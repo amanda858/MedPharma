@@ -12,6 +12,11 @@ CLIA_DATA_URL = "https://data.cms.gov/provider-compliance/certification-and-comp
 # App settings
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
+
+# Separate ports for each service
+LAB_PORT = int(os.getenv("LAB_PORT", "8000"))    # Lab Lead Generator
+HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
+
 DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
 
 # Hunter.io API key (optional — free tier: 25 searches/month)
