@@ -1412,42 +1412,39 @@
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Failed');
 
-                const verified = data.verified_emails || [];
-                const patterns = data.pattern_emails || [];
-
+                const emails = data.emails || [];
                 let html = '';
-                if (verified.length) {
-                    html += `<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">✅ Verified Emails</div>`;
-                    verified.forEach(e => {
+
+                // Error / warning banner
+                if (data.error) {
+                    html += `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#92400e">⚠️ ${escHtml(data.error)}</div>`;
+                }
+
+                // Live domain badge
+                if (data.live_domain) {
+                    html += `<div style="margin-bottom:12px;font-size:12px;color:var(--gray-500)">🌐 Live domain: <strong>${escHtml(data.live_domain)}</strong>${data.total_at_domain ? ` &mdash; ${data.total_at_domain} email(s) on file` : ''}</div>`;
+                }
+
+                if (emails.length) {
+                    html += `<div style="margin-bottom:4px"><div style="font-size:11px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">✅ Real Emails</div>`;
+                    emails.forEach(e => {
+                        const safeMail = escHtml(e.email);
                         html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--gray-100)">
-                            <span style="font-weight:600;color:var(--primary)">${escHtml(e.email)}</span>
+                            <span style="font-weight:600;color:var(--primary)">${safeMail}</span>
+                            ${e.full_name ? `<span style="font-size:12px;color:var(--gray-600)">${escHtml(e.full_name)}</span>` : ''}
                             ${e.position ? `<span style="font-size:12px;color:var(--gray-500)">${escHtml(e.position)}</span>` : ''}
                             ${e.is_decision_maker ? '<span style="background:#d1fae5;color:#065f46;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px">Decision Maker</span>' : ''}
+                            ${e.verified ? '<span style="background:#dbeafe;color:#1e40af;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px">Verified</span>' : ''}
                             <button onclick="navigator.clipboard.writeText('${e.email}');showToast('Copied!','success')" style="margin-left:auto;font-size:11px;background:var(--gray-100);border:none;border-radius:6px;padding:3px 10px;cursor:pointer">Copy</button>
                         </div>`;
                     });
                     html += '</div>';
+                } else if (!data.error) {
+                    html += '<p style="color:var(--gray-500);text-align:center;padding:20px">No emails found for this organization.</p>';
                 }
 
-                html += `<div><div style="font-size:11px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">${verified.length ? '📧 Pattern Emails (unverified guesses)' : '📧 Generated Email Patterns'}</div>`;
-                patterns.forEach(e => {
-                    html += `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--gray-100)">
-                        <span style="color:var(--gray-700);font-size:13px">${escHtml(e.email)}</span>
-                        <button onclick="navigator.clipboard.writeText('${e.email}');showToast('Copied!','success')" style="margin-left:auto;font-size:11px;background:var(--gray-100);border:none;border-radius:6px;padding:3px 10px;cursor:pointer">Copy</button>
-                    </div>`;
-                });
-                html += '</div>';
-
-                if (!verified.length && !patterns.length) {
-                    html = '<p style="color:var(--gray-500);text-align:center;padding:20px">No emails found for this organization.</p>';
-                }
-
-                const domains = data.domain_candidates || [];
-                if (domains.length) {
-                    html += `<div style="margin-top:16px;font-size:12px;color:var(--gray-400)">Domain guesses: ${domains.join(', ')}</div>`;
-                }
                 if (!data.hunter_enabled) {
-                    html += `<div style="margin-top:8px;font-size:12px;color:var(--gray-400)">💡 Set HUNTER_API_KEY for verified emails with real names &amp; titles.</div>`;
+                    html += `<div style="margin-top:14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 14px;font-size:12px;color:#0369a1">💡 <strong>Get real named emails:</strong> sign up free at <a href="https://hunter.io" target="_blank" style="color:#0369a1">hunter.io</a>, then set <code>HUNTER_API_KEY=your_key</code> as an environment variable and restart the server.</div>`;
                 }
 
                 body.innerHTML = html;

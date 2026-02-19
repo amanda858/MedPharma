@@ -189,18 +189,22 @@ async def get_emails_for_lead(
 ):
     cached = get_lead_emails(npi)
     if cached:
-        return {"npi": npi, "org_name": org_name, "cached": True, "emails": cached, "count": len(cached)}
+        return {"npi": npi, "org_name": org_name, "cached": True, "emails": cached, "count": len(cached), "error": None}
     result = await find_emails_for_lab(org_name, domain_hint=domain)
-    all_emails = result["verified_emails"] + result["pattern_emails"]
-    if save and all_emails:
-        save_lead_emails(npi, all_emails)
+    emails = result.get("emails", [])
+    if save and emails:
+        save_lead_emails(npi, emails)
     return {
-        "npi": npi, "org_name": org_name, "cached": False,
-        "domain_candidates": result["domain_candidates"],
-        "hunter_enabled": result["hunter_enabled"],
-        "verified_emails": result["verified_emails"],
-        "pattern_emails": result["pattern_emails"],
-        "emails": all_emails, "count": len(all_emails),
+        "npi": npi,
+        "org_name": org_name,
+        "cached": False,
+        "live_domain": result.get("live_domain"),
+        "domain_candidates": result.get("domain_candidates", []),
+        "hunter_enabled": result.get("hunter_enabled"),
+        "emails": emails,
+        "total_at_domain": result.get("total_at_domain", 0),
+        "count": len(emails),
+        "error": result.get("error"),
     }
 
 
