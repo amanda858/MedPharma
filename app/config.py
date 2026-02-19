@@ -14,6 +14,10 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
 DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
 
+# Hunter.io API key (optional — free tier: 25 searches/month)
+# Sign up at https://hunter.io and set HUNTER_API_KEY env var to enable verified emails
+HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
+
 # Search defaults
 DEFAULT_RESULTS_LIMIT = 50
 MAX_RESULTS_LIMIT = 200

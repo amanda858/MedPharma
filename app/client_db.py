@@ -216,6 +216,24 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_enroll_client   ON enrollment(client_id);
         CREATE INDEX IF NOT EXISTS idx_edi_client      ON edi_setup(client_id);
         CREATE INDEX IF NOT EXISTS idx_prov_client     ON providers(client_id);
+
+        -- ── client file uploads ───────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS client_files (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id     INTEGER NOT NULL,
+            filename      TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            file_type     TEXT DEFAULT 'other',
+            file_size     INTEGER DEFAULT 0,
+            category      TEXT DEFAULT 'General',
+            description   TEXT DEFAULT '',
+            status        TEXT DEFAULT 'Uploaded',
+            row_count     INTEGER DEFAULT 0,
+            uploaded_by   TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_files_client    ON client_files(client_id);
     """)
     conn.commit()
 
@@ -239,19 +257,19 @@ def _seed_data(conn):
     )
     admin_id = cur.lastrowid
 
-    # Client 1 — Westside Physicians
+    # Client 1 — Luminary MHP
     s1 = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("westside", _hash_pw("client123", s1), s1, "Westside Physicians Group", "Dr. Maria Torres", "billing@westsidephys.com", "client")
+        ("luminary", _hash_pw("client123", s1), s1, "Luminary MHP", "Contact", "billing@luminarymhp.com", "client")
     )
     c1 = cur.lastrowid
 
-    # Client 2 — Summit Medical
+    # Client 2 — TruPath
     s2 = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("summit", _hash_pw("client123", s2), s2, "Summit Medical Associates", "James Chen", "james@summitmed.com", "client")
+        ("trupath", _hash_pw("client123", s2), s2, "TruPath", "Contact", "billing@trupath.com", "client")
     )
     c2 = cur.lastrowid
 
@@ -1003,3 +1021,42 @@ def get_dashboard(client_id: int = None):
         "credentialing_stats": cred_stats,
         "enrollment_stats": enroll_stats,
     }
+
+
+# ─── File uploads ──────────────────────────────────────────────────────────
+
+def list_files(client_id: int = None):
+    conn = get_db()
+    cur = conn.cursor()
+    if client_id:
+        cur.execute("SELECT * FROM client_files WHERE client_id=? ORDER BY created_at DESC", (client_id,))
+    else:
+        cur.execute("SELECT * FROM client_files ORDER BY created_at DESC")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_file(client_id: int, filename: str, original_name: str, file_type: str,
+             file_size: int, category: str, description: str, row_count: int, uploaded_by: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO client_files
+        (client_id,filename,original_name,file_type,file_size,category,description,row_count,uploaded_by,status)
+        VALUES (?,?,?,?,?,?,?,?,'Uploaded')
+    """, (client_id, filename, original_name, file_type, file_size, category, description, row_count, uploaded_by))
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    return new_id
+
+
+def delete_file_record(file_id: int, client_id: int = None):
+    conn = get_db()
+    if client_id:
+        conn.execute("DELETE FROM client_files WHERE id=? AND client_id=?", (file_id, client_id))
+    else:
+        conn.execute("DELETE FROM client_files WHERE id=?", (file_id,))
+    conn.commit()
+    conn.close()

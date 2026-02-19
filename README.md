@@ -1,5 +1,7 @@
 # CVOPro — Lab Lead Generator
 
+[Download MedPharma Hub](https://github.com/amanda858/MedPharma/archive/refs/heads/main.zip)
+
 Find clinical laboratories across the United States for **medical billing**, **compliance**, and **payor contracting** services. Stop exhausting yourself with Google Ads and LinkedIn — pull real, verified leads directly from federal databases.
 
 ## What It Does
@@ -28,7 +30,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Open **http://localhost:8000** in your browser.
+Open **<http://localhost:8000>** in your browser.
 
 ## How Lead Scoring Works
 
@@ -60,7 +62,7 @@ Each lab gets a score from 0-100 based on:
 
 ## Data Sources
 
-- **NPI Registry**: https://npiregistry.cms.hhs.gov — Free, no API key required, updated weekly
-- **CLIA**: https://data.cms.gov — CMS public data on certified laboratories
+- **NPI Registry**: <https://npiregistry.cms.hhs.gov> — Free, no API key required, updated weekly
+- **CLIA**: <https://data.cms.gov> — CMS public data on certified laboratories
 
 All data is publicly available from the Centers for Medicare & Medicaid Services (CMS).

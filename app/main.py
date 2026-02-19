@@ -5,7 +5,7 @@ import io
 import json
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -13,12 +13,14 @@ from app.config import US_STATES, LAB_TAXONOMY_CODES
 from app.database import (
     init_db, save_lead, get_saved_leads, update_lead,
     delete_lead, get_lead_stats, log_search,
+    save_lead_emails, get_lead_emails, get_all_leads_with_emails,
 )
 from app.npi_client import (
     search_npi, search_npi_by_taxonomy, get_npi_detail, bulk_search_labs,
 )
 from app.client_db import init_client_hub_db
 from app.client_routes import router as client_hub_router
+from app.email_finder import find_emails_for_lab
 
 app = FastAPI(
     title="MedPharma Hub",
@@ -200,6 +202,57 @@ async def delete_lead_endpoint(lead_id: int):
     return {"message": "Lead deleted"}
 
 
+# ─── Email Enrichment ─────────────────────────────────────────────────
+
+@app.get("/api/leads/{npi}/emails")
+async def get_emails_for_lead(
+    npi: str,
+    org_name: str = Query(..., description="Organization name to derive domain from"),
+    domain: Optional[str] = Query(None, description="Known domain override (e.g. acmelabs.com)"),
+    save: bool = Query(True, description="Auto-save discovered emails to the database"),
+):
+    """
+    Find owner/director emails for a lab.
+    Returns verified emails (if Hunter.io key set) + generated patterns.
+    """
+    # Return cached emails first if already saved
+    cached = get_lead_emails(npi)
+    if cached:
+        return {
+            "npi": npi,
+            "org_name": org_name,
+            "cached": True,
+            "emails": cached,
+            "count": len(cached),
+        }
+
+    result = await find_emails_for_lab(org_name, domain_hint=domain)
+
+    all_emails = result["verified_emails"] + result["pattern_emails"]
+
+    if save and all_emails:
+        save_lead_emails(npi, all_emails)
+
+    return {
+        "npi": npi,
+        "org_name": org_name,
+        "cached": False,
+        "domain_candidates": result["domain_candidates"],
+        "hunter_enabled": result["hunter_enabled"],
+        "verified_emails": result["verified_emails"],
+        "pattern_emails": result["pattern_emails"],
+        "emails": all_emails,
+        "count": len(all_emails),
+    }
+
+
+@app.get("/api/leads/{npi}/emails/saved")
+async def get_saved_emails_for_lead(npi: str):
+    """Get previously saved emails for a lead."""
+    emails = get_lead_emails(npi)
+    return {"npi": npi, "emails": emails, "count": len(emails)}
+
+
 @app.get("/api/leads/stats")
 async def leads_stats():
     """Get dashboard statistics for saved leads."""
@@ -213,22 +266,27 @@ async def export_csv(
     source: str = Query("saved", description="'saved' for saved leads, 'search' for search results"),
     state: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    include_emails: bool = Query(True, description="Include saved emails in export"),
 ):
-    """Export leads as CSV file."""
+    """Export leads as CSV file, including any saved emails."""
     if source == "saved":
-        leads = get_saved_leads(status=status, state=state)
+        leads = get_all_leads_with_emails() if include_emails else get_saved_leads(status=status, state=state)
     else:
-        # Export from a search
         results = await search_npi(state=state, limit=200)
         leads = results["results"]
 
     output = io.StringIO()
     if leads:
-        writer = csv.DictWriter(output, fieldnames=[
+        base_fields = [
             "npi", "organization_name", "first_name", "last_name",
             "taxonomy_desc", "address_line1", "city", "state",
-            "zip_code", "phone", "fax", "lead_score", "enumeration_date"
-        ], extrasaction="ignore")
+            "zip_code", "phone", "fax", "lead_score", "lead_status",
+            "enumeration_date", "notes",
+        ]
+        if include_emails and source == "saved":
+            base_fields += ["emails", "email_positions"]
+
+        writer = csv.DictWriter(output, fieldnames=base_fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(leads)
 
@@ -256,11 +314,10 @@ async def get_taxonomies():
 
 # ─── Frontend ─────────────────────────────────────────────────────────
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def serve_frontend():
-    """Serve the main dashboard."""
-    with open("app/templates/index.html", "r") as f:
-        return f.read()
+    """Redirect to MedPharma Hub."""
+    return RedirectResponse(url="/hub")
 
 
 @app.get("/hub", response_class=HTMLResponse)

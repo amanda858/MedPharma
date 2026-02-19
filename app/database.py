@@ -66,6 +66,24 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_leads_state ON saved_leads(state);
         CREATE INDEX IF NOT EXISTS idx_leads_status ON saved_leads(lead_status);
         CREATE INDEX IF NOT EXISTS idx_leads_score ON saved_leads(lead_score);
+
+        CREATE TABLE IF NOT EXISTS lead_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            npi TEXT NOT NULL,
+            email TEXT NOT NULL,
+            first_name TEXT DEFAULT '',
+            last_name TEXT DEFAULT '',
+            position TEXT DEFAULT '',
+            is_decision_maker INTEGER DEFAULT 0,
+            confidence INTEGER DEFAULT 0,
+            email_type TEXT DEFAULT 'pattern',
+            source TEXT DEFAULT 'generated',
+            domain TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(npi, email)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_emails_npi ON lead_emails(npi);
     """)
 
     conn.commit()
@@ -208,3 +226,66 @@ def log_search(search_type: str, params: str, count: int):
     )
     conn.commit()
     conn.close()
+
+
+def save_lead_emails(npi: str, emails: list) -> int:
+    """Save discovered emails for a lead. Returns count saved."""
+    conn = get_db()
+    cursor = conn.cursor()
+    saved = 0
+    for e in emails:
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO lead_emails (
+                    npi, email, first_name, last_name, position,
+                    is_decision_maker, confidence, email_type, source, domain
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                npi,
+                e.get("email", ""),
+                e.get("first_name", ""),
+                e.get("last_name", ""),
+                e.get("position", ""),
+                1 if e.get("is_decision_maker") else 0,
+                e.get("confidence", 0),
+                e.get("type", "pattern"),
+                e.get("source", "generated"),
+                e.get("domain", ""),
+            ))
+            saved += cursor.rowcount
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_lead_emails(npi: str) -> list:
+    """Get all saved emails for a lead NPI."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM lead_emails WHERE npi = ? ORDER BY is_decision_maker DESC, confidence DESC",
+        (npi,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_leads_with_emails() -> list:
+    """Get saved leads joined with their best email for CSV export."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sl.*,
+               GROUP_CONCAT(le.email, '; ') AS emails,
+               GROUP_CONCAT(le.position, '; ') AS email_positions
+        FROM saved_leads sl
+        LEFT JOIN lead_emails le ON sl.npi = le.npi
+        GROUP BY sl.id
+        ORDER BY sl.lead_score DESC, sl.created_at DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

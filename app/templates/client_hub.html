@@ -7,8 +7,8 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --primary:#6366f1;--primary-dark:#4f46e5;--primary-darker:#4338ca;
-  --primary-light:#eef2ff;--primary-mid:#c7d2fe;
+  --primary:#1e88e5;--primary-dark:#1565c0;--primary-darker:#0d47a1;
+  --primary-light:#e3f2fd;--primary-mid:#90caf9;
   --success:#10b981;--success-light:#d1fae5;
   --warning:#f59e0b;--warning-light:#fef3c7;
   --danger:#ef4444;--danger-light:#fee2e2;
@@ -27,7 +27,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f5f6fa;color:var(--g
 
 /* ── Login ── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;
-  background:linear-gradient(135deg,var(--primary-darker) 0%,var(--primary) 50%,#818cf8 100%);
+  background:linear-gradient(135deg,#060b18 0%,#0d1f3c 40%,#0d47a1 75%,#1e88e5 100%);
   position:relative;overflow:hidden}
 .login-wrap::before{content:'';position:absolute;inset:0;
   background:radial-gradient(circle at 70% 20%,rgba(255,255,255,.08) 0%,transparent 50%),
@@ -60,7 +60,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f5f6fa;color:var(--g
 
 /* ── Account Selector ── */
 .account-select-wrap{min-height:100vh;background:#f5f6fa}
-.account-header{background:linear-gradient(135deg,var(--primary-darker),var(--primary));
+.account-header{background:linear-gradient(135deg,#060b18,#0d47a1);
   padding:28px 40px;display:flex;align-items:center;justify-content:space-between}
 .account-header .brand{display:flex;align-items:center;gap:12px}
 .account-header .brand h1{color:#fff;font-size:22px;font-weight:700;letter-spacing:-.5px}
@@ -84,9 +84,9 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f5f6fa;color:var(--g
 
 /* ── App Shell ── */
 .app{display:none}
-.topbar{background:linear-gradient(135deg,var(--primary-darker) 0%,var(--primary) 100%);
+.topbar{background:linear-gradient(135deg,#060b18 0%,#0d47a1 100%);
   color:#fff;height:62px;display:flex;align-items:center;justify-content:space-between;
-  padding:0 24px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(79,70,229,.35)}
+  padding:0 24px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(13,71,161,.5)}
 .topbar-left{display:flex;align-items:center;gap:14px}
 .topbar-left .brand{font-size:20px;font-weight:700;letter-spacing:-.5px}
 .topbar-left .account-chip{background:rgba(255,255,255,.18);padding:4px 14px;border-radius:20px;
@@ -102,16 +102,16 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f5f6fa;color:var(--g
 
 /* ── Layout ── */
 .app-body{display:flex;min-height:calc(100vh - 62px)}
-.sidebar{width:230px;background:#fff;border-right:1px solid var(--gray-200);
+.sidebar{width:230px;background:#0a0f1e;border-right:none;
   padding:20px 0;flex-shrink:0;overflow-y:auto}
-.nav-section{font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;
+.nav-section{font-size:10px;font-weight:700;color:rgba(255,255,255,.3);text-transform:uppercase;
   letter-spacing:1.2px;padding:18px 20px 8px;margin-top:4px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:10px 18px 10px 16px;
-  cursor:pointer;font-size:14px;font-weight:500;color:var(--gray-600);transition:all .15s;
+  cursor:pointer;font-size:14px;font-weight:500;color:rgba(255,255,255,.6);transition:all .15s;
   border-left:3px solid transparent;border-radius:0 8px 8px 0;margin:1px 8px 1px 0}
-.nav-item:hover{background:var(--gray-50);color:var(--gray-800)}
-.nav-item.active{color:var(--primary);background:var(--primary-light);
-  border-left-color:var(--primary);font-weight:600}
+.nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.nav-item.active{color:#fff;background:rgba(30,136,229,.25);
+  border-left-color:#1e88e5;font-weight:600}
 .nav-item .ni{width:20px;font-size:15px;text-align:center;flex-shrink:0}
 .main-content{flex:1;padding:28px;min-width:0;overflow-x:hidden}
 
@@ -370,6 +370,10 @@ select.form-control{cursor:pointer}
       <div class="nav-item" data-panel="providers" onclick="navTo('providers')">
         <span class="ni">👤</span> Providers
       </div>
+      <div class="nav-section">Reports</div>
+      <div class="nav-item" data-panel="files" onclick="navTo('files')">
+        <span class="ni">📁</span> Files & Reports
+      </div>
       <div id="adminNav" style="display:none">
         <div class="nav-section">Admin</div>
         <div class="nav-item" data-panel="clients" onclick="navTo('clients')">
@@ -531,6 +535,55 @@ select.form-control{cursor:pointer}
             <thead><tr><th>Username</th><th>Company</th><th>Contact</th><th>Email</th>
               <th>Phone</th><th>Role</th><th>Last Login</th><th>Active</th></tr></thead>
             <tbody id="clientTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ FILES & REPORTS ═══ -->
+      <div class="hub-panel" id="panel-files">
+        <div class="page-header">
+          <div class="page-title">Files &amp; Reports</div>
+          <div class="page-actions">
+            <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">&#8593; Upload File</button>
+            <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none" onchange="handleFileSelect(this)">
+          </div>
+        </div>
+
+        <!-- Completion Tracker -->
+        <div class="card" style="margin-bottom:18px">
+          <div class="card-header"><span class="card-title">&#9646; Workflow Completion Tracker</span></div>
+          <div id="completionTracker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
+            <!-- populated by JS -->
+          </div>
+        </div>
+
+        <!-- Upload Drop Zone -->
+        <div class="card" id="dropZone" style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:36px 20px;cursor:pointer;transition:all .2s"
+          ondragover="event.preventDefault();this.style.borderColor='#1e88e5';this.style.background='#e3f2fd'"
+          ondragleave="this.style.borderColor='';this.style.background=''"
+          ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
+          <div style="font-size:36px;margin-bottom:10px">&#128196;</div>
+          <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop Excel or PDF files here</div>
+          <div style="font-size:13px;color:var(--gray-400);margin-top:6px">.xlsx &nbsp;&#8226;&nbsp; .xls &nbsp;&#8226;&nbsp; .csv &nbsp;&#8226;&nbsp; .pdf</div>
+          <div style="margin-top:14px">
+            <select id="fileCategory" class="form-control" style="width:auto;display:inline-block;margin-right:8px">
+              <option value="Claims">Claims</option>
+              <option value="Credentialing">Credentialing</option>
+              <option value="Enrollment">Enrollment</option>
+              <option value="EDI">EDI</option>
+              <option value="Reports">Reports</option>
+              <option value="General">General</option>
+            </select>
+            <input id="fileDesc" class="form-control" placeholder="Description (optional)" style="width:220px;display:inline-block">
+          </div>
+        </div>
+
+        <!-- File list -->
+        <div class="card" style="padding:0">
+          <div class="card-header" style="padding:16px 20px"><span class="card-title">Uploaded Files</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Filename</th><th>Category</th><th>Description</th><th>Size</th><th>Rows</th><th>Uploaded By</th><th>Date</th><th>Status</th><th></th></tr></thead>
+            <tbody id="filesTbody"><tr><td colspan="9" style="text-align:center;padding:24px;color:var(--gray-400)">No files uploaded yet</td></tr></tbody>
           </table></div>
         </div>
       </div>
@@ -942,6 +995,7 @@ function navTo(panel) {
   if(panel==='edi') loadEdi();
   if(panel==='providers') loadProviders();
   if(panel==='clients') loadClients();
+  if(panel==='files') loadFiles();
 }
 
 // ═══════════════════════════════════════
@@ -1717,6 +1771,118 @@ function toast(msg, type='') {
   t.className = `toast ${type}`; t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(()=>t.remove(), 3500);
+}
+
+// ═══════════════════════════════════════
+// FILES & REPORTS
+// ═══════════════════════════════════════
+async function loadFiles() {
+  try {
+    const url = activeClientId ? `/hub/api/files?client_id=${activeClientId}` : '/hub/api/files';
+    const r = await fetch(url);
+    const d = await r.json();
+    renderFiles(d.files || []);
+    loadCompletionTracker();
+  } catch(e){ console.error(e); }
+}
+
+function renderFiles(files) {
+  const tb = document.getElementById('filesTbody');
+  if(!files.length){ tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--gray-400)">No files uploaded yet</td></tr>'; return; }
+  tb.innerHTML = files.map(f => {
+    const kb = f.file_size > 0 ? (f.file_size < 1024 ? f.file_size+'B' : f.file_size < 1048576 ? Math.round(f.file_size/1024)+'KB' : Math.round(f.file_size/1048576*10)/10+'MB') : '-';
+    const stColor = f.status==='Processed' ? 'badge-green' : f.status==='Error' ? 'badge-red' : 'badge-blue';
+    return `<tr>
+      <td><strong>${esc(f.original_name)}</strong></td>
+      <td><span class="badge badge-purple">${esc(f.category)}</span></td>
+      <td style="color:var(--gray-500);font-size:12px">${esc(f.description)||'-'}</td>
+      <td>${kb}</td>
+      <td>${f.row_count > 0 ? f.row_count.toLocaleString()+' rows' : '-'}</td>
+      <td>${esc(f.uploaded_by)||'-'}</td>
+      <td style="font-size:12px">${(f.created_at||'').slice(0,10)}</td>
+      <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
+      <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none" onclick="deleteFile(${f.id})">Delete</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadCompletionTracker() {
+  try {
+    const url = activeClientId ? `/hub/api/dashboard/client/${activeClientId}` : '/hub/api/dashboard';
+    const r = await fetch(url);
+    const d = await r.json();
+    const tracker = document.getElementById('completionTracker');
+    const sd = d.status_distribution || {};
+    const cs = d.credentialing_stats || {};
+    const es = d.enrollment_stats || {};
+
+    const totalClaims = Object.values(sd).reduce((a,b)=>a+b,0);
+    const paidClaims = sd['Paid']||0;
+    const claimPct = totalClaims ? Math.round(paidClaims/totalClaims*100) : 0;
+
+    const totalCred = Object.values(cs).reduce((a,b)=>a+b,0);
+    const approvedCred = cs['Approved']||0;
+    const credPct = totalCred ? Math.round(approvedCred/totalCred*100) : 0;
+
+    const totalEnroll = Object.values(es).reduce((a,b)=>a+b,0);
+    const activeEnroll = es['Active']||0;
+    const enrollPct = totalEnroll ? Math.round(activeEnroll/totalEnroll*100) : 0;
+
+    const items = [
+      {label:'Claims Billed', pct: claimPct, color:'#1e88e5', sub: paidClaims+' of '+totalClaims+' paid'},
+      {label:'Credentialing', pct: credPct, color:'#10b981', sub: approvedCred+' of '+totalCred+' approved'},
+      {label:'Enrollment', pct: enrollPct, color:'#f59e0b', sub: activeEnroll+' of '+totalEnroll+' active'},
+      {label:'Total A/R', pct: null, value: '$'+(d.total_ar||0).toLocaleString(), color:'#ef4444', sub: d.active_claims+' active claims'},
+    ];
+
+    tracker.innerHTML = items.map(item => `
+      <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+        <div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${item.label}</div>
+        ${item.pct !== null ? `
+          <div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.pct}%</div>
+          <div style="background:var(--gray-200);border-radius:20px;height:6px;overflow:hidden">
+            <div style="background:${item.color};height:100%;width:${item.pct}%;transition:width .5s"></div>
+          </div>` :
+          `<div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.value}</div>`
+        }
+        <div style="font-size:12px;color:var(--gray-400);margin-top:6px">${item.sub}</div>
+      </div>`).join('');
+  } catch(e){ console.error(e); }
+}
+
+function handleFileSelect(input) {
+  if(input.files && input.files[0]) uploadFile(input.files[0]);
+  input.value = '';
+}
+function handleFileDrop(e) {
+  const files = e.dataTransfer.files;
+  for(let f of files) uploadFile(f);
+}
+
+async function uploadFile(file) {
+  const category = document.getElementById('fileCategory')?.value || 'General';
+  const description = document.getElementById('fileDesc')?.value || '';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('category', category);
+  fd.append('description', description);
+  if(activeClientId) fd.append('client_id', activeClientId);
+  try {
+    toast('Uploading '+file.name+'...', 'info');
+    const r = await fetch('/hub/api/files/upload', {method:'POST', body:fd});
+    if(!r.ok) { const e=await r.json(); throw new Error(e.detail||'Upload failed'); }
+    toast(file.name+' uploaded!', 'success');
+    loadFiles();
+  } catch(e){ toast(e.message,'error'); }
+}
+
+async function deleteFile(id) {
+  if(!confirm('Delete this file?')) return;
+  try {
+    const r = await fetch(`/hub/api/files/${id}`, {method:'DELETE'});
+    if(!r.ok) throw new Error('Failed');
+    toast('File deleted','success'); loadFiles();
+  } catch(e){ toast(e.message,'error'); }
 }
 </script>
 </body>

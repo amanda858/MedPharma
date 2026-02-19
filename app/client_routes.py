@@ -1,7 +1,10 @@
 """Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
 
+import os
+import shutil
+import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Cookie, Response, Request
+from fastapi import APIRouter, HTTPException, Cookie, Response, Request, UploadFile, File as FastAPIFile, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.client_db import (
@@ -15,6 +18,7 @@ from app.client_db import (
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
+    list_files, add_file, delete_file_record,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -560,3 +564,85 @@ def dashboard_for_client(client_id: int, hub_session: Optional[str] = Cookie(Non
     data = get_dashboard(client_id)
     data["user"] = user
     return data
+
+
+# ─── File Uploads ───────────────────────────────────────────────────────────
+
+UPLOAD_DIR = os.path.join("data", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+@router.get("/files")
+def get_files(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    files = list_files(scope)
+    return {"files": files}
+
+
+@router.post("/files/upload")
+async def upload_file(
+    file: UploadFile = FastAPIFile(...),
+    category: str = Form("General"),
+    description: str = Form(""),
+    client_id: Optional[int] = Form(None),
+    hub_session: Optional[str] = Cookie(None),
+):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user) or user["id"]
+
+    # Validate type
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv", ".pdf"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf files allowed")
+
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(UPLOAD_DIR, unique_name)
+
+    content = await file.read()
+    file_size = len(content)
+
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    # Count rows for Excel/CSV
+    row_count = 0
+    if file_type == "excel":
+        try:
+            import csv, io
+            if ext == ".csv":
+                reader = csv.reader(io.StringIO(content.decode("utf-8", errors="replace")))
+                row_count = max(0, sum(1 for _ in reader) - 1)
+            else:
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+                    ws = wb.active
+                    row_count = max(0, ws.max_row - 1)  # minus header
+                    wb.close()
+                except Exception:
+                    row_count = 0
+        except Exception:
+            row_count = 0
+
+    file_id = add_file(
+        client_id=scope,
+        filename=unique_name,
+        original_name=file.filename or "file",
+        file_type=file_type,
+        file_size=file_size,
+        category=category,
+        description=description,
+        row_count=row_count,
+        uploaded_by=user["username"],
+    )
+    return {"id": file_id, "filename": unique_name, "original_name": file.filename, "row_count": row_count}
+
+
+@router.delete("/files/{file_id}")
+def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = _client_scope(user)
+    delete_file_record(file_id, scope)
+    return {"ok": True}
