@@ -31,12 +31,13 @@ if __name__ == "__main__":
     is_prod = bool(os.getenv("PORT"))
 
     if is_prod:
-        # On Render: one process, pick which app based on SERVICE env var
+        # On Render: bind to the PORT they assign, pick app via SERVICE env var
+        render_port = int(os.getenv("PORT", "8000"))
         service = os.getenv("SERVICE", "hub")
         if service == "leads":
-            uvicorn.run("app.leads_app:app", host=APP_HOST, port=LAB_PORT)
+            uvicorn.run("app.leads_app:app", host="0.0.0.0", port=render_port)
         else:
-            uvicorn.run("app.hub_app:app", host=APP_HOST, port=HUB_PORT)
+            uvicorn.run("app.hub_app:app", host="0.0.0.0", port=render_port)
     else:
         print(f"Starting Lab Leads  → http://localhost:{LAB_PORT}")
         print(f"Starting Client Hub → http://localhost:{HUB_PORT}")

@@ -7,5 +7,20 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python run.py
     envVars:
-      - key: APP_HOST
-        value: 0.0.0.0
+      - key: SERVICE
+        value: hub
+      - key: HUNTER_API_KEY
+        value: ccc11a9f717c2adde35fe72018a272d86b5a5d9b
+
+  - type: web
+    name: medpharma-leads
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run.py
+    envVars:
+      - key: SERVICE
+        value: leads
+      - key: HUNTER_API_KEY
+        value: ccc11a9f717c2adde35fe72018a272d86b5a5d9b

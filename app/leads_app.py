@@ -3,7 +3,8 @@
 import csv
 import io
 import json
-from typing import Optional
+import asyncio
+from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
@@ -212,6 +213,61 @@ async def get_emails_for_lead(
 async def get_saved_emails_for_lead(npi: str):
     emails = get_lead_emails(npi)
     return {"npi": npi, "emails": emails, "count": len(emails)}
+
+
+class BulkEmailItem(BaseModel):
+    npi: str
+    org_name: str
+    domain: Optional[str] = None
+
+
+@app.post("/api/emails/bulk")
+async def bulk_email_enrichment(items: List[BulkEmailItem]):
+    """
+    Enrich emails for multiple labs concurrently.
+    Checks cache first; only calls Hunter.io for uncached NPIs.
+    Throttled to 5 concurrent Hunter.io requests.
+    """
+    semaphore = asyncio.Semaphore(5)
+
+    async def enrich_one(item: BulkEmailItem) -> dict:
+        # Check cache first (free)
+        cached = get_lead_emails(item.npi)
+        if cached:
+            top = cached[0] if cached else None
+            return {
+                "npi": item.npi,
+                "cached": True,
+                "emails": cached,
+                "count": len(cached),
+                "top_email": top.get("email") if top else None,
+                "live_domain": top.get("domain") if top else None,
+                "error": None,
+            }
+        async with semaphore:
+            result = await find_emails_for_lab(item.org_name, domain_hint=item.domain)
+        emails = result.get("emails", [])
+        if emails:
+            save_lead_emails(item.npi, emails)
+        top = emails[0] if emails else None
+        return {
+            "npi": item.npi,
+            "cached": False,
+            "emails": emails,
+            "count": len(emails),
+            "top_email": top.get("email") if top else None,
+            "live_domain": result.get("live_domain"),
+            "error": result.get("error"),
+        }
+
+    results = await asyncio.gather(*[enrich_one(item) for item in items], return_exceptions=True)
+    output = []
+    for item, res in zip(items, results):
+        if isinstance(res, Exception):
+            output.append({"npi": item.npi, "error": str(res), "emails": [], "count": 0})
+        else:
+            output.append(res)
+    return {"results": output, "total": len(output)}
 
 
 # ─── Export ──────────────────────────────────────────────────────────

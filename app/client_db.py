@@ -238,8 +238,27 @@ def init_client_hub_db():
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
-    if cur.fetchone()[0] == 0:
+    total = cur.fetchone()[0]
+
+    if total == 0:
         _seed_data(conn)
+    else:
+        # Auto-fix: ensure BOTH expected client accounts exist.
+        # If either is missing the DB has stale/wrong seed data — wipe and re-seed.
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username IN ('luminary','trupath')")
+        found = cur.fetchone()[0]
+        if found < 2:
+            for tbl in (
+                "sessions", "claims_master", "payments", "notes_log",
+                "credentialing", "enrollment", "edi_setup", "providers",
+                "client_files", "clients"
+            ):
+                try:
+                    cur.execute(f"DELETE FROM {tbl}")
+                except Exception:
+                    pass
+            conn.commit()
+            _seed_data(conn)
 
     conn.close()
 

@@ -859,6 +859,9 @@
             }
         }
 
+        // Track whether "emails only" filter is on
+        let emailsOnlyFilter = false;
+
         function renderSearchResults(results, totalCount, container) {
             if (!results.length) {
                 container.innerHTML = `
@@ -869,15 +872,22 @@
                 return;
             }
 
+            emailsOnlyFilter = false;
+
             let html = `
         <div class="results-header">
             <span class="result-count">${totalCount.toLocaleString()} labs found (showing ${results.length})</span>
-            <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:8px;align-items:center;">
                 <button class="btn btn-secondary btn-sm" onclick="selectAllResults()">Select All</button>
                 <button class="btn btn-success btn-sm" onclick="saveSelected()" id="saveSelectedBtn" disabled>
                     Save Selected (0)
                 </button>
                 <button class="btn btn-secondary btn-sm" onclick="exportSearchCSV()">↓ CSV</button>
+                <button class="btn btn-secondary btn-sm" id="emailsFilterBtn" onclick="toggleEmailsFilter()"
+                    style="border:1px solid var(--primary);color:var(--primary);">
+                    📧 Show emails only
+                </button>
+                <span id="emailEnrichStatus" style="font-size:12px;color:var(--gray-400);">⏳ Fetching emails…</span>
             </div>
         </div>
         <div id="selectionBar" style="display:none;" class="actions-bar">
@@ -896,18 +906,20 @@
                             <th>City</th>
                             <th>State</th>
                             <th>Phone</th>
+                            <th>Top Email</th>
                             <th>NPI</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody>`;
+                    <tbody id="searchResultsTbody">`;
 
             results.forEach((lab, i) => {
                 const scoreClass = lab.lead_score >= 80 ? 'score-high' : lab.lead_score >= 60 ? 'score-mid' : 'score-low';
                 const name = lab.organization_name || `${lab.first_name} ${lab.last_name}`.trim() || 'Unknown';
+                const safeNpi = lab.npi;
 
                 html += `
-            <tr>
+            <tr id="row-${safeNpi}" data-has-email="0">
                 <td class="checkbox-col">
                     <input type="checkbox" data-index="${i}" onchange="toggleSelect(${i})">
                 </td>
@@ -917,16 +929,73 @@
                 <td>${escHtml(lab.city || '')}</td>
                 <td><strong>${escHtml(lab.state || '')}</strong></td>
                 <td style="white-space:nowrap;">${escHtml(lab.phone || '—')}</td>
-                <td style="font-family:monospace;font-size:12px;">${lab.npi}</td>
+                <td id="email-cell-${safeNpi}" style="font-size:12px;color:var(--gray-400);">⏳</td>
+                <td style="font-family:monospace;font-size:12px;">${safeNpi}</td>
                 <td style="white-space:nowrap;">
                     <button class="btn btn-success btn-sm" onclick="saveSingleLead(${i})">Save</button>
-                    <button class="btn btn-secondary btn-sm" onclick="fetchEmails('${lab.npi}','${escHtml(name).replace(/'/g, "\\'")}')">Emails</button>
+                    <button class="btn btn-secondary btn-sm" onclick="fetchEmails('${safeNpi}','${escHtml(name).replace(/'/g, "\\'")}')">Emails</button>
                 </td>
             </tr>`;
             });
 
             html += '</tbody></table></div></div>';
             container.innerHTML = html;
+
+            // Auto-enrich emails for all results
+            autoEnrichEmails(results);
+        }
+
+        function toggleEmailsFilter() {
+            emailsOnlyFilter = !emailsOnlyFilter;
+            const btn = document.getElementById('emailsFilterBtn');
+            if (btn) btn.style.background = emailsOnlyFilter ? 'var(--primary)' : '';
+            if (btn) btn.style.color = emailsOnlyFilter ? '#fff' : 'var(--primary)';
+            document.querySelectorAll('#searchResultsTbody tr').forEach(row => {
+                row.style.display = (emailsOnlyFilter && row.dataset.hasEmail === '0') ? 'none' : '';
+            });
+        }
+
+        async function autoEnrichEmails(results) {
+            const items = results.map(lab => ({
+                npi: lab.npi,
+                org_name: lab.organization_name || `${lab.first_name || ''} ${lab.last_name || ''}`.trim(),
+            })).filter(x => x.org_name);
+
+            if (!items.length) return;
+
+            try {
+                const resp = await fetch('/api/emails/bulk', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(items),
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                let found = 0;
+
+                (data.results || []).forEach(r => {
+                    const cell = document.getElementById(`email-cell-${r.npi}`);
+                    const row = document.getElementById(`row-${r.npi}`);
+                    if (!cell) return;
+
+                    if (r.top_email) {
+                        found++;
+                        cell.innerHTML = `<span style="color:var(--primary);font-weight:600;">${escHtml(r.top_email)}</span>`
+                            + (r.count > 1 ? ` <span style="color:var(--gray-400);font-size:11px;">+${r.count - 1} more</span>` : '');
+                        if (row) row.dataset.hasEmail = '1';
+                    } else if (r.live_domain) {
+                        cell.innerHTML = `<span style="color:var(--gray-500);font-size:11px;">🌐 ${escHtml(r.live_domain)}</span>`;
+                    } else {
+                        cell.innerHTML = `<span style="color:var(--gray-300);font-size:11px;">—</span>`;
+                    }
+                });
+
+                const status = document.getElementById('emailEnrichStatus');
+                if (status) status.textContent = `✅ ${found} email${found !== 1 ? 's' : ''} found`;
+            } catch (e) {
+                const status = document.getElementById('emailEnrichStatus');
+                if (status) status.textContent = '';
+            }
         }
 
         // ──────────────────────────────────────────────────────────────
