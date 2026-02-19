@@ -1,0 +1,1723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MedPharma Client Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --primary:#6366f1;--primary-dark:#4f46e5;--primary-darker:#4338ca;
+  --primary-light:#eef2ff;--primary-mid:#c7d2fe;
+  --success:#10b981;--success-light:#d1fae5;
+  --warning:#f59e0b;--warning-light:#fef3c7;
+  --danger:#ef4444;--danger-light:#fee2e2;
+  --info:#3b82f6;--info-light:#dbeafe;
+  --purple:#8b5cf6;--purple-light:#ede9fe;
+  --gray-50:#f9fafb;--gray-100:#f3f4f6;--gray-200:#e5e7eb;
+  --gray-300:#d1d5db;--gray-400:#9ca3af;--gray-500:#6b7280;
+  --gray-600:#4b5563;--gray-700:#374151;--gray-800:#1f2937;--gray-900:#111827;
+  --radius:12px;--radius-sm:8px;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.05);
+  --shadow-md:0 4px 16px rgba(0,0,0,.08);
+  --shadow-lg:0 20px 50px rgba(0,0,0,.12);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',system-ui,sans-serif;background:#f5f6fa;color:var(--gray-800);line-height:1.5;-webkit-font-smoothing:antialiased}
+
+/* ── Login ── */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--primary-darker) 0%,var(--primary) 50%,#818cf8 100%);
+  position:relative;overflow:hidden}
+.login-wrap::before{content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 70% 20%,rgba(255,255,255,.08) 0%,transparent 50%),
+             radial-gradient(circle at 20% 80%,rgba(255,255,255,.06) 0%,transparent 50%)}
+.login-card{background:#fff;border-radius:20px;padding:48px 44px;width:440px;max-width:92vw;
+  box-shadow:var(--shadow-lg);position:relative;z-index:1}
+.login-logo{text-align:center;margin-bottom:32px}
+.login-logo .brand-name{font-size:30px;font-weight:700;color:var(--primary);letter-spacing:-1px;
+  background:linear-gradient(135deg,var(--primary),var(--primary-dark));-webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;background-clip:text}
+.login-logo .brand-sub{font-size:13px;color:var(--gray-400);margin-top:4px;font-weight:400}
+.login-logo .badge{display:inline-block;background:var(--primary-light);color:var(--primary);
+  font-size:11px;font-weight:600;padding:3px 12px;border-radius:20px;margin-top:8px;letter-spacing:.3px}
+.login-field{margin-bottom:18px}
+.login-field label{display:block;font-size:12px;font-weight:600;color:var(--gray-600);
+  text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.login-field input{width:100%;padding:12px 16px;border:2px solid var(--gray-200);border-radius:var(--radius-sm);
+  font-size:15px;font-family:inherit;outline:none;transition:border .2s,box-shadow .2s;background:#fafafa}
+.login-field input:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-light);background:#fff}
+.btn-login{width:100%;padding:14px;background:linear-gradient(135deg,var(--primary),var(--primary-dark));
+  color:#fff;border:none;border-radius:var(--radius-sm);font-size:16px;font-weight:600;
+  font-family:inherit;cursor:pointer;transition:all .2s;letter-spacing:.2px;
+  box-shadow:0 4px 15px rgba(99,102,241,.3)}
+.btn-login:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(99,102,241,.4)}
+.btn-login:active{transform:translateY(0)}
+.login-error{color:var(--danger);font-size:13px;text-align:center;margin-top:14px;padding:10px;
+  background:var(--danger-light);border-radius:var(--radius-sm);display:none}
+.login-hint{font-size:12px;color:var(--gray-400);text-align:center;margin-top:18px;
+  padding-top:18px;border-top:1px solid var(--gray-100)}
+
+/* ── Account Selector ── */
+.account-select-wrap{min-height:100vh;background:#f5f6fa}
+.account-header{background:linear-gradient(135deg,var(--primary-darker),var(--primary));
+  padding:28px 40px;display:flex;align-items:center;justify-content:space-between}
+.account-header .brand{display:flex;align-items:center;gap:12px}
+.account-header .brand h1{color:#fff;font-size:22px;font-weight:700;letter-spacing:-.5px}
+.account-header .brand span{background:rgba(255,255,255,.2);color:#fff;font-size:11px;
+  font-weight:600;padding:3px 10px;border-radius:20px;letter-spacing:.5px}
+.account-body{max-width:1100px;margin:0 auto;padding:48px 24px}
+.account-body h2{font-size:26px;font-weight:700;color:var(--gray-900);margin-bottom:8px}
+.account-body p{color:var(--gray-500);font-size:15px;margin-bottom:36px}
+.account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
+.account-card{background:#fff;border-radius:16px;padding:28px;cursor:pointer;
+  box-shadow:var(--shadow);border:2px solid transparent;transition:all .2s;
+  display:flex;flex-direction:column;gap:12px}
+.account-card:hover{border-color:var(--primary);box-shadow:0 8px 30px rgba(99,102,241,.15);
+  transform:translateY(-2px)}
+.account-card .ac-icon{width:52px;height:52px;background:linear-gradient(135deg,var(--primary-light),var(--primary-mid));
+  border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px}
+.account-card .ac-name{font-size:18px;font-weight:700;color:var(--gray-900)}
+.account-card .ac-contact{font-size:13px;color:var(--gray-500)}
+.account-card .ac-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
+  color:var(--success);background:var(--success-light);padding:3px 10px;border-radius:20px;width:fit-content}
+
+/* ── App Shell ── */
+.app{display:none}
+.topbar{background:linear-gradient(135deg,var(--primary-darker) 0%,var(--primary) 100%);
+  color:#fff;height:62px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 24px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(79,70,229,.35)}
+.topbar-left{display:flex;align-items:center;gap:14px}
+.topbar-left .brand{font-size:20px;font-weight:700;letter-spacing:-.5px}
+.topbar-left .account-chip{background:rgba(255,255,255,.18);padding:4px 14px;border-radius:20px;
+  font-size:13px;font-weight:500;cursor:pointer;transition:background .2s;border:1px solid rgba(255,255,255,.25)}
+.topbar-left .account-chip:hover{background:rgba(255,255,255,.28)}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px}
+.topbar-right .role-pill{background:rgba(255,255,255,.2);padding:3px 10px;border-radius:20px;
+  font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.btn-logout{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);
+  padding:6px 16px;border-radius:8px;font-size:13px;font-family:inherit;cursor:pointer;
+  font-weight:500;transition:background .2s}
+.btn-logout:hover{background:rgba(255,255,255,.25)}
+
+/* ── Layout ── */
+.app-body{display:flex;min-height:calc(100vh - 62px)}
+.sidebar{width:230px;background:#fff;border-right:1px solid var(--gray-200);
+  padding:20px 0;flex-shrink:0;overflow-y:auto}
+.nav-section{font-size:10px;font-weight:700;color:var(--gray-400);text-transform:uppercase;
+  letter-spacing:1.2px;padding:18px 20px 8px;margin-top:4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 18px 10px 16px;
+  cursor:pointer;font-size:14px;font-weight:500;color:var(--gray-600);transition:all .15s;
+  border-left:3px solid transparent;border-radius:0 8px 8px 0;margin:1px 8px 1px 0}
+.nav-item:hover{background:var(--gray-50);color:var(--gray-800)}
+.nav-item.active{color:var(--primary);background:var(--primary-light);
+  border-left-color:var(--primary);font-weight:600}
+.nav-item .ni{width:20px;font-size:15px;text-align:center;flex-shrink:0}
+.main-content{flex:1;padding:28px;min-width:0;overflow-x:hidden}
+
+/* ── Panels ── */
+.hub-panel{display:none}
+.hub-panel.active{display:block}
+
+/* ── Page header ── */
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.page-title{font-size:24px;font-weight:700;color:var(--gray-900);letter-spacing:-.3px}
+.page-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* ── KPI Cards ── */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;margin-bottom:24px}
+.kpi-card{background:#fff;border-radius:var(--radius);padding:22px 20px;box-shadow:var(--shadow);
+  position:relative;overflow:hidden;border-top:4px solid var(--primary)}
+.kpi-card.indigo{border-top-color:var(--primary)}
+.kpi-card.green{border-top-color:var(--success)}
+.kpi-card.amber{border-top-color:var(--warning)}
+.kpi-card.red{border-top-color:var(--danger)}
+.kpi-card.purple{border-top-color:var(--purple)}
+.kpi-card.blue{border-top-color:var(--info)}
+.kpi-value{font-size:28px;font-weight:700;color:var(--gray-900);letter-spacing:-.5px;line-height:1}
+.kpi-label{font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;
+  letter-spacing:.6px;margin-top:6px}
+.kpi-sub{font-size:12px;color:var(--gray-500);margin-top:4px}
+
+/* ── Cards ── */
+.card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;margin-bottom:18px}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.card-title{font-size:15px;font-weight:700;color:var(--gray-800)}
+
+/* ── Tables ── */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:var(--gray-50)}
+th{padding:11px 14px;font-weight:600;color:var(--gray-500);border-bottom:2px solid var(--gray-200);
+  text-transform:uppercase;font-size:11px;letter-spacing:.5px;white-space:nowrap;text-align:left}
+td{padding:12px 14px;border-bottom:1px solid var(--gray-100);vertical-align:middle}
+tr:hover td{background:#fafbff}
+tr:last-child td{border-bottom:none}
+
+/* ── Badges ── */
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;
+  font-weight:600;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.badge-green,.badge-paid,.badge-active,.badge-approved,.badge-completed,.badge-live,.badge-enrolled{
+  background:var(--success-light);color:#065f46}
+.badge-amber,.badge-pending,.badge-in-review,.badge-draft,.badge-in-progress,.badge-not-started{
+  background:var(--warning-light);color:#92400e}
+.badge-red,.badge-denied,.badge-rejected,.badge-overdue,.badge-failed,.badge-sla-breach{
+  background:var(--danger-light);color:#991b1b}
+.badge-blue,.badge-submitted,.badge-billed,.badge-sent,.badge-in-process{
+  background:var(--info-light);color:#1e40af}
+.badge-purple,.badge-appeal,.badge-credentialing{
+  background:var(--purple-light);color:#5b21b6}
+.badge-indigo,.badge-ar-follow-up,.badge-intake,.badge-coding,.badge-verification{
+  background:var(--primary-light);color:var(--primary-dark)}
+.badge-gray,.badge-inactive,.badge-not-enrolled{
+  background:var(--gray-100);color:var(--gray-600)}
+
+/* ── Buttons ── */
+.btn{padding:9px 18px;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;
+  font-family:inherit;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;
+  gap:6px;white-space:nowrap;letter-spacing:.1px}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-dark)}
+.btn-secondary{background:var(--gray-100);color:var(--gray-700);border:1px solid var(--gray-200)}
+.btn-secondary:hover{background:var(--gray-200)}
+.btn-success{background:var(--success);color:#fff}
+.btn-danger-outline{background:#fff;color:var(--danger);border:1px solid var(--gray-200)}
+.btn-danger-outline:hover{background:var(--danger-light);border-color:var(--danger)}
+.btn-sm{padding:5px 12px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-icon{background:none;border:none;cursor:pointer;padding:5px;font-size:16px;
+  color:var(--gray-400);border-radius:6px;transition:all .15s}
+.btn-icon:hover{color:var(--gray-700);background:var(--gray-100)}
+
+/* ── Form ── */
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:16px}
+.form-full{grid-column:1/-1}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group label{font-size:11px;font-weight:600;color:var(--gray-600);
+  text-transform:uppercase;letter-spacing:.5px}
+.form-control{padding:9px 13px;border:2px solid var(--gray-200);border-radius:var(--radius-sm);
+  font-size:13px;font-family:inherit;outline:none;transition:border .2s;background:#fff}
+.form-control:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-light)}
+textarea.form-control{min-height:72px;resize:vertical}
+select.form-control{cursor:pointer}
+
+/* ── Modal ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(17,24,39,.55);
+  z-index:200;justify-content:center;align-items:flex-start;padding:40px 16px;
+  backdrop-filter:blur(3px)}
+.modal-overlay.open{display:flex}
+.modal{background:#fff;border-radius:18px;padding:32px;width:720px;max-width:96vw;
+  max-height:88vh;overflow-y:auto;box-shadow:0 30px 80px rgba(0,0,0,.2)}
+.modal-sm{width:480px}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.modal-header h2{font-size:20px;font-weight:700;color:var(--gray-900)}
+.modal-close{background:none;border:none;font-size:28px;cursor:pointer;
+  color:var(--gray-400);line-height:1;border-radius:6px;padding:0 4px}
+.modal-close:hover{color:var(--gray-700)}
+.modal-section{margin-top:24px;padding-top:20px;border-top:1px solid var(--gray-100)}
+.modal-section-title{font-size:13px;font-weight:700;color:var(--gray-700);text-transform:uppercase;
+  letter-spacing:.6px;margin-bottom:14px}
+
+/* ── Claims Queue tabs ── */
+.queue-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:20px;
+  background:#fff;padding:8px;border-radius:var(--radius);box-shadow:var(--shadow);border:1px solid var(--gray-100)}
+.qtab{padding:7px 14px;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;
+  font-family:inherit;cursor:pointer;transition:all .15s;color:var(--gray-600);background:transparent;
+  white-space:nowrap}
+.qtab:hover{background:var(--gray-100);color:var(--gray-800)}
+.qtab.active{background:var(--primary);color:#fff;box-shadow:0 2px 8px rgba(99,102,241,.35)}
+.qtab .cnt{background:rgba(255,255,255,.35);padding:1px 7px;border-radius:10px;margin-left:5px;font-size:11px}
+.qtab:not(.active) .cnt{background:var(--gray-200);color:var(--gray-600)}
+
+/* ── Notes log ── */
+.note-item{padding:12px 14px;background:var(--gray-50);border-radius:var(--radius-sm);
+  margin-bottom:8px;border-left:3px solid var(--primary-mid)}
+.note-meta{font-size:11px;color:var(--gray-400);margin-bottom:4px;font-weight:500}
+.note-text{font-size:13px;color:var(--gray-700);line-height:1.5}
+
+/* ── Payments log ── */
+.pay-item{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
+  background:var(--gray-50);border-radius:var(--radius-sm);margin-bottom:6px}
+.pay-item .pay-left{display:flex;flex-direction:column;gap:2px}
+.pay-item .pay-amount{font-size:16px;font-weight:700;color:var(--success)}
+.pay-item .pay-meta{font-size:11px;color:var(--gray-400)}
+
+/* ── Charts ── */
+.bar-list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.bar-row{display:flex;align-items:center;gap:12px}
+.bar-lbl{width:120px;font-size:12px;font-weight:600;color:var(--gray-600);text-align:right;flex-shrink:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-track{flex:1;background:var(--gray-100);border-radius:8px;height:26px;position:relative;overflow:hidden}
+.bar-fill{height:100%;border-radius:8px;display:flex;align-items:center;padding:0 10px;
+  font-size:11px;font-weight:600;color:#fff;min-width:40px;transition:width .6s ease}
+.bf-indigo{background:linear-gradient(90deg,var(--primary),#818cf8)}
+.bf-green{background:linear-gradient(90deg,var(--success),#34d399)}
+.bf-amber{background:linear-gradient(90deg,var(--warning),#fcd34d)}
+.bf-red{background:linear-gradient(90deg,var(--danger),#f87171)}
+.bf-purple{background:linear-gradient(90deg,var(--purple),#a78bfa)}
+.bf-blue{background:linear-gradient(90deg,var(--info),#60a5fa)}
+
+/* ── Aging buckets ── */
+.aging-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}
+.aging-bucket{background:var(--gray-50);border-radius:var(--radius-sm);padding:16px;text-align:center;
+  border:2px solid var(--gray-200)}
+.aging-bucket .ab-val{font-size:20px;font-weight:700;color:var(--gray-900)}
+.aging-bucket .ab-lbl{font-size:11px;font-weight:600;color:var(--gray-400);margin-top:3px;text-transform:uppercase}
+.aging-bucket.danger{border-color:var(--danger);background:var(--danger-light)}
+.aging-bucket.danger .ab-val{color:var(--danger)}
+.aging-bucket.warning{border-color:var(--warning);background:var(--warning-light)}
+.aging-bucket.warning .ab-val{color:var(--warning)}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;right:24px;padding:13px 20px;background:var(--gray-900);
+  color:#fff;border-radius:var(--radius);box-shadow:var(--shadow-md);z-index:500;
+  font-size:14px;font-weight:500;animation:toastIn .3s ease;max-width:360px}
+.toast.success{background:var(--success)}
+.toast.error{background:var(--danger)}
+@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* ── Empty state ── */
+.empty-state{text-align:center;padding:56px 24px;color:var(--gray-400)}
+.empty-state .es-icon{font-size:40px;margin-bottom:12px;opacity:.6}
+.empty-state p{font-size:14px}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .kpi-grid{grid-template-columns:1fr 1fr}
+  .aging-grid{grid-template-columns:1fr 1fr}
+  .account-grid{grid-template-columns:1fr}
+  .main-content{padding:16px}
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════ LOGIN ══════════════ -->
+<div id="loginScreen">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="brand-name">MedPharma</div>
+        <div class="brand-sub">Revenue Cycle Management</div>
+        <div class="badge">Secure Client Portal</div>
+      </div>
+      <div class="login-field">
+        <label>Username</label>
+        <input class="form-control" type="text" id="loginUser" placeholder="Enter username" autofocus>
+      </div>
+      <div class="login-field">
+        <label>Password</label>
+        <input class="form-control" type="password" id="loginPass" placeholder="Enter password">
+      </div>
+      <button class="btn-login" onclick="doLogin()">Sign In →</button>
+      <div class="login-error" id="loginError"></div>
+      <div class="login-hint">admin / admin123 &nbsp;·&nbsp; demo / client123</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ ACCOUNT SELECTOR ══════════════ -->
+<div id="accountSelect" style="display:none">
+  <div class="account-header">
+    <div class="brand">
+      <h1>MedPharma</h1>
+      <span>Client Hub</span>
+    </div>
+    <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+  </div>
+  <div class="account-body">
+    <h2>Select an Account</h2>
+    <p>Choose a client account to open the dashboard</p>
+    <div class="account-grid" id="accountGrid"></div>
+  </div>
+</div>
+
+<!-- ══════════════ APP SHELL ══════════════ -->
+<div class="app" id="appShell">
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="brand">MedPharma</span>
+      <span class="account-chip" id="topAccount" onclick="switchAccount()">↩ Switch Account</span>
+    </div>
+    <div class="topbar-right">
+      <span id="topUser" style="font-weight:500"></span>
+      <span class="role-pill" id="topRole"></span>
+      <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <div class="app-body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="nav-section">Overview</div>
+      <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">
+        <span class="ni">📊</span> Dashboard
+      </div>
+      <div class="nav-section">Operations</div>
+      <div class="nav-item" data-panel="claims" onclick="navTo('claims')">
+        <span class="ni">📋</span> Claims Queue
+      </div>
+      <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')">
+        <span class="ni">🎓</span> Credentialing
+      </div>
+      <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">
+        <span class="ni">📝</span> Enrollment
+      </div>
+      <div class="nav-item" data-panel="edi" onclick="navTo('edi')">
+        <span class="ni">🔗</span> EDI Setup
+      </div>
+      <div class="nav-item" data-panel="providers" onclick="navTo('providers')">
+        <span class="ni">👤</span> Providers
+      </div>
+      <div id="adminNav" style="display:none">
+        <div class="nav-section">Admin</div>
+        <div class="nav-item" data-panel="clients" onclick="navTo('clients')">
+          <span class="ni">🏢</span> Manage Clients
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="main-content">
+
+      <!-- ═══ DASHBOARD ═══ -->
+      <div class="hub-panel active" id="panel-dashboard">
+        <div class="page-header">
+          <div class="page-title" id="dashTitle">Dashboard</div>
+          <div class="page-actions">
+            <select id="dashPeriod" class="form-control btn-sm" onchange="loadDashboard()" style="width:auto">
+              <option value="mtd">Month to Date</option>
+              <option value="wtd">Week to Date</option>
+              <option value="ytd">Year to Date</option>
+              <option value="all">All Time</option>
+            </select>
+          </div>
+        </div>
+        <div class="kpi-grid" id="kpiGrid"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+          <div class="card">
+            <div class="card-header"><div class="card-title">AR Aging Buckets</div></div>
+            <div class="aging-grid" id="agingGrid"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><div class="card-title">Claims by Status</div></div>
+            <div class="bar-list" id="statusChart"></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:18px">
+          <div class="card">
+            <div class="card-header"><div class="card-title">Top Denial Categories</div></div>
+            <div class="bar-list" id="denialChart"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><div class="card-title">Payor Mix</div></div>
+            <div class="bar-list" id="payorChart"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ CLAIMS QUEUE ═══ -->
+      <div class="hub-panel" id="panel-claims">
+        <div class="page-header">
+          <div class="page-title">Claims Queue</div>
+          <div class="page-actions">
+            <input class="form-control btn-sm" type="text" id="claimSearch" placeholder="🔍 Search claims…" oninput="filterClaimsTable()" style="width:220px">
+            <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
+          </div>
+        </div>
+        <div class="queue-tabs" id="queueTabs"></div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table id="claimsTable">
+            <thead><tr>
+              <th>Claim #</th><th>Patient</th><th>Provider</th><th>Payor</th>
+              <th>DOS</th><th>Charge</th><th>Paid</th><th>Balance</th>
+              <th>Status</th><th>Owner</th><th>Next Action</th><th>Due</th><th></th>
+            </tr></thead>
+            <tbody id="claimsTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ CREDENTIALING ═══ -->
+      <div class="hub-panel" id="panel-credentialing">
+        <div class="page-header">
+          <div class="page-title">Credentialing</div>
+          <div class="page-actions">
+            <select id="credFilter" class="form-control btn-sm" onchange="loadCred()" style="width:auto">
+              <option value="">All Statuses</option>
+              <option>Not Started</option><option>In Progress</option>
+              <option>Submitted</option><option>Approved</option><option>Denied</option><option>Expired</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="openCredModal()">+ Add</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Provider</th><th>Payor</th><th>Type</th><th>Status</th>
+              <th>Submitted</th><th>Follow-Up</th><th>Approved</th><th>Expires</th><th>Owner</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="credTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ ENROLLMENT ═══ -->
+      <div class="hub-panel" id="panel-enrollment">
+        <div class="page-header">
+          <div class="page-title">Enrollment</div>
+          <div class="page-actions">
+            <select id="enrollFilter" class="form-control btn-sm" onchange="loadEnroll()" style="width:auto">
+              <option value="">All Statuses</option>
+              <option>Not Started</option><option>In Progress</option><option>Submitted</option>
+              <option>Approved</option><option>Enrolled</option><option>Denied</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Provider</th><th>Payor</th><th>Type</th><th>Status</th>
+              <th>Submitted</th><th>Follow-Up</th><th>Approved</th><th>Effective</th><th>Owner</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="enrollTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ EDI ═══ -->
+      <div class="hub-panel" id="panel-edi">
+        <div class="page-header">
+          <div class="page-title">EDI Setup</div>
+          <div class="page-actions">
+            <button class="btn btn-primary btn-sm" onclick="openEdiModal()">+ Add</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Provider</th><th>Payor</th><th>Payer ID</th>
+              <th>EDI</th><th>ERA</th><th>EFT</th>
+              <th>Submitted</th><th>Go-Live</th><th>Owner</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="ediTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ PROVIDERS ═══ -->
+      <div class="hub-panel" id="panel-providers">
+        <div class="page-header">
+          <div class="page-title">Providers</div>
+          <div class="page-actions">
+            <button class="btn btn-primary btn-sm" onclick="openProviderModal()">+ Add Provider</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>NPI</th><th>Specialty</th><th>Tax ID</th>
+              <th>Email</th><th>Phone</th><th>Status</th><th>Start Date</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="providerTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- ═══ CLIENTS (admin) ═══ -->
+      <div class="hub-panel" id="panel-clients">
+        <div class="page-header">
+          <div class="page-title">Manage Clients</div>
+          <div class="page-actions">
+            <button class="btn btn-primary btn-sm" onclick="openClientModal()">+ Add Client</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Username</th><th>Company</th><th>Contact</th><th>Email</th>
+              <th>Phone</th><th>Role</th><th>Last Login</th><th>Active</th></tr></thead>
+            <tbody id="clientTbody"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+    </div><!-- main-content -->
+  </div><!-- app-body -->
+</div><!-- appShell -->
+
+<!-- ══════════════ MODALS ══════════════ -->
+
+<!-- Claim Modal (full edit with notes + payments) -->
+<div class="modal-overlay" id="claimModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="claimModalTitle">New Claim</h2>
+      <button class="modal-close" onclick="closeModal('claimModal')">&times;</button>
+    </div>
+    <input type="hidden" id="claimEditId">
+    <div class="form-grid">
+      <div class="form-group"><label>Claim Key *</label><input class="form-control" id="fClaimKey" placeholder="CLM-2026-001"></div>
+      <div class="form-group"><label>Patient ID</label><input class="form-control" id="fPatientID"></div>
+      <div class="form-group"><label>Patient Name</label><input class="form-control" id="fPatientName"></div>
+      <div class="form-group"><label>Payor</label><input class="form-control" id="fPayor"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Provider Name</label><input class="form-control" id="fProviderName"></div>
+      <div class="form-group"><label>NPI</label><input class="form-control" id="fNPI"></div>
+      <div class="form-group"><label>CPT Code</label><input class="form-control" id="fCPT"></div>
+      <div class="form-group"><label>DOS</label><input class="form-control" type="date" id="fDOS"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Charge $</label><input class="form-control" type="number" step="0.01" id="fCharge" value="0"></div>
+      <div class="form-group"><label>Allowed $</label><input class="form-control" type="number" step="0.01" id="fAllowed" value="0"></div>
+      <div class="form-group"><label>Paid $</label><input class="form-control" type="number" step="0.01" id="fPaid" value="0"></div>
+      <div class="form-group"><label>Balance $</label><input class="form-control" type="number" step="0.01" id="fBalance" value="0"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Status *</label>
+        <select class="form-control" id="fClaimStatus">
+          <option>Intake</option><option>Verification</option><option>Coding</option>
+          <option>Billed/Submitted</option><option>Rejected</option><option>Denied</option>
+          <option>A/R Follow-up</option><option>Appeal</option><option>Paid</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Owner</label><input class="form-control" id="fOwner"></div>
+      <div class="form-group"><label>Bill Date</label><input class="form-control" type="date" id="fBillDate"></div>
+      <div class="form-group"><label>Denied Date</label><input class="form-control" type="date" id="fDeniedDate"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Denial Category</label>
+        <select class="form-control" id="fDenialCat">
+          <option value=""></option>
+          <option>Authorization/Referral</option><option>Eligibility</option><option>Coding Error</option>
+          <option>Duplicate Claim</option><option>Timely Filing</option><option>Medical Necessity</option>
+          <option>Non-Covered Service</option><option>Missing Info</option><option>Other</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Denial Reason</label><input class="form-control" id="fDenialReason"></div>
+      <div class="form-group"><label>Next Action</label><input class="form-control" id="fNextAction"></div>
+      <div class="form-group"><label>Next Action Due</label><input class="form-control" type="date" id="fNextActionDue"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Paid Date</label><input class="form-control" type="date" id="fPaidDate"></div>
+      <div class="form-group"><label>Appeal Date</label><input class="form-control" type="date" id="fAppealDate"></div>
+      <div class="form-group"><label>Appeal Status</label>
+        <select class="form-control" id="fAppealStatus">
+          <option value=""></option><option>Filed</option><option>Pending</option>
+          <option>Won</option><option>Lost</option>
+        </select>
+      </div>
+      <div class="form-group"><label>SLA Breached</label>
+        <select class="form-control" id="fSLA"><option value="0">No</option><option value="1">Yes</option></select>
+      </div>
+    </div>
+    <div class="form-group form-full" id="claimClientGroup" style="display:none;margin-bottom:14px">
+      <label>Client</label>
+      <select class="form-control" id="fClaimClient"></select>
+    </div>
+    <button class="btn btn-primary" onclick="saveClaim()">Save Claim</button>
+
+    <!-- Notes section (only for edit mode) -->
+    <div class="modal-section" id="notesSection" style="display:none">
+      <div class="modal-section-title">Notes Log</div>
+      <div id="notesList" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px">
+        <input class="form-control" id="newNoteText" placeholder="Add a note…" style="flex:1" onkeydown="if(event.key==='Enter')addNote()">
+        <button class="btn btn-secondary btn-sm" onclick="addNote()">Add Note</button>
+      </div>
+    </div>
+
+    <!-- Payments section (only for edit mode) -->
+    <div class="modal-section" id="paymentsSection" style="display:none">
+      <div class="modal-section-title">Payment History</div>
+      <div id="paymentsList" style="margin-bottom:12px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end">
+        <div class="form-group"><label>Post Date</label><input class="form-control" type="date" id="payDate"></div>
+        <div class="form-group"><label>Amount $</label><input class="form-control" type="number" step="0.01" id="payAmount" value="0"></div>
+        <div class="form-group"><label>Type</label>
+          <select class="form-control" id="payType"><option>Primary</option><option>Secondary</option><option>Patient</option></select>
+        </div>
+        <button class="btn btn-success btn-sm" onclick="addPayment()">+ Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Credentialing Modal -->
+<div class="modal-overlay" id="credModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="credModalTitle">New Credentialing Item</h2>
+      <button class="modal-close" onclick="closeModal('credModal')">&times;</button>
+    </div>
+    <input type="hidden" id="credEditId">
+    <div class="form-grid">
+      <div class="form-group"><label>Provider Name</label><input class="form-control" id="fCredProvider"></div>
+      <div class="form-group"><label>Payor</label><input class="form-control" id="fCredPayor"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Type</label>
+        <select class="form-control" id="fCredType">
+          <option>Initial</option><option>Re-credential</option><option>Renewal</option><option>Add Location</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Status</label>
+        <select class="form-control" id="fCredStatus">
+          <option>Not Started</option><option>In Progress</option><option>Submitted</option>
+          <option>Approved</option><option>Denied</option><option>Expired</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Submitted</label><input class="form-control" type="date" id="fCredSubmitted"></div>
+      <div class="form-group"><label>Follow-Up</label><input class="form-control" type="date" id="fCredFollowUp"></div>
+      <div class="form-group"><label>Approved</label><input class="form-control" type="date" id="fCredApproved"></div>
+      <div class="form-group"><label>Expiration</label><input class="form-control" type="date" id="fCredExpires"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Owner</label><input class="form-control" id="fCredOwner"></div>
+      <div class="form-group form-full" id="credClientGroup" style="display:none">
+        <label>Client</label><select class="form-control" id="fCredClient"></select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control" id="fCredNotes"></textarea></div>
+    <button class="btn btn-primary" onclick="saveCred()">Save</button>
+  </div>
+</div>
+
+<!-- Enrollment Modal -->
+<div class="modal-overlay" id="enrollModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="enrollModalTitle">New Enrollment Item</h2>
+      <button class="modal-close" onclick="closeModal('enrollModal')">&times;</button>
+    </div>
+    <input type="hidden" id="enrollEditId">
+    <div class="form-grid">
+      <div class="form-group"><label>Provider Name</label><input class="form-control" id="fEnrollProvider"></div>
+      <div class="form-group"><label>Payor</label><input class="form-control" id="fEnrollPayor"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Type</label>
+        <select class="form-control" id="fEnrollType">
+          <option>Enrollment</option><option>Re-enrollment</option><option>PECOS</option><option>State Medicaid</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Status</label>
+        <select class="form-control" id="fEnrollStatus">
+          <option>Not Started</option><option>In Progress</option><option>Submitted</option>
+          <option>Approved</option><option>Enrolled</option><option>Denied</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Submitted</label><input class="form-control" type="date" id="fEnrollSubmitted"></div>
+      <div class="form-group"><label>Follow-Up</label><input class="form-control" type="date" id="fEnrollFollowUp"></div>
+      <div class="form-group"><label>Approved</label><input class="form-control" type="date" id="fEnrollApproved"></div>
+      <div class="form-group"><label>Effective</label><input class="form-control" type="date" id="fEnrollEffective"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Owner</label><input class="form-control" id="fEnrollOwner"></div>
+      <div class="form-group form-full" id="enrollClientGroup" style="display:none">
+        <label>Client</label><select class="form-control" id="fEnrollClient"></select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control" id="fEnrollNotes"></textarea></div>
+    <button class="btn btn-primary" onclick="saveEnroll()">Save</button>
+  </div>
+</div>
+
+<!-- EDI Modal -->
+<div class="modal-overlay" id="ediModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="ediModalTitle">New EDI Setup</h2>
+      <button class="modal-close" onclick="closeModal('ediModal')">&times;</button>
+    </div>
+    <input type="hidden" id="ediEditId">
+    <div class="form-grid">
+      <div class="form-group"><label>Provider Name</label><input class="form-control" id="fEdiProvider"></div>
+      <div class="form-group"><label>Payor</label><input class="form-control" id="fEdiPayor"></div>
+      <div class="form-group"><label>Payer ID</label><input class="form-control" id="fEdiPayerID"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>EDI Status</label>
+        <select class="form-control" id="fEdiStatus">
+          <option>Not Started</option><option>In Process</option><option>Live</option><option>Failed</option>
+        </select>
+      </div>
+      <div class="form-group"><label>ERA Status</label>
+        <select class="form-control" id="fEraStatus">
+          <option>Not Started</option><option>In Process</option><option>Live</option><option>Failed</option>
+        </select>
+      </div>
+      <div class="form-group"><label>EFT Status</label>
+        <select class="form-control" id="fEftStatus">
+          <option>Not Started</option><option>In Process</option><option>Live</option><option>Failed</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Submitted</label><input class="form-control" type="date" id="fEdiSubmitted"></div>
+      <div class="form-group"><label>Go-Live</label><input class="form-control" type="date" id="fEdiGoLive"></div>
+      <div class="form-group"><label>Owner</label><input class="form-control" id="fEdiOwner"></div>
+    </div>
+    <div class="form-group form-full" id="ediClientGroup" style="display:none;margin-bottom:14px">
+      <label>Client</label><select class="form-control" id="fEdiClient"></select>
+    </div>
+    <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control" id="fEdiNotes"></textarea></div>
+    <button class="btn btn-primary" onclick="saveEdi()">Save</button>
+  </div>
+</div>
+
+<!-- Provider Modal -->
+<div class="modal-overlay" id="providerModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="providerModalTitle">New Provider</h2>
+      <button class="modal-close" onclick="closeModal('providerModal')">&times;</button>
+    </div>
+    <input type="hidden" id="providerEditId">
+    <div class="form-grid">
+      <div class="form-group"><label>Full Name *</label><input class="form-control" id="fProvName"></div>
+      <div class="form-group"><label>NPI</label><input class="form-control" id="fProvNPI"></div>
+      <div class="form-group"><label>Specialty</label><input class="form-control" id="fProvSpecialty"></div>
+      <div class="form-group"><label>Tax ID</label><input class="form-control" id="fProvTaxID"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Email</label><input class="form-control" type="email" id="fProvEmail"></div>
+      <div class="form-group"><label>Phone</label><input class="form-control" id="fProvPhone"></div>
+      <div class="form-group"><label>Status</label>
+        <select class="form-control" id="fProvStatus"><option>Active</option><option>Inactive</option></select>
+      </div>
+      <div class="form-group"><label>Start Date</label><input class="form-control" type="date" id="fProvStart"></div>
+    </div>
+    <div class="form-group form-full" id="provClientGroup" style="display:none;margin-bottom:14px">
+      <label>Client</label><select class="form-control" id="fProvClient"></select>
+    </div>
+    <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control" id="fProvNotes"></textarea></div>
+    <button class="btn btn-primary" onclick="saveProvider()">Save Provider</button>
+  </div>
+</div>
+
+<!-- Client Modal -->
+<div class="modal-overlay" id="clientModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Add Client Account</h2>
+      <button class="modal-close" onclick="closeModal('clientModal')">&times;</button>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Username *</label><input class="form-control" id="fCUsername"></div>
+      <div class="form-group"><label>Password *</label><input class="form-control" id="fCPassword"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Company *</label><input class="form-control" id="fCCompany"></div>
+      <div class="form-group"><label>Contact Name</label><input class="form-control" id="fCContact"></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Email</label><input class="form-control" type="email" id="fCEmail"></div>
+      <div class="form-group"><label>Phone</label><input class="form-control" id="fCPhone"></div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:8px" onclick="saveClient()">Create Client</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let currentUser = null;
+let activeClientId = null;
+let clientsList = [];
+let allClaims = [];
+let activeQueueStatus = 'All';
+const QUEUE_STATUSES = ['All','Intake','Verification','Coding','Billed/Submitted','Rejected','Denied','A/R Follow-up','Appeal','Paid'];
+
+// ═══════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async () => {
+  // Enter key on login
+  document.getElementById('loginPass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+  // Escape to close modals
+  document.addEventListener('keydown', e => {
+    if(e.key==='Escape') document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));
+  });
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
+  });
+
+  try {
+    const r = await fetch('/hub/api/me');
+    if(r.ok){ const u = await r.json(); currentUser = u; showAccountSelector(); }
+  } catch(_){}
+});
+
+// ═══════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════
+async function doLogin() {
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+  if(!username||!password){ showLoginError('Please enter username and password'); return; }
+  try {
+    const r = await fetch('/hub/api/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username, password})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail||'Login failed');
+    currentUser = d.user;
+    showAccountSelector();
+  } catch(e){ showLoginError(e.message); }
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById('loginError');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+async function doLogout() {
+  await fetch('/hub/api/logout', {method:'POST'});
+  currentUser = null; activeClientId = null;
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('accountSelect').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'block';
+}
+
+// ═══════════════════════════════════════
+// ACCOUNT SELECTOR
+// ═══════════════════════════════════════
+async function showAccountSelector() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('accountSelect').style.display = 'block';
+
+  if(currentUser.role === 'admin') {
+    const r = await fetch('/hub/api/clients');
+    const d = await r.json();
+    clientsList = d.clients || d || [];
+  } else {
+    clientsList = [{id: currentUser.id, company: currentUser.company,
+      contact_name: currentUser.contact_name, email: currentUser.email}];
+  }
+
+  const grid = document.getElementById('accountGrid');
+  grid.innerHTML = clientsList.map(c => `
+    <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
+      <div class="ac-icon">🏥</div>
+      <div class="ac-name">${esc(c.company)}</div>
+      <div class="ac-contact">${esc(c.contact_name||'')}${c.email?` · ${esc(c.email)}`:''}</div>
+      <div class="ac-badge"><span>●</span> Active</div>
+    </div>
+  `).join('');
+}
+
+function selectAccount(clientId, company) {
+  activeClientId = clientId;
+  document.getElementById('accountSelect').style.display = 'none';
+  document.getElementById('appShell').style.display = 'block';
+  document.getElementById('topAccount').textContent = company;
+  document.getElementById('topUser').textContent = currentUser.username;
+  document.getElementById('topRole').textContent = currentUser.role;
+  if(currentUser.role === 'admin') document.getElementById('adminNav').style.display = 'block';
+  navTo('dashboard');
+}
+
+function switchAccount() { showAccountSelector(); }
+
+// ═══════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════
+function navTo(panel) {
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.querySelectorAll('.hub-panel').forEach(p=>p.classList.remove('active'));
+  const ni = document.querySelector(`[data-panel="${panel}"]`);
+  if(ni) ni.classList.add('active');
+  const pp = document.getElementById(`panel-${panel}`);
+  if(pp) pp.classList.add('active');
+
+  if(panel==='dashboard') loadDashboard();
+  if(panel==='claims') loadClaims();
+  if(panel==='credentialing') loadCred();
+  if(panel==='enrollment') loadEnroll();
+  if(panel==='edi') loadEdi();
+  if(panel==='providers') loadProviders();
+  if(panel==='clients') loadClients();
+}
+
+// ═══════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════
+async function loadDashboard() {
+  const url = activeClientId
+    ? `/hub/api/dashboard/client/${activeClientId}`
+    : '/hub/api/dashboard';
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    renderDashboard(d);
+  } catch(e){ console.error(e); }
+}
+
+function renderDashboard(d) {
+  const adminView = currentUser && currentUser.role === 'admin';
+  document.getElementById('dashTitle').textContent = d.user
+    ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
+
+  // KPI grid
+  const kpis = [
+    {label:'Active Claims', val: d.active_claims||0, color:'indigo', icon:'📋'},
+    {label:'Total AR', val: '$'+fmt(d.total_ar), color:'blue', icon:'💰'},
+    {label:'Submitted MTD', val: d.submitted_mtd||0, color:'purple', icon:'📤'},
+    {label:'Payments MTD', val: '$'+fmt(d.payments_mtd), color:'green', icon:'✅'},
+    {label:'Denials MTD', val: d.denied_mtd||0, color:'red', icon:'❌'},
+    {label:'Clean Claim Rate', val: (d.clean_claim_rate||0)+'%', color:'green', icon:'🎯'},
+    {label:'Denial Rate', val: (d.denial_rate||0)+'%', color:'amber', icon:'⚠️'},
+    {label:'Avg Days to Pay', val: (d.avg_days_to_pay||0)+' days', color:'blue', icon:'📅'},
+  ];
+  if(adminView) kpis.push({label:'SLA Breaches', val: d.sla_breaches||0, color:'red', icon:'🚨'});
+
+  document.getElementById('kpiGrid').innerHTML = kpis.map(k=>`
+    <div class="kpi-card ${k.color}">
+      <div style="font-size:22px;margin-bottom:8px">${k.icon}</div>
+      <div class="kpi-value">${k.val}</div>
+      <div class="kpi-label">${k.label}</div>
+    </div>
+  `).join('');
+
+  // AR Aging
+  const aging = d.ar_aging || {current:0, days_31_60:0, days_61_90:0, days_90_plus:0};
+  document.getElementById('agingGrid').innerHTML = `
+    <div class="aging-bucket">
+      <div class="ab-val">$${fmt(aging.current||0)}</div><div class="ab-lbl">0–30 Days</div>
+    </div>
+    <div class="aging-bucket warning">
+      <div class="ab-val">$${fmt(aging.days_31_60||0)}</div><div class="ab-lbl">31–60 Days</div>
+    </div>
+    <div class="aging-bucket warning">
+      <div class="ab-val">$${fmt(aging.days_61_90||0)}</div><div class="ab-lbl">61–90 Days</div>
+    </div>
+    <div class="aging-bucket danger">
+      <div class="ab-val">$${fmt(aging.days_90_plus||0)}</div><div class="ab-lbl">90+ Days</div>
+    </div>
+  `;
+
+  // Status chart  
+  const sd = d.status_distribution || {};
+  const sdMax = Math.max(...Object.values(sd).map(Number), 1);
+  const sdColors = {Paid:'bf-green','Billed/Submitted':'bf-blue',Denied:'bf-red',
+    'A/R Follow-up':'bf-indigo',Appeal:'bf-purple',Intake:'bf-amber',Coding:'bf-amber'};
+  document.getElementById('statusChart').innerHTML = Object.entries(sd).length
+    ? Object.entries(sd).map(([s,c])=>`
+      <div class="bar-row">
+        <div class="bar-lbl">${esc(s)}</div>
+        <div class="bar-track">
+          <div class="bar-fill ${sdColors[s]||'bf-indigo'}" style="width:${Math.max(6,(c/sdMax)*100)}%">${c}</div>
+        </div>
+      </div>`).join('')
+    : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No claims data</p>';
+
+  // Denial categories
+  const dc = d.denial_categories || {};
+  const dcMax = Math.max(...Object.values(dc).map(Number), 1);
+  document.getElementById('denialChart').innerHTML = Object.entries(dc).length
+    ? Object.entries(dc).map(([s,c])=>`
+      <div class="bar-row">
+        <div class="bar-lbl">${esc(s)}</div>
+        <div class="bar-track">
+          <div class="bar-fill bf-red" style="width:${Math.max(6,(c/dcMax)*100)}%">${c}</div>
+        </div>
+      </div>`).join('')
+    : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No denials</p>';
+
+  // Payor mix
+  const pm = d.payor_mix || {};
+  const pmMax = Math.max(...Object.values(pm).map(Number), 1);
+  const pmColors = ['bf-indigo','bf-green','bf-amber','bf-purple','bf-blue'];
+  document.getElementById('payorChart').innerHTML = Object.entries(pm).length
+    ? Object.entries(pm).map(([s,c],i)=>`
+      <div class="bar-row">
+        <div class="bar-lbl">${esc(s)}</div>
+        <div class="bar-track">
+          <div class="bar-fill ${pmColors[i%pmColors.length]}" style="width:${Math.max(6,(c/pmMax)*100)}%">${c}</div>
+        </div>
+      </div>`).join('')
+    : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No payor data</p>';
+}
+
+// ═══════════════════════════════════════
+// CLAIMS QUEUE
+// ═══════════════════════════════════════
+async function loadClaims() {
+  buildQueueTabs([]);
+  const r = await fetch(`/hub/api/claims${activeClientId?`?client_id=${activeClientId}`:''}`);
+  const d = await r.json();
+  allClaims = d.claims || [];
+  buildQueueTabs(allClaims);
+  renderClaimsForStatus(activeQueueStatus);
+}
+
+function buildQueueTabs(claims) {
+  const counts = {};
+  QUEUE_STATUSES.forEach(s => { counts[s] = s==='All' ? claims.length : claims.filter(c=>c.ClaimStatus===s).length; });
+  document.getElementById('queueTabs').innerHTML = QUEUE_STATUSES.map(s=>`
+    <button class="qtab ${s===activeQueueStatus?'active':''}" onclick="setQueueTab('${s}')">
+      ${s} <span class="cnt">${counts[s]||0}</span>
+    </button>`).join('');
+}
+
+function setQueueTab(status) {
+  activeQueueStatus = status;
+  buildQueueTabs(allClaims);
+  renderClaimsForStatus(status);
+}
+
+function renderClaimsForStatus(status) {
+  const list = status==='All' ? allClaims : allClaims.filter(c=>c.ClaimStatus===status);
+  const search = document.getElementById('claimSearch')?.value?.toLowerCase()||'';
+  const filtered = search ? list.filter(c=>
+    (c.ClaimKey||'').toLowerCase().includes(search)||
+    (c.PatientName||'').toLowerCase().includes(search)||
+    (c.Payor||'').toLowerCase().includes(search)||
+    (c.PatientID||'').toLowerCase().includes(search)
+  ) : list;
+
+  const tbody = document.getElementById('claimsTbody');
+  if(!filtered.length){
+    tbody.innerHTML = `<tr><td colspan="13"><div class="empty-state"><div class="es-icon">📋</div><p>No claims in this queue</p></div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(c=>{
+    const slaClass = c.SLABreached ? 'style="background:#fff0f0"':'';
+    return `<tr ${slaClass}>
+      <td style="font-family:monospace;font-weight:700;font-size:12px">${esc(c.ClaimKey)}${c.SLABreached?'<br><span class="badge badge-red" style="font-size:9px">SLA!</span>':''}</td>
+      <td>${esc(c.PatientName||c.PatientID||'—')}</td>
+      <td style="font-size:12px">${esc(c.ProviderName||'—')}</td>
+      <td>${esc(c.Payor||'—')}</td>
+      <td style="font-size:12px">${c.DOS||'—'}</td>
+      <td style="font-weight:600">$${fmt(c.ChargeAmount)}</td>
+      <td style="color:var(--success);font-weight:600">$${fmt(c.PaidAmount)}</td>
+      <td style="color:${c.BalanceRemaining>0?'var(--danger)':'var(--gray-400)'};font-weight:600">$${fmt(c.BalanceRemaining)}</td>
+      <td>${statusBadge(c.ClaimStatus)}</td>
+      <td style="font-size:12px">${esc(c.Owner||'—')}</td>
+      <td style="font-size:12px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.NextAction||'—')}</td>
+      <td style="font-size:12px;${c.NextActionDueDate&&new Date(c.NextActionDueDate)<new Date()?'color:var(--danger);font-weight:600':''}">${c.NextActionDueDate||'—'}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="editClaim(${c.id})">Edit</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function filterClaimsTable() { renderClaimsForStatus(activeQueueStatus); }
+
+function openClaimModal(claim) {
+  const editId = claim?.id||'';
+  document.getElementById('claimEditId').value = editId;
+  document.getElementById('claimModalTitle').textContent = claim ? 'Edit Claim' : 'New Claim';
+  document.getElementById('fClaimKey').value = claim?.ClaimKey||'';
+  document.getElementById('fPatientID').value = claim?.PatientID||'';
+  document.getElementById('fPatientName').value = claim?.PatientName||'';
+  document.getElementById('fPayor').value = claim?.Payor||'';
+  document.getElementById('fProviderName').value = claim?.ProviderName||'';
+  document.getElementById('fNPI').value = claim?.NPI||'';
+  document.getElementById('fCPT').value = claim?.CPTCode||'';
+  document.getElementById('fDOS').value = claim?.DOS||'';
+  document.getElementById('fCharge').value = claim?.ChargeAmount||0;
+  document.getElementById('fAllowed').value = claim?.AllowedAmount||0;
+  document.getElementById('fPaid').value = claim?.PaidAmount||0;
+  document.getElementById('fBalance').value = claim?.BalanceRemaining||0;
+  document.getElementById('fClaimStatus').value = claim?.ClaimStatus||'Intake';
+  document.getElementById('fOwner').value = claim?.Owner||'';
+  document.getElementById('fBillDate').value = claim?.BillDate||'';
+  document.getElementById('fDeniedDate').value = claim?.DeniedDate||'';
+  document.getElementById('fDenialCat').value = claim?.DenialCategory||'';
+  document.getElementById('fDenialReason').value = claim?.DenialReason||'';
+  document.getElementById('fNextAction').value = claim?.NextAction||'';
+  document.getElementById('fNextActionDue').value = claim?.NextActionDueDate||'';
+  document.getElementById('fPaidDate').value = claim?.PaidDate||'';
+  document.getElementById('fAppealDate').value = claim?.AppealDate||'';
+  document.getElementById('fAppealStatus').value = claim?.AppealStatus||'';
+  document.getElementById('fSLA').value = claim?.SLABreached||0;
+
+  if(currentUser.role==='admin') {
+    document.getElementById('claimClientGroup').style.display='';
+    populateClientDrop('fClaimClient', claim?.client_id);
+  }
+
+  // Show notes+payments only when editing
+  document.getElementById('notesSection').style.display = editId ? '' : 'none';
+  document.getElementById('paymentsSection').style.display = editId ? '' : 'none';
+  if(editId) { loadClaimNotes(claim.ClaimKey); loadClaimPayments(claim.ClaimKey); }
+
+  document.getElementById('claimModal').classList.add('open');
+}
+
+function editClaim(id) {
+  const c = allClaims.find(x=>x.id===id);
+  if(c) openClaimModal(c);
+}
+
+async function saveClaim() {
+  const editId = document.getElementById('claimEditId').value;
+  const data = {
+    ClaimKey: document.getElementById('fClaimKey').value,
+    PatientID: document.getElementById('fPatientID').value,
+    PatientName: document.getElementById('fPatientName').value,
+    Payor: document.getElementById('fPayor').value,
+    ProviderName: document.getElementById('fProviderName').value,
+    NPI: document.getElementById('fNPI').value,
+    CPTCode: document.getElementById('fCPT').value,
+    DOS: document.getElementById('fDOS').value,
+    ChargeAmount: parseFloat(document.getElementById('fCharge').value)||0,
+    AllowedAmount: parseFloat(document.getElementById('fAllowed').value)||0,
+    PaidAmount: parseFloat(document.getElementById('fPaid').value)||0,
+    BalanceRemaining: parseFloat(document.getElementById('fBalance').value)||0,
+    ClaimStatus: document.getElementById('fClaimStatus').value,
+    Owner: document.getElementById('fOwner').value,
+    BillDate: document.getElementById('fBillDate').value,
+    DeniedDate: document.getElementById('fDeniedDate').value,
+    DenialCategory: document.getElementById('fDenialCat').value,
+    DenialReason: document.getElementById('fDenialReason').value,
+    NextAction: document.getElementById('fNextAction').value,
+    NextActionDueDate: document.getElementById('fNextActionDue').value,
+    PaidDate: document.getElementById('fPaidDate').value,
+    AppealDate: document.getElementById('fAppealDate').value,
+    AppealStatus: document.getElementById('fAppealStatus').value,
+    SLABreached: parseInt(document.getElementById('fSLA').value)||0,
+  };
+
+  try {
+    if(editId) {
+      const r = await fetch(`/hub/api/claims/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!r.ok) throw new Error((await r.json()).detail||'Failed');
+    } else {
+      data.client_id = currentUser.role==='admin'
+        ? parseInt(document.getElementById('fClaimClient').value)||activeClientId
+        : activeClientId||currentUser.id;
+      const r = await fetch('/hub/api/claims', {method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!r.ok) throw new Error((await r.json()).detail||'Failed');
+    }
+    closeModal('claimModal');
+    loadClaims();
+    toast('Claim saved', 'success');
+  } catch(e){ toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════
+// NOTES
+// ═══════════════════════════════════════
+async function loadClaimNotes(claimKey) {
+  const r = await fetch(`/hub/api/notes?claim_key=${encodeURIComponent(claimKey)}`);
+  const d = await r.json();
+  const notes = d.notes || d || [];
+  document.getElementById('notesList').innerHTML = notes.length
+    ? notes.map(n=>`
+        <div class="note-item">
+          <div class="note-meta">${esc(n.Author||'Unknown')} · ${(n.CreatedAt||'').slice(0,16)}</div>
+          <div class="note-text">${esc(n.Note)}</div>
+        </div>`).join('')
+    : '<p style="font-size:13px;color:var(--gray-400)">No notes yet</p>';
+}
+
+async function addNote() {
+  const editId = document.getElementById('claimEditId').value;
+  const claim = allClaims.find(c=>c.id===parseInt(editId));
+  const text = document.getElementById('newNoteText').value.trim();
+  if(!text||!claim) return;
+  await fetch('/hub/api/notes', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ClaimKey:claim.ClaimKey, Note:text, Module:'Claim'})});
+  document.getElementById('newNoteText').value='';
+  loadClaimNotes(claim.ClaimKey);
+  toast('Note added', 'success');
+}
+
+// ═══════════════════════════════════════
+// PAYMENTS
+// ═══════════════════════════════════════
+async function loadClaimPayments(claimKey) {
+  const r = await fetch(`/hub/api/claims/${encodeURIComponent(claimKey)}/payments`);
+  const d = await r.json();
+  const pays = d.payments || d || [];
+  document.getElementById('paymentsList').innerHTML = pays.length
+    ? pays.map(p=>`
+        <div class="pay-item">
+          <div class="pay-left">
+            <div class="pay-amount">$${fmt(p.PaymentAmount)}</div>
+            <div class="pay-meta">${p.PostDate||'—'} · ${esc(p.PayerType||'')}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${p.AdjustmentAmount ? `<span style="font-size:12px;color:var(--gray-500)">Adj: -$${fmt(p.AdjustmentAmount)}</span>` : ''}
+            <button class="btn-icon" onclick="deletePayment(${p.id})">🗑</button>
+          </div>
+        </div>`).join('')
+    : '<p style="font-size:13px;color:var(--gray-400)">No payments recorded</p>';
+}
+
+async function addPayment() {
+  const editId = document.getElementById('claimEditId').value;
+  const claim = allClaims.find(c=>c.id===parseInt(editId));
+  if(!claim) return;
+  const data = {
+    ClaimKey: claim.ClaimKey,
+    PostDate: document.getElementById('payDate').value,
+    PaymentAmount: parseFloat(document.getElementById('payAmount').value)||0,
+    PayerType: document.getElementById('payType').value,
+  };
+  await fetch(`/hub/api/claims/${claim.ClaimKey}/payments`, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  document.getElementById('payAmount').value='0';
+  loadClaimPayments(claim.ClaimKey);
+  toast('Payment recorded', 'success');
+}
+
+async function deletePayment(id) {
+  if(!confirm('Remove this payment?')) return;
+  const editId = document.getElementById('claimEditId').value;
+  const claim = allClaims.find(c=>c.id===parseInt(editId));
+  await fetch(`/hub/api/payments/${id}`, {method:'DELETE'});
+  if(claim) loadClaimPayments(claim.ClaimKey);
+  toast('Payment removed');
+}
+
+// ═══════════════════════════════════════
+// CREDENTIALING
+// ═══════════════════════════════════════
+async function loadCred() {
+  const status = document.getElementById('credFilter').value;
+  const params = new URLSearchParams();
+  if(status) params.set('status', status);
+  if(activeClientId) params.set('client_id', activeClientId);
+  const r = await fetch('/hub/api/credentialing?'+params);
+  const d = await r.json();
+  const items = d.credentialing || d || [];
+  const tbody = document.getElementById('credTbody');
+  if(!items.length){
+    tbody.innerHTML=`<tr><td colspan="11"><div class="empty-state"><div class="es-icon">🎓</div><p>No credentialing items</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(i=>`<tr>
+    <td style="font-weight:600">${esc(i.ProviderName||'—')}</td>
+    <td>${esc(i.Payor||'—')}</td>
+    <td><span class="badge badge-indigo">${esc(i.CredType||'')}</span></td>
+    <td>${statusBadge(i.Status)}</td>
+    <td style="font-size:12px">${i.SubmittedDate||'—'}</td>
+    <td style="font-size:12px;${i.FollowUpDate&&new Date(i.FollowUpDate)<new Date()?'color:var(--danger);font-weight:600':''}">${i.FollowUpDate||'—'}</td>
+    <td style="font-size:12px">${i.ApprovedDate||'—'}</td>
+    <td style="font-size:12px;${i.ExpirationDate&&new Date(i.ExpirationDate)<new Date()?'color:var(--danger);font-weight:600':''}">${i.ExpirationDate||'—'}</td>
+    <td style="font-size:12px">${esc(i.Owner||'—')}</td>
+    <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes||'')}</td>
+    <td><button class="btn btn-secondary btn-sm" onclick="editCredItem(${i.id})">Edit</button></td>
+  </tr>`).join('');
+}
+
+let credItems = [];
+async function editCredItem(id) {
+  const r = await fetch('/hub/api/credentialing');
+  const d = await r.json();
+  credItems = d.credentialing || d || [];
+  const item = credItems.find(x=>x.id===id);
+  if(item) openCredModal(item);
+}
+
+function openCredModal(item) {
+  document.getElementById('credEditId').value = item?.id||'';
+  document.getElementById('credModalTitle').textContent = item ? 'Edit Credentialing' : 'New Credentialing';
+  document.getElementById('fCredProvider').value = item?.ProviderName||'';
+  document.getElementById('fCredPayor').value = item?.Payor||'';
+  document.getElementById('fCredType').value = item?.CredType||'Initial';
+  document.getElementById('fCredStatus').value = item?.Status||'Not Started';
+  document.getElementById('fCredSubmitted').value = item?.SubmittedDate||'';
+  document.getElementById('fCredFollowUp').value = item?.FollowUpDate||'';
+  document.getElementById('fCredApproved').value = item?.ApprovedDate||'';
+  document.getElementById('fCredExpires').value = item?.ExpirationDate||'';
+  document.getElementById('fCredOwner').value = item?.Owner||'';
+  document.getElementById('fCredNotes').value = item?.Notes||'';
+  if(currentUser.role==='admin'){
+    document.getElementById('credClientGroup').style.display='';
+    populateClientDrop('fCredClient', item?.client_id);
+  }
+  document.getElementById('credModal').classList.add('open');
+}
+
+async function saveCred() {
+  const editId = document.getElementById('credEditId').value;
+  const data = {
+    ProviderName: document.getElementById('fCredProvider').value,
+    Payor: document.getElementById('fCredPayor').value,
+    CredType: document.getElementById('fCredType').value,
+    Status: document.getElementById('fCredStatus').value,
+    SubmittedDate: document.getElementById('fCredSubmitted').value,
+    FollowUpDate: document.getElementById('fCredFollowUp').value,
+    ApprovedDate: document.getElementById('fCredApproved').value,
+    ExpirationDate: document.getElementById('fCredExpires').value,
+    Owner: document.getElementById('fCredOwner').value,
+    Notes: document.getElementById('fCredNotes').value,
+  };
+  try {
+    if(editId) {
+      await fetch(`/hub/api/credentialing/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    } else {
+      data.client_id = currentUser.role==='admin'
+        ? parseInt(document.getElementById('fCredClient').value)||activeClientId
+        : activeClientId||currentUser.id;
+      await fetch('/hub/api/credentialing', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    }
+    closeModal('credModal'); loadCred(); toast('Saved', 'success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// ═══════════════════════════════════════
+// ENROLLMENT
+// ═══════════════════════════════════════
+async function loadEnroll() {
+  const status = document.getElementById('enrollFilter').value;
+  const params = new URLSearchParams();
+  if(status) params.set('status', status);
+  if(activeClientId) params.set('client_id', activeClientId);
+  const r = await fetch('/hub/api/enrollment?'+params);
+  const d = await r.json();
+  const items = d.enrollment || d || [];
+  const tbody = document.getElementById('enrollTbody');
+  if(!items.length){
+    tbody.innerHTML=`<tr><td colspan="11"><div class="empty-state"><div class="es-icon">📝</div><p>No enrollment items</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(i=>`<tr>
+    <td style="font-weight:600">${esc(i.ProviderName||'—')}</td>
+    <td>${esc(i.Payor||'—')}</td>
+    <td><span class="badge badge-blue">${esc(i.EnrollType||'')}</span></td>
+    <td>${statusBadge(i.Status)}</td>
+    <td style="font-size:12px">${i.SubmittedDate||'—'}</td>
+    <td style="font-size:12px;${i.FollowUpDate&&new Date(i.FollowUpDate)<new Date()?'color:var(--danger);font-weight:600':''}">${i.FollowUpDate||'—'}</td>
+    <td style="font-size:12px">${i.ApprovedDate||'—'}</td>
+    <td style="font-size:12px">${i.EffectiveDate||'—'}</td>
+    <td style="font-size:12px">${esc(i.Owner||'—')}</td>
+    <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes||'')}</td>
+    <td><button class="btn btn-secondary btn-sm" onclick="editEnrollItem(${i.id})">Edit</button></td>
+  </tr>`).join('');
+}
+
+let enrollItems = [];
+async function editEnrollItem(id) {
+  const r = await fetch('/hub/api/enrollment');
+  const d = await r.json();
+  enrollItems = d.enrollment || d || [];
+  const item = enrollItems.find(x=>x.id===id);
+  if(item) openEnrollModal(item);
+}
+
+function openEnrollModal(item) {
+  document.getElementById('enrollEditId').value = item?.id||'';
+  document.getElementById('enrollModalTitle').textContent = item ? 'Edit Enrollment' : 'New Enrollment';
+  document.getElementById('fEnrollProvider').value = item?.ProviderName||'';
+  document.getElementById('fEnrollPayor').value = item?.Payor||'';
+  document.getElementById('fEnrollType').value = item?.EnrollType||'Enrollment';
+  document.getElementById('fEnrollStatus').value = item?.Status||'Not Started';
+  document.getElementById('fEnrollSubmitted').value = item?.SubmittedDate||'';
+  document.getElementById('fEnrollFollowUp').value = item?.FollowUpDate||'';
+  document.getElementById('fEnrollApproved').value = item?.ApprovedDate||'';
+  document.getElementById('fEnrollEffective').value = item?.EffectiveDate||'';
+  document.getElementById('fEnrollOwner').value = item?.Owner||'';
+  document.getElementById('fEnrollNotes').value = item?.Notes||'';
+  if(currentUser.role==='admin'){
+    document.getElementById('enrollClientGroup').style.display='';
+    populateClientDrop('fEnrollClient', item?.client_id);
+  }
+  document.getElementById('enrollModal').classList.add('open');
+}
+
+async function saveEnroll() {
+  const editId = document.getElementById('enrollEditId').value;
+  const data = {
+    ProviderName: document.getElementById('fEnrollProvider').value,
+    Payor: document.getElementById('fEnrollPayor').value,
+    EnrollType: document.getElementById('fEnrollType').value,
+    Status: document.getElementById('fEnrollStatus').value,
+    SubmittedDate: document.getElementById('fEnrollSubmitted').value,
+    FollowUpDate: document.getElementById('fEnrollFollowUp').value,
+    ApprovedDate: document.getElementById('fEnrollApproved').value,
+    EffectiveDate: document.getElementById('fEnrollEffective').value,
+    Owner: document.getElementById('fEnrollOwner').value,
+    Notes: document.getElementById('fEnrollNotes').value,
+  };
+  try {
+    if(editId) {
+      await fetch(`/hub/api/enrollment/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    } else {
+      data.client_id = currentUser.role==='admin'
+        ? parseInt(document.getElementById('fEnrollClient').value)||activeClientId
+        : activeClientId||currentUser.id;
+      await fetch('/hub/api/enrollment', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    }
+    closeModal('enrollModal'); loadEnroll(); toast('Saved', 'success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// ═══════════════════════════════════════
+// EDI
+// ═══════════════════════════════════════
+async function loadEdi() {
+  const params = activeClientId ? `?client_id=${activeClientId}` : '';
+  const r = await fetch('/hub/api/edi'+params);
+  const d = await r.json();
+  const items = d.edi || d || [];
+  const tbody = document.getElementById('ediTbody');
+  if(!items.length){
+    tbody.innerHTML=`<tr><td colspan="11"><div class="empty-state"><div class="es-icon">🔗</div><p>No EDI setups</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(i=>`<tr>
+    <td style="font-weight:600">${esc(i.ProviderName||'—')}</td>
+    <td>${esc(i.Payor||'—')}</td>
+    <td style="font-family:monospace;font-size:12px">${esc(i.PayerID||'—')}</td>
+    <td>${statusBadge(i.EDIStatus)}</td>
+    <td>${statusBadge(i.ERAStatus)}</td>
+    <td>${statusBadge(i.EFTStatus)}</td>
+    <td style="font-size:12px">${i.SubmittedDate||'—'}</td>
+    <td style="font-size:12px">${i.GoLiveDate||'—'}</td>
+    <td style="font-size:12px">${esc(i.Owner||'—')}</td>
+    <td style="font-size:12px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes||'')}</td>
+    <td><button class="btn btn-secondary btn-sm" onclick="editEdiItem(${i.id})">Edit</button></td>
+  </tr>`).join('');
+}
+
+let ediItems = [];
+async function editEdiItem(id) {
+  const r = await fetch('/hub/api/edi');
+  const d = await r.json();
+  ediItems = d.edi || d || [];
+  const item = ediItems.find(x=>x.id===id);
+  if(item) openEdiModal(item);
+}
+
+function openEdiModal(item) {
+  document.getElementById('ediEditId').value = item?.id||'';
+  document.getElementById('ediModalTitle').textContent = item ? 'Edit EDI Setup' : 'New EDI Setup';
+  document.getElementById('fEdiProvider').value = item?.ProviderName||'';
+  document.getElementById('fEdiPayor').value = item?.Payor||'';
+  document.getElementById('fEdiPayerID').value = item?.PayerID||'';
+  document.getElementById('fEdiStatus').value = item?.EDIStatus||'Not Started';
+  document.getElementById('fEraStatus').value = item?.ERAStatus||'Not Started';
+  document.getElementById('fEftStatus').value = item?.EFTStatus||'Not Started';
+  document.getElementById('fEdiSubmitted').value = item?.SubmittedDate||'';
+  document.getElementById('fEdiGoLive').value = item?.GoLiveDate||'';
+  document.getElementById('fEdiOwner').value = item?.Owner||'';
+  document.getElementById('fEdiNotes').value = item?.Notes||'';
+  if(currentUser.role==='admin'){
+    document.getElementById('ediClientGroup').style.display='';
+    populateClientDrop('fEdiClient', item?.client_id);
+  }
+  document.getElementById('ediModal').classList.add('open');
+}
+
+async function saveEdi() {
+  const editId = document.getElementById('ediEditId').value;
+  const data = {
+    ProviderName: document.getElementById('fEdiProvider').value,
+    Payor: document.getElementById('fEdiPayor').value,
+    PayerID: document.getElementById('fEdiPayerID').value,
+    EDIStatus: document.getElementById('fEdiStatus').value,
+    ERAStatus: document.getElementById('fEraStatus').value,
+    EFTStatus: document.getElementById('fEftStatus').value,
+    SubmittedDate: document.getElementById('fEdiSubmitted').value,
+    GoLiveDate: document.getElementById('fEdiGoLive').value,
+    Owner: document.getElementById('fEdiOwner').value,
+    Notes: document.getElementById('fEdiNotes').value,
+  };
+  try {
+    if(editId) {
+      await fetch(`/hub/api/edi/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    } else {
+      data.client_id = currentUser.role==='admin'
+        ? parseInt(document.getElementById('fEdiClient').value)||activeClientId
+        : activeClientId||currentUser.id;
+      await fetch('/hub/api/edi', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    }
+    closeModal('ediModal'); loadEdi(); toast('Saved', 'success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// ═══════════════════════════════════════
+// PROVIDERS
+// ═══════════════════════════════════════
+async function loadProviders() {
+  const params = activeClientId ? `?client_id=${activeClientId}` : '';
+  const r = await fetch('/hub/api/providers'+params);
+  const d = await r.json();
+  const items = d.providers || d || [];
+  const tbody = document.getElementById('providerTbody');
+  if(!items.length){
+    tbody.innerHTML=`<tr><td colspan="10"><div class="empty-state"><div class="es-icon">👤</div><p>No providers</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(i=>`<tr>
+    <td style="font-weight:600">${esc(i.ProviderName||'—')}</td>
+    <td style="font-family:monospace;font-size:12px">${esc(i.NPI||'—')}</td>
+    <td>${esc(i.Specialty||'—')}</td>
+    <td style="font-family:monospace;font-size:12px">${esc(i.TaxID||'—')}</td>
+    <td style="font-size:12px">${esc(i.Email||'—')}</td>
+    <td style="font-size:12px">${esc(i.Phone||'—')}</td>
+    <td>${statusBadge(i.Status)}</td>
+    <td style="font-size:12px">${i.StartDate||'—'}</td>
+    <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes||'')}</td>
+    <td><button class="btn btn-secondary btn-sm" onclick="editProviderItem(${i.id})">Edit</button></td>
+  </tr>`).join('');
+}
+
+let providerItems = [];
+async function editProviderItem(id) {
+  const r = await fetch('/hub/api/providers');
+  const d = await r.json();
+  providerItems = d.providers || d || [];
+  const item = providerItems.find(x=>x.id===id);
+  if(item) openProviderModal(item);
+}
+
+function openProviderModal(item) {
+  document.getElementById('providerEditId').value = item?.id||'';
+  document.getElementById('providerModalTitle').textContent = item ? 'Edit Provider' : 'New Provider';
+  document.getElementById('fProvName').value = item?.ProviderName||'';
+  document.getElementById('fProvNPI').value = item?.NPI||'';
+  document.getElementById('fProvSpecialty').value = item?.Specialty||'';
+  document.getElementById('fProvTaxID').value = item?.TaxID||'';
+  document.getElementById('fProvEmail').value = item?.Email||'';
+  document.getElementById('fProvPhone').value = item?.Phone||'';
+  document.getElementById('fProvStatus').value = item?.Status||'Active';
+  document.getElementById('fProvStart').value = item?.StartDate||'';
+  document.getElementById('fProvNotes').value = item?.Notes||'';
+  if(currentUser.role==='admin'){
+    document.getElementById('provClientGroup').style.display='';
+    populateClientDrop('fProvClient', item?.client_id);
+  }
+  document.getElementById('providerModal').classList.add('open');
+}
+
+async function saveProvider() {
+  const editId = document.getElementById('providerEditId').value;
+  const data = {
+    ProviderName: document.getElementById('fProvName').value,
+    NPI: document.getElementById('fProvNPI').value,
+    Specialty: document.getElementById('fProvSpecialty').value,
+    TaxID: document.getElementById('fProvTaxID').value,
+    Email: document.getElementById('fProvEmail').value,
+    Phone: document.getElementById('fProvPhone').value,
+    Status: document.getElementById('fProvStatus').value,
+    StartDate: document.getElementById('fProvStart').value,
+    Notes: document.getElementById('fProvNotes').value,
+  };
+  try {
+    if(editId) {
+      await fetch(`/hub/api/providers/${editId}`, {method:'PUT',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    } else {
+      data.client_id = currentUser.role==='admin'
+        ? parseInt(document.getElementById('fProvClient').value)||activeClientId
+        : activeClientId||currentUser.id;
+      await fetch('/hub/api/providers', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    }
+    closeModal('providerModal'); loadProviders(); toast('Provider saved', 'success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// ═══════════════════════════════════════
+// CLIENTS (admin)
+// ═══════════════════════════════════════
+async function loadClients() {
+  const r = await fetch('/hub/api/clients');
+  const d = await r.json();
+  const items = d.clients || d || [];
+  clientsList = items;
+  const tbody = document.getElementById('clientTbody');
+  tbody.innerHTML = items.map(c=>`<tr>
+    <td style="font-weight:600">${esc(c.username)}</td>
+    <td>${esc(c.company)}</td>
+    <td>${esc(c.contact_name||'—')}</td>
+    <td style="font-size:12px">${esc(c.email||'—')}</td>
+    <td style="font-size:12px">${esc(c.phone||'—')}</td>
+    <td><span class="badge ${c.role==='admin'?'badge-purple':'badge-blue'}">${c.role}</span></td>
+    <td style="font-size:12px">${c.last_login||'Never'}</td>
+    <td>${c.is_active ? '✅':'❌'}</td>
+  </tr>`).join('');
+}
+
+function openClientModal() { document.getElementById('clientModal').classList.add('open'); }
+
+async function saveClient() {
+  const data = {
+    username: document.getElementById('fCUsername').value,
+    password: document.getElementById('fCPassword').value,
+    company: document.getElementById('fCCompany').value,
+    contact_name: document.getElementById('fCContact').value,
+    email: document.getElementById('fCEmail').value,
+    phone: document.getElementById('fCPhone').value,
+  };
+  if(!data.username||!data.password||!data.company){toast('Username, password, and company required','error');return;}
+  try {
+    const r = await fetch('/hub/api/clients', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if(!r.ok) throw new Error((await r.json()).detail||'Failed');
+    closeModal('clientModal'); loadClients(); toast('Client created', 'success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// ═══════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════
+async function populateClientDrop(selectId, selectedId) {
+  if(!clientsList.length){
+    try{const r=await fetch('/hub/api/clients');const d=await r.json();clientsList=d.clients||d||[];}catch(_){}
+  }
+  const sel = document.getElementById(selectId);
+  if(!sel) return;
+  sel.innerHTML = clientsList.map(c=>
+    `<option value="${c.id}" ${c.id==selectedId?'selected':''}>${esc(c.company)}</option>`
+  ).join('');
+}
+
+function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
+
+function statusBadge(status) {
+  if(!status) return '<span class="badge badge-gray">—</span>';
+  const s = status.toLowerCase().replace(/[\s/]+/g,'-');
+  const map = {
+    'paid':'badge-green','active':'badge-green','approved':'badge-green','completed':'badge-green',
+    'live':'badge-green','enrolled':'badge-green',
+    'denied':'badge-red','rejected':'badge-red','overdue':'badge-red','failed':'badge-red','sla-breach':'badge-red',
+    'submitted':'badge-blue','billed-submitted':'badge-blue','billed':'badge-blue','sent':'badge-blue','in-process':'badge-blue',
+    'in-progress':'badge-amber','pending':'badge-amber','draft':'badge-amber','in-review':'badge-amber','not-started':'badge-amber',
+    'appeal':'badge-purple','credentialing':'badge-purple',
+    'intake':'badge-indigo','coding':'badge-indigo','verification':'badge-indigo','a-r-follow-up':'badge-indigo','ar-follow-up':'badge-indigo',
+    'inactive':'badge-gray','not-enrolled':'badge-gray',
+  };
+  return `<span class="badge ${map[s]||'badge-gray'}">${esc(status)}</span>`;
+}
+
+function fmt(n) {
+  return (parseFloat(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function esc(str) {
+  if(str===null||str===undefined) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+
+function toast(msg, type='') {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3500);
+}
+</script>
+</body>
+</html>

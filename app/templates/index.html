@@ -1,0 +1,1379 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVOPro — Lab Lead Generator</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --primary-light: #dbeafe;
+            --success: #059669;
+            --warning: #d97706;
+            --danger: #dc2626;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+            --radius: 8px;
+            --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07), 0 2px 4px rgba(0, 0, 0, 0.06);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-800);
+            line-height: 1.5;
+        }
+
+        /* ─── Header ─── */
+        header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: var(--shadow-md);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        header h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        header h1 span {
+            font-weight: 400;
+            opacity: 0.85;
+            font-size: 14px;
+            margin-left: 8px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* ─── Tabs ─── */
+        .tab-bar {
+            display: flex;
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            padding: 0 24px;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-weight: 500;
+            color: var(--gray-500);
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .tab:hover {
+            color: var(--gray-700);
+        }
+
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        /* ─── Layout ─── */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .panel {
+            display: none;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        /* ─── Cards ─── */
+        .card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--gray-800);
+        }
+
+        /* ─── Stats Grid ─── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+
+        /* ─── Forms ─── */
+        .search-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+            align-items: end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--gray-600);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input,
+        select {
+            padding: 8px 12px;
+            border: 1px solid var(--gray-300);
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input:focus,
+        select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        /* ─── Buttons ─── */
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            border: 1px solid var(--gray-300);
+        }
+
+        .btn-secondary:hover {
+            background: var(--gray-200);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #047857;
+        }
+
+        .btn-danger {
+            background: white;
+            color: var(--danger);
+            border: 1px solid var(--gray-200);
+        }
+
+        .btn-danger:hover {
+            background: #fef2f2;
+        }
+
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ─── Table ─── */
+        .table-wrap {
+            overflow-x: auto;
+            margin-top: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--gray-50);
+            font-weight: 600;
+            color: var(--gray-600);
+            border-bottom: 2px solid var(--gray-200);
+            white-space: nowrap;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--gray-100);
+            vertical-align: top;
+        }
+
+        tr:hover td {
+            background: var(--gray-50);
+        }
+
+        /* ─── Score Badge ─── */
+        .score {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            min-width: 36px;
+            text-align: center;
+        }
+
+        .score-high {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .score-mid {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .score-low {
+            background: var(--gray-100);
+            color: var(--gray-600);
+        }
+
+        /* ─── Status Badge ─── */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-new {
+            background: var(--primary-light);
+            color: var(--primary);
+        }
+
+        .status-contacted {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-qualified {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-proposal {
+            background: #ede9fe;
+            color: #5b21b6;
+        }
+
+        .status-closed {
+            background: var(--gray-100);
+            color: var(--gray-600);
+        }
+
+        /* ─── Other ─── */
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--gray-400);
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 32px;
+            color: var(--gray-400);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--gray-200);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .result-count {
+            font-size: 14px;
+            color: var(--gray-500);
+        }
+
+        .checkbox-col {
+            width: 36px;
+        }
+
+        .actions-bar {
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            background: var(--primary-light);
+            border-radius: var(--radius);
+            margin-bottom: 12px;
+            align-items: center;
+        }
+
+        .actions-bar .count {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .paginator {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .detail-item label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            display: block;
+        }
+
+        .detail-item .value {
+            font-size: 14px;
+            color: var(--gray-800);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 200;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h2 {
+            font-size: 18px;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--gray-400);
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            background: var(--gray-800);
+            color: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+            z-index: 300;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            background: var(--success);
+        }
+
+        .toast.error {
+            background: var(--danger);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .multi-state-select {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+            border: 1px solid var(--gray-300);
+            border-radius: 6px;
+            padding: 6px;
+        }
+
+        .state-chip {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            cursor: pointer;
+            background: var(--gray-100);
+            color: var(--gray-600);
+            border: 1px solid transparent;
+            transition: all 0.15s;
+        }
+
+        .state-chip.selected {
+            background: var(--primary-light);
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+
+        @media (max-width: 768px) {
+            .search-form {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .detail-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- ─── Header ─── -->
+    <header>
+        <h1>CVOPro <span>Lab Lead Generator</span></h1>
+        <div class="header-actions">
+            <button class="btn btn-secondary" onclick="exportCSV('saved')" title="Export saved leads">
+                ↓ Export CSV
+            </button>
+        </div>
+    </header>
+
+    <!-- ─── Tabs ─── -->
+    <div class="tab-bar">
+        <div class="tab active" data-tab="search" onclick="switchTab('search')">Search Labs</div>
+        <div class="tab" data-tab="bulk" onclick="switchTab('bulk')">Multi-State Search</div>
+        <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
+        <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
+    </div>
+
+    <div class="container">
+
+        <!-- ═══════════════════ SEARCH PANEL ═══════════════════ -->
+        <div class="panel active" id="panel-search">
+            <div class="card">
+                <div class="card-title">Search NPI Registry for Laboratories</div>
+                <div class="search-form" id="searchForm">
+                    <div class="form-group">
+                        <label>State</label>
+                        <select id="searchState">
+                            <option value="">All States</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>City</label>
+                        <input type="text" id="searchCity" placeholder="e.g., Houston">
+                    </div>
+                    <div class="form-group">
+                        <label>Organization Name</label>
+                        <input type="text" id="searchName" placeholder="e.g., Quest">
+                    </div>
+                    <div class="form-group">
+                        <label>Specialty / Type</label>
+                        <select id="searchTaxonomy">
+                            <option value="">All Laboratories</option>
+                            <option value="Clinical Medical Laboratory">Clinical Medical Laboratory</option>
+                            <option value="Dental Laboratory">Dental Laboratory</option>
+                            <option value="Physiological Laboratory">Physiological Laboratory</option>
+                            <option value="Pathology">Pathology Lab</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>ZIP Code</label>
+                        <input type="text" id="searchZip" placeholder="e.g., 77001">
+                    </div>
+                    <div class="form-group">
+                        <label>Results</label>
+                        <select id="searchLimit">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>&nbsp;</label>
+                        <button class="btn btn-primary" onclick="runSearch()">Search Labs</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div id="searchResults"></div>
+        </div>
+
+        <!-- ═══════════════════ BULK SEARCH PANEL ═══════════════════ -->
+        <div class="panel" id="panel-bulk">
+            <div class="card">
+                <div class="card-title">Multi-State Lab Search</div>
+                <p style="font-size:13px;color:var(--gray-500);margin-bottom:16px;">
+                    Select multiple states to search for labs across regions at once.
+                    Great for building territory-based prospect lists.
+                </p>
+                <div class="multi-state-select" id="bulkStateSelect"></div>
+                <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+                    <div class="form-group" style="width:120px;">
+                        <label>Per State</label>
+                        <select id="bulkLimit">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="runBulkSearch()" style="margin-top:18px;">
+                        Search Selected States
+                    </button>
+                    <span id="bulkSelectedCount" style="font-size:13px;color:var(--gray-500);margin-top:18px;">0 states
+                        selected</span>
+                </div>
+            </div>
+            <div id="bulkResults"></div>
+        </div>
+
+        <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
+        <div class="panel" id="panel-saved">
+            <div class="card">
+                <div class="card-title">Saved Leads</div>
+                <div class="search-form" style="grid-template-columns: repeat(3, 1fr) auto;">
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select id="savedFilterStatus" onchange="loadSavedLeads()">
+                            <option value="">All</option>
+                            <option value="new">New</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="qualified">Qualified</option>
+                            <option value="proposal">Proposal</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>State</label>
+                        <select id="savedFilterState" onchange="loadSavedLeads()">
+                            <option value="">All</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Min Score</label>
+                        <input type="number" id="savedFilterScore" min="0" max="100" placeholder="0"
+                            onchange="loadSavedLeads()">
+                    </div>
+                    <div class="form-group">
+                        <label>&nbsp;</label>
+                        <button class="btn btn-secondary" onclick="exportCSV('saved')">↓ Export</button>
+                    </div>
+                </div>
+            </div>
+            <div id="savedResults"></div>
+        </div>
+
+        <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
+        <div class="panel" id="panel-dashboard">
+            <div class="stats-grid" id="dashboardStats"></div>
+            <div class="card">
+                <div class="card-title">Leads by Status</div>
+                <div id="statusChart" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+            </div>
+            <div class="card" style="margin-top:16px;">
+                <div class="card-title">Top States</div>
+                <div id="stateChart"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ─── Detail Modal ─── -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modalTitle">Lab Details</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <!-- ─── Toast Container ─── -->
+    <div id="toastContainer"></div>
+
+    <script>
+        // ──────────────────────────────────────────────────────────────
+        // State
+        // ──────────────────────────────────────────────────────────────
+        let selectedSearchResults = new Set();
+        let currentSearchResults = [];
+        let bulkSelectedStates = new Set();
+
+        const US_STATES = {};
+
+        // ──────────────────────────────────────────────────────────────
+        // Init
+        // ──────────────────────────────────────────────────────────────
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Load states
+            const statesResp = await fetch('/api/ref/states');
+            const states = await statesResp.json();
+            Object.assign(US_STATES, states);
+
+            // Populate state dropdowns
+            const stateDropdowns = ['searchState', 'savedFilterState'];
+            stateDropdowns.forEach(id => {
+                const el = document.getElementById(id);
+                Object.entries(states).forEach(([code, name]) => {
+                    const opt = document.createElement('option');
+                    opt.value = code;
+                    opt.textContent = `${code} - ${name}`;
+                    el.appendChild(opt);
+                });
+            });
+
+            // Populate bulk state chips
+            const bulkContainer = document.getElementById('bulkStateSelect');
+            Object.entries(states).forEach(([code, name]) => {
+                const chip = document.createElement('span');
+                chip.className = 'state-chip';
+                chip.textContent = code;
+                chip.title = name;
+                chip.onclick = () => toggleBulkState(code, chip);
+                bulkContainer.appendChild(chip);
+            });
+
+            // Load saved leads count
+            loadSavedLeads();
+        });
+
+        // ──────────────────────────────────────────────────────────────
+        // Tabs
+        // ──────────────────────────────────────────────────────────────
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+            document.getElementById(`panel-${tab}`).classList.add('active');
+
+            if (tab === 'dashboard') loadDashboard();
+            if (tab === 'saved') loadSavedLeads();
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Search
+        // ──────────────────────────────────────────────────────────────
+        async function runSearch() {
+            const params = new URLSearchParams();
+            const state = document.getElementById('searchState').value;
+            const city = document.getElementById('searchCity').value;
+            const name = document.getElementById('searchName').value;
+            const taxonomy = document.getElementById('searchTaxonomy').value;
+            const zip = document.getElementById('searchZip').value;
+            const limit = document.getElementById('searchLimit').value;
+
+            if (state) params.set('state', state);
+            if (city) params.set('city', city);
+            if (name) params.set('name', name);
+            if (taxonomy) params.set('taxonomy', taxonomy);
+            if (zip) params.set('zip_code', zip);
+            params.set('limit', limit);
+
+            const container = document.getElementById('searchResults');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Searching NPI Registry...</p></div>';
+
+            try {
+                const resp = await fetch(`/api/search/labs?${params}`);
+                const data = await resp.json();
+
+                if (!resp.ok) throw new Error(data.detail || 'Search failed');
+
+                currentSearchResults = data.results || [];
+                selectedSearchResults.clear();
+                renderSearchResults(currentSearchResults, data.result_count, container);
+            } catch (err) {
+                container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
+            }
+        }
+
+        function renderSearchResults(results, totalCount, container) {
+            if (!results.length) {
+                container.innerHTML = `
+            <div class="card empty-state">
+                <p style="font-size:18px;margin-bottom:8px;">No laboratories found</p>
+                <p>Try adjusting your search filters</p>
+            </div>`;
+                return;
+            }
+
+            let html = `
+        <div class="results-header">
+            <span class="result-count">${totalCount.toLocaleString()} labs found (showing ${results.length})</span>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary btn-sm" onclick="selectAllResults()">Select All</button>
+                <button class="btn btn-success btn-sm" onclick="saveSelected()" id="saveSelectedBtn" disabled>
+                    Save Selected (0)
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="exportSearchCSV()">↓ CSV</button>
+            </div>
+        </div>
+        <div id="selectionBar" style="display:none;" class="actions-bar">
+            <span class="count" id="selectCount">0 selected</span>
+            <button class="btn btn-success btn-sm" onclick="saveSelected()">Save to Leads</button>
+        </div>
+        <div class="card" style="padding:0;">
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col"><input type="checkbox" onchange="toggleAllCheckboxes(this)"></th>
+                            <th>Score</th>
+                            <th>Organization</th>
+                            <th>Type</th>
+                            <th>City</th>
+                            <th>State</th>
+                            <th>Phone</th>
+                            <th>NPI</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+            results.forEach((lab, i) => {
+                const scoreClass = lab.lead_score >= 80 ? 'score-high' : lab.lead_score >= 60 ? 'score-mid' : 'score-low';
+                const name = lab.organization_name || `${lab.first_name} ${lab.last_name}`.trim() || 'Unknown';
+
+                html += `
+            <tr>
+                <td class="checkbox-col">
+                    <input type="checkbox" data-index="${i}" onchange="toggleSelect(${i})">
+                </td>
+                <td><span class="score ${scoreClass}">${lab.lead_score}</span></td>
+                <td><a href="javascript:void(0)" onclick="showDetail(${i})" style="color:var(--primary);font-weight:500;">${escHtml(name)}</a></td>
+                <td style="font-size:12px;">${escHtml(lab.taxonomy_desc || '—')}</td>
+                <td>${escHtml(lab.city || '')}</td>
+                <td><strong>${escHtml(lab.state || '')}</strong></td>
+                <td style="white-space:nowrap;">${escHtml(lab.phone || '—')}</td>
+                <td style="font-family:monospace;font-size:12px;">${lab.npi}</td>
+                <td>
+                    <button class="btn btn-success btn-sm" onclick="saveSingleLead(${i})">Save</button>
+                </td>
+            </tr>`;
+            });
+
+            html += '</tbody></table></div></div>';
+            container.innerHTML = html;
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Bulk Search
+        // ──────────────────────────────────────────────────────────────
+        function toggleBulkState(code, chip) {
+            if (bulkSelectedStates.has(code)) {
+                bulkSelectedStates.delete(code);
+                chip.classList.remove('selected');
+            } else {
+                if (bulkSelectedStates.size >= 10) {
+                    showToast('Max 10 states per search', 'error');
+                    return;
+                }
+                bulkSelectedStates.add(code);
+                chip.classList.add('selected');
+            }
+            document.getElementById('bulkSelectedCount').textContent = `${bulkSelectedStates.size} state${bulkSelectedStates.size !== 1 ? 's' : ''} selected`;
+        }
+
+        async function runBulkSearch() {
+            if (bulkSelectedStates.size === 0) {
+                showToast('Select at least one state', 'error');
+                return;
+            }
+
+            const states = Array.from(bulkSelectedStates).join(',');
+            const limit = document.getElementById('bulkLimit').value;
+            const container = document.getElementById('bulkResults');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Searching across states... this may take a moment</p></div>';
+
+            try {
+                const resp = await fetch(`/api/search/bulk?states=${states}&limit_per_state=${limit}`);
+                const data = await resp.json();
+
+                if (!resp.ok) throw new Error(data.detail || 'Bulk search failed');
+
+                currentSearchResults = data.results || [];
+                selectedSearchResults.clear();
+
+                if (data.errors?.length) {
+                    const errMsg = data.errors.map(e => `${e.state}: ${e.error}`).join(', ');
+                    showToast(`Some states had errors: ${errMsg}`, 'error');
+                }
+
+                renderSearchResults(currentSearchResults, data.result_count, container);
+            } catch (err) {
+                container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Selection & Saving
+        // ──────────────────────────────────────────────────────────────
+        function toggleSelect(index) {
+            if (selectedSearchResults.has(index)) {
+                selectedSearchResults.delete(index);
+            } else {
+                selectedSearchResults.add(index);
+            }
+            updateSelectionUI();
+        }
+
+        function selectAllResults() {
+            const allSelected = selectedSearchResults.size === currentSearchResults.length;
+            if (allSelected) {
+                selectedSearchResults.clear();
+            } else {
+                currentSearchResults.forEach((_, i) => selectedSearchResults.add(i));
+            }
+            // Update checkboxes
+            document.querySelectorAll('[data-index]').forEach(cb => {
+                cb.checked = selectedSearchResults.has(parseInt(cb.dataset.index));
+            });
+            updateSelectionUI();
+        }
+
+        function toggleAllCheckboxes(masterCb) {
+            if (masterCb.checked) {
+                currentSearchResults.forEach((_, i) => selectedSearchResults.add(i));
+            } else {
+                selectedSearchResults.clear();
+            }
+            document.querySelectorAll('[data-index]').forEach(cb => {
+                cb.checked = masterCb.checked;
+            });
+            updateSelectionUI();
+        }
+
+        function updateSelectionUI() {
+            const count = selectedSearchResults.size;
+            const bar = document.getElementById('selectionBar');
+            const btn = document.getElementById('saveSelectedBtn');
+            if (bar) {
+                bar.style.display = count > 0 ? 'flex' : 'none';
+                document.getElementById('selectCount').textContent = `${count} selected`;
+            }
+            if (btn) {
+                btn.disabled = count === 0;
+                btn.textContent = `Save Selected (${count})`;
+            }
+        }
+
+        async function saveSingleLead(index) {
+            const lead = currentSearchResults[index];
+            try {
+                const resp = await fetch('/api/leads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(lead),
+                });
+                if (!resp.ok) throw new Error('Failed to save');
+                showToast('Lead saved!', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function saveSelected() {
+            const leads = Array.from(selectedSearchResults).map(i => currentSearchResults[i]);
+            if (!leads.length) return;
+
+            try {
+                const resp = await fetch('/api/leads/bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(leads),
+                });
+                const data = await resp.json();
+                showToast(`${data.saved} leads saved!`, 'success');
+                selectedSearchResults.clear();
+                updateSelectionUI();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Saved Leads
+        // ──────────────────────────────────────────────────────────────
+        async function loadSavedLeads() {
+            const params = new URLSearchParams();
+            const status = document.getElementById('savedFilterStatus')?.value;
+            const state = document.getElementById('savedFilterState')?.value;
+            const score = document.getElementById('savedFilterScore')?.value;
+
+            if (status) params.set('status', status);
+            if (state) params.set('state', state);
+            if (score) params.set('min_score', score);
+
+            const container = document.getElementById('savedResults');
+            if (!container) return;
+
+            try {
+                const resp = await fetch(`/api/leads?${params}`);
+                const data = await resp.json();
+                renderSavedLeads(data.leads || [], container);
+            } catch (err) {
+                container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading leads</div>`;
+            }
+        }
+
+        function renderSavedLeads(leads, container) {
+            if (!leads.length) {
+                container.innerHTML = `
+            <div class="card empty-state">
+                <p style="font-size:18px;margin-bottom:8px;">No saved leads yet</p>
+                <p>Search for labs and save them to build your prospect list</p>
+            </div>`;
+                return;
+            }
+
+            let html = `
+        <div class="results-header">
+            <span class="result-count">${leads.length} saved lead${leads.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="card" style="padding:0;">
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Score</th>
+                            <th>Status</th>
+                            <th>Organization</th>
+                            <th>City</th>
+                            <th>State</th>
+                            <th>Phone</th>
+                            <th>Notes</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+            leads.forEach(lead => {
+                const scoreClass = lead.lead_score >= 80 ? 'score-high' : lead.lead_score >= 60 ? 'score-mid' : 'score-low';
+                const name = lead.organization_name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Unknown';
+                const statusClass = `status-${lead.lead_status || 'new'}`;
+
+                html += `
+            <tr>
+                <td><span class="score ${scoreClass}">${lead.lead_score || 0}</span></td>
+                <td>
+                    <select class="status-select" style="font-size:12px;padding:2px 6px;" onchange="updateLeadStatus(${lead.id}, this.value)">
+                        <option value="new" ${lead.lead_status === 'new' ? 'selected' : ''}>New</option>
+                        <option value="contacted" ${lead.lead_status === 'contacted' ? 'selected' : ''}>Contacted</option>
+                        <option value="qualified" ${lead.lead_status === 'qualified' ? 'selected' : ''}>Qualified</option>
+                        <option value="proposal" ${lead.lead_status === 'proposal' ? 'selected' : ''}>Proposal</option>
+                        <option value="closed" ${lead.lead_status === 'closed' ? 'selected' : ''}>Closed</option>
+                    </select>
+                </td>
+                <td><strong>${escHtml(name)}</strong></td>
+                <td>${escHtml(lead.city || '')}</td>
+                <td>${escHtml(lead.state || '')}</td>
+                <td style="white-space:nowrap;">${escHtml(lead.phone || '—')}</td>
+                <td>
+                    <input type="text" value="${escHtml(lead.notes || '')}" placeholder="Add notes..."
+                           style="font-size:12px;width:150px;padding:2px 6px;"
+                           onblur="updateLeadNotes(${lead.id}, this.value)">
+                </td>
+                <td>
+                    <button class="btn btn-danger btn-sm" onclick="deleteSavedLead(${lead.id})">✕</button>
+                </td>
+            </tr>`;
+            });
+
+            html += '</tbody></table></div></div>';
+            container.innerHTML = html;
+        }
+
+        async function updateLeadStatus(id, status) {
+            try {
+                await fetch(`/api/leads/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_status: status }),
+                });
+                showToast('Status updated', 'success');
+            } catch (err) {
+                showToast('Failed to update', 'error');
+            }
+        }
+
+        async function updateLeadNotes(id, notes) {
+            try {
+                await fetch(`/api/leads/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ notes }),
+                });
+            } catch (err) {
+                showToast('Failed to save notes', 'error');
+            }
+        }
+
+        async function deleteSavedLead(id) {
+            if (!confirm('Remove this lead?')) return;
+            try {
+                await fetch(`/api/leads/${id}`, { method: 'DELETE' });
+                loadSavedLeads();
+                showToast('Lead removed', 'success');
+            } catch (err) {
+                showToast('Failed to delete', 'error');
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Dashboard
+        // ──────────────────────────────────────────────────────────────
+        async function loadDashboard() {
+            try {
+                const resp = await fetch('/api/leads/stats');
+                const stats = await resp.json();
+
+                // Stats cards
+                document.getElementById('dashboardStats').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-value">${stats.total_leads || 0}</div>
+                <div class="stat-label">Total Saved Leads</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.avg_score || 0}</div>
+                <div class="stat-label">Avg Lead Score</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${(stats.by_status || {}).new || 0}</div>
+                <div class="stat-label">New Leads</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${(stats.by_status || {}).qualified || 0}</div>
+                <div class="stat-label">Qualified</div>
+            </div>
+        `;
+
+                // Status breakdown
+                const statusData = stats.by_status || {};
+                let statusHtml = '';
+                Object.entries(statusData).forEach(([status, count]) => {
+                    statusHtml += `<div class="stat-card" style="min-width:120px;">
+                <div class="stat-value" style="font-size:24px;">${count}</div>
+                <div class="stat-label">${status}</div>
+            </div>`;
+                });
+                document.getElementById('statusChart').innerHTML = statusHtml || '<p style="color:var(--gray-400)">No leads saved yet</p>';
+
+                // Top states
+                const states = stats.top_states || {};
+                let stateHtml = '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+                Object.entries(states).forEach(([st, count]) => {
+                    const width = Math.max(40, Math.min(300, count * 3));
+                    stateHtml += `
+                <div style="display:flex;align-items:center;gap:8px;width:100%;">
+                    <span style="font-weight:600;width:40px;">${st}</span>
+                    <div style="background:var(--primary-light);height:24px;width:${width}px;border-radius:4px;display:flex;align-items:center;padding-left:8px;">
+                        <span style="font-size:12px;font-weight:600;color:var(--primary);">${count}</span>
+                    </div>
+                </div>`;
+                });
+                stateHtml += '</div>';
+                document.getElementById('stateChart').innerHTML = Object.keys(states).length ?
+                    stateHtml : '<p style="color:var(--gray-400)">No state data yet</p>';
+
+            } catch (err) {
+                document.getElementById('dashboardStats').innerHTML =
+                    `<div class="card" style="color:var(--danger)">Failed to load stats</div>`;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Detail Modal
+        // ──────────────────────────────────────────────────────────────
+        function showDetail(index) {
+            const lab = currentSearchResults[index];
+            const name = lab.organization_name || `${lab.first_name} ${lab.last_name}`.trim() || 'Unknown';
+
+            document.getElementById('modalTitle').textContent = name;
+
+            const scoreClass = lab.lead_score >= 80 ? 'score-high' : lab.lead_score >= 60 ? 'score-mid' : 'score-low';
+
+            document.getElementById('modalBody').innerHTML = `
+        <div style="margin-bottom:20px;">
+            <span class="score ${scoreClass}" style="font-size:16px;padding:4px 16px;">
+                Lead Score: ${lab.lead_score}
+            </span>
+        </div>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <label>NPI Number</label>
+                <div class="value" style="font-family:monospace;">${lab.npi}</div>
+            </div>
+            <div class="detail-item">
+                <label>Entity Type</label>
+                <div class="value">${lab.entity_type}</div>
+            </div>
+            <div class="detail-item">
+                <label>Taxonomy</label>
+                <div class="value">${escHtml(lab.taxonomy_desc || '—')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Taxonomy Code</label>
+                <div class="value" style="font-family:monospace;">${lab.taxonomy_code || '—'}</div>
+            </div>
+            <div class="detail-item">
+                <label>Address</label>
+                <div class="value">
+                    ${escHtml(lab.address_line1 || '')}<br>
+                    ${lab.address_line2 ? escHtml(lab.address_line2) + '<br>' : ''}
+                    ${escHtml(lab.city || '')}, ${escHtml(lab.state || '')} ${escHtml(lab.zip_code || '')}
+                </div>
+            </div>
+            <div class="detail-item">
+                <label>Phone</label>
+                <div class="value">${escHtml(lab.phone || '—')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Fax</label>
+                <div class="value">${escHtml(lab.fax || '—')}</div>
+            </div>
+            <div class="detail-item">
+                <label>Enumeration Date</label>
+                <div class="value">${lab.enumeration_date || '—'}</div>
+            </div>
+            <div class="detail-item">
+                <label>Last Updated</label>
+                <div class="value">${lab.last_updated || '—'}</div>
+            </div>
+            ${lab.credential ? `
+            <div class="detail-item">
+                <label>Credential</label>
+                <div class="value">${escHtml(lab.credential)}</div>
+            </div>` : ''}
+        </div>
+        ${lab.all_taxonomies?.length > 1 ? `
+        <div style="margin-top:16px;">
+            <strong style="font-size:12px;color:var(--gray-600);">ALL TAXONOMIES:</strong>
+            <div style="margin-top:4px;">
+                ${lab.all_taxonomies.map(t => `<span style="font-size:12px;background:var(--gray-100);padding:2px 8px;border-radius:4px;margin-right:4px;">${escHtml(t.desc)}</span>`).join('')}
+            </div>
+        </div>` : ''}
+        <div style="margin-top:20px;display:flex;gap:8px;">
+            <button class="btn btn-success" onclick="saveSingleLead(${index}); closeModal();">Save Lead</button>
+            <a href="https://npiregistry.cms.hhs.gov/provider-view/${lab.npi}" target="_blank" class="btn btn-secondary">View on NPI Registry →</a>
+        </div>
+    `;
+
+            document.getElementById('detailModal').classList.add('open');
+        }
+
+        function closeModal() {
+            document.getElementById('detailModal').classList.remove('open');
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Export
+        // ──────────────────────────────────────────────────────────────
+        function exportCSV(source) {
+            const params = new URLSearchParams({ source });
+            const state = document.getElementById('savedFilterState')?.value;
+            const status = document.getElementById('savedFilterStatus')?.value;
+            if (state) params.set('state', state);
+            if (status) params.set('status', status);
+            window.open(`/api/export/csv?${params}`, '_blank');
+        }
+
+        function exportSearchCSV() {
+            if (!currentSearchResults.length) return;
+
+            // Client-side CSV from current results
+            const headers = ['npi', 'organization_name', 'first_name', 'last_name', 'taxonomy_desc', 'address_line1', 'city', 'state', 'zip_code', 'phone', 'fax', 'lead_score', 'enumeration_date'];
+            const rows = currentSearchResults.map(r => headers.map(h => `"${(r[h] || '').toString().replace(/"/g, '""')}"`).join(','));
+            const csv = [headers.join(','), ...rows].join('\n');
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'lab_search_results.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Utils
+        // ──────────────────────────────────────────────────────────────
+        function escHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function showToast(msg, type = '') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // Close modal on escape
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // Close modal on overlay click
+        document.getElementById('detailModal').addEventListener('click', e => {
+            if (e.target === e.currentTarget) closeModal();
+        });
+    </script>
+
+</body>
+
+</html>
