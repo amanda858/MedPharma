@@ -1,12 +1,16 @@
 """Client Hub app — runs on HUB_PORT (default 5240)."""
 
 import hashlib
+import os
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app.client_db import init_client_hub_db
 from app.client_routes import router as client_hub_router
+
+RENDER_URL = "https://medpharma-hub.onrender.com"
+IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
 
 app = FastAPI(
     title="MedPharma Client Hub",
@@ -42,25 +46,35 @@ def _serve_hub():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
+async def root(request: Request):
+    if not IS_PROD:
+        return RedirectResponse(url=RENDER_URL, status_code=302)
     return _serve_hub()
 
 
 @app.get("/hub", response_class=HTMLResponse)
-async def hub():
+async def hub(request: Request):
+    if not IS_PROD:
+        return RedirectResponse(url=RENDER_URL, status_code=302)
     return _serve_hub()
 
 
 @app.get("/portal", response_class=HTMLResponse)
-async def portal():
+async def portal(request: Request):
+    if not IS_PROD:
+        return RedirectResponse(url=RENDER_URL, status_code=302)
     return _serve_hub()
 
 
 @app.get("/medpharma", response_class=HTMLResponse)
-async def medpharma():
+async def medpharma(request: Request):
+    if not IS_PROD:
+        return RedirectResponse(url=RENDER_URL, status_code=302)
     return _serve_hub()
 
 
 @app.get("/mphub2026", response_class=HTMLResponse)
-async def mphub2026():
+async def mphub2026(request: Request):
+    if not IS_PROD:
+        return RedirectResponse(url=RENDER_URL, status_code=302)
     return _serve_hub()
