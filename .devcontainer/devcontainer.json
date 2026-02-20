@@ -1,0 +1,18 @@
+{
+    "forwardPorts": [
+        8000,
+        5240
+    ],
+    "portsAttributes": {
+        "8000": {
+            "label": "Lab Lead Generator",
+            "onAutoForward": "notify",
+            "visibility": "public"
+        },
+        "5240": {
+            "label": "Client Hub",
+            "onAutoForward": "notify",
+            "visibility": "public"
+        }
+    }
+}

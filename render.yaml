@@ -10,7 +10,7 @@ services:
       - key: SERVICE
         value: hub
       - key: HUNTER_API_KEY
-        value: ccc11a9f717c2adde35fe72018a272d86b5a5d9b
+        sync: false
 
   - type: web
     name: medpharma-leads
@@ -23,4 +23,4 @@ services:
       - key: SERVICE
         value: leads
       - key: HUNTER_API_KEY
-        value: ccc11a9f717c2adde35fe72018a272d86b5a5d9b
+        sync: false

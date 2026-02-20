@@ -26,29 +26,33 @@ router = APIRouter(prefix="/hub/api")
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
+_PUBLIC_USER = {
+    "id": 0,
+    "username": "public",
+    "company": "Public",
+    "contact_name": "",
+    "email": "",
+    "phone": "",
+    "role": "admin",
+    "is_active": 1,
+}
+
+
 def _get_user(hub_session: Optional[str] = None):
-    if not hub_session:
-        return None
-    return validate_session(hub_session)
+    return _PUBLIC_USER
 
 
 def _require_user(hub_session: Optional[str] = Cookie(None)):
-    user = _get_user(hub_session)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
+    return _PUBLIC_USER
 
 
 def _require_admin(hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    return user
+    return _PUBLIC_USER
 
 
 def _client_scope(user: dict) -> Optional[int]:
     """Return client_id filter — None means all (admin)."""
-    return None if user["role"] == "admin" else user["id"]
+    return None
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────

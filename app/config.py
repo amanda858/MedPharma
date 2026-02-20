@@ -19,8 +19,8 @@ HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
 
 DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
 
-# Hunter.io API key
-HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "ccc11a9f717c2adde35fe72018a272d86b5a5d9b")
+# Hunter.io API key (set via environment variable)
+HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 
 # Search defaults
 DEFAULT_RESULTS_LIMIT = 50
