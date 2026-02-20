@@ -641,7 +641,170 @@ async def upload_file(
         row_count=row_count,
         uploaded_by=user["username"],
     )
-    return {"id": file_id, "filename": unique_name, "original_name": file.filename, "row_count": row_count}
+
+    # ── Auto-import claims when category is "Claims" and file is Excel/CSV ──
+    imported = 0
+    import_errors = []
+    if file_type == "excel" and category == "Claims":
+        try:
+            imported, import_errors = _import_claims_from_excel(content, ext, scope)
+        except Exception as e:
+            import_errors = [str(e)]
+
+    return {
+        "id": file_id,
+        "filename": unique_name,
+        "original_name": file.filename,
+        "row_count": row_count,
+        "imported_claims": imported,
+        "import_errors": import_errors[:5],
+    }
+
+
+def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
+    """
+    Parse an Excel/CSV claims report and upsert rows into claims_master.
+    Flexible column matching — maps common header names to DB columns.
+    Returns (imported_count, error_list).
+    """
+    import csv, io
+    from app.client_db import get_db
+    from datetime import date as _date
+
+    COLUMN_MAP = {
+        # ClaimKey
+        "claimkey": "ClaimKey", "claim key": "ClaimKey", "claim #": "ClaimKey",
+        "claim id": "ClaimKey", "claimid": "ClaimKey", "claim number": "ClaimKey",
+        # Patient
+        "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
+        "patientid": "PatientID", "patient id": "PatientID",
+        # Provider / Payor
+        "providername": "ProviderName", "provider name": "ProviderName", "provider": "ProviderName",
+        "npi": "NPI",
+        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        # DOS / CPT
+        "dos": "DOS", "date of service": "DOS", "service date": "DOS",
+        "cptcode": "CPTCode", "cpt code": "CPTCode", "cpt": "CPTCode",
+        "description": "Description", "desc": "Description",
+        # Financials
+        "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount", "billed": "ChargeAmount",
+        "allowedamount": "AllowedAmount", "allowed amount": "AllowedAmount", "allowed": "AllowedAmount",
+        "adjustmentamount": "AdjustmentAmount", "adjustment": "AdjustmentAmount", "adj": "AdjustmentAmount",
+        "paidamount": "PaidAmount", "paid amount": "PaidAmount", "paid": "PaidAmount",
+        "balanceremaining": "BalanceRemaining", "balance": "BalanceRemaining", "balance remaining": "BalanceRemaining",
+        # Status / dates
+        "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
+        "billdate": "BillDate", "bill date": "BillDate",
+        "denieddate": "DeniedDate", "denied date": "DeniedDate",
+        "paiddate": "PaidDate", "paid date": "PaidDate",
+        "denialreason": "DenialReason", "denial reason": "DenialReason", "denial": "DenialReason",
+        "denialcategory": "DenialCategory", "denial category": "DenialCategory",
+        "owner": "Owner",
+    }
+
+    def _parse_float(v):
+        try:
+            return float(str(v).replace("$", "").replace(",", "").strip())
+        except Exception:
+            return 0.0
+
+    def _parse_date(v):
+        if not v:
+            return ""
+        s = str(v).strip()
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%Y%m%d"):
+            try:
+                from datetime import datetime
+                return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        return s
+
+    # Parse rows
+    rows = []
+    if ext == ".csv":
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
+        rows = list(reader)
+    else:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        headers = None
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                headers = [str(c).strip() if c else "" for c in row]
+            else:
+                rows.append(dict(zip(headers, row)))
+        wb.close()
+
+    if not rows:
+        return 0, ["No rows found in file"]
+
+    conn = get_db()
+    cur = conn.cursor()
+    today_str = _date.today().isoformat()
+    imported = 0
+    errors = []
+    counter = 1
+
+    for row in rows:
+        # Normalize keys
+        mapped = {}
+        for raw_key, val in row.items():
+            norm = (raw_key or "").strip().lower()
+            db_col = COLUMN_MAP.get(norm)
+            if db_col:
+                mapped[db_col] = val
+
+        if not mapped:
+            continue
+
+        # Generate a ClaimKey if missing
+        if not mapped.get("ClaimKey"):
+            mapped["ClaimKey"] = f"IMP-{today_str}-{counter:04d}"
+        counter += 1
+
+        try:
+            cur.execute("""
+                INSERT OR REPLACE INTO claims_master
+                (client_id, ClaimKey, PatientID, PatientName, Payor, ProviderName, NPI,
+                 DOS, CPTCode, Description, ChargeAmount, AllowedAmount, AdjustmentAmount,
+                 PaidAmount, BalanceRemaining, ClaimStatus, BillDate, DeniedDate, PaidDate,
+                 DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                client_id,
+                str(mapped.get("ClaimKey", "")),
+                str(mapped.get("PatientID", "")),
+                str(mapped.get("PatientName", "")),
+                str(mapped.get("Payor", "")),
+                str(mapped.get("ProviderName", "")),
+                str(mapped.get("NPI", "")),
+                _parse_date(mapped.get("DOS", "")),
+                str(mapped.get("CPTCode", "")),
+                str(mapped.get("Description", "")),
+                _parse_float(mapped.get("ChargeAmount", 0)),
+                _parse_float(mapped.get("AllowedAmount", 0)),
+                _parse_float(mapped.get("AdjustmentAmount", 0)),
+                _parse_float(mapped.get("PaidAmount", 0)),
+                _parse_float(mapped.get("BalanceRemaining", 0)),
+                str(mapped.get("ClaimStatus", "Intake")),
+                _parse_date(mapped.get("BillDate", "")),
+                _parse_date(mapped.get("DeniedDate", "")),
+                _parse_date(mapped.get("PaidDate", "")),
+                str(mapped.get("DenialCategory", "")),
+                str(mapped.get("DenialReason", "")),
+                str(mapped.get("Owner", "")),
+                today_str,
+                today_str,
+            ))
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {counter}: {e}")
+
+    conn.commit()
+    conn.close()
+    return imported, errors
 
 
 @router.delete("/files/{file_id}")

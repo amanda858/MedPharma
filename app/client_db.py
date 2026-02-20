@@ -32,18 +32,26 @@ def init_client_hub_db():
     cur.executescript("""
         -- ── users / auth ──────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS clients (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            username      TEXT UNIQUE NOT NULL,
-            password      TEXT NOT NULL,
-            salt          TEXT NOT NULL,
-            company       TEXT NOT NULL,
-            contact_name  TEXT DEFAULT '',
-            email         TEXT DEFAULT '',
-            phone         TEXT DEFAULT '',
-            role          TEXT DEFAULT 'client',
-            is_active     INTEGER DEFAULT 1,
-            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_login    TEXT
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            username         TEXT UNIQUE NOT NULL,
+            password         TEXT NOT NULL,
+            salt             TEXT NOT NULL,
+            company          TEXT NOT NULL,
+            contact_name     TEXT DEFAULT '',
+            email            TEXT DEFAULT '',
+            phone            TEXT DEFAULT '',
+            role             TEXT DEFAULT 'client',
+            is_active        INTEGER DEFAULT 1,
+            created_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_login       TEXT,
+            tax_id           TEXT DEFAULT '',
+            group_npi        TEXT DEFAULT '',
+            individual_npi   TEXT DEFAULT '',
+            ptan_group       TEXT DEFAULT '',
+            ptan_individual  TEXT DEFAULT '',
+            address          TEXT DEFAULT '',
+            specialty        TEXT DEFAULT '',
+            notes            TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -237,6 +245,24 @@ def init_client_hub_db():
     """)
     conn.commit()
 
+    # ── Migrate existing DBs: add profile columns if missing ──────────────
+    profile_cols = [
+        ("tax_id", "TEXT DEFAULT ''"),
+        ("group_npi", "TEXT DEFAULT ''"),
+        ("individual_npi", "TEXT DEFAULT ''"),
+        ("ptan_group", "TEXT DEFAULT ''"),
+        ("ptan_individual", "TEXT DEFAULT ''"),
+        ("address", "TEXT DEFAULT ''"),
+        ("specialty", "TEXT DEFAULT ''"),
+        ("notes", "TEXT DEFAULT ''"),
+    ]
+    cur.execute("PRAGMA table_info(clients)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    for col, col_def in profile_cols:
+        if col not in existing_cols:
+            cur.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_def}")
+    conn.commit()
+
     cur.execute("SELECT COUNT(*) FROM clients")
     total = cur.fetchone()[0]
 
@@ -274,15 +300,17 @@ def _seed_data(conn):
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
     )
-    admin_id = cur.lastrowid
 
     # Client 1 — Luminary MHP
     s1 = secrets.token_hex(16)
     cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("luminary", _hash_pw("client123", s1), s1, "Luminary MHP", "Contact", "billing@luminarymhp.com", "client")
+        """INSERT INTO clients
+           (username,password,salt,company,contact_name,email,role,
+            tax_id,group_npi,individual_npi,ptan_group,ptan_individual)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        ("luminary", _hash_pw("client123", s1), s1, "Luminary MHP", "Contact", "billing@luminarymhp.com", "client",
+         "334707784", "1033901723", "1497174478", "MI120440", "MI20440001")
     )
-    c1 = cur.lastrowid
 
     # Client 2 — TruPath
     s2 = secrets.token_hex(16)
@@ -290,118 +318,10 @@ def _seed_data(conn):
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("trupath", _hash_pw("client123", s2), s2, "TruPath", "Contact", "billing@trupath.com", "client")
     )
-    c2 = cur.lastrowid
 
     conn.commit()
-
-    # Providers for c1
-    providers_c1 = [
-        (c1, "Dr. Maria Torres", "1234567890", "Internal Medicine", "83-1234567"),
-        (c1, "Dr. Robert Lee", "0987654321", "Cardiology", "83-1234567"),
-    ]
-    for p in providers_c1:
-        cur.execute(
-            "INSERT INTO providers (client_id,ProviderName,NPI,Specialty,TaxID,Status) VALUES (?,?,?,?,?,'Active')",
-            p
-        )
-    pid1 = cur.lastrowid - 1
-    pid2 = cur.lastrowid
-
-    conn.commit()
-
-    # Credentialing records
-    creds = [
-        (c1, pid1, "Dr. Maria Torres", "Medicare", "Initial", "Approved", "2025-09-01", "2025-10-01", "2025-11-15", "2027-11-15", "Sarah K."),
-        (c1, pid1, "Dr. Maria Torres", "BCBS", "Revalidation", "In Review", "2026-01-10", "2026-02-10", "", "", "Sarah K."),
-        (c1, pid2, "Dr. Robert Lee", "Medicare", "Initial", "Submitted", "2026-01-20", "2026-02-20", "", "", "Mike R."),
-        (c1, pid2, "Dr. Robert Lee", "Aetna", "Initial", "Not Started", "", "", "", "", "Mike R."),
-    ]
-    for r in creds:
-        cur.execute("""INSERT INTO credentialing
-            (client_id,provider_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", r)
-
-    # Enrollment records
-    enrolls = [
-        (c1, pid1, "Dr. Maria Torres", "Medicare", "Enrollment", "Active", "2025-09-01", "", "2025-11-15", "2025-12-01", "Sarah K."),
-        (c1, pid1, "Dr. Maria Torres", "BCBS", "Enrollment", "Submitted", "2026-01-10", "2026-02-10", "", "", "Sarah K."),
-        (c1, pid2, "Dr. Robert Lee", "Medicare", "Enrollment", "In Progress", "2026-01-20", "2026-02-20", "", "", "Mike R."),
-    ]
-    for r in enrolls:
-        cur.execute("""INSERT INTO enrollment
-            (client_id,provider_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", r)
-
-    # EDI setup
-    edi_rows = [
-        (c1, pid1, "Dr. Maria Torres", "Medicare", "Active", "Active", "Active", "2025-09-01", "2025-12-01", "MCR001", "Sarah K."),
-        (c1, pid1, "Dr. Maria Torres", "BCBS", "In Progress", "Not Started", "Not Started", "2026-01-10", "", "BCBS002", "Sarah K."),
-    ]
-    for r in edi_rows:
-        cur.execute("""INSERT INTO edi_setup
-            (client_id,provider_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", r)
-
-    conn.commit()
-
-    # Claims for c1
-    today = date.today()
-    claims_data = [
-        # ClaimKey, Patient, Payor, Provider, DOS, Charge, Paid, Balance, Status, BillDate, DeniedDate, PaidDate, DenialCat, DenialReason, Owner
-        ("CLM-001", "PT-101", "John Smith", "Medicare", "Dr. Maria Torres", "1234567890", (today - timedelta(days=60)).isoformat(), "99213", "Office Visit Level 3", 185.00, 130.00, 48.75, 6.25, 0.00, "Paid", (today - timedelta(days=55)).isoformat(), "", (today - timedelta(days=30)).isoformat(), "", "", "Sarah K.", "Closed", 0),
-        ("CLM-002", "PT-102", "Linda Brown", "BCBS", "Dr. Maria Torres", "1234567890", (today - timedelta(days=50)).isoformat(), "80053", "Comp Metabolic Panel", 95.00, 76.00, 15.20, 3.80, 0.00, "Paid", (today - timedelta(days=45)).isoformat(), "", (today - timedelta(days=15)).isoformat(), "", "", "Sarah K.", "Paid", 0),
-        ("CLM-003", "PT-103", "Carlos Diaz", "Aetna", "Dr. Robert Lee", "0987654321", (today - timedelta(days=45)).isoformat(), "93000", "Electrocardiogram", 125.00, 0.00, 0.00, 0.00, 125.00, "Denied", (today - timedelta(days=40)).isoformat(), (today - timedelta(days=20)).isoformat(), "", "Missing Auth", "Prior authorization not obtained", "Mike R.", "Denied", 0),
-        ("CLM-004", "PT-104", "Anna White", "UHC", "Dr. Maria Torres", "1234567890", (today - timedelta(days=35)).isoformat(), "85025", "CBC with diff", 75.00, 60.00, 0.00, 0.00, 75.00, "Billed/Submitted", (today - timedelta(days=30)).isoformat(), "", "", "", "", "Sarah K.", "Billed/Submitted", 0),
-        ("CLM-005", "PT-105", "David Kim", "Medicare", "Dr. Robert Lee", "0987654321", (today - timedelta(days=30)).isoformat(), "93306", "Echo w/Doppler", 850.00, 680.00, 0.00, 0.00, 850.00, "A/R Follow-Up", (today - timedelta(days=25)).isoformat(), "", "", "", "", "Mike R.", "A/R Follow-Up", 0),
-        ("CLM-006", "PT-106", "Maria Lopez", "BCBS", "Dr. Maria Torres", "1234567890", (today - timedelta(days=20)).isoformat(), "99214", "Office Visit Level 4", 225.00, 0.00, 0.00, 0.00, 225.00, "Denied", (today - timedelta(days=15)).isoformat(), (today - timedelta(days=5)).isoformat(), "", "Coding Error", "Incorrect CPT code submitted", "Sarah K.", "Appeals", 0),
-        ("CLM-007", "PT-107", "Robert Jones", "Cigna", "Dr. Robert Lee", "0987654321", (today - timedelta(days=10)).isoformat(), "99213", "Office Visit Level 3", 185.00, 0.00, 0.00, 0.00, 185.00, "Verification", "", "", "", "", "", "Mike R.", "Verification", 0),
-        ("CLM-008", "PT-108", "Susan Clark", "Medicare", "Dr. Maria Torres", "1234567890", (today - timedelta(days=7)).isoformat(), "81001", "Urinalysis", 45.00, 0.00, 0.00, 0.00, 45.00, "Coding", "", "", "", "", "", "Sarah K.", "Coding", 0),
-        ("CLM-009", "PT-109", "Thomas Moore", "Aetna", "Dr. Robert Lee", "0987654321", (today - timedelta(days=5)).isoformat(), "80061", "Lipid Panel", 95.00, 0.00, 0.00, 0.00, 95.00, "Intake", "", "", "", "", "", "", "Intake", 0),
-        ("CLM-010", "PT-110", "Patricia Hall", "UHC", "Dr. Maria Torres", "1234567890", (today - timedelta(days=3)).isoformat(), "36415", "Venipuncture", 25.00, 0.00, 0.00, 0.00, 25.00, "Rejected", "", "", "", "Eligibility", "Patient not eligible on DOS", "Sarah K.", "Rejected", 0),
-        ("CLM-011", "PT-101", "John Smith", "Medicare", "Dr. Maria Torres", "1234567890", (today - timedelta(days=65)).isoformat(), "99232", "Subsequent Hospital Care", 195.00, 140.00, 54.60, 30.40, 0.00, "Paid", (today - timedelta(days=60)).isoformat(), "", (today - timedelta(days=35)).isoformat(), "", "", "Sarah K.", "Paid", 0),
-        ("CLM-012", "PT-111", "Helen Turner", "BCBS", "Dr. Robert Lee", "0987654321", (today - timedelta(days=55)).isoformat(), "93000", "ECG", 125.00, 100.00, 20.00, 5.00, 0.00, "Paid", (today - timedelta(days=50)).isoformat(), "", (today - timedelta(days=25)).isoformat(), "", "", "Mike R.", "Paid", 0),
-    ]
-    for row in claims_data:
-        (ck, pid, pname, payor, provider, npi, dos, cpt, desc,
-         charge, allowed, adj, paid, bal, cs, billdate, dendate, paiddate,
-         denial_cat, denial_reason, owner, status, sla) = row
-        cur.execute("""
-            INSERT OR IGNORE INTO claims_master
-            (client_id,ClaimKey,PatientID,PatientName,Payor,ProviderName,NPI,DOS,CPTCode,Description,
-             ChargeAmount,AllowedAmount,AdjustmentAmount,PaidAmount,BalanceRemaining,
-             ClaimStatus,BillDate,DeniedDate,PaidDate,DenialCategory,DenialReason,Owner,
-             StatusStartDate,LastTouchedDate,SLABreached)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (c1, ck, pid, pname, payor, provider, npi, dos, cpt, desc,
-              charge, allowed, adj, paid, bal,
-              status, billdate, dendate, paiddate, denial_cat, denial_reason, owner,
-              (today - timedelta(days=3)).isoformat(), today.isoformat(), sla))
-
-    # Notes for some claims
-    notes = [
-        (c1, "CLM-003", "Claim", 0, "Submitted re-authorization request to Aetna.", "Sarah K."),
-        (c1, "CLM-003", "Claim", 0, "Auth denied again — escalating to physician review.", "Mike R."),
-        (c1, "CLM-005", "Claim", 0, "Called UHC — claim in review, follow up in 7 days.", "Mike R."),
-        (c1, "CLM-006", "Claim", 0, "Appeal letter sent with corrected CPT documentation.", "Sarah K."),
-    ]
-    for n in notes:
-        cur.execute(
-            "INSERT INTO notes_log (client_id,ClaimKey,Module,RefID,Note,Author) VALUES (?,?,?,?,?,?)", n
-        )
-
-    # Payments for paid claims
-    pay_rows = [
-        (c1, "CLM-001", (today - timedelta(days=30)).isoformat(), 130.00, 48.75, "Primary", "CHK-11230", "ERA-001"),
-        (c1, "CLM-002", (today - timedelta(days=15)).isoformat(), 76.00, 15.20, "Primary", "CHK-11231", "ERA-002"),
-        (c1, "CLM-011", (today - timedelta(days=35)).isoformat(), 140.00, 54.60, "Primary", "CHK-11220", "ERA-003"),
-        (c1, "CLM-012", (today - timedelta(days=25)).isoformat(), 100.00, 20.00, "Primary", "CHK-11225", "ERA-004"),
-    ]
-    for p in pay_rows:
-        cur.execute("""INSERT INTO payments
-            (client_id,ClaimKey,PostDate,PaymentAmount,AdjustmentAmount,PayerType,CheckNumber,ERA)
-            VALUES (?,?,?,?,?,?,?,?)""", p)
-
-    conn.commit()
+    # No fake claims, providers, credentialing, or payments seeded.
+    # All data is imported via Excel/CSV file uploads.
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -1015,6 +935,20 @@ def get_dashboard(client_id: int = None):
     cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {cond} GROUP BY Status", p)
     enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
 
+    # Client profile
+    profile = {}
+    if client_id:
+        cur.execute("""SELECT company, contact_name, email, phone,
+                              tax_id, group_npi, individual_npi,
+                              ptan_group, ptan_individual, address, specialty, notes
+                       FROM clients WHERE id=?""", [client_id])
+        row = cur.fetchone()
+        if row:
+            cols = ["company","contact_name","email","phone",
+                    "tax_id","group_npi","individual_npi",
+                    "ptan_group","ptan_individual","address","specialty","notes"]
+            profile = {c: (row[i] or "") for i, c in enumerate(cols)}
+
     conn.close()
     return {
         "total_ar": round(total_ar, 2),
@@ -1039,6 +973,7 @@ def get_dashboard(client_id: int = None):
         "payment_trend": pay_trend,
         "credentialing_stats": cred_stats,
         "enrollment_stats": enroll_stats,
+        "profile": profile,
     }
 
 
