@@ -1,6 +1,7 @@
 """Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
 
 import os
+import json as _json
 import shutil
 import uuid
 from typing import Optional
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from app.client_db import (
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client,
+    get_profile, update_profile,
     list_providers, create_provider, update_provider, delete_provider,
     get_claims, get_claim, create_claim, update_claim, delete_claim,
     get_payments, create_payment, delete_payment,
@@ -19,7 +21,6 @@ from app.client_db import (
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, delete_file_record,
-    list_practice_profiles, save_practice_profile, delete_practice_profile,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -121,6 +122,22 @@ class ClientUpdate(BaseModel):
     password: Optional[str] = None
 
 
+class ProfileUpdate(BaseModel):
+    company: Optional[str] = None
+    contact_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    tax_id: Optional[str] = None
+    group_npi: Optional[str] = None
+    individual_npi: Optional[str] = None
+    ptan_group: Optional[str] = None
+    ptan_individual: Optional[str] = None
+    address: Optional[str] = None
+    specialty: Optional[str] = None
+    notes: Optional[str] = None
+    doc_tabs: Optional[list] = None
+
+
 @router.get("/clients")
 def get_clients(hub_session: Optional[str] = Cookie(None)):
     _require_admin(hub_session)
@@ -138,6 +155,45 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
 def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cookie(None)):
     _require_admin(hub_session)
     update_client(cid, {k: v for k, v in body.model_dump().items() if v is not None})
+    return {"ok": True}
+
+
+# ─── Profile (own client profile) ──────────────────────────────────────────────────────────
+
+@router.get("/profile")
+def get_my_profile(hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    cid = _client_scope(user) or user["id"]
+    return get_profile(cid)
+
+
+@router.get("/profile/{cid}")
+def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    # admin can get any profile; clients can only get their own
+    if user["role"] != "admin" and user["id"] != cid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return get_profile(cid)
+
+
+@router.put("/profile")
+def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    cid = _client_scope(user) or user["id"]
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
+    if body.doc_tabs is not None:
+        data["doc_tab_names"] = _json.dumps(body.doc_tabs)
+    update_profile(cid, data)
+    return {"ok": True}
+
+
+@router.put("/profile/{cid}")
+def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
+    _require_admin(hub_session)
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
+    if body.doc_tabs is not None:
+        data["doc_tab_names"] = _json.dumps(body.doc_tabs)
+    update_profile(cid, data)
     return {"ok": True}
 
 
@@ -569,37 +625,6 @@ def dashboard_for_client(client_id: int, hub_session: Optional[str] = Cookie(Non
     data = get_dashboard(client_id)
     data["user"] = user
     return data
-
-
-# ─── Practice Profiles ──────────────────────────────────────────────────────
-
-@router.get("/profiles")
-async def api_list_profiles(hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    return {"profiles": list_practice_profiles()}
-
-
-@router.post("/profiles")
-async def api_create_profile(request: Request, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    data = await request.json()
-    pid = save_practice_profile(data)
-    return {"id": pid}
-
-
-@router.put("/profiles/{pid}")
-async def api_update_profile(pid: int, request: Request, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    data = await request.json()
-    save_practice_profile({**data, "id": pid})
-    return {"ok": True}
-
-
-@router.delete("/profiles/{pid}")
-async def api_delete_profile(pid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    delete_practice_profile(pid)
-    return {"ok": True}
 
 
 # ─── File Uploads ───────────────────────────────────────────────────────────

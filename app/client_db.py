@@ -51,7 +51,8 @@ def init_client_hub_db():
             ptan_individual  TEXT DEFAULT '',
             address          TEXT DEFAULT '',
             specialty        TEXT DEFAULT '',
-            notes            TEXT DEFAULT ''
+            notes            TEXT DEFAULT '',
+            doc_tab_names    TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -242,24 +243,6 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_files_client    ON client_files(client_id);
-
-        -- ── practice profiles (CVO-managed practices) ────────────────
-        CREATE TABLE IF NOT EXISTS practice_profiles (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT NOT NULL DEFAULT '',
-            contact_name    TEXT DEFAULT '',
-            email           TEXT DEFAULT '',
-            phone           TEXT DEFAULT '',
-            address         TEXT DEFAULT '',
-            tax_id          TEXT DEFAULT '',
-            group_npi       TEXT DEFAULT '',
-            individual_npi  TEXT DEFAULT '',
-            ptan_group      TEXT DEFAULT '',
-            ptan_individual TEXT DEFAULT '',
-            specialty       TEXT DEFAULT '',
-            notes           TEXT DEFAULT '',
-            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
-        );
     """)
     conn.commit()
 
@@ -273,6 +256,7 @@ def init_client_hub_db():
         ("address", "TEXT DEFAULT ''"),
         ("specialty", "TEXT DEFAULT ''"),
         ("notes", "TEXT DEFAULT ''"),
+        ("doc_tab_names", "TEXT DEFAULT ''"),
     ]
     cur.execute("PRAGMA table_info(clients)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -303,11 +287,6 @@ def init_client_hub_db():
                     pass
             conn.commit()
             _seed_data(conn)
-
-    # Seed practice_profiles if newly created / empty
-    cur.execute("SELECT COUNT(*) FROM practice_profiles")
-    if cur.fetchone()[0] == 0:
-        _seed_practice_profiles(conn)
 
     conn.close()
 
@@ -342,26 +321,16 @@ def _seed_data(conn):
         ("trupath", _hash_pw("client123", s2), s2, "TruPath", "Contact", "billing@trupath.com", "client")
     )
 
+    # Client 3 — OMT
+    s3 = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("omt", _hash_pw("client123", s3), s3, "OMT", "Contact", "billing@omt.com", "client")
+    )
+
     conn.commit()
     # No fake claims, providers, credentialing, or payments seeded.
     # All data is imported via Excel/CSV file uploads.
-    _seed_practice_profiles(conn)
-
-
-def _seed_practice_profiles(conn):
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM practice_profiles")
-    if cur.fetchone()[0] > 0:
-        return
-    cur.execute("""
-        INSERT INTO practice_profiles
-          (name,contact_name,email,tax_id,group_npi,individual_npi,ptan_group,ptan_individual,specialty)
-        VALUES (?,?,?,?,?,?,?,?,?)""",
-        ("Luminary MHP", "", "billing@luminarymhp.com",
-         "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "Mental Health")
-    )
-    cur.execute("INSERT INTO practice_profiles (name, specialty) VALUES (?,?)", ("OMT", ""))
-    conn.commit()
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -440,10 +409,12 @@ def create_client(data: dict) -> int:
 def update_client(cid: int, data: dict):
     conn = get_db()
     cur = conn.cursor()
-    allowed = ["company", "contact_name", "email", "phone", "role", "is_active"]
+    allowed = ["company", "contact_name", "email", "phone", "role", "is_active",
+               "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
+               "address", "specialty", "notes", "doc_tab_names"]
     parts, params = [], []
     for f in allowed:
-        if f in data:
+        if f in data and data[f] is not None:
             parts.append(f"{f}=?")
             params.append(data[f])
     if "password" in data and data["password"]:
@@ -455,6 +426,39 @@ def update_client(cid: int, data: dict):
         cur.execute(f"UPDATE clients SET {','.join(parts)} WHERE id=?", params)
         conn.commit()
     conn.close()
+
+
+DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
+
+
+def get_profile(client_id: int) -> dict:
+    import json as _json
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT company, contact_name, email, phone,
+               tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
+               address, specialty, notes, doc_tab_names
+        FROM clients WHERE id=?""", [client_id])
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return {}
+    cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
+            "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes", "doc_tab_names"]
+    d = {c: (row[i] or "") for i, c in enumerate(cols)}
+    try:
+        d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
+    except Exception:
+        d["doc_tabs"] = DEFAULT_DOC_TABS[:]
+    return d
+
+
+def update_profile(client_id: int, data: dict):
+    import json as _json
+    allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
+               "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes", "doc_tab_names"]
+    update_client(client_id, {k: v for k, v in data.items() if k in allowed})
 
 
 # ─── Providers ────────────────────────────────────────────────────────────────
@@ -1015,46 +1019,6 @@ def get_dashboard(client_id: int = None):
         "enrollment_stats": enroll_stats,
         "profile": profile,
     }
-
-
-# ─── Practice Profiles ──────────────────────────────────────────────────────
-
-def list_practice_profiles():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM practice_profiles ORDER BY id")
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
-
-
-def save_practice_profile(data: dict) -> int:
-    conn = get_db()
-    cur = conn.cursor()
-    pid = data.get("id")
-    fields = ["name", "contact_name", "email", "phone", "address",
-              "tax_id", "group_npi", "individual_npi",
-              "ptan_group", "ptan_individual", "specialty", "notes"]
-    if pid:
-        sets = ", ".join(f"{f}=?" for f in fields)
-        vals = [data.get(f, "") for f in fields] + [pid]
-        cur.execute(f"UPDATE practice_profiles SET {sets} WHERE id=?", vals)
-    else:
-        cols = ", ".join(fields)
-        placeholders = ", ".join("?" for _ in fields)
-        vals = [data.get(f, "") for f in fields]
-        cur.execute(f"INSERT INTO practice_profiles ({cols}) VALUES ({placeholders})", vals)
-        pid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return pid
-
-
-def delete_practice_profile(pid: int):
-    conn = get_db()
-    conn.execute("DELETE FROM practice_profiles WHERE id=?", (pid,))
-    conn.commit()
-    conn.close()
 
 
 # ─── File uploads ──────────────────────────────────────────────────────────

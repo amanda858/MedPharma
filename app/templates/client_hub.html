@@ -1277,16 +1277,12 @@
         <div class="nav-item" data-panel="providers" onclick="navTo('providers')">
           <span class="ni">👤</span> Providers
         </div>
-        <div class="nav-section">Reports</div>
+        <div class="nav-item" data-panel="profile" onclick="navTo('profile')">
+          <span class="ni">🏷️</span> Profile
+        </div>
+        <div class="nav-section">Documents</div>
         <div class="nav-item" data-panel="files" onclick="navTo('files')">
-          <span class="ni">📁</span> Files & Reports
-        </div>
-        <div class="nav-item" data-panel="documents" onclick="navTo('documents')">
-          <span class="ni">📂</span> Client Documents
-        </div>
-        <div class="nav-section">Profiles</div>
-        <div class="nav-item" data-panel="profiles" onclick="navTo('profiles')">
-          <span class="ni">🏥</span> Practice Profiles
+          <span class="ni">📂</span> Documents
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -1598,54 +1594,64 @@
         </div>
 
         <!-- ═══ FILES & REPORTS ═══ -->
+        <!-- ═══ DOCUMENTS ═══ -->
         <div class="hub-panel" id="panel-files">
           <div class="page-header">
-            <div class="page-title">Files &amp; Reports</div>
-            <div class="page-actions">
-              <button class="btn btn-primary btn-sm"
-                onclick="document.getElementById('filePickerInput').click()">&#8593; Upload File</button>
-              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none"
-                onchange="handleFileSelect(this)">
+            <div class="page-title">📂 Documents</div>
+            <div class="page-actions" style="gap:8px;display:flex;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Rename Tabs</button>
+              <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆ Upload File</button>
+              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
+                onchange="handleFileSelect(this)" multiple>
+            </div>
+          </div>
+
+          <!-- Rename tabs inline editor -->
+          <div id="renameDocTabsForm" style="display:none;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:16px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:700;color:var(--gray-600);margin-bottom:12px">✏️ Edit Tab Names (5 categories)</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
+              <input class="form-control" id="docTabName0" placeholder="Tab 1 name">
+              <input class="form-control" id="docTabName1" placeholder="Tab 2 name">
+              <input class="form-control" id="docTabName2" placeholder="Tab 3 name">
+              <input class="form-control" id="docTabName3" placeholder="Tab 4 name">
+              <input class="form-control" id="docTabName4" placeholder="Tab 5 name">
+            </div>
+            <div style="margin-top:12px;display:flex;gap:8px">
+              <button class="btn btn-primary btn-sm" onclick="saveDocTabNames()">Save Tab Names</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Category tabs -->
+          <div id="docCategoryTabs" class="queue-tabs" style="margin-bottom:0"></div>
+
+          <!-- Upload Drop Zone -->
+          <div class="card" id="dropZone" style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:28px 20px;cursor:pointer;transition:all .2s;margin-top:16px"
+            ondragover="event.preventDefault();this.style.borderColor='#1e88e5';this.style.background='#e3f2fd'"
+            ondragleave="this.style.borderColor='';this.style.background=''"
+            ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
+            <div style="font-size:32px;margin-bottom:8px">📄</div>
+            <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload</div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
+            <div style="margin-top:10px">
+              <input id="fileDesc" class="form-control" placeholder="Description (optional)" style="width:240px;display:inline-block">
             </div>
           </div>
 
           <!-- Completion Tracker -->
-          <div class="card" style="margin-bottom:18px">
-            <div class="card-header"><span class="card-title">&#9646; Workflow Completion Tracker</span></div>
-            <div id="completionTracker"
-              style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
+          <div class="card" style="margin:16px 0 0">
+            <div class="card-header"><span class="card-title">◆ Workflow Completion Tracker</span></div>
+            <div id="completionTracker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
               <!-- populated by JS -->
             </div>
           </div>
 
-          <!-- Upload Drop Zone -->
-          <div class="card" id="dropZone"
-            style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:36px 20px;cursor:pointer;transition:all .2s"
-            ondragover="event.preventDefault();this.style.borderColor='#1e88e5';this.style.background='#e3f2fd'"
-            ondragleave="this.style.borderColor='';this.style.background=''"
-            ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
-            <div style="font-size:36px;margin-bottom:10px">&#128196;</div>
-            <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop Excel or PDF files here
-            </div>
-            <div style="font-size:13px;color:var(--gray-400);margin-top:6px">.xlsx &nbsp;&#8226;&nbsp; .xls
-              &nbsp;&#8226;&nbsp; .csv &nbsp;&#8226;&nbsp; .pdf</div>
-            <div style="margin-top:14px">
-              <select id="fileCategory" class="form-control" style="width:auto;display:inline-block;margin-right:8px">
-                <option value="Claims">Claims</option>
-                <option value="Credentialing">Credentialing</option>
-                <option value="Enrollment">Enrollment</option>
-                <option value="EDI">EDI</option>
-                <option value="Reports">Reports</option>
-                <option value="General">General</option>
-              </select>
-              <input id="fileDesc" class="form-control" placeholder="Description (optional)"
-                style="width:220px;display:inline-block">
-            </div>
-          </div>
-
           <!-- File list -->
-          <div class="card" style="padding:0">
-            <div class="card-header" style="padding:16px 20px"><span class="card-title">Uploaded Files</span></div>
+          <div class="card" style="padding:0;margin-top:16px">
+            <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+              <span class="card-title" id="docFilesTitle">All Documents</span>
+              <span id="docFilesCount" style="font-size:13px;color:var(--gray-400)"></span>
+            </div>
             <div class="table-wrap">
               <table>
                 <thead>
@@ -1654,89 +1660,89 @@
                     <th>Category</th>
                     <th>Description</th>
                     <th>Size</th>
-                    <th>Rows</th>
                     <th>Uploaded By</th>
                     <th>Date</th>
                     <th>Status</th>
                     <th></th>
                   </tr>
                 </thead>
-                <tbody id="filesTbody">
-                  <tr>
-                    <td colspan="9" style="text-align:center;padding:24px;color:var(--gray-400)">No files uploaded yet
-                    </td>
-                  </tr>
-                </tbody>
+                <tbody id="filesTbody"></tbody>
               </table>
             </div>
           </div>
         </div>
 
-        <!-- ═══ CLIENT DOCUMENTS ═══ -->
-        <div class="hub-panel" id="panel-documents">
+        <!-- ═══ PROFILE ═══ -->
+        <div class="hub-panel" id="panel-profile">
           <div class="page-header">
-            <div class="page-title">Client Documents</div>
+            <div class="page-title" id="profilePanelTitle">🏷️ Client Profile</div>
             <div class="page-actions">
-              <button class="btn btn-primary btn-sm" onclick="document.getElementById('docFileInput').click()">&#8593;
-                Upload</button>
-              <input type="file" id="docFileInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
-                onchange="handleDocFileSelect(this)" multiple>
+              <button class="btn btn-primary btn-sm" onclick="saveProfile()">💾 Save Changes</button>
             </div>
           </div>
-          <!-- Editable category tabs -->
-          <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;align-items:center" id="docCategoryTabs">
-          </div>
-          <!-- Drop zone -->
-          <div class="card" id="docDropZone"
-            style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:32px 20px;cursor:pointer;transition:all .2s;margin-bottom:18px"
-            ondragover="event.preventDefault();this.style.borderColor='#1e88e5';this.style.background='#e3f2fd'"
-            ondragleave="this.style.borderColor='';this.style.background=''"
-            ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleDocDrop(event)">
-            <div style="font-size:36px;margin-bottom:8px">&#128194;</div>
-            <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload
-            </div>
-            <div style="font-size:13px;color:var(--gray-400);margin-top:6px">.xlsx &nbsp;&#8226;&nbsp; .xls
-              &nbsp;&#8226;&nbsp; .csv &nbsp;&#8226;&nbsp; .pdf &nbsp;&#8226;&nbsp; .doc &nbsp;&#8226;&nbsp; .docx</div>
-            <div style="margin-top:10px;font-size:12px;color:var(--gray-500)">Files will be saved under the active
-              category tab</div>
-          </div>
-          <!-- File list -->
-          <div class="card" style="padding:0">
-            <div class="card-header"
-              style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
-              <span class="card-title" id="docListTitle">All Documents</span>
-              <input class="form-control btn-sm" type="text" id="docSearch" placeholder="&#128269; Search files…"
-                oninput="renderDocFiles()" style="width:200px">
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Filename</th>
-                    <th>Category</th>
-                    <th>Description</th>
-                    <th>Size</th>
-                    <th>Uploaded By</th>
-                    <th>Date</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="docFilesTbody"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
 
-        <!-- ═══ PRACTICE PROFILES ═══ -->
-        <div class="hub-panel" id="panel-profiles">
-          <div class="page-header">
-            <div class="page-title">Practice Profiles</div>
-            <div class="page-actions">
-              <button class="btn btn-primary btn-sm" onclick="openNewProfileForm()">+ Add Profile</button>
+          <div class="card" style="margin-bottom:18px">
+            <div class="card-header"><div class="card-title">🏥 Practice Information</div></div>
+            <div class="form-grid" style="margin-top:12px">
+              <div class="form-group">
+                <label>Practice / Company Name</label>
+                <input class="form-control" id="pf-company" placeholder="e.g. Luminary MHP">
+              </div>
+              <div class="form-group">
+                <label>Specialty</label>
+                <input class="form-control" id="pf-specialty" placeholder="e.g. Mental Health">
+              </div>
+              <div class="form-group">
+                <label>Tax ID (EIN)</label>
+                <input class="form-control" id="pf-tax_id" placeholder="XX-XXXXXXX">
+              </div>
+              <div class="form-group">
+                <label>Group NPI</label>
+                <input class="form-control" id="pf-group_npi" placeholder="10-digit NPI">
+              </div>
+              <div class="form-group">
+                <label>Individual NPI</label>
+                <input class="form-control" id="pf-individual_npi" placeholder="10-digit NPI">
+              </div>
+              <div class="form-group">
+                <label>Medicare PTAN (Group)</label>
+                <input class="form-control" id="pf-ptan_group" placeholder="e.g. MI120440">
+              </div>
+              <div class="form-group">
+                <label>Medicare PTAN (Individual)</label>
+                <input class="form-control" id="pf-ptan_individual" placeholder="e.g. MI20440001">
+              </div>
             </div>
           </div>
-          <div class="queue-tabs" id="profileTabs" style="margin-bottom:18px"></div>
-          <div id="profileFormWrap"></div>
+
+          <div class="card" style="margin-bottom:18px">
+            <div class="card-header"><div class="card-title">📞 Contact Information</div></div>
+            <div class="form-grid" style="margin-top:12px">
+              <div class="form-group">
+                <label>Contact Name</label>
+                <input class="form-control" id="pf-contact_name" placeholder="Full name">
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <input class="form-control" type="email" id="pf-email" placeholder="billing@example.com">
+              </div>
+              <div class="form-group">
+                <label>Phone</label>
+                <input class="form-control" id="pf-phone" placeholder="(555) 000-0000">
+              </div>
+              <div class="form-group" style="grid-column:span 2">
+                <label>Address</label>
+                <input class="form-control" id="pf-address" placeholder="Street, City, State ZIP">
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><div class="card-title">📝 Notes</div></div>
+            <div class="form-group" style="margin-top:12px">
+              <textarea class="form-control" id="pf-notes" rows="4" placeholder="Internal notes about this client…"></textarea>
+            </div>
+          </div>
         </div>
 
       </div><!-- main-content -->
@@ -2218,9 +2224,8 @@
       if (panel === 'edi') loadEdi();
       if (panel === 'providers') loadProviders();
       if (panel === 'clients') loadClients();
-      if (panel === 'files') loadFiles();
-      if (panel === 'documents') loadDocuments();
-      if (panel === 'profiles') loadProfiles();
+      if (panel === 'files') loadDocuments();
+      if (panel === 'profile') loadProfile();
     }
 
     // ═══════════════════════════════════════
@@ -3099,34 +3104,115 @@
     // ═══════════════════════════════════════
     // FILES & REPORTS
     // ═══════════════════════════════════════
-    async function loadFiles() {
+    // ═══════════════════════════════════════
+    // DOCUMENTS
+    // ═══════════════════════════════════════
+    const DEFAULT_DOC_TABS = ['Payor Letters', 'Company Documents', 'Credentialing Docs', 'Reports', 'General'];
+    let activeDocTab = 'All';
+    let allDocFiles = [];
+    let currentDocTabs = [...DEFAULT_DOC_TABS];
+
+    async function loadDocuments() {
       try {
         const url = activeClientId ? `/hub/api/files?client_id=${activeClientId}` : '/hub/api/files';
-        const r = await fetch(url);
-        const d = await r.json();
-        renderFiles(d.files || []);
+        const profUrl = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
+        const [fr, pr] = await Promise.all([fetch(url), fetch(profUrl).catch(() => null)]);
+        allDocFiles = (await fr.json()).files || [];
+        if (pr && pr.ok) {
+          const pd = await pr.json();
+          if (pd.doc_tabs && pd.doc_tabs.length === 5) currentDocTabs = pd.doc_tabs;
+          else currentDocTabs = [...DEFAULT_DOC_TABS];
+        }
+        renderDocTabs();
+        renderDocFiles();
         loadCompletionTracker();
       } catch (e) { console.error(e); }
     }
 
+    // alias so old code that calls loadFiles() still works
+    function loadFiles() { loadDocuments(); }
+
+    function renderDocTabs() {
+      const tabs = ['All', ...currentDocTabs];
+      document.getElementById('docCategoryTabs').innerHTML = tabs.map(t => {
+        const cnt = t === 'All' ? allDocFiles.length : allDocFiles.filter(f => f.category === t).length;
+        return `<button class="qtab ${t === activeDocTab ? 'active' : ''}" onclick="setDocTab('${t.replace(/'/g, "\\'")}')">
+          ${esc(t)} <span class="cnt">${cnt}</span>
+        </button>`;
+      }).join('');
+    }
+
+    function setDocTab(tab) {
+      activeDocTab = tab;
+      renderDocTabs();
+      renderDocFiles();
+    }
+
+    function renderDocFiles() {
+      const filtered = activeDocTab === 'All' ? allDocFiles : allDocFiles.filter(f => f.category === activeDocTab);
+      const title = activeDocTab === 'All' ? 'All Documents' : activeDocTab;
+      const titleEl = document.getElementById('docFilesTitle');
+      const countEl = document.getElementById('docFilesCount');
+      if (titleEl) titleEl.textContent = title;
+      if (countEl) countEl.textContent = filtered.length + ' file' + (filtered.length !== 1 ? 's' : '');
+      renderFiles(filtered);
+    }
+
     function renderFiles(files) {
       const tb = document.getElementById('filesTbody');
-      if (!files.length) { tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--gray-400)">No files uploaded yet</td></tr>'; return; }
+      if (!files.length) {
+        tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--gray-400)">No files in this category yet</td></tr>';
+        return;
+      }
       tb.innerHTML = files.map(f => {
         const kb = f.file_size > 0 ? (f.file_size < 1024 ? f.file_size + 'B' : f.file_size < 1048576 ? Math.round(f.file_size / 1024) + 'KB' : Math.round(f.file_size / 1048576 * 10) / 10 + 'MB') : '-';
         const stColor = f.status === 'Processed' ? 'badge-green' : f.status === 'Error' ? 'badge-red' : 'badge-blue';
+        const ext = (f.original_name || '').split('.').pop().toLowerCase();
+        const icon = ext === 'pdf' ? '📕' : (ext === 'doc' || ext === 'docx') ? '📘' : '📗';
         return `<tr>
-      <td><strong>${esc(f.original_name)}</strong></td>
-      <td><span class="badge badge-purple">${esc(f.category)}</span></td>
-      <td style="color:var(--gray-500);font-size:12px">${esc(f.description) || '-'}</td>
-      <td>${kb}</td>
-      <td>${f.row_count > 0 ? f.row_count.toLocaleString() + ' rows' : '-'}</td>
-      <td>${esc(f.uploaded_by) || '-'}</td>
-      <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
-      <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
-      <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none" onclick="deleteFile(${f.id})">Delete</button></td>
-    </tr>`;
+          <td><strong>${icon} ${esc(f.original_name)}</strong></td>
+          <td><span class="badge badge-purple">${esc(f.category)}</span></td>
+          <td style="color:var(--gray-500);font-size:12px">${esc(f.description) || '-'}</td>
+          <td>${kb}</td>
+          <td>${esc(f.uploaded_by) || '-'}</td>
+          <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
+          <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
+          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none" onclick="deleteFile(${f.id})">Delete</button></td>
+        </tr>`;
       }).join('');
+    }
+
+    let renameTabsOpen = false;
+    function toggleRenameDocTabs() {
+      renameTabsOpen = !renameTabsOpen;
+      const form = document.getElementById('renameDocTabsForm');
+      form.style.display = renameTabsOpen ? '' : 'none';
+      if (renameTabsOpen) {
+        currentDocTabs.forEach((t, i) => {
+          const el = document.getElementById('docTabName' + i);
+          if (el) el.value = t;
+        });
+      }
+    }
+
+    async function saveDocTabNames() {
+      const tabs = [0, 1, 2, 3, 4].map(i => {
+        const el = document.getElementById('docTabName' + i);
+        return (el && el.value.trim()) ? el.value.trim() : DEFAULT_DOC_TABS[i];
+      });
+      try {
+        const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
+        const method = activeClientId ? 'PUT' : 'PUT';
+        const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doc_tabs: tabs }) });
+        if (!r.ok) throw new Error('Failed to save tab names');
+        currentDocTabs = tabs;
+        activeDocTab = 'All';
+        renameTabsOpen = false;
+        document.getElementById('renameDocTabsForm').style.display = 'none';
+        renderDocTabs();
+        renderDocFiles();
+        toast('Tab names saved!', 'success');
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     async function loadCompletionTracker() {
@@ -3159,31 +3245,30 @@
         ];
 
         tracker.innerHTML = items.map(item => `
-      <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
-        <div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${item.label}</div>
-        ${item.pct !== null ? `
-          <div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.pct}%</div>
-          <div style="background:var(--gray-200);border-radius:20px;height:6px;overflow:hidden">
-            <div style="background:${item.color};height:100%;width:${item.pct}%;transition:width .5s"></div>
-          </div>` :
-            `<div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.value}</div>`
-          }
-        <div style="font-size:12px;color:var(--gray-400);margin-top:6px">${item.sub}</div>
-      </div>`).join('');
+          <div style="background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+            <div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${item.label}</div>
+            ${item.pct !== null ? `
+              <div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.pct}%</div>
+              <div style="background:var(--gray-200);border-radius:20px;height:6px;overflow:hidden">
+                <div style="background:${item.color};height:100%;width:${item.pct}%;transition:width .5s"></div>
+              </div>` :
+              `<div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.value}</div>`
+            }
+            <div style="font-size:12px;color:var(--gray-400);margin-top:6px">${item.sub}</div>
+          </div>`).join('');
       } catch (e) { console.error(e); }
     }
 
     function handleFileSelect(input) {
-      if (input.files && input.files[0]) uploadFile(input.files[0]);
+      if (input.files) Array.from(input.files).forEach(f => uploadFile(f));
       input.value = '';
     }
     function handleFileDrop(e) {
-      const files = e.dataTransfer.files;
-      for (let f of files) uploadFile(f);
+      Array.from(e.dataTransfer.files).forEach(f => uploadFile(f));
     }
 
     async function uploadFile(file) {
-      const category = document.getElementById('fileCategory')?.value || 'General';
+      const category = (activeDocTab && activeDocTab !== 'All') ? activeDocTab : (currentDocTabs[0] || 'General');
       const description = document.getElementById('fileDesc')?.value || '';
       const fd = new FormData();
       fd.append('file', file);
@@ -3195,7 +3280,7 @@
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
         if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Upload failed'); }
         toast(file.name + ' uploaded!', 'success');
-        loadFiles();
+        loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -3204,260 +3289,46 @@
       try {
         const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
         if (!r.ok) throw new Error('Failed');
-        toast('File deleted', 'success'); loadFiles();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-
-    // ═══════════════════════════════════════
-    // PRACTICE PROFILES
-    // ═══════════════════════════════════════
-    let allProfiles = [];
-    let activeProfileId = null;
-
-    async function loadProfiles() {
-      try {
-        const r = await fetch('/hub/api/profiles');
-        const d = await r.json();
-        allProfiles = d.profiles || [];
-        renderProfileTabs();
-        if (allProfiles.length > 0) showProfileForm(allProfiles[0]);
-        else document.getElementById('profileFormWrap').innerHTML =
-          '<div class="empty-state"><div class="es-icon">🏥</div><p>No profiles yet. Click + Add Profile.</p></div>';
-      } catch (e) { console.error(e); }
-    }
-
-    function renderProfileTabs() {
-      const tabs = document.getElementById('profileTabs');
-      if (!tabs) return;
-      tabs.innerHTML = allProfiles.map(p =>
-        `<button class="qtab ${p.id === activeProfileId ? 'active' : ''}" onclick="selectProfile(${p.id})">${esc(p.name || 'Unnamed')}</button>`
-      ).join('');
-    }
-
-    function selectProfile(id) {
-      activeProfileId = id;
-      const prof = allProfiles.find(p => p.id === id);
-      if (prof) showProfileForm(prof);
-      renderProfileTabs();
-    }
-
-    function _profField(id, label, value, mono) {
-      return `<div class="form-group"><label>${label}</label>
-        <input class="form-control" id="${id}" value="${esc(value || '')}"${mono ? ' style="font-family:monospace"' : ''}></div>`;
-    }
-
-    function showProfileForm(prof) {
-      activeProfileId = prof.id;
-      renderProfileTabs();
-      document.getElementById('profileFormWrap').innerHTML = `
-        <div class="card">
-          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-            <div class="card-title">🏥 ${esc(prof.name || 'Profile')}</div>
-            <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none"
-              onclick="if(confirm('Delete this profile?')) deleteProfile(${prof.id})">Delete</button>
-          </div>
-          <div class="form-grid">
-            ${_profField('pf-name', 'Practice Name *', prof.name)}
-            ${_profField('pf-specialty', 'Specialty', prof.specialty)}
-            ${_profField('pf-contact', 'Contact Name', prof.contact_name)}
-            ${_profField('pf-email', 'Email', prof.email)}
-            ${_profField('pf-phone', 'Phone', prof.phone)}
-            ${_profField('pf-taxid', 'Tax ID', prof.tax_id, true)}
-            ${_profField('pf-gnpi', 'Group NPI', prof.group_npi, true)}
-            ${_profField('pf-inpi', 'Individual NPI', prof.individual_npi, true)}
-            ${_profField('pf-ptangrp', 'Medicare PTAN (Group)', prof.ptan_group, true)}
-            ${_profField('pf-ptanind', 'Medicare PTAN (Individual)', prof.ptan_individual, true)}
-          </div>
-          <div class="form-group" style="margin-bottom:12px"><label>Address</label>
-            <textarea class="form-control" id="pf-address" rows="2">${esc(prof.address || '')}</textarea></div>
-          <div class="form-group" style="margin-bottom:16px"><label>Notes</label>
-            <textarea class="form-control" id="pf-notes" rows="2">${esc(prof.notes || '')}</textarea></div>
-          <button class="btn btn-primary" onclick="saveProfile(${prof.id})">&#128190; Save Changes</button>
-        </div>`;
-    }
-
-    function openNewProfileForm() {
-      activeProfileId = null;
-      renderProfileTabs();
-      document.getElementById('profileFormWrap').innerHTML = `
-        <div class="card">
-          <div class="card-header"><div class="card-title">🏥 New Practice Profile</div></div>
-          <div class="form-grid">
-            ${_profField('pf-name', 'Practice Name *', '')}
-            ${_profField('pf-specialty', 'Specialty', '')}
-            ${_profField('pf-contact', 'Contact Name', '')}
-            ${_profField('pf-email', 'Email', '')}
-            ${_profField('pf-phone', 'Phone', '')}
-            ${_profField('pf-taxid', 'Tax ID', '', true)}
-            ${_profField('pf-gnpi', 'Group NPI', '', true)}
-            ${_profField('pf-inpi', 'Individual NPI', '', true)}
-            ${_profField('pf-ptangrp', 'Medicare PTAN (Group)', '', true)}
-            ${_profField('pf-ptanind', 'Medicare PTAN (Individual)', '', true)}
-          </div>
-          <div class="form-group" style="margin-bottom:12px"><label>Address</label>
-            <textarea class="form-control" id="pf-address" rows="2"></textarea></div>
-          <div class="form-group" style="margin-bottom:16px"><label>Notes</label>
-            <textarea class="form-control" id="pf-notes" rows="2"></textarea></div>
-          <div style="display:flex;gap:10px">
-            <button class="btn btn-primary" onclick="saveProfile(null)">Create Profile</button>
-            <button class="btn btn-secondary" onclick="loadProfiles()">Cancel</button>
-          </div>
-        </div>`;
-    }
-
-    async function saveProfile(id) {
-      const name = document.getElementById('pf-name')?.value?.trim();
-      if (!name) { toast('Practice name is required', 'error'); return; }
-      const data = {
-        name,
-        specialty: document.getElementById('pf-specialty')?.value || '',
-        contact_name: document.getElementById('pf-contact')?.value || '',
-        email: document.getElementById('pf-email')?.value || '',
-        phone: document.getElementById('pf-phone')?.value || '',
-        tax_id: document.getElementById('pf-taxid')?.value || '',
-        group_npi: document.getElementById('pf-gnpi')?.value || '',
-        individual_npi: document.getElementById('pf-inpi')?.value || '',
-        ptan_group: document.getElementById('pf-ptangrp')?.value || '',
-        ptan_individual: document.getElementById('pf-ptanind')?.value || '',
-        address: document.getElementById('pf-address')?.value || '',
-        notes: document.getElementById('pf-notes')?.value || '',
-      };
-      try {
-        let newId = id;
-        if (id) {
-          await fetch(`/hub/api/profiles/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-        } else {
-          const r2 = await fetch('/hub/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-          newId = (await r2.json()).id;
-        }
-        toast('Profile saved!', 'success');
-        allProfiles = (await (await fetch('/hub/api/profiles')).json()).profiles || [];
-        activeProfileId = newId;
-        selectProfile(newId);
-      } catch (e) { toast('Save failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteProfile(id) {
-      try {
-        await fetch(`/hub/api/profiles/${id}`, { method: 'DELETE' });
-        toast('Profile deleted', 'success'); loadProfiles();
-      } catch (e) { toast('Delete failed', 'error'); }
-    }
-
-    // ═══════════════════════════════════════
-    // CLIENT DOCUMENTS
-    // ═══════════════════════════════════════
-    const DOC_DEFAULT_TABS = ['Payor Letters', 'Company Documents', 'EOBs', 'Credentialing Docs', 'Other'];
-    let docActiveTab = null;
-    let allDocFiles = [];
-
-    function getDocTabNames() {
-      try {
-        const s = localStorage.getItem('docTabNames');
-        if (s) { const a = JSON.parse(s); if (Array.isArray(a) && a.length === 5) return a; }
-      } catch (e) { }
-      return [...DOC_DEFAULT_TABS];
-    }
-    function saveDocTabNames(n) { localStorage.setItem('docTabNames', JSON.stringify(n)); }
-
-    async function loadDocuments() {
-      try {
-        const url = activeClientId ? `/hub/api/files?client_id=${activeClientId}` : '/hub/api/files';
-        allDocFiles = ((await (await fetch(url)).json()).files) || [];
-        const tabs = getDocTabNames();
-        if (!docActiveTab || !tabs.includes(docActiveTab)) docActiveTab = tabs[0];
-        renderDocTabs(tabs);
-        const title = document.getElementById('docListTitle');
-        if (title) title.textContent = docActiveTab || 'Documents';
-        renderDocFiles();
-      } catch (e) { console.error(e); }
-    }
-
-    function renderDocTabs(tabs) {
-      const c = document.getElementById('docCategoryTabs');
-      if (!c) return;
-      c.innerHTML = tabs.map((name, i) => `
-        <div style="display:flex;align-items:center;gap:2px">
-          <button class="qtab ${name === docActiveTab ? 'active' : ''}" style="font-size:13px;padding:6px 14px"
-            onclick="setDocTab(${JSON.stringify(name)})">${esc(name)}</button>
-          <button title="Rename" onclick="renameDocTab(${i})"
-            style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:12px;padding:2px 4px">&#9998;</button>
-        </div>`).join('');
-    }
-
-    function setDocTab(name) {
-      docActiveTab = name;
-      const title = document.getElementById('docListTitle');
-      if (title) title.textContent = name;
-      renderDocTabs(getDocTabNames());
-      renderDocFiles();
-    }
-
-    function renameDocTab(i) {
-      const tabs = getDocTabNames();
-      const oldName = tabs[i];
-      const newName = (prompt('Rename "' + oldName + '" to:', oldName) || '').trim();
-      if (!newName || newName === oldName) return;
-      tabs[i] = newName;
-      saveDocTabNames(tabs);
-      if (docActiveTab === oldName) docActiveTab = newName;
-      renderDocTabs(tabs);
-      renderDocFiles();
-      const title = document.getElementById('docListTitle');
-      if (title && docActiveTab === newName) title.textContent = newName;
-      toast('Tab renamed to “' + newName + '”', 'success');
-    }
-
-    function renderDocFiles() {
-      const tb = document.getElementById('docFilesTbody');
-      if (!tb) return;
-      const q = (document.getElementById('docSearch')?.value || '').toLowerCase();
-      let files = docActiveTab
-        ? allDocFiles.filter(f => (f.category || '').toLowerCase() === docActiveTab.toLowerCase())
-        : allDocFiles;
-      if (q) files = files.filter(f =>
-        (f.original_name || '').toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q));
-      if (!files.length) {
-        tb.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="es-icon">📂</div><p>No files in this category yet</p></div></td></tr>';
-        return;
-      }
-      tb.innerHTML = files.map(f => {
-        const kb = f.file_size > 0 ? (f.file_size < 1024 ? f.file_size + 'B' : f.file_size < 1048576 ? Math.round(f.file_size / 1024) + 'KB' : Math.round(f.file_size / 1048576 * 10) / 10 + 'MB') : '-';
-        return `<tr>
-          <td><strong>${esc(f.original_name)}</strong></td>
-          <td><span class="badge badge-purple">${esc(f.category)}</span></td>
-          <td style="color:var(--gray-500);font-size:12px">${esc(f.description) || '-'}</td>
-          <td>${kb}</td><td>${esc(f.uploaded_by) || '-'}</td>
-          <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
-          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none"
-            onclick="deleteDocFile(${f.id})">Delete</button></td></tr>`;
-      }).join('');
-    }
-
-    function handleDocFileSelect(input) {
-      if (input.files) for (const f of input.files) uploadDocFile(f);
-      input.value = '';
-    }
-    function handleDocDrop(e) { for (const f of e.dataTransfer.files) uploadDocFile(f); }
-
-    async function uploadDocFile(file) {
-      const cat = docActiveTab || 'General';
-      const fd = new FormData();
-      fd.append('file', file); fd.append('category', cat); fd.append('description', '');
-      if (activeClientId) fd.append('client_id', activeClientId);
-      try {
-        toast('Uploading ' + file.name + '...', 'info');
-        const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
-        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Upload failed'); }
-        toast(file.name + ' uploaded!', 'success'); loadDocuments();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-
-    async function deleteDocFile(id) {
-      if (!confirm('Delete this file?')) return;
-      try {
-        await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
         toast('File deleted', 'success'); loadDocuments();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════
+    // PROFILE
+    // ═══════════════════════════════════════
+    async function loadProfile() {
+      try {
+        const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('Failed to load profile');
+        const d = await r.json();
+        const fields = ['company','contact_name','email','phone','tax_id','group_npi',
+                        'individual_npi','ptan_group','ptan_individual','address','specialty','notes'];
+        fields.forEach(f => {
+          const el = document.getElementById('pf-' + f);
+          if (el) el.value = d[f] || '';
+        });
+        const titleEl = document.getElementById('profilePanelTitle');
+        if (titleEl && d.company) titleEl.textContent = '🏷️ ' + d.company + ' — Profile';
+      } catch (e) { console.error(e); toast('Could not load profile', 'error'); }
+    }
+
+    async function saveProfile() {
+      const fields = ['company','contact_name','email','phone','tax_id','group_npi',
+                      'individual_npi','ptan_group','ptan_individual','address','specialty','notes'];
+      const data = {};
+      fields.forEach(f => {
+        const el = document.getElementById('pf-' + f);
+        if (el) data[f] = el.value;
+      });
+      try {
+        const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
+        const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+        if (!r.ok) throw new Error('Save failed');
+        toast('Profile saved!', 'success');
+        // Refresh dashboard profile card if visible
+        const dashPanel = document.getElementById('panel-dashboard');
+        if (dashPanel && dashPanel.classList.contains('active')) loadDashboard();
       } catch (e) { toast(e.message, 'error'); }
     }
   </script>
