@@ -55,33 +55,124 @@
     }
 
     /* ── Login ── */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
     .login-wrap {
       min-height: 100vh;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      background: linear-gradient(135deg, #060b18 0%, #0d1f3c 40%, #0d47a1 75%, #1e88e5 100%);
+      align-items: stretch;
       position: relative;
-      overflow: hidden
+      overflow: hidden;
+      font-family: 'Inter', sans-serif
     }
 
-    .login-wrap::before {
-      content: '';
+    .login-bg {
       position: absolute;
       inset: 0;
-      background: radial-gradient(circle at 70% 20%, rgba(255, 255, 255, .08) 0%, transparent 50%),
-        radial-gradient(circle at 20% 80%, rgba(255, 255, 255, .06) 0%, transparent 50%)
+      background-image: url('https://medpharmasc.com/wp-content/uploads/2024/11/blur-hospital-scaled.jpg');
+      background-size: cover;
+      background-position: center;
+      filter: blur(3px) brightness(.35);
+      transform: scale(1.05)
+    }
+
+    .login-bg-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(5, 27, 46, .92) 0%, rgba(9, 36, 60, .85) 50%, rgba(30, 222, 143, .08) 100%)
+    }
+
+    .login-left {
+      position: relative;
+      z-index: 2;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 60px 64px;
+      max-width: 560px
+    }
+
+    .login-left .site-logo {
+      width: 220px;
+      height: auto;
+      margin-bottom: 48px;
+      filter: brightness(0) invert(1)
+    }
+
+    .login-left h2 {
+      font-size: 38px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.2;
+      margin-bottom: 16px;
+      letter-spacing: -1px
+    }
+
+    .login-left h2 span {
+      color: #1EDE8F
+    }
+
+    .login-left p {
+      font-size: 16px;
+      color: rgba(255, 255, 255, .65);
+      line-height: 1.7;
+      max-width: 400px
+    }
+
+    .login-features {
+      margin-top: 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px
+    }
+
+    .login-feature {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: rgba(255, 255, 255, .8);
+      font-size: 14px
+    }
+
+    .login-feature-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #1EDE8F;
+      flex-shrink: 0
+    }
+
+    .login-right {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      flex-shrink: 0;
+      width: 480px
     }
 
     .login-card {
       background: #fff;
-      border-radius: 20px;
+      border-radius: 24px;
       padding: 48px 44px;
-      width: 440px;
-      max-width: 92vw;
-      box-shadow: var(--shadow-lg);
-      position: relative;
-      z-index: 1
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, .4), 0 0 0 1px rgba(255, 255, 255, .05);
+      position: relative
+    }
+
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      border-radius: 24px 24px 0 0;
+      background: linear-gradient(90deg, #09243C, #1EDE8F)
     }
 
     .login-logo {
@@ -90,41 +181,42 @@
     }
 
     .login-logo img.brand-img {
-      max-width: 220px;
+      max-width: 190px;
       height: auto;
       display: block;
-      margin: 0 auto 4px;
-      filter: drop-shadow(0 2px 6px rgba(0,0,0,.12))
+      margin: 0 auto 12px
     }
 
-    .login-logo .brand-name {
-      font-size: 30px;
+    .login-logo .login-title {
+      font-size: 18px;
       font-weight: 700;
-      color: var(--primary);
-      letter-spacing: -1px;
-      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text
+      color: #09243C;
+      letter-spacing: -.3px
     }
 
-    .login-logo .brand-sub {
+    .login-logo .login-sub {
       font-size: 13px;
-      color: var(--gray-400);
-      margin-top: 4px;
-      font-weight: 400
+      color: #68747A;
+      margin-top: 4px
     }
 
     .login-logo .badge {
       display: inline-block;
-      background: var(--primary-light);
-      color: var(--primary);
+      background: rgba(30, 222, 143, .12);
+      color: #0a8a54;
       font-size: 11px;
       font-weight: 600;
-      padding: 3px 12px;
+      padding: 4px 14px;
       border-radius: 20px;
-      margin-top: 8px;
-      letter-spacing: .3px
+      margin-top: 10px;
+      letter-spacing: .3px;
+      border: 1px solid rgba(30, 222, 143, .3)
+    }
+
+    .login-divider {
+      height: 1px;
+      background: #DADEE2;
+      margin: 24px 0
     }
 
     .login-field {
@@ -133,51 +225,68 @@
 
     .login-field label {
       display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--gray-600);
+      font-size: 11px;
+      font-weight: 700;
+      color: #09243C;
       text-transform: uppercase;
-      letter-spacing: .6px;
-      margin-bottom: 6px
+      letter-spacing: .8px;
+      margin-bottom: 8px
     }
 
     .login-field input {
       width: 100%;
-      padding: 12px 16px;
-      border: 2px solid var(--gray-200);
-      border-radius: var(--radius-sm);
+      padding: 13px 16px;
+      border: 1.5px solid #DADEE2;
+      border-radius: 10px;
       font-size: 15px;
       font-family: inherit;
       outline: none;
       transition: border .2s, box-shadow .2s;
-      background: #fafafa
+      background: #f8f9fa;
+      color: #09243C
     }
 
     .login-field input:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px var(--primary-light);
+      border-color: #1EDE8F;
+      box-shadow: 0 0 0 3px rgba(30, 222, 143, .15);
       background: #fff
     }
 
     .btn-login {
       width: 100%;
-      padding: 14px;
-      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      padding: 15px;
+      background: #09243C;
       color: #fff;
       border: none;
-      border-radius: var(--radius-sm);
-      font-size: 16px;
-      font-weight: 600;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 700;
       font-family: inherit;
       cursor: pointer;
       transition: all .2s;
-      letter-spacing: .2px;
-      box-shadow: 0 4px 15px rgba(99, 102, 241, .3)
+      letter-spacing: .3px;
+      margin-top: 8px;
+      position: relative;
+      overflow: hidden
+    }
+
+    .btn-login::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, transparent 0%, rgba(30, 222, 143, .15) 100%);
+      opacity: 0;
+      transition: opacity .2s
     }
 
     .btn-login:hover {
+      background: #051B2E;
       transform: translateY(-1px);
-      box-shadow: 0 6px 20px rgba(99, 102, 241, .4)
+      box-shadow: 0 8px 24px rgba(9, 36, 60, .35)
+    }
+
+    .btn-login:hover::after {
+      opacity: 1
     }
 
     .btn-login:active {
@@ -191,17 +300,26 @@
       margin-top: 14px;
       padding: 10px;
       background: var(--danger-light);
-      border-radius: var(--radius-sm);
+      border-radius: 8px;
       display: none
     }
 
-    .login-hint {
-      font-size: 12px;
-      color: var(--gray-400);
+    .login-footer {
       text-align: center;
-      margin-top: 18px;
-      padding-top: 18px;
-      border-top: 1px solid var(--gray-100)
+      margin-top: 24px;
+      font-size: 12px;
+      color: #B3C0CE
+    }
+
+    @media (max-width: 860px) {
+      .login-left {
+        display: none
+      }
+
+      .login-right {
+        width: 100%;
+        padding: 24px
+      }
     }
 
     /* ── Account Selector ── */
@@ -1211,22 +1329,53 @@
   <!-- ══════════════ LOGIN ══════════════ -->
   <div id="loginScreen">
     <div class="login-wrap">
-      <div class="login-card">
-        <div class="login-logo">
-          <img class="brand-img" src="https://medpharmasc.com/wp-content/uploads/2024/11/logo.png" alt="MedPharma" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-          <div class="brand-name" style="display:none">MedPharma</div>
-          <div class="badge">Secure Client Portal</div>
+      <div class="login-bg"></div>
+      <div class="login-bg-overlay"></div>
+
+      <!-- Left branding panel -->
+      <div class="login-left">
+        <img class="site-logo" src="https://medpharmasc.com/wp-content/uploads/2024/11/logo.png" alt="MedPharma">
+        <h2>Revenue Cycle<br><span>Simplified.</span></h2>
+        <p>End-to-end credentialing, enrollment, billing, and claims management — all in one secure portal.</p>
+        <div class="login-features">
+          <div class="login-feature">
+            <div class="login-feature-dot"></div>Credentialing &amp; Provider Enrollment
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-dot"></div>Claims Queue &amp; EDI Management
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-dot"></div>Real-Time Dashboard &amp; Reporting
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-dot"></div>Secure Document Storage
+          </div>
         </div>
-        <div class="login-field">
-          <label>Username</label>
-          <input class="form-control" type="text" id="loginUser" placeholder="Enter username" autofocus>
+      </div>
+
+      <!-- Right sign-in card -->
+      <div class="login-right">
+        <div class="login-card">
+          <div class="login-logo">
+            <img class="brand-img" src="https://medpharmasc.com/wp-content/uploads/2024/11/logo.png" alt="MedPharma"
+              onerror="this.style.display='none'">
+            <div class="login-title">Client Portal</div>
+            <div class="login-sub">Sign in to access your account</div>
+            <div class="badge">&#128274; Secure Access</div>
+          </div>
+          <div class="login-divider"></div>
+          <div class="login-field">
+            <label>Username</label>
+            <input type="text" id="loginUser" placeholder="Enter your username" autofocus>
+          </div>
+          <div class="login-field">
+            <label>Password</label>
+            <input type="password" id="loginPass" placeholder="Enter your password">
+          </div>
+          <button class="btn-login" onclick="doLogin()">Sign In &rarr;</button>
+          <div class="login-error" id="loginError"></div>
+          <div class="login-footer">MedPharma &copy; 2026 &nbsp;&middot;&nbsp; medpharmasc.com</div>
         </div>
-        <div class="login-field">
-          <label>Password</label>
-          <input class="form-control" type="password" id="loginPass" placeholder="Enter password">
-        </div>
-        <button class="btn-login" onclick="doLogin()">Sign In →</button>
-        <div class="login-error" id="loginError"></div>
       </div>
     </div>
   </div>
