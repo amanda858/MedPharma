@@ -318,7 +318,30 @@
 
       .login-right {
         width: 100%;
-        padding: 24px
+        padding: 24px;
+        justify-content: center;
+        align-items: flex-start;
+        padding-top: 40px
+      }
+
+      .login-card {
+        max-width: 100%
+      }
+    }
+
+    @media (max-width: 480px) {
+      .login-right {
+        padding: 16px;
+        padding-top: 24px
+      }
+
+      .login-card {
+        padding: 32px 24px;
+        border-radius: 16px
+      }
+
+      .login-logo img.brand-img {
+        max-width: 150px
       }
     }
 
@@ -1300,11 +1323,104 @@
     }
 
     /* ── Responsive ── */
+    /* ── Hamburger button ── */
+    .hamburger {
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      gap: 5px;
+      width: 44px;
+      height: 44px;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .1);
+      border: none;
+      flex-shrink: 0
+    }
+
+    .hamburger span {
+      display: block;
+      height: 2px;
+      background: #fff;
+      border-radius: 2px;
+      transition: all .25s
+    }
+
+    .hamburger.open span:nth-child(1) {
+      transform: translateY(7px) rotate(45deg)
+    }
+
+    .hamburger.open span:nth-child(2) {
+      opacity: 0
+    }
+
+    .hamburger.open span:nth-child(3) {
+      transform: translateY(-7px) rotate(-45deg)
+    }
+
+    /* ── Mobile sidebar overlay ── */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .55);
+      z-index: 149;
+      backdrop-filter: blur(2px)
+    }
+
+    .sidebar-overlay.show {
+      display: block
+    }
+
     @media(max-width:768px) {
+
+      /* Hamburger visible */
+      .hamburger {
+        display: flex
+      }
+
+      /* Sidebar becomes a drawer */
       .sidebar {
+        position: fixed;
+        top: 62px;
+        left: 0;
+        bottom: 0;
+        z-index: 150;
+        transform: translateX(-100%);
+        transition: transform .28s cubic-bezier(.4, 0, .2, 1);
+        width: 260px;
+        box-shadow: 4px 0 24px rgba(0, 0, 0, .4)
+      }
+
+      .sidebar.mobile-open {
+        transform: translateX(0)
+      }
+
+      /* Content takes full width */
+      .app-body {
+        flex-direction: column
+      }
+
+      .main-content {
+        padding: 14px;
+        width: 100%
+      }
+
+      /* Topbar adjustments */
+      .topbar {
+        padding: 0 14px
+      }
+
+      .topbar-left .brand {
+        font-size: 17px
+      }
+
+      #topUser {
         display: none
       }
 
+      /* Grids go single column on small phones */
       .kpi-grid {
         grid-template-columns: 1fr 1fr
       }
@@ -1317,8 +1433,57 @@
         grid-template-columns: 1fr
       }
 
-      .main-content {
-        padding: 16px
+      .form-grid {
+        grid-template-columns: 1fr !important
+      }
+
+      /* Cards full width */
+      .card {
+        border-radius: 12px
+      }
+
+      /* Touch-friendly nav items */
+      .nav-item {
+        min-height: 48px;
+        font-size: 14px
+      }
+
+      /* Page header stack */
+      .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px
+      }
+
+      .page-actions {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px
+      }
+
+      .page-actions .btn,
+      .page-actions .form-control {
+        width: 100%
+      }
+
+      /* Account header */
+      .account-header {
+        padding: 20px 16px
+      }
+    }
+
+    @media(max-width:420px) {
+      .kpi-grid {
+        grid-template-columns: 1fr
+      }
+
+      .aging-grid {
+        grid-template-columns: 1fr 1fr
+      }
+
+      .topbar-left .account-chip {
+        display: none
       }
     }
   </style>
@@ -1400,8 +1565,11 @@
   <div class="app" id="appShell">
     <div class="topbar">
       <div class="topbar-left">
+        <button class="hamburger" id="hamburgerBtn" onclick="toggleMobileSidebar()" aria-label="Menu">
+          <span></span><span></span><span></span>
+        </button>
         <span class="brand">MedPharma</span>
-        <span class="account-chip" id="topAccount" onclick="switchAccount()">↩ Switch Account</span>
+        <span class="account-chip" id="topAccount" onclick="switchAccount()">&#8629; Switch Account</span>
       </div>
       <div class="topbar-right">
         <span id="topUser" style="font-weight:500"></span>
@@ -1409,6 +1577,7 @@
         <button class="btn-logout" onclick="doLogout()">Sign Out</button>
       </div>
     </div>
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileSidebar()"></div>
 
     <div class="app-body">
       <!-- Sidebar -->
@@ -2411,6 +2580,8 @@
       if (ni) ni.classList.add('active');
       const pp = document.getElementById(`panel-${panel}`);
       if (pp) pp.classList.add('active');
+      // Close sidebar on mobile after navigation
+      closeMobileSidebar();
 
       if (panel === 'dashboard') loadDashboard();
       if (panel === 'claims') loadClaims();
@@ -2421,6 +2592,34 @@
       if (panel === 'clients') loadClients();
       if (panel === 'files') loadDocuments();
       if (panel === 'profile') loadProfile();
+    }
+
+    function toggleMobileSidebar() {
+      const sb = document.querySelector('.sidebar');
+      const overlay = document.getElementById('sidebarOverlay');
+      const btn = document.getElementById('hamburgerBtn');
+      const isOpen = sb.classList.contains('mobile-open');
+      if (isOpen) {
+        sb.classList.remove('mobile-open');
+        overlay.classList.remove('show');
+        btn.classList.remove('open');
+        document.body.style.overflow = '';
+      } else {
+        sb.classList.add('mobile-open');
+        overlay.classList.add('show');
+        btn.classList.add('open');
+        document.body.style.overflow = 'hidden';
+      }
+    }
+
+    function closeMobileSidebar() {
+      const sb = document.querySelector('.sidebar');
+      const overlay = document.getElementById('sidebarOverlay');
+      const btn = document.getElementById('hamburgerBtn');
+      if (sb) sb.classList.remove('mobile-open');
+      if (overlay) overlay.classList.remove('show');
+      if (btn) btn.classList.remove('open');
+      document.body.style.overflow = '';
     }
 
     // ═══════════════════════════════════════
