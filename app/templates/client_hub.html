@@ -89,6 +89,14 @@
       margin-bottom: 32px
     }
 
+    .login-logo img.brand-img {
+      max-width: 220px;
+      height: auto;
+      display: block;
+      margin: 0 auto 4px;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,.12))
+    }
+
     .login-logo .brand-name {
       font-size: 30px;
       font-weight: 700;
@@ -1205,8 +1213,8 @@
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">
-          <div class="brand-name">MedPharma</div>
-          <div class="brand-sub">Revenue Cycle Management</div>
+          <img class="brand-img" src="https://medpharmasc.com/wp-content/uploads/2024/11/logo.png" alt="MedPharma" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+          <div class="brand-name" style="display:none">MedPharma</div>
           <div class="badge">Secure Client Portal</div>
         </div>
         <div class="login-field">
@@ -1219,7 +1227,6 @@
         </div>
         <button class="btn-login" onclick="doLogin()">Sign In →</button>
         <div class="login-error" id="loginError"></div>
-        <div class="login-hint">admin / admin123 &nbsp;·&nbsp; demo / client123</div>
       </div>
     </div>
   </div>
