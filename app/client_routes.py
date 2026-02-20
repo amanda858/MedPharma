@@ -96,7 +96,7 @@ def me(hub_session: Optional[str] = Cookie(None)):
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     if user["role"] == "admin":
-        return list_clients()
+        return [c for c in list_clients() if c["role"] != "admin"]
     return [{"id": user["id"], "company": user["company"],
              "contact_name": user["contact_name"], "email": user["email"]}]
 
