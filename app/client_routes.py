@@ -19,6 +19,7 @@ from app.client_db import (
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, delete_file_record,
+    list_practice_profiles, save_practice_profile, delete_practice_profile,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -568,6 +569,37 @@ def dashboard_for_client(client_id: int, hub_session: Optional[str] = Cookie(Non
     data = get_dashboard(client_id)
     data["user"] = user
     return data
+
+
+# ─── Practice Profiles ──────────────────────────────────────────────────────
+
+@router.get("/profiles")
+async def api_list_profiles(hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    return {"profiles": list_practice_profiles()}
+
+
+@router.post("/profiles")
+async def api_create_profile(request: Request, hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    data = await request.json()
+    pid = save_practice_profile(data)
+    return {"id": pid}
+
+
+@router.put("/profiles/{pid}")
+async def api_update_profile(pid: int, request: Request, hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    data = await request.json()
+    save_practice_profile({**data, "id": pid})
+    return {"ok": True}
+
+
+@router.delete("/profiles/{pid}")
+async def api_delete_profile(pid: int, hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    delete_practice_profile(pid)
+    return {"ok": True}
 
 
 # ─── File Uploads ───────────────────────────────────────────────────────────

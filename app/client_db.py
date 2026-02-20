@@ -242,6 +242,24 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_files_client    ON client_files(client_id);
+
+        -- ── practice profiles (CVO-managed practices) ────────────────
+        CREATE TABLE IF NOT EXISTS practice_profiles (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL DEFAULT '',
+            contact_name    TEXT DEFAULT '',
+            email           TEXT DEFAULT '',
+            phone           TEXT DEFAULT '',
+            address         TEXT DEFAULT '',
+            tax_id          TEXT DEFAULT '',
+            group_npi       TEXT DEFAULT '',
+            individual_npi  TEXT DEFAULT '',
+            ptan_group      TEXT DEFAULT '',
+            ptan_individual TEXT DEFAULT '',
+            specialty       TEXT DEFAULT '',
+            notes           TEXT DEFAULT '',
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
 
@@ -286,6 +304,11 @@ def init_client_hub_db():
             conn.commit()
             _seed_data(conn)
 
+    # Seed practice_profiles if newly created / empty
+    cur.execute("SELECT COUNT(*) FROM practice_profiles")
+    if cur.fetchone()[0] == 0:
+        _seed_practice_profiles(conn)
+
     conn.close()
 
 
@@ -322,6 +345,23 @@ def _seed_data(conn):
     conn.commit()
     # No fake claims, providers, credentialing, or payments seeded.
     # All data is imported via Excel/CSV file uploads.
+    _seed_practice_profiles(conn)
+
+
+def _seed_practice_profiles(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM practice_profiles")
+    if cur.fetchone()[0] > 0:
+        return
+    cur.execute("""
+        INSERT INTO practice_profiles
+          (name,contact_name,email,tax_id,group_npi,individual_npi,ptan_group,ptan_individual,specialty)
+        VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("Luminary MHP", "", "billing@luminarymhp.com",
+         "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "Mental Health")
+    )
+    cur.execute("INSERT INTO practice_profiles (name, specialty) VALUES (?,?)", ("OMT", ""))
+    conn.commit()
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -975,6 +1015,46 @@ def get_dashboard(client_id: int = None):
         "enrollment_stats": enroll_stats,
         "profile": profile,
     }
+
+
+# ─── Practice Profiles ──────────────────────────────────────────────────────
+
+def list_practice_profiles():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM practice_profiles ORDER BY id")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def save_practice_profile(data: dict) -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    pid = data.get("id")
+    fields = ["name", "contact_name", "email", "phone", "address",
+              "tax_id", "group_npi", "individual_npi",
+              "ptan_group", "ptan_individual", "specialty", "notes"]
+    if pid:
+        sets = ", ".join(f"{f}=?" for f in fields)
+        vals = [data.get(f, "") for f in fields] + [pid]
+        cur.execute(f"UPDATE practice_profiles SET {sets} WHERE id=?", vals)
+    else:
+        cols = ", ".join(fields)
+        placeholders = ", ".join("?" for _ in fields)
+        vals = [data.get(f, "") for f in fields]
+        cur.execute(f"INSERT INTO practice_profiles ({cols}) VALUES ({placeholders})", vals)
+        pid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def delete_practice_profile(pid: int):
+    conn = get_db()
+    conn.execute("DELETE FROM practice_profiles WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
 
 
 # ─── File uploads ──────────────────────────────────────────────────────────
