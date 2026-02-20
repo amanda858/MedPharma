@@ -336,7 +336,7 @@ def _seed_data(conn):
            (username,password,salt,company,contact_name,email,role,
             tax_id,group_npi,individual_npi,ptan_group,ptan_individual,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("luminary", _hash_pw("client123", s1), s1, "Luminary MHP/OMT", "Contact", "billing@luminarymhp.com", "client",
+        ("luminary", _hash_pw("client123", s1), s1, "Luminary MHP", "Contact", "billing@luminarymhp.com", "client",
          "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "MHP+OMT")
     )
     luminary_id = cur.lastrowid
