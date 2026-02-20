@@ -1535,7 +1535,7 @@
           <div class="login-divider"></div>
           <div class="login-field">
             <label>Username</label>
-            <input type="text" id="loginUser" placeholder="Enter your username" autofocus autocomplete="username"
+            <input type="text" id="loginUser" placeholder="e.g. eric" autofocus autocomplete="username"
               autocorrect="off" autocapitalize="none" spellcheck="false">
           </div>
           <div class="login-field">
@@ -2575,10 +2575,13 @@
         const d = await r.json();
         clientsList = d.clients || d || [];
       } else {
+        // Non-admin: skip account selector, go straight to dashboard
         clientsList = [{
           id: currentUser.id, company: currentUser.company,
           contact_name: currentUser.contact_name, email: currentUser.email
         }];
+        selectAccount(currentUser.id, currentUser.company);
+        return;
       }
 
       const grid = document.getElementById('accountGrid');

@@ -299,7 +299,7 @@ def init_client_hub_db():
     else:
         # Auto-fix: ensure BOTH expected client accounts exist.
         # If either is missing the DB has stale/wrong seed data — wipe and re-seed.
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username IN ('eric@medprosc.com','rcm@medprosc.com')")
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username IN ('eric','rcm')")
         found = cur.fetchone()[0]
         if found < 2:
             for tbl in (
@@ -336,7 +336,7 @@ def _seed_data(conn):
            (username,password,salt,company,contact_name,email,role,
             tax_id,group_npi,individual_npi,ptan_group,ptan_individual,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("eric@medprosc.com", _hash_pw("eric123", s1), s1, "Luminary MHP", "Eric", "eric@medprosc.com", "client",
+        ("eric", _hash_pw("eric123", s1), s1, "Luminary MHP", "Eric", "eric@medprosc.com", "client",
          "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "MHP+OMT")
     )
     luminary_id = cur.lastrowid
@@ -347,7 +347,7 @@ def _seed_data(conn):
         """INSERT INTO clients
            (username,password,salt,company,contact_name,email,role,specialty,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?)""",
-        ("rcm@medprosc.com", _hash_pw("rcm123", s2), s2, "TruPath", "RCM Team", "rcm@medprosc.com", "client",
+        ("rcm", _hash_pw("rcm123", s2), s2, "TruPath", "RCM Team", "rcm@medprosc.com", "client",
          "Laboratory", "Laboratory")
     )
 
