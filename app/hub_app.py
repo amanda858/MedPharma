@@ -38,7 +38,12 @@ async def portal_redirect():
     return RedirectResponse(url="/medpharma", status_code=302)
 
 
-@app.get("/medpharma", response_class=HTMLResponse)
+@app.get("/medpharma")
+async def medpharma_redirect():
+    return RedirectResponse(url="/mphub2026", status_code=302)
+
+
+@app.get("/mphub2026", response_class=HTMLResponse)
 async def serve_client_hub():
     with open("app/templates/client_hub.html", "r") as f:
         content = f.read()
