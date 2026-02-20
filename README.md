@@ -1,4 +1,4 @@
-# CVOPro — Lab Lead Generator
+# MedPharma — Lab Lead Generator
 
 [Download MedPharma Hub](https://github.com/amanda858/MedPharma/archive/refs/heads/main.zip)
 
@@ -6,7 +6,7 @@ Find clinical laboratories across the United States for **medical billing**, **c
 
 ## What It Does
 
-CVOPro searches **public federal databases** to find labs that are potential clients:
+MedPharma searches **public federal databases** to find labs that are potential clients:
 
 | Source | Data | Why It Matters |
 |--------|------|----------------|

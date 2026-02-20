@@ -1,1 +1,1 @@
-# CVOPro - Laboratory Lead Generation Platform
+# MedPharma - Laboratory Lead Generation Platform

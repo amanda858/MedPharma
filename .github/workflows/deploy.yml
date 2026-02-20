@@ -11,5 +11,7 @@ jobs:
     steps:
       - name: Trigger Render deploy — medpharma-hub
         run: |
-          curl -s -o /dev/null -w "%{http_code}" \
-            "https://api.render.com/deploy/srv-d6c8fb3nv86c73e79oug?key=Ca5j4QUjIPM"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "https://api.render.com/deploy/srv-d6c8fb3nv86c73e79oug?key=Ca5j4QUjIPM")
+          echo "Render deploy HTTP status: $STATUS"
+          [ "$STATUS" = "200" ] && echo "Deploy triggered successfully" || exit 1
