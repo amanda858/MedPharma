@@ -1,7 +1,7 @@
 """Client Hub app — runs on HUB_PORT (default 5240)."""
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app.client_db import init_client_hub_db
 from app.client_routes import router as client_hub_router
@@ -29,4 +29,13 @@ async def root():
 @app.get("/hub", response_class=HTMLResponse)
 async def serve_client_hub():
     with open("app/templates/client_hub.html", "r") as f:
-        return f.read()
+        content = f.read()
+    return Response(
+        content=content,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
