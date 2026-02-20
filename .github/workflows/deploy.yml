@@ -1,0 +1,15 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy — medpharma-hub
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" \
+            "https://api.render.com/deploy/srv-d6c8fb3nv86c73e79oug?key=Ca5j4QUjIPM"
