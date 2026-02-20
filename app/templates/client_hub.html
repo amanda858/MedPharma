@@ -1540,10 +1540,13 @@
             <label>Password</label>
             <input type="password" id="loginPass" placeholder="Enter your password">
           </div>
-          <button class="btn-login" onclick="doLogin()">Sign In &rarr;</button>
+          <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In &rarr;</button>
           <div class="login-error" id="loginError"></div>
+          <div id="loginStatus" style="text-align:center;font-size:13px;color:#888;margin-top:8px;display:none">
+            Connecting to server…</div>
           <div class="login-footer">MedPharma &copy; 2026 &nbsp;&middot;&nbsp; medpharmasc.com &nbsp;&middot;&nbsp;
-            <span style="color:#1EDE8F;font-weight:700">v2.1</span></div>
+            <span style="color:#1EDE8F;font-weight:700">v2.2</span>
+          </div>
         </div>
       </div>
     </div>
@@ -2479,6 +2482,9 @@
         m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
       });
 
+      // Ping server immediately so it wakes up before user hits Sign In
+      fetch('/hub/api/me').catch(() => { });
+
       try {
         const r = await fetch('/hub/api/me');
         if (r.ok) { const u = await r.json(); currentUser = u; showAccountSelector(); }
@@ -2492,18 +2498,41 @@
       const username = document.getElementById('loginUser').value.trim();
       const password = document.getElementById('loginPass').value;
       const errEl = document.getElementById('loginError');
+      const btn = document.getElementById('btnLogin');
+      const statusEl = document.getElementById('loginStatus');
       errEl.style.display = 'none';
       if (!username || !password) { showLoginError('Please enter username and password'); return; }
+      btn.disabled = true;
+      btn.textContent = 'Signing in…';
+      statusEl.style.display = 'block';
       try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 45000);
         const r = await fetch('/hub/api/login', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password }),
+          signal: controller.signal
         });
+        clearTimeout(tid);
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.detail || 'Invalid credentials');
+        }
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || 'Login failed');
         currentUser = d.user;
+        statusEl.style.display = 'none';
         showAccountSelector();
-      } catch (e) { showLoginError(e.message); }
+      } catch (e) {
+        statusEl.style.display = 'none';
+        if (e.name === 'AbortError') {
+          showLoginError('Server is waking up — please try again in 30 seconds');
+        } else {
+          showLoginError(e.message || 'Login failed. Check your username and password.');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In →';
+      }
     }
 
     function showLoginError(msg) {
