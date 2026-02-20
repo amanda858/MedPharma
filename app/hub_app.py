@@ -1,5 +1,7 @@
 """Client Hub app — runs on HUB_PORT (default 5240)."""
 
+import hashlib
+import time
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -30,6 +32,10 @@ async def root():
 async def serve_client_hub():
     with open("app/templates/client_hub.html", "r") as f:
         content = f.read()
+    # Inject build timestamp so every deploy busts any CDN/proxy cache
+    build_ts = str(int(time.time()))
+    content = content.replace("</head>", f'<meta name="build" content="{build_ts}">\n</head>', 1)
+    etag = hashlib.md5(content.encode()).hexdigest()
     return Response(
         content=content,
         media_type="text/html",
@@ -37,5 +43,6 @@ async def serve_client_hub():
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
             "Expires": "0",
+            "ETag": etag,
         }
     )
