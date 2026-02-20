@@ -25,16 +25,20 @@ app.include_router(client_hub_router)
 
 @app.get("/")
 async def root():
-    return RedirectResponse(url="/portal", status_code=302)
+    return RedirectResponse(url="/medpharma", status_code=302)
 
 
 @app.get("/hub")
 async def hub_redirect():
-    """Redirect old /hub URL so CDN cache is bypassed."""
-    return RedirectResponse(url="/portal", status_code=302)
+    return RedirectResponse(url="/medpharma", status_code=302)
 
 
-@app.get("/portal", response_class=HTMLResponse)
+@app.get("/portal")
+async def portal_redirect():
+    return RedirectResponse(url="/medpharma", status_code=302)
+
+
+@app.get("/medpharma", response_class=HTMLResponse)
 async def serve_client_hub():
     with open("app/templates/client_hub.html", "r") as f:
         content = f.read()
