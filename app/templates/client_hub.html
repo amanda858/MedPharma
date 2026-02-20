@@ -1534,18 +1534,24 @@
           <div class="login-divider"></div>
           <div class="login-field">
             <label>Username</label>
-            <input type="text" id="loginUser" placeholder="Enter your username" autofocus>
+            <input type="text" id="loginUser" placeholder="Enter your username" autofocus autocomplete="username"
+              autocorrect="off" autocapitalize="none" spellcheck="false">
           </div>
           <div class="login-field">
             <label>Password</label>
-            <input type="password" id="loginPass" placeholder="Enter your password">
+            <div style="position:relative">
+              <input type="password" id="loginPass" placeholder="Enter your password" autocomplete="current-password"
+                style="width:100%;padding-right:44px">
+              <button type="button" onclick="togglePw()" id="btnShowPw"
+                style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#888;font-size:13px;padding:4px">Show</button>
+            </div>
           </div>
           <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In &rarr;</button>
           <div class="login-error" id="loginError"></div>
           <div id="loginStatus" style="text-align:center;font-size:13px;color:#888;margin-top:8px;display:none">
             Connecting to server…</div>
           <div class="login-footer">MedPharma &copy; 2026 &nbsp;&middot;&nbsp; medpharmasc.com &nbsp;&middot;&nbsp;
-            <span style="color:#1EDE8F;font-weight:700">v2.2</span>
+            <span style="color:#1EDE8F;font-weight:700">v2.3</span>
           </div>
         </div>
       </div>
@@ -2538,6 +2544,13 @@
     function showLoginError(msg) {
       const el = document.getElementById('loginError');
       el.textContent = msg; el.style.display = 'block';
+    }
+
+    function togglePw() {
+      const inp = document.getElementById('loginPass');
+      const btn = document.getElementById('btnShowPw');
+      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
+      else { inp.type = 'password'; btn.textContent = 'Show'; }
     }
 
     async function doLogout() {
