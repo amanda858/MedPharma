@@ -12,6 +12,7 @@ from app.client_db import (
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client,
     get_profile, update_profile,
+    get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
     get_claims, get_claim, create_claim, update_claim, delete_claim,
     get_payments, create_payment, delete_payment,
@@ -135,7 +136,23 @@ class ProfileUpdate(BaseModel):
     address: Optional[str] = None
     specialty: Optional[str] = None
     notes: Optional[str] = None
+    practice_type: Optional[str] = None
     doc_tabs: Optional[list] = None
+
+
+class PracticeProfileUpdate(BaseModel):
+    practice_type: Optional[str] = None
+    specialty: Optional[str] = None
+    tax_id: Optional[str] = None
+    group_npi: Optional[str] = None
+    individual_npi: Optional[str] = None
+    ptan_group: Optional[str] = None
+    ptan_individual: Optional[str] = None
+    address: Optional[str] = None
+    contact_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    notes: Optional[str] = None
 
 
 @router.get("/clients")
@@ -194,6 +211,48 @@ def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[s
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
     update_profile(cid, data)
+    return {"ok": True}
+
+
+# ─── Practice Sub-Profiles ─────────────────────────────────────────────────────────────
+
+@router.get("/practice-profiles")
+def list_practice_profiles(hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    cid = _client_scope(user) or user["id"]
+    return {"profiles": get_practice_profiles(cid)}
+
+
+@router.get("/practice-profiles/{cid}")
+def list_practice_profiles_admin(cid: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    if user["role"] != "admin" and user["id"] != cid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return {"profiles": get_practice_profiles(cid)}
+
+
+@router.put("/practice-profiles/{profile_name}")
+def save_practice_profile(profile_name: str, body: PracticeProfileUpdate,
+                          hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    cid = _client_scope(user) or user["id"]
+    upsert_practice_profile(cid, profile_name, body.model_dump(exclude_none=True))
+    return {"ok": True}
+
+
+@router.put("/practice-profiles/{cid}/{profile_name}")
+def save_practice_profile_admin(cid: int, profile_name: str, body: PracticeProfileUpdate,
+                                hub_session: Optional[str] = Cookie(None)):
+    _require_admin(hub_session)
+    upsert_practice_profile(cid, profile_name, body.model_dump(exclude_none=True))
+    return {"ok": True}
+
+
+@router.delete("/practice-profiles/{pp_id}")
+def remove_practice_profile(pp_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    cid = _client_scope(user) or user["id"]
+    delete_practice_profile(pp_id, cid)
     return {"ok": True}
 
 

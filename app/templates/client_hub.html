@@ -1266,7 +1266,7 @@
           <span class="ni">📋</span> Claims Queue
         </div>
         <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')">
-          <span class="ni">🎓</span> Credentialing
+          <span class="ni">🎓</span> <span id="navCredLabel">Credentialing</span>
         </div>
         <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">
           <span class="ni">📝</span> Enrollment
@@ -1422,7 +1422,7 @@
         <!-- ═══ CREDENTIALING ═══ -->
         <div class="hub-panel" id="panel-credentialing">
           <div class="page-header">
-            <div class="page-title">Credentialing</div>
+            <div class="page-title" id="credPanelTitle">Credentialing</div>
             <div class="page-actions">
               <select id="credFilter" class="form-control btn-sm" onchange="loadCred()" style="width:auto">
                 <option value="">All Statuses</option>
@@ -1599,16 +1599,20 @@
           <div class="page-header">
             <div class="page-title">📂 Documents</div>
             <div class="page-actions" style="gap:8px;display:flex;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Rename Tabs</button>
-              <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆ Upload File</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Rename
+                Tabs</button>
+              <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
+                Upload File</button>
               <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
                 onchange="handleFileSelect(this)" multiple>
             </div>
           </div>
 
           <!-- Rename tabs inline editor -->
-          <div id="renameDocTabsForm" style="display:none;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:16px;margin-bottom:16px">
-            <div style="font-size:13px;font-weight:700;color:var(--gray-600);margin-bottom:12px">✏️ Edit Tab Names (5 categories)</div>
+          <div id="renameDocTabsForm"
+            style="display:none;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:16px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:700;color:var(--gray-600);margin-bottom:12px">✏️ Edit Tab Names (5
+              categories)</div>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
               <input class="form-control" id="docTabName0" placeholder="Tab 1 name">
               <input class="form-control" id="docTabName1" placeholder="Tab 2 name">
@@ -1626,29 +1630,35 @@
           <div id="docCategoryTabs" class="queue-tabs" style="margin-bottom:0"></div>
 
           <!-- Upload Drop Zone -->
-          <div class="card" id="dropZone" style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:28px 20px;cursor:pointer;transition:all .2s;margin-top:16px"
+          <div class="card" id="dropZone"
+            style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:28px 20px;cursor:pointer;transition:all .2s;margin-top:16px"
             ondragover="event.preventDefault();this.style.borderColor='#1e88e5';this.style.background='#e3f2fd'"
             ondragleave="this.style.borderColor='';this.style.background=''"
             ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleFileDrop(event)">
             <div style="font-size:32px;margin-bottom:8px">📄</div>
-            <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload</div>
-            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
+            <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload
+            </div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv
+              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
             <div style="margin-top:10px">
-              <input id="fileDesc" class="form-control" placeholder="Description (optional)" style="width:240px;display:inline-block">
+              <input id="fileDesc" class="form-control" placeholder="Description (optional)"
+                style="width:240px;display:inline-block">
             </div>
           </div>
 
           <!-- Completion Tracker -->
           <div class="card" style="margin:16px 0 0">
             <div class="card-header"><span class="card-title">◆ Workflow Completion Tracker</span></div>
-            <div id="completionTracker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
+            <div id="completionTracker"
+              style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
               <!-- populated by JS -->
             </div>
           </div>
 
           <!-- File list -->
           <div class="card" style="padding:0;margin-top:16px">
-            <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+            <div class="card-header"
+              style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
               <span class="card-title" id="docFilesTitle">All Documents</span>
               <span id="docFilesCount" style="font-size:13px;color:var(--gray-400)"></span>
             </div>
@@ -1682,7 +1692,9 @@
           </div>
 
           <div class="card" style="margin-bottom:18px">
-            <div class="card-header"><div class="card-title">🏥 Practice Information</div></div>
+            <div class="card-header">
+              <div class="card-title">🏥 Practice Information</div>
+            </div>
             <div class="form-grid" style="margin-top:12px">
               <div class="form-group">
                 <label>Practice / Company Name</label>
@@ -1716,7 +1728,9 @@
           </div>
 
           <div class="card" style="margin-bottom:18px">
-            <div class="card-header"><div class="card-title">📞 Contact Information</div></div>
+            <div class="card-header">
+              <div class="card-title">📞 Contact Information</div>
+            </div>
             <div class="form-grid" style="margin-top:12px">
               <div class="form-group">
                 <label>Contact Name</label>
@@ -1738,10 +1752,23 @@
           </div>
 
           <div class="card">
-            <div class="card-header"><div class="card-title">📝 Notes</div></div>
-            <div class="form-group" style="margin-top:12px">
-              <textarea class="form-control" id="pf-notes" rows="4" placeholder="Internal notes about this client…"></textarea>
+            <div class="card-header">
+              <div class="card-title">📝 Notes</div>
             </div>
+            <div class="form-group" style="margin-top:12px">
+              <textarea class="form-control" id="pf-notes" rows="4"
+                placeholder="Internal notes about this client…"></textarea>
+            </div>
+          </div>
+
+          <!-- Sub-Profiles (MHP / OMT) — visible only for MHP+OMT practice type -->
+          <div id="subProfilesSection" style="display:none;margin-top:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <div style="font-size:16px;font-weight:700;color:var(--gray-700)">🏷️ Practice Sub-Profiles</div>
+              <button class="btn btn-secondary btn-sm" onclick="showAddSubProfilePrompt()">+ Add Sub-Profile</button>
+            </div>
+            <div id="subProfilesGrid"
+              style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:18px"></div>
           </div>
         </div>
 
@@ -2201,7 +2228,19 @@
       document.getElementById('topUser').textContent = currentUser.username;
       document.getElementById('topRole').textContent = currentUser.role;
       if (currentUser.role === 'admin') document.getElementById('adminNav').style.display = 'block';
+      // Determine practice_type for selected client
+      const sel = clientsList.find(c => c.id === clientId);
+      const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
+      updateNavForPracticeType(pt);
       navTo('dashboard');
+    }
+
+    function updateNavForPracticeType(pt) {
+      const isLab = pt === 'Laboratory';
+      const credLabel = document.getElementById('navCredLabel');
+      const credTitle = document.getElementById('credPanelTitle');
+      if (credLabel) credLabel.textContent = isLab ? 'Group Contracting' : 'Credentialing';
+      if (credTitle) credTitle.textContent = isLab ? 'Group Contracting' : 'Credentialing';
     }
 
     function switchAccount() { showAccountSelector(); }
@@ -3252,8 +3291,8 @@
               <div style="background:var(--gray-200);border-radius:20px;height:6px;overflow:hidden">
                 <div style="background:${item.color};height:100%;width:${item.pct}%;transition:width .5s"></div>
               </div>` :
-              `<div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.value}</div>`
-            }
+            `<div style="font-size:28px;font-weight:700;color:${item.color};margin-bottom:8px">${item.value}</div>`
+          }
             <div style="font-size:12px;color:var(--gray-400);margin-top:6px">${item.sub}</div>
           </div>`).join('');
       } catch (e) { console.error(e); }
@@ -3302,20 +3341,119 @@
         const r = await fetch(url);
         if (!r.ok) throw new Error('Failed to load profile');
         const d = await r.json();
-        const fields = ['company','contact_name','email','phone','tax_id','group_npi',
-                        'individual_npi','ptan_group','ptan_individual','address','specialty','notes'];
+        const fields = ['company', 'contact_name', 'email', 'phone', 'tax_id', 'group_npi',
+          'individual_npi', 'ptan_group', 'ptan_individual', 'address', 'specialty', 'notes'];
         fields.forEach(f => {
           const el = document.getElementById('pf-' + f);
           if (el) el.value = d[f] || '';
         });
         const titleEl = document.getElementById('profilePanelTitle');
         if (titleEl && d.company) titleEl.textContent = '🏷️ ' + d.company + ' — Profile';
+        // Sub-profiles for MHP+OMT practices
+        const sect = document.getElementById('subProfilesSection');
+        if (sect) sect.style.display = (d.practice_type === 'MHP+OMT') ? '' : 'none';
+        if (d.practice_type === 'MHP+OMT') loadPracticeProfiles();
       } catch (e) { console.error(e); toast('Could not load profile', 'error'); }
     }
 
+    async function loadPracticeProfiles() {
+      try {
+        const cid = activeClientId;
+        const url = cid ? `/hub/api/practice-profiles/${cid}` : '/hub/api/practice-profiles';
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const d = await r.json();
+        renderPracticeProfiles(d.profiles || []);
+      } catch (e) { console.error(e); }
+    }
+
+    function renderPracticeProfiles(profiles) {
+      const grid = document.getElementById('subProfilesGrid');
+      if (!grid) return;
+      const profFields = [
+        { key: 'practice_type', label: 'Practice Type', placeholder: 'e.g. Ancillary' },
+        { key: 'specialty', label: 'Specialty', placeholder: 'e.g. Mental Health' },
+        { key: 'tax_id', label: 'Tax ID', placeholder: 'XX-XXXXXXX', mono: true },
+        { key: 'group_npi', label: 'Group NPI', placeholder: '10-digit NPI', mono: true },
+        { key: 'individual_npi', label: 'Individual NPI', placeholder: '10-digit NPI', mono: true },
+        { key: 'ptan_group', label: 'Medicare PTAN (Group)', placeholder: 'e.g. MI120440', mono: true },
+        { key: 'ptan_individual', label: 'Medicare PTAN (Individual)', placeholder: '', mono: true },
+        { key: 'address', label: 'Address', placeholder: 'Street, City, State ZIP', span: true },
+        { key: 'contact_name', label: 'Contact Name', placeholder: 'Full name' },
+        { key: 'email', label: 'Email', placeholder: 'billing@example.com' },
+        { key: 'phone', label: 'Phone', placeholder: '(555) 000-0000' },
+        { key: 'notes', label: 'Notes', placeholder: 'Additional notes...', textarea: true, span: true },
+      ];
+      const typeColors = { MHP: '#4f46e5', OMT: '#0891b2' };
+      grid.innerHTML = profiles.map(p => {
+        const color = typeColors[p.profile_name] || '#6b7280';
+        return `<div class="card" style="position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:4px;background:${color}"></div>
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding-top:12px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="background:${color};color:#fff;border-radius:8px;padding:4px 12px;font-weight:700;font-size:13px">${esc(p.profile_name)}</div>
+              <div class="card-title" style="margin:0">${esc(p.practice_type || 'Ancillary Practice')}</div>
+            </div>
+            <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none"
+              onclick="deleteSubProfile(${p.id},'${esc(p.profile_name)}')">Remove</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+            ${profFields.map(f => `
+              <div class="form-group" style="${f.span ? 'grid-column:span 2' : ''}">
+                <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray-400)">${f.label}</label>
+                ${f.textarea
+            ? `<textarea class="form-control" id="sp-${p.id}-${f.key}" rows="2" placeholder="${f.placeholder}" style="font-size:13px">${esc(p[f.key] || '')}</textarea>`
+            : `<input class="form-control" id="sp-${p.id}-${f.key}" value="${esc(p[f.key] || '')}" placeholder="${f.placeholder}" style="font-size:13px${f.mono ? ';font-family:monospace' : ''}">`
+          }
+              </div>`).join('')}
+          </div>
+          <div style="margin-top:12px;text-align:right">
+            <button class="btn btn-primary btn-sm" onclick="saveSubProfile(${p.id},'${esc(p.profile_name)}')">&#128190; Save ${esc(p.profile_name)}</button>
+          </div>
+        </div>`;
+      }).join('') || '<p style="color:var(--gray-400);font-size:14px;padding:8px">No sub-profiles yet. Click + Add Sub-Profile.</p>';
+    }
+
+    async function saveSubProfile(id, profileName) {
+      const profFields = ['practice_type', 'specialty', 'tax_id', 'group_npi', 'individual_npi',
+        'ptan_group', 'ptan_individual', 'address', 'contact_name', 'email', 'phone', 'notes'];
+      const data = {};
+      profFields.forEach(f => {
+        const el = document.getElementById(`sp-${id}-${f}`);
+        if (el) data[f] = el.value;
+      });
+      try {
+        const cid = activeClientId;
+        const url = cid ? `/hub/api/practice-profiles/${cid}/${profileName}` : `/hub/api/practice-profiles/${profileName}`;
+        const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+        if (!r.ok) throw new Error('Save failed');
+        toast(`${profileName} sub-profile saved!`, 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteSubProfile(id, profileName) {
+      if (!confirm(`Remove the ${profileName} sub-profile?`)) return;
+      try {
+        const r = await fetch(`/hub/api/practice-profiles/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Failed');
+        toast(`${profileName} removed`, 'success');
+        loadPracticeProfiles();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function showAddSubProfilePrompt() {
+      const name = prompt('Enter sub-profile name (e.g. MHP, OMT, Behavioral):');
+      if (!name || !name.trim()) return;
+      const cid = activeClientId;
+      const url = cid ? `/hub/api/practice-profiles/${cid}/${name.trim()}` : `/hub/api/practice-profiles/${name.trim()}`;
+      fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
+        .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
+        .catch(e => toast(e.message, 'error'));
+    }
+
     async function saveProfile() {
-      const fields = ['company','contact_name','email','phone','tax_id','group_npi',
-                      'individual_npi','ptan_group','ptan_individual','address','specialty','notes'];
+      const fields = ['company', 'contact_name', 'email', 'phone', 'tax_id', 'group_npi',
+        'individual_npi', 'ptan_group', 'ptan_individual', 'address', 'specialty', 'notes'];
       const data = {};
       fields.forEach(f => {
         const el = document.getElementById('pf-' + f);
