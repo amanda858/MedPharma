@@ -24,6 +24,8 @@ from app.client_db import (
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
+    log_audit, get_audit_log, auto_flag_sla, get_alerts,
+    global_search, bulk_update_claims, export_claims, export_table,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -55,8 +57,10 @@ def _require_admin(hub_session: Optional[str] = Cookie(None)):
 
 
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (any user sees all data)."""
-    return None
+    """Return client_id filter — None means all (admin sees all data)."""
+    if user.get("role") == "admin":
+        return None
+    return user["id"]
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -1083,7 +1087,19 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
             continue
         mapped["client_id"] = client_id
         try:
-            create_credentialing(mapped)
+            # Dedup: check for existing record with same provider+payor
+            from app.client_db import get_db as _get_db
+            _conn = _get_db()
+            existing = _conn.execute(
+                "SELECT id FROM credentialing WHERE client_id=? AND ProviderName=? AND Payor=?",
+                (client_id, mapped.get("ProviderName", ""), mapped.get("Payor", ""))
+            ).fetchone()
+            if existing:
+                from app.client_db import update_credentialing as _update_cred
+                _update_cred(existing["id"], {k: v for k, v in mapped.items() if k != "client_id"})
+            else:
+                create_credentialing(mapped)
+            _conn.close()
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
@@ -1119,7 +1135,19 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
             continue
         mapped["client_id"] = client_id
         try:
-            create_enrollment(mapped)
+            # Dedup: check for existing record with same provider+payor
+            from app.client_db import get_db as _get_db
+            _conn = _get_db()
+            existing = _conn.execute(
+                "SELECT id FROM enrollment WHERE client_id=? AND ProviderName=? AND Payor=?",
+                (client_id, mapped.get("ProviderName", ""), mapped.get("Payor", ""))
+            ).fetchone()
+            if existing:
+                from app.client_db import update_enrollment as _update_enr
+                _update_enr(existing["id"], {k: v for k, v in mapped.items() if k != "client_id"})
+            else:
+                create_enrollment(mapped)
+            _conn.close()
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
@@ -1155,7 +1183,19 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
             continue
         mapped["client_id"] = client_id
         try:
-            create_edi(mapped)
+            # Dedup: check for existing record with same provider+payor+payerID
+            from app.client_db import get_db as _get_db
+            _conn = _get_db()
+            existing = _conn.execute(
+                "SELECT id FROM edi_setup WHERE client_id=? AND ProviderName=? AND Payor=?",
+                (client_id, mapped.get("ProviderName", ""), mapped.get("Payor", ""))
+            ).fetchone()
+            if existing:
+                from app.client_db import update_edi as _update_edi
+                _update_edi(existing["id"], {k: v for k, v in mapped.items() if k != "client_id"})
+            else:
+                create_edi(mapped)
+            _conn.close()
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
@@ -1690,3 +1730,133 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
     filename = f"{safe_name}_Report_{date.today().isoformat()}.pdf"
     return StreamingResponse(buf, media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+# ─── Bulk Claim Status Update ─────────────────────────────────────────────────
+
+class BulkStatusIn(BaseModel):
+    claim_ids: list
+    ClaimStatus: Optional[str] = None
+    Owner: Optional[str] = None
+    NextAction: Optional[str] = None
+    NextActionDueDate: Optional[str] = None
+
+
+@router.post("/claims/bulk-status")
+def bulk_status_update(body: BulkStatusIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = _client_scope(user)
+    data = {}
+    if body.ClaimStatus:
+        data["ClaimStatus"] = body.ClaimStatus
+    if body.Owner:
+        data["Owner"] = body.Owner
+    if body.NextAction:
+        data["NextAction"] = body.NextAction
+    if body.NextActionDueDate:
+        data["NextActionDueDate"] = body.NextActionDueDate
+    updated = bulk_update_claims(body.claim_ids, data, scope)
+    # Audit log
+    log_audit(scope, user.get("username", ""), "bulk_status_update",
+              "claims", None, f"Updated {updated} claims: {data}")
+    return {"ok": True, "updated": updated}
+
+
+# ─── Global Search ────────────────────────────────────────────────────────────
+
+@router.get("/search")
+def search(q: str = "", client_id: Optional[int] = None,
+           hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    if not q or len(q) < 2:
+        return {"results": []}
+    results = global_search(q, scope)
+    return {"results": results}
+
+
+# ─── Alerts & Notifications ──────────────────────────────────────────────────
+
+@router.get("/alerts")
+def alerts_endpoint(client_id: Optional[int] = None,
+                    hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    # Auto-flag SLA breaches before returning alerts
+    auto_flag_sla(scope)
+    alert_list = get_alerts(scope)
+    return {"alerts": alert_list, "count": len(alert_list)}
+
+
+# ─── Audit Log ────────────────────────────────────────────────────────────────
+
+@router.get("/audit-log")
+def audit_log_endpoint(client_id: Optional[int] = None, limit: int = 100,
+                       hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    entries = get_audit_log(scope, limit)
+    return {"entries": entries}
+
+
+# ─── Export to CSV ────────────────────────────────────────────────────────────
+
+@router.get("/export/{section}")
+def export_section(section: str, client_id: Optional[int] = None,
+                   sub_profile: Optional[str] = None,
+                   hub_session: Optional[str] = Cookie(None)):
+    """Export a section (claims, credentialing, enrollment, edi, providers, production) as CSV."""
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+
+    if section == "claims":
+        rows = export_claims(scope, sub_profile)
+    elif section in ("credentialing", "enrollment", "edi_setup", "providers"):
+        rows = export_table(section, scope)
+    elif section == "production":
+        logs = list_production_logs(scope)
+        rows = logs
+    else:
+        raise HTTPException(400, f"Unknown section: {section}")
+
+    if not rows:
+        raise HTTPException(404, "No data to export")
+
+    # Build CSV
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+
+    log_audit(scope, user.get("username", ""), "export",
+              section, None, f"Exported {len(rows)} rows")
+
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={section}_export.csv"}
+    )
+
+
+# ─── Dashboard with Date Filters ─────────────────────────────────────────────
+
+@router.get("/dashboard/filtered")
+def dashboard_filtered(client_id: Optional[int] = None,
+                       period: str = "all",
+                       start_date: Optional[str] = None,
+                       end_date: Optional[str] = None,
+                       sub_profile: Optional[str] = None,
+                       hub_session: Optional[str] = Cookie(None)):
+    """Dashboard with date filtering support."""
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    # Run SLA auto-flagging on dashboard load
+    auto_flag_sla(scope)
+    data = get_dashboard(scope, sub_profile=sub_profile)
+    data["user"] = user
+    data["alerts"] = get_alerts(scope)
+    return data

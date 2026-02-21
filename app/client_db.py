@@ -292,6 +292,20 @@ def init_client_hub_db():
         );
         CREATE INDEX IF NOT EXISTS idx_tp_client ON team_production(client_id);
         CREATE INDEX IF NOT EXISTS idx_tp_date   ON team_production(work_date);
+
+        -- ── Audit trail / activity log ────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER,
+            username    TEXT DEFAULT '',
+            action      TEXT NOT NULL,
+            entity_type TEXT DEFAULT '',
+            entity_id   INTEGER,
+            details     TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log(client_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_time   ON audit_log(created_at);
     """)
     conn.commit()
 
@@ -1159,7 +1173,275 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
     }
 
 
-# ─── Team Production ──────────────────────────────────────────────────────
+# ─── Audit Trail ──────────────────────────────────────────────────────────
+
+def log_audit(client_id: int, username: str, action: str,
+              entity_type: str = "", entity_id: int = None, details: str = ""):
+    """Record an action in the audit log."""
+    try:
+        conn = get_db()
+        conn.execute("""INSERT INTO audit_log (client_id, username, action, entity_type, entity_id, details)
+                        VALUES (?,?,?,?,?,?)""",
+                     (client_id, username, action, entity_type, entity_id, details))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Don't let audit logging break main operations
+
+
+def get_audit_log(client_id: int = None, limit: int = 100):
+    conn = get_db()
+    cur = conn.cursor()
+    if client_id:
+        cur.execute("SELECT * FROM audit_log WHERE client_id=? ORDER BY created_at DESC LIMIT ?", (client_id, limit))
+    else:
+        cur.execute("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?", (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+# ─── SLA Auto-Flagging ───────────────────────────────────────────────────
+
+SLA_THRESHOLDS = {
+    "Intake": 3, "Verification": 5, "Coding": 5,
+    "Billed/Submitted": 14, "A/R Follow-up": 14,
+    "Appeal": 30, "Denied": 7, "Rejected": 3,
+}
+
+
+def auto_flag_sla(client_id: int = None):
+    """Auto-flag claims that have exceeded SLA thresholds. Returns count of newly flagged."""
+    conn = get_db()
+    cur = conn.cursor()
+    flagged = 0
+    for status, days in SLA_THRESHOLDS.items():
+        cond = "WHERE ClaimStatus=? AND SLABreached=0"
+        p = [status]
+        if client_id:
+            cond += " AND client_id=?"
+            p.append(client_id)
+        cur.execute(f"""UPDATE claims_master SET SLABreached=1
+                        {cond}
+                        AND CAST(julianday('now') - julianday(
+                            COALESCE(NULLIF(StatusStartDate,''), NULLIF(LastTouchedDate,''), updated_at)
+                        ) AS INTEGER) > ?""",
+                    p + [days])
+        flagged += cur.rowcount
+    conn.commit()
+    conn.close()
+    return flagged
+
+
+# ─── Alerts / Notifications ──────────────────────────────────────────────
+
+def get_alerts(client_id: int = None):
+    """Generate real-time alerts for the client."""
+    conn = get_db()
+    cur = conn.cursor()
+    alerts = []
+    cond = "WHERE client_id=?" if client_id else ""
+    p = [client_id] if client_id else []
+
+    # 1. SLA Breaches
+    sla_count = cur.execute(
+        f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1 AND ClaimStatus NOT IN ('Paid','Closed')", p
+    ).fetchone()[0]
+    if sla_count:
+        alerts.append({"type": "danger", "icon": "🚨", "title": f"{sla_count} SLA Breach(es)",
+                        "detail": "Claims exceeded time thresholds — review immediately"})
+
+    # 2. Credentialing expirations (next 90 days)
+    for window, level in [(30, "danger"), (60, "warning"), (90, "info")]:
+        exp = cur.execute(
+            f"""SELECT COUNT(*) FROM credentialing {cond}
+                {'AND' if cond else 'WHERE'} ExpirationDate != ''
+                AND ExpirationDate <= date('now', '+{window} days')
+                AND ExpirationDate >= date('now')
+                AND Status NOT IN ('Expired','Denied')""", p
+        ).fetchone()[0]
+        if exp:
+            alerts.append({"type": level, "icon": "📋" if window > 30 else "⚠️",
+                           "title": f"{exp} Credentialing(s) expiring within {window} days",
+                           "detail": f"Review and initiate revalidation"})
+            break  # Show most urgent only
+
+    # 3. Overdue follow-ups (credentialing & enrollment)
+    for tbl, label in [("credentialing", "Credentialing"), ("enrollment", "Enrollment")]:
+        overdue = cur.execute(
+            f"""SELECT COUNT(*) FROM {tbl} {cond}
+                {'AND' if cond else 'WHERE'} FollowUpDate != '' AND FollowUpDate < date('now')
+                AND Status NOT IN ('Approved','Active','Completed','Denied','Expired','Terminated')""", p
+        ).fetchone()[0]
+        if overdue:
+            alerts.append({"type": "warning", "icon": "📅", "title": f"{overdue} Overdue {label} Follow-ups",
+                           "detail": "Past follow-up dates need attention"})
+
+    # 4. High denial rate warning
+    total_sub = cur.execute(
+        f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate != ''", p
+    ).fetchone()[0]
+    total_denied = cur.execute(
+        f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate != ''", p
+    ).fetchone()[0]
+    if total_sub > 10:
+        rate = round(total_denied / total_sub * 100, 1)
+        if rate > 15:
+            alerts.append({"type": "danger", "icon": "❌", "title": f"High Denial Rate: {rate}%",
+                           "detail": "Denial rate exceeds 15% — review denial patterns"})
+        elif rate > 10:
+            alerts.append({"type": "warning", "icon": "⚠️", "title": f"Elevated Denial Rate: {rate}%",
+                           "detail": "Denial rate above 10% — monitor closely"})
+
+    # 5. Unpaid claims > 90 days
+    old_ar = cur.execute(
+        f"""SELECT COUNT(*), COALESCE(SUM(BalanceRemaining),0) FROM claims_master
+            {cond} {'AND' if cond else 'WHERE'} ClaimStatus NOT IN ('Paid','Closed')
+            AND BalanceRemaining > 0
+            AND CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) > 90""", p
+    ).fetchone()
+    if old_ar[0] > 0:
+        alerts.append({"type": "danger", "icon": "💰", "title": f"{old_ar[0]} Claims in 90+ Day AR (${old_ar[1]:,.0f})",
+                        "detail": "These claims need escalated collection efforts"})
+
+    conn.close()
+    return alerts
+
+
+# ─── Global Search ────────────────────────────────────────────────────────
+
+def global_search(query: str, client_id: int = None, limit: int = 30):
+    """Search across claims, providers, credentialing, enrollment, EDI."""
+    conn = get_db()
+    cur = conn.cursor()
+    results = []
+    q = f"%{query}%"
+    cond = " AND client_id=?" if client_id else ""
+    p_base = [client_id] if client_id else []
+
+    # Claims
+    cur.execute(f"""SELECT id, 'claim' as type, ClaimKey as title,
+                    PatientName || ' — ' || Payor || ' — $' || ChargeAmount as subtitle,
+                    ClaimStatus as status
+                    FROM claims_master WHERE (
+                        ClaimKey LIKE ? OR PatientName LIKE ? OR Payor LIKE ? OR
+                        ProviderName LIKE ? OR PatientID LIKE ? OR DenialReason LIKE ?
+                    ) {cond} ORDER BY updated_at DESC LIMIT ?""",
+                [q]*6 + p_base + [limit])
+    results += [dict(r) for r in cur.fetchall()]
+
+    # Providers
+    cur.execute(f"""SELECT id, 'provider' as type, ProviderName as title,
+                    NPI || ' — ' || Specialty as subtitle, Status as status
+                    FROM providers WHERE (
+                        ProviderName LIKE ? OR NPI LIKE ? OR Specialty LIKE ? OR Email LIKE ?
+                    ) {cond} ORDER BY ProviderName LIMIT ?""",
+                [q]*4 + p_base + [limit])
+    results += [dict(r) for r in cur.fetchall()]
+
+    # Credentialing
+    cur.execute(f"""SELECT id, 'credentialing' as type,
+                    ProviderName || ' → ' || Payor as title,
+                    CredType || ' — ' || Owner as subtitle, Status as status
+                    FROM credentialing WHERE (
+                        ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
+                    ) {cond} ORDER BY updated_at DESC LIMIT ?""",
+                [q]*3 + p_base + [limit])
+    results += [dict(r) for r in cur.fetchall()]
+
+    # Enrollment
+    cur.execute(f"""SELECT id, 'enrollment' as type,
+                    ProviderName || ' → ' || Payor as title,
+                    EnrollType || ' — ' || Owner as subtitle, Status as status
+                    FROM enrollment WHERE (
+                        ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
+                    ) {cond} ORDER BY updated_at DESC LIMIT ?""",
+                [q]*3 + p_base + [limit])
+    results += [dict(r) for r in cur.fetchall()]
+
+    # EDI
+    cur.execute(f"""SELECT id, 'edi' as type,
+                    ProviderName || ' → ' || Payor as title,
+                    'EDI: ' || EDIStatus || ' | ERA: ' || ERAStatus as subtitle,
+                    EDIStatus as status
+                    FROM edi_setup WHERE (
+                        ProviderName LIKE ? OR Payor LIKE ? OR PayerID LIKE ?
+                    ) {cond} ORDER BY updated_at DESC LIMIT ?""",
+                [q]*3 + p_base + [limit])
+    results += [dict(r) for r in cur.fetchall()]
+
+    conn.close()
+    return results[:limit]
+
+
+# ─── Bulk Claim Updates ──────────────────────────────────────────────────
+
+def bulk_update_claims(claim_ids: list, data: dict, client_id: int = None):
+    """Update multiple claims at once. Returns count of updated rows."""
+    if not claim_ids or not data:
+        return 0
+    conn = get_db()
+    cur = conn.cursor()
+    allowed = ["ClaimStatus", "Owner", "NextAction", "NextActionDueDate", "SLABreached",
+               "StatusStartDate", "LastTouchedDate"]
+    parts, params = [], []
+    for f in allowed:
+        if f in data and data[f] is not None:
+            parts.append(f"{f}=?")
+            params.append(data[f])
+    if not parts:
+        conn.close()
+        return 0
+    # Always update LastTouchedDate
+    if "LastTouchedDate" not in data:
+        parts.append("LastTouchedDate=?")
+        params.append(datetime.now().isoformat()[:10])
+    placeholders = ",".join("?" for _ in claim_ids)
+    sql = f"UPDATE claims_master SET {', '.join(parts)} WHERE id IN ({placeholders})"
+    if client_id:
+        sql += " AND client_id=?"
+        params += list(claim_ids) + [client_id]
+    else:
+        params += list(claim_ids)
+    cur.execute(sql, params)
+    updated = cur.rowcount
+    conn.commit()
+    conn.close()
+    return updated
+
+
+# ─── Export Data ──────────────────────────────────────────────────────────
+
+def export_claims(client_id: int = None, sub_profile: str = None):
+    """Return all claims as list of dicts for CSV/Excel export."""
+    conn = get_db()
+    cond, p = "", []
+    if client_id:
+        cond = "WHERE client_id=?"
+        p.append(client_id)
+    if sub_profile:
+        cond += (" AND " if cond else "WHERE ") + "sub_profile=?"
+        p.append(sub_profile)
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT * FROM claims_master {cond} ORDER BY updated_at DESC", p).fetchall()]
+    conn.close()
+    return rows
+
+
+def export_table(table: str, client_id: int = None):
+    """Generic export for credentialing, enrollment, edi_setup, providers."""
+    allowed_tables = {"credentialing", "enrollment", "edi_setup", "providers"}
+    if table not in allowed_tables:
+        return []
+    conn = get_db()
+    if client_id:
+        rows = [dict(r) for r in conn.execute(
+            f"SELECT * FROM {table} WHERE client_id=? ORDER BY updated_at DESC", (client_id,)).fetchall()]
+    else:
+        rows = [dict(r) for r in conn.execute(
+            f"SELECT * FROM {table} ORDER BY updated_at DESC").fetchall()]
+    conn.close()
+    return rows# ─── Team Production ──────────────────────────────────────────────────────
 
 def list_production_logs(client_id: int = None, start_date: str = None, end_date: str = None, username: str = None):
     conn = get_db()

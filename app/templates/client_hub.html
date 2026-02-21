@@ -1648,6 +1648,131 @@
         display: none
       }
     }
+
+    /* Search Dropdown */
+    .search-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #fff;
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      box-shadow: var(--shadow-lg);
+      z-index: 200;
+      max-height: 420px;
+      overflow-y: auto;
+      margin-top: 4px;
+    }
+
+    .search-result-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--gray-100);
+      transition: background .15s;
+    }
+
+    .search-result-item:hover {
+      background: var(--primary-light);
+    }
+
+    .search-result-item .sr-type {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .search-result-item .sr-type.claim {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .search-result-item .sr-type.provider {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .search-result-item .sr-type.credentialing {
+      background: #ede9fe;
+      color: #5b21b6;
+    }
+
+    .search-result-item .sr-type.enrollment {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .search-result-item .sr-type.edi {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .search-result-item .sr-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--gray-800);
+    }
+
+    .search-result-item .sr-subtitle {
+      font-size: 11px;
+      color: var(--gray-500);
+      margin-top: 1px;
+    }
+
+    /* Alert Cards */
+    .alert-card {
+      display: flex;
+      gap: 16px;
+      padding: 16px 20px;
+      border-radius: 12px;
+      margin-bottom: 10px;
+      align-items: flex-start;
+      border-left: 4px solid;
+    }
+
+    .alert-card.danger {
+      background: #fef2f2;
+      border-color: var(--danger);
+    }
+
+    .alert-card.warning {
+      background: #fffbeb;
+      border-color: var(--warning);
+    }
+
+    .alert-card.info {
+      background: #eff6ff;
+      border-color: var(--info);
+    }
+
+    .alert-card .alert-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .alert-card .alert-body {
+      flex: 1;
+    }
+
+    .alert-card .alert-title {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--gray-800);
+    }
+
+    .alert-card .alert-detail {
+      font-size: 12px;
+      color: var(--gray-500);
+      margin-top: 2px;
+    }
   </style>
 </head>
 
@@ -1781,7 +1906,22 @@
         <span class="brand">MedPharma</span>
         <span class="account-chip" id="topAccount" onclick="switchAccount()">&#8629; Switch Account</span>
       </div>
+      <!-- Global Search Bar -->
+      <div class="topbar-search" style="flex:1;max-width:420px;margin:0 16px;position:relative">
+        <input type="text" id="globalSearchInput" class="form-control"
+          placeholder="🔍 Search claims, providers, credentialing…"
+          style="width:100%;padding:8px 14px;border-radius:20px;font-size:13px;border:1px solid var(--gray-200);background:var(--gray-50)"
+          oninput="debounceGlobalSearch()" onkeydown="if(event.key==='Enter')runGlobalSearch()">
+        <div id="searchDropdown" class="search-dropdown" style="display:none"></div>
+      </div>
       <div class="topbar-right">
+        <!-- Alerts Bell -->
+        <button id="alertsBell" onclick="navTo('alerts')" title="Alerts & Notifications"
+          style="position:relative;background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">
+          🔔<span id="alertsBadge"
+            style="display:none;position:absolute;top:-2px;right:0;background:var(--danger);color:#fff;
+            font-size:10px;font-weight:700;border-radius:50%;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px">0</span>
+        </button>
         <span id="topUser" style="font-weight:500"></span>
         <span class="role-pill" id="topRole"></span>
         <button class="btn-logout" onclick="doLogout()">Sign Out</button>
@@ -1838,6 +1978,14 @@
           <div class="nav-item" data-panel="clients" onclick="navTo('clients')">
             <span class="ni">🏢</span> Manage Clients
           </div>
+          <div class="nav-item" data-panel="audit" onclick="navTo('audit')">
+            <span class="ni">📜</span> Audit Log
+          </div>
+        </div>
+        <div class="nav-section">Alerts</div>
+        <div class="nav-item" data-panel="alerts" onclick="navTo('alerts')">
+          <span class="ni">🔔</span> Alerts <span id="navAlertsBadge" class="badge badge-red"
+            style="display:none;margin-left:auto;font-size:10px">0</span>
         </div>
       </div>
 
@@ -1964,6 +2112,7 @@
               </select>
               <input class="form-control btn-sm" type="text" id="claimSearch" placeholder="🔍 Search claims…"
                 oninput="filterClaimsTable()" style="width:200px">
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('claims')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('claimsExcelInput').click()">📥
                 Import Excel</button>
               <input type="file" id="claimsExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
@@ -1971,12 +2120,26 @@
               <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
             </div>
           </div>
+          <!-- Bulk Action Bar -->
+          <div id="bulkActionBar" style="display:none;background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #c7d2fe;
+            border-radius:10px;padding:10px 16px;margin-bottom:12px;align-items:center;gap:12px;flex-wrap:wrap">
+            <span style="font-weight:700;color:#4338ca;font-size:13px">📦 <span id="bulkCount">0</span> selected</span>
+            <select id="bulkStatusSelect" class="form-control btn-sm" style="width:auto;min-width:160px">
+              <option value="">Change Status…</option>
+            </select>
+            <input type="text" id="bulkOwner" class="form-control btn-sm" placeholder="Assign Owner…"
+              style="width:150px">
+            <button class="btn btn-primary btn-sm" onclick="applyBulkUpdate()">✅ Apply</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearBulkSelection()">✖ Clear</button>
+          </div>
           <div class="queue-tabs" id="queueTabs"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
               <table id="claimsTable">
                 <thead>
                   <tr>
+                    <th style="width:32px"><input type="checkbox" id="claimSelectAll" onchange="toggleAllClaims(this)">
+                    </th>
                     <th>Claim #</th>
                     <th>Patient</th>
                     <th>Provider</th>
@@ -2012,6 +2175,7 @@
                 <option>Denied</option>
                 <option>Expired</option>
               </select>
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('credentialing')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('credExcelInput').click()">📥
                 Import Excel</button>
               <input type="file" id="credExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
@@ -2057,6 +2221,7 @@
                 <option>Enrolled</option>
                 <option>Denied</option>
               </select>
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('enrollment')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('enrollExcelInput').click()">📥
                 Import Excel</button>
               <input type="file" id="enrollExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
@@ -2093,6 +2258,7 @@
           <div class="page-header">
             <div class="page-title">EDI Setup</div>
             <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('edi_setup')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ediExcelInput').click()">📥
                 Import Excel</button>
               <input type="file" id="ediExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
@@ -2129,6 +2295,7 @@
           <div class="page-header">
             <div class="page-title">Providers</div>
             <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('providers')">📤 Export CSV</button>
               <button class="btn btn-primary btn-sm" onclick="openProviderModal()">+ Add Provider</button>
             </div>
           </div>
@@ -2504,6 +2671,7 @@
           <div class="page-header">
             <div class="page-title">⏱️ Team Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
               <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
@@ -2611,6 +2779,45 @@
             <div id="prodReportContent">
               <p style="color:var(--gray-400);font-size:14px;padding:20px;text-align:center">Select a date range and
                 click Generate Report</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ ALERTS & NOTIFICATIONS ═══ -->
+        <div class="hub-panel" id="panel-alerts">
+          <div class="page-header">
+            <div class="page-title">🔔 Alerts & Notifications</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
+            </div>
+          </div>
+          <div id="alertsContent">
+            <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading alerts...</div>
+          </div>
+        </div>
+
+        <!-- ═══ AUDIT LOG (Admin) ═══ -->
+        <div class="hub-panel" id="panel-audit">
+          <div class="page-header">
+            <div class="page-title">📜 Audit Log</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadAuditLog()">🔄 Refresh</button>
+            </div>
+          </div>
+          <div class="card" style="padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Entity</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="auditTbody"></tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -3210,6 +3417,8 @@
       if (panel === 'profile') loadProfile();
       if (panel === 'reporting') loadReport();
       if (panel === 'production') loadProduction();
+      if (panel === 'alerts') loadAlerts();
+      if (panel === 'audit') loadAuditLog();
     }
 
     function toggleMobileSidebar() {
@@ -3477,13 +3686,14 @@
 
       const tbody = document.getElementById('claimsTbody');
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="13"><div class="empty-state"><div class="es-icon">📋</div><p>No claims in this queue</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="14"><div class="empty-state"><div class="es-icon">📋</div><p>No claims in this queue</p></div></td></tr>`;
         return;
       }
 
       tbody.innerHTML = filtered.map(c => {
         const slaClass = c.SLABreached ? 'style="background:#fff0f0"' : '';
         return `<tr ${slaClass}>
+      <td><input type="checkbox" class="claim-cb" value="${c.id}" onchange="updateBulkBar()"></td>
       <td style="font-family:monospace;font-weight:700;font-size:12px">${esc(c.ClaimKey)}${c.SLABreached ? '<br><span class="badge badge-red" style="font-size:9px">SLA!</span>' : ''}</td>
       <td>${esc(c.PatientName || c.PatientID || '—')}</td>
       <td style="font-size:12px">${esc(c.ProviderName || '—')}</td>
@@ -5613,6 +5823,202 @@
         const topEl = document.getElementById('topAccount');
         if (topEl && data.company) topEl.textContent = data.company;
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════
+    // GLOBAL SEARCH
+    // ═══════════════════════════════════════
+    let searchTimer = null;
+    function debounceGlobalSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(runGlobalSearch, 350);
+    }
+
+    async function runGlobalSearch() {
+      const q = document.getElementById('globalSearchInput')?.value?.trim();
+      const dd = document.getElementById('searchDropdown');
+      if (!q || q.length < 2) { dd.style.display = 'none'; return; }
+      try {
+        const params = new URLSearchParams({ q });
+        if (activeClientId) params.set('client_id', activeClientId);
+        const r = await fetch('/hub/api/search?' + params);
+        const d = await r.json();
+        if (!d.results?.length) {
+          dd.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-400);font-size:13px">No results found</div>';
+        } else {
+          dd.innerHTML = d.results.map(item => `
+            <div class="search-result-item" onclick="navigateToSearchResult('${item.type}', ${item.id})">
+              <span class="sr-type ${item.type}">${item.type}</span>
+              <div>
+                <div class="sr-title">${esc(item.title || '')}</div>
+                <div class="sr-subtitle">${esc(item.subtitle || '')}</div>
+              </div>
+              ${item.status ? `<span class="badge" style="margin-left:auto">${esc(item.status)}</span>` : ''}
+            </div>
+          `).join('');
+        }
+        dd.style.display = 'block';
+      } catch (e) { console.error(e); }
+    }
+
+    function navigateToSearchResult(type, id) {
+      document.getElementById('searchDropdown').style.display = 'none';
+      document.getElementById('globalSearchInput').value = '';
+      const panelMap = { claim: 'claims', provider: 'providers', credentialing: 'credentialing', enrollment: 'enrollment', edi: 'edi' };
+      navTo(panelMap[type] || 'dashboard');
+    }
+
+    // Close search dropdown on click outside
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('searchDropdown');
+      const input = document.getElementById('globalSearchInput');
+      if (dd && !dd.contains(e.target) && e.target !== input) dd.style.display = 'none';
+    });
+
+    // ═══════════════════════════════════════
+    // ALERTS & NOTIFICATIONS
+    // ═══════════════════════════════════════
+    async function loadAlerts() {
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      try {
+        const r = await fetch('/hub/api/alerts?' + params);
+        const d = await r.json();
+        const alerts = d.alerts || [];
+
+        // Update badges
+        const bellBadge = document.getElementById('alertsBadge');
+        const navBadge = document.getElementById('navAlertsBadge');
+        if (alerts.length > 0) {
+          bellBadge.textContent = alerts.length; bellBadge.style.display = '';
+          navBadge.textContent = alerts.length; navBadge.style.display = '';
+        } else {
+          bellBadge.style.display = 'none';
+          navBadge.style.display = 'none';
+        }
+
+        // Render alerts panel
+        const el = document.getElementById('alertsContent');
+        if (!el) return;
+        if (!alerts.length) {
+          el.innerHTML = `<div class="card" style="text-align:center;padding:40px">
+            <div style="font-size:48px;margin-bottom:12px">✅</div>
+            <p style="color:var(--gray-500);font-size:15px;font-weight:600">No active alerts</p>
+            <p style="color:var(--gray-400);font-size:13px;margin-top:4px">Everything looks good! All metrics are within normal ranges.</p>
+          </div>`;
+          return;
+        }
+        el.innerHTML = alerts.map(a => `
+          <div class="alert-card ${a.type}">
+            <div class="alert-icon">${a.icon || '⚠️'}</div>
+            <div class="alert-body">
+              <div class="alert-title">${esc(a.title)}</div>
+              <div class="alert-detail">${esc(a.detail)}</div>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) { console.error(e); }
+    }
+
+    // Load alerts on dashboard too — update badge count
+    const _origLoadDash = loadDashboard;
+    loadDashboard = async function () {
+      await _origLoadDash();
+      loadAlerts();
+    };
+
+    // ═══════════════════════════════════════
+    // AUDIT LOG
+    // ═══════════════════════════════════════
+    async function loadAuditLog() {
+      const params = new URLSearchParams({ limit: '200' });
+      if (activeClientId) params.set('client_id', activeClientId);
+      try {
+        const r = await fetch('/hub/api/audit-log?' + params);
+        const d = await r.json();
+        const entries = d.entries || [];
+        const tbody = document.getElementById('auditTbody');
+        if (!entries.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px">No audit entries</td></tr>';
+          return;
+        }
+        tbody.innerHTML = entries.map(e => `<tr>
+          <td style="font-size:12px;white-space:nowrap">${esc(e.created_at || '')}</td>
+          <td><span class="badge badge-blue">${esc(e.username || '')}</span></td>
+          <td><span class="badge badge-purple">${esc(e.action || '')}</span></td>
+          <td style="font-size:12px">${esc(e.entity_type || '')}${e.entity_id ? ' #' + e.entity_id : ''}</td>
+          <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.details || '')}</td>
+        </tr>`).join('');
+      } catch (e) { console.error(e); }
+    }
+
+    // ═══════════════════════════════════════
+    // BULK CLAIM STATUS UPDATE
+    // ═══════════════════════════════════════
+    let selectedClaimIds = new Set();
+
+    function toggleAllClaims(masterCb) {
+      document.querySelectorAll('.claim-cb').forEach(cb => {
+        cb.checked = masterCb.checked;
+        if (masterCb.checked) selectedClaimIds.add(parseInt(cb.value));
+        else selectedClaimIds.delete(parseInt(cb.value));
+      });
+      updateBulkBar();
+    }
+
+    function updateBulkBar() {
+      selectedClaimIds = new Set();
+      document.querySelectorAll('.claim-cb:checked').forEach(cb => selectedClaimIds.add(parseInt(cb.value)));
+      const bar = document.getElementById('bulkActionBar');
+      if (selectedClaimIds.size > 0) {
+        bar.style.display = 'flex';
+        document.getElementById('bulkCount').textContent = selectedClaimIds.size;
+        // Populate status dropdown
+        const sel = document.getElementById('bulkStatusSelect');
+        if (sel.options.length <= 1) {
+          QUEUE_STATUSES.filter(s => s !== 'All').forEach(s => {
+            sel.add(new Option(s, s));
+          });
+        }
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function clearBulkSelection() {
+      selectedClaimIds.clear();
+      document.querySelectorAll('.claim-cb').forEach(cb => cb.checked = false);
+      document.getElementById('claimSelectAll').checked = false;
+      document.getElementById('bulkActionBar').style.display = 'none';
+    }
+
+    async function applyBulkUpdate() {
+      if (!selectedClaimIds.size) return toast('No claims selected', 'error');
+      const data = { claim_ids: Array.from(selectedClaimIds) };
+      const status = document.getElementById('bulkStatusSelect').value;
+      const owner = document.getElementById('bulkOwner').value.trim();
+      if (status) data.ClaimStatus = status;
+      if (owner) data.Owner = owner;
+      if (!status && !owner) return toast('Select a status or enter an owner', 'error');
+      try {
+        const r = await fetch('/hub/api/claims/bulk-status', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+        });
+        const result = await r.json();
+        toast(`Updated ${result.updated} claims`, 'success');
+        clearBulkSelection();
+        loadClaims();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════
+    // EXPORT TO CSV
+    // ═══════════════════════════════════════
+    function exportSection(section) {
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      window.location.href = `/hub/api/export/${section}?${params}`;
     }
   </script>
 </body>
