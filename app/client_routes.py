@@ -260,6 +260,7 @@ class ProviderIn(BaseModel):
     Status: Optional[str] = "Active"
     StartDate: Optional[str] = ""
     Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
 
 
 class ProviderUpdate(BaseModel):
@@ -272,12 +273,15 @@ class ProviderUpdate(BaseModel):
     Status: Optional[str] = None
     StartDate: Optional[str] = None
     Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
 
 
 @router.get("/providers")
-def get_providers(hub_session: Optional[str] = Cookie(None)):
+def get_providers(client_id: Optional[int] = None, sub_profile: Optional[str] = None,
+                 hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return list_providers(_client_scope(user))
+    scope = client_id or _client_scope(user)
+    return list_providers(scope, sub_profile=sub_profile)
 
 
 @router.post("/providers")
@@ -334,6 +338,7 @@ class ClaimIn(BaseModel):
     DenialReason: Optional[str] = ""
     AppealDate: Optional[str] = ""
     AppealStatus: Optional[str] = ""
+    sub_profile: Optional[str] = ""
 
 
 class ClaimUpdate(BaseModel):
@@ -362,12 +367,16 @@ class ClaimUpdate(BaseModel):
     DenialReason: Optional[str] = None
     AppealDate: Optional[str] = None
     AppealStatus: Optional[str] = None
+    sub_profile: Optional[str] = None
 
 
 @router.get("/claims")
-def get_claims_list(status: Optional[str] = None, hub_session: Optional[str] = Cookie(None)):
+def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = None,
+                   sub_profile: Optional[str] = None,
+                   hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return get_claims(_client_scope(user), status)
+    scope = client_id or _client_scope(user)
+    return get_claims(scope, status, sub_profile=sub_profile)
 
 
 @router.get("/claims/statuses")
@@ -491,6 +500,7 @@ class CredIn(BaseModel):
     ExpirationDate: Optional[str] = ""
     Owner: Optional[str] = ""
     Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
 
 
 class CredUpdate(BaseModel):
@@ -504,12 +514,16 @@ class CredUpdate(BaseModel):
     ExpirationDate: Optional[str] = None
     Owner: Optional[str] = None
     Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
 
 
 @router.get("/credentialing")
-def list_cred(status: Optional[str] = None, hub_session: Optional[str] = Cookie(None)):
+def list_cred(status: Optional[str] = None, client_id: Optional[int] = None,
+             sub_profile: Optional[str] = None,
+             hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return get_credentialing(_client_scope(user), status)
+    scope = client_id or _client_scope(user)
+    return get_credentialing(scope, status, sub_profile=sub_profile)
 
 
 @router.post("/credentialing")
@@ -551,6 +565,7 @@ class EnrollIn(BaseModel):
     EffectiveDate: Optional[str] = ""
     Owner: Optional[str] = ""
     Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
 
 
 class EnrollUpdate(BaseModel):
@@ -564,12 +579,16 @@ class EnrollUpdate(BaseModel):
     EffectiveDate: Optional[str] = None
     Owner: Optional[str] = None
     Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
 
 
 @router.get("/enrollment")
-def list_enroll(status: Optional[str] = None, hub_session: Optional[str] = Cookie(None)):
+def list_enroll(status: Optional[str] = None, client_id: Optional[int] = None,
+               sub_profile: Optional[str] = None,
+               hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return get_enrollment(_client_scope(user), status)
+    scope = client_id or _client_scope(user)
+    return get_enrollment(scope, status, sub_profile=sub_profile)
 
 
 @router.post("/enrollment")
@@ -611,6 +630,7 @@ class EDIIn(BaseModel):
     PayerID: Optional[str] = ""
     Owner: Optional[str] = ""
     Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
 
 
 class EDIUpdate(BaseModel):
@@ -624,12 +644,15 @@ class EDIUpdate(BaseModel):
     PayerID: Optional[str] = None
     Owner: Optional[str] = None
     Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
 
 
 @router.get("/edi")
-def list_edi(hub_session: Optional[str] = Cookie(None)):
+def list_edi(client_id: Optional[int] = None, sub_profile: Optional[str] = None,
+            hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return get_edi(_client_scope(user))
+    scope = client_id or _client_scope(user)
+    return get_edi(scope, sub_profile=sub_profile)
 
 
 @router.post("/edi")
@@ -667,9 +690,10 @@ def dashboard(hub_session: Optional[str] = Cookie(None)):
 
 
 @router.get("/dashboard/client/{client_id}")
-def dashboard_for_client(client_id: int, hub_session: Optional[str] = Cookie(None)):
+def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
+                        hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    data = get_dashboard(client_id)
+    data = get_dashboard(client_id, sub_profile=sub_profile)
     data["user"] = user
     return data
 
@@ -804,6 +828,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "denialreason": "DenialReason", "denial reason": "DenialReason", "denial": "DenialReason",
         "denialcategory": "DenialCategory", "denial category": "DenialCategory",
         "owner": "Owner",
+        # Sub-profile (MHP or OMT for Luminary)
+        "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
+        "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
     }
 
     def _parse_float(v):
@@ -874,8 +901,8 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                 (client_id, ClaimKey, PatientID, PatientName, Payor, ProviderName, NPI,
                  DOS, CPTCode, Description, ChargeAmount, AllowedAmount, AdjustmentAmount,
                  PaidAmount, BalanceRemaining, ClaimStatus, BillDate, DeniedDate, PaidDate,
-                 DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate, sub_profile)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 client_id,
                 str(mapped.get("ClaimKey", "")),
@@ -898,6 +925,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                 _parse_date(mapped.get("PaidDate", "")),
                 str(mapped.get("DenialCategory", "")),
                 str(mapped.get("DenialReason", "")),
+                str(mapped.get("Owner", "")),
+                today_str,
+                today_str,
+                str(mapped.get("sub_profile", "")),
                 str(mapped.get("Owner", "")),
                 today_str,
                 today_str,

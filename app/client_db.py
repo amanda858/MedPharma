@@ -99,6 +99,8 @@ def init_client_hub_db():
             DenialReason        TEXT DEFAULT '',
             AppealDate          TEXT DEFAULT '',
             AppealStatus        TEXT DEFAULT '',
+            -- sub-profile (e.g. MHP or OMT for Luminary)
+            sub_profile         TEXT DEFAULT '',
             -- meta
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -118,6 +120,7 @@ def init_client_hub_db():
             CheckNumber     TEXT DEFAULT '',
             ERA             TEXT DEFAULT '',
             Notes           TEXT DEFAULT '',
+            sub_profile     TEXT DEFAULT '',
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
@@ -148,6 +151,7 @@ def init_client_hub_db():
             Status          TEXT DEFAULT 'Active',
             StartDate       TEXT DEFAULT '',
             Notes           TEXT DEFAULT '',
+            sub_profile     TEXT DEFAULT '',
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id)
@@ -168,6 +172,7 @@ def init_client_hub_db():
             ExpirationDate      TEXT DEFAULT '',
             Owner               TEXT DEFAULT '',
             Notes               TEXT DEFAULT '',
+            sub_profile         TEXT DEFAULT '',
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -189,6 +194,7 @@ def init_client_hub_db():
             EffectiveDate       TEXT DEFAULT '',
             Owner               TEXT DEFAULT '',
             Notes               TEXT DEFAULT '',
+            sub_profile         TEXT DEFAULT '',
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -210,6 +216,7 @@ def init_client_hub_db():
             PayerID         TEXT DEFAULT '',
             Owner           TEXT DEFAULT '',
             Notes           TEXT DEFAULT '',
+            sub_profile     TEXT DEFAULT '',
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -291,6 +298,16 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_def}")
     conn.commit()
 
+    # ── Migrate existing DBs: add sub_profile column to data tables ───────
+    sub_profile_tables = ["claims_master", "payments", "providers",
+                          "credentialing", "enrollment", "edi_setup"]
+    for tbl in sub_profile_tables:
+        cur.execute(f"PRAGMA table_info({tbl})")
+        cols = {row[1] for row in cur.fetchall()}
+        if "sub_profile" not in cols:
+            cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
+    conn.commit()
+
     cur.execute("SELECT COUNT(*) FROM clients")
     total = cur.fetchone()[0]
 
@@ -329,14 +346,14 @@ def _seed_data(conn):
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
     )
 
-    # Client 1 — Luminary (Ancillary practice: MHP + OMT as sub-profiles)
+    # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
     s1 = secrets.token_hex(16)
     cur.execute(
         """INSERT INTO clients
            (username,password,salt,company,contact_name,email,role,
             tax_id,group_npi,individual_npi,ptan_group,ptan_individual,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("eric", _hash_pw("eric123", s1), s1, "Luminary MHP", "Eric", "eric@medprosc.com", "client",
+        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Eric", "eric@medprosc.com", "client",
          "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "MHP+OMT")
     )
     luminary_id = cur.lastrowid
@@ -542,14 +559,17 @@ def delete_practice_profile(pp_id: int, client_id: int):
 
 # ─── Providers ────────────────────────────────────────────────────────────────
 
-def list_providers(client_id: int = None):
+def list_providers(client_id: int = None, sub_profile: str = None):
     conn = get_db()
     cur = conn.cursor()
-    q = "SELECT * FROM providers"
+    q = "SELECT * FROM providers WHERE 1=1"
     params = []
     if client_id:
-        q += " WHERE client_id=?"
+        q += " AND client_id=?"
         params.append(client_id)
+    if sub_profile:
+        q += " AND sub_profile=?"
+        params.append(sub_profile)
     q += " ORDER BY ProviderName"
     cur.execute(q, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -560,12 +580,12 @@ def list_providers(client_id: int = None):
 def create_provider(data: dict) -> int:
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""INSERT INTO providers (client_id,ProviderName,NPI,Specialty,TaxID,Email,Phone,Status,StartDate,Notes)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+    cur.execute("""INSERT INTO providers (client_id,ProviderName,NPI,Specialty,TaxID,Email,Phone,Status,StartDate,Notes,sub_profile)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["client_id"], data["ProviderName"], data.get("NPI", ""),
                  data.get("Specialty", ""), data.get("TaxID", ""), data.get("Email", ""),
                  data.get("Phone", ""), data.get("Status", "Active"),
-                 data.get("StartDate", ""), data.get("Notes", "")))
+                 data.get("StartDate", ""), data.get("Notes", ""), data.get("sub_profile", "")))
     conn.commit()
     pid = cur.lastrowid
     conn.close()
@@ -575,7 +595,7 @@ def create_provider(data: dict) -> int:
 def update_provider(pid: int, data: dict):
     conn = get_db()
     cur = conn.cursor()
-    allowed = ["ProviderName", "NPI", "Specialty", "TaxID", "Email", "Phone", "Status", "StartDate", "Notes"]
+    allowed = ["ProviderName", "NPI", "Specialty", "TaxID", "Email", "Phone", "Status", "StartDate", "Notes", "sub_profile"]
     parts, params = [], []
     for f in allowed:
         if f in data:
@@ -602,7 +622,7 @@ CLAIM_STATUSES = ["Intake", "Verification", "Coding", "Billed/Submitted",
                    "Rejected", "Denied", "A/R Follow-Up", "Appeals", "Paid", "Closed"]
 
 
-def get_claims(client_id: int = None, status: str = None):
+def get_claims(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     cur = conn.cursor()
     q = """SELECT cm.*, c.company as client_company
@@ -616,6 +636,9 @@ def get_claims(client_id: int = None, status: str = None):
     if status:
         q += " AND cm.ClaimStatus=?"
         params.append(status)
+    if sub_profile:
+        q += " AND cm.sub_profile=?"
+        params.append(sub_profile)
     q += " ORDER BY cm.updated_at DESC"
     cur.execute(q, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -641,8 +664,9 @@ def create_claim(data: dict) -> int:
         (client_id,ClaimKey,PatientID,PatientName,Payor,ProviderName,NPI,DOS,CPTCode,Description,
          ChargeAmount,AllowedAmount,AdjustmentAmount,PaidAmount,BalanceRemaining,
          ClaimStatus,StatusStartDate,BillDate,DeniedDate,PaidDate,LastTouchedDate,
-         Owner,NextAction,NextActionDueDate,SLABreached,DenialCategory,DenialReason,AppealDate,AppealStatus)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         Owner,NextAction,NextActionDueDate,SLABreached,DenialCategory,DenialReason,AppealDate,AppealStatus,
+         sub_profile)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         data["client_id"], data["ClaimKey"], data.get("PatientID", ""), data.get("PatientName", ""),
         data.get("Payor", ""), data.get("ProviderName", ""), data.get("NPI", ""),
@@ -653,7 +677,8 @@ def create_claim(data: dict) -> int:
         data.get("DeniedDate", ""), data.get("PaidDate", ""), now,
         data.get("Owner", ""), data.get("NextAction", ""), data.get("NextActionDueDate", ""),
         data.get("SLABreached", 0), data.get("DenialCategory", ""), data.get("DenialReason", ""),
-        data.get("AppealDate", ""), data.get("AppealStatus", "")
+        data.get("AppealDate", ""), data.get("AppealStatus", ""),
+        data.get("sub_profile", "")
     ))
     conn.commit()
     cid = cur.lastrowid
@@ -668,7 +693,8 @@ def update_claim(claim_id: int, data: dict):
                "CPTCode", "Description", "ChargeAmount", "AllowedAmount", "AdjustmentAmount",
                "PaidAmount", "BalanceRemaining", "ClaimStatus", "StatusStartDate", "BillDate",
                "DeniedDate", "PaidDate", "Owner", "NextAction", "NextActionDueDate",
-               "SLABreached", "DenialCategory", "DenialReason", "AppealDate", "AppealStatus"]
+               "SLABreached", "DenialCategory", "DenialReason", "AppealDate", "AppealStatus",
+               "sub_profile"]
     parts, params = ["LastTouchedDate=?", "updated_at=?"], [datetime.now().isoformat(), datetime.now().isoformat()]
     for f in allowed:
         if f in data:
@@ -781,7 +807,7 @@ def add_note(data: dict) -> int:
 
 # ─── Credentialing ────────────────────────────────────────────────────────────
 
-def get_credentialing(client_id: int = None, status: str = None):
+def get_credentialing(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     cur = conn.cursor()
     q = "SELECT * FROM credentialing WHERE 1=1"
@@ -790,6 +816,8 @@ def get_credentialing(client_id: int = None, status: str = None):
         q += " AND client_id=?"; params.append(client_id)
     if status:
         q += " AND Status=?"; params.append(status)
+    if sub_profile:
+        q += " AND sub_profile=?"; params.append(sub_profile)
     q += " ORDER BY updated_at DESC"
     cur.execute(q, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -801,13 +829,13 @@ def create_credentialing(data: dict) -> int:
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""INSERT INTO credentialing
-        (client_id,provider_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (client_id,provider_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes,sub_profile)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data["client_id"], data.get("provider_id"), data.get("ProviderName", ""),
          data.get("Payor", ""), data.get("CredType", "Initial"), data.get("Status", "Not Started"),
          data.get("SubmittedDate", ""), data.get("FollowUpDate", ""),
          data.get("ApprovedDate", ""), data.get("ExpirationDate", ""),
-         data.get("Owner", ""), data.get("Notes", "")))
+         data.get("Owner", ""), data.get("Notes", ""), data.get("sub_profile", "")))
     conn.commit()
     cid = cur.lastrowid
     conn.close()
@@ -818,7 +846,7 @@ def update_credentialing(rec_id: int, data: dict):
     conn = get_db()
     cur = conn.cursor()
     allowed = ["ProviderName", "Payor", "CredType", "Status", "SubmittedDate",
-               "FollowUpDate", "ApprovedDate", "ExpirationDate", "Owner", "Notes"]
+               "FollowUpDate", "ApprovedDate", "ExpirationDate", "Owner", "Notes", "sub_profile"]
     parts, params = ["updated_at=?"], [datetime.now().isoformat()]
     for f in allowed:
         if f in data:
@@ -837,7 +865,7 @@ def delete_credentialing(rec_id: int):
 
 # ─── Enrollment ───────────────────────────────────────────────────────────────
 
-def get_enrollment(client_id: int = None, status: str = None):
+def get_enrollment(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     cur = conn.cursor()
     q = "SELECT * FROM enrollment WHERE 1=1"
@@ -846,6 +874,8 @@ def get_enrollment(client_id: int = None, status: str = None):
         q += " AND client_id=?"; params.append(client_id)
     if status:
         q += " AND Status=?"; params.append(status)
+    if sub_profile:
+        q += " AND sub_profile=?"; params.append(sub_profile)
     q += " ORDER BY updated_at DESC"
     cur.execute(q, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -857,13 +887,13 @@ def create_enrollment(data: dict) -> int:
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""INSERT INTO enrollment
-        (client_id,provider_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (client_id,provider_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data["client_id"], data.get("provider_id"), data.get("ProviderName", ""),
          data.get("Payor", ""), data.get("EnrollType", "Enrollment"), data.get("Status", "Not Started"),
          data.get("SubmittedDate", ""), data.get("FollowUpDate", ""),
          data.get("ApprovedDate", ""), data.get("EffectiveDate", ""),
-         data.get("Owner", ""), data.get("Notes", "")))
+         data.get("Owner", ""), data.get("Notes", ""), data.get("sub_profile", "")))
     conn.commit()
     eid = cur.lastrowid
     conn.close()
@@ -874,7 +904,7 @@ def update_enrollment(rec_id: int, data: dict):
     conn = get_db()
     cur = conn.cursor()
     allowed = ["ProviderName", "Payor", "EnrollType", "Status", "SubmittedDate",
-               "FollowUpDate", "ApprovedDate", "EffectiveDate", "Owner", "Notes"]
+               "FollowUpDate", "ApprovedDate", "EffectiveDate", "Owner", "Notes", "sub_profile"]
     parts, params = ["updated_at=?"], [datetime.now().isoformat()]
     for f in allowed:
         if f in data:
@@ -893,13 +923,15 @@ def delete_enrollment(rec_id: int):
 
 # ─── EDI Setup ────────────────────────────────────────────────────────────────
 
-def get_edi(client_id: int = None):
+def get_edi(client_id: int = None, sub_profile: str = None):
     conn = get_db()
     cur = conn.cursor()
-    q = "SELECT * FROM edi_setup"
+    q = "SELECT * FROM edi_setup WHERE 1=1"
     params = []
     if client_id:
-        q += " WHERE client_id=?"; params.append(client_id)
+        q += " AND client_id=?"; params.append(client_id)
+    if sub_profile:
+        q += " AND sub_profile=?"; params.append(sub_profile)
     q += " ORDER BY updated_at DESC"
     cur.execute(q, params)
     rows = [dict(r) for r in cur.fetchall()]
@@ -911,13 +943,13 @@ def create_edi(data: dict) -> int:
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""INSERT INTO edi_setup
-        (client_id,provider_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (client_id,provider_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes,sub_profile)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data["client_id"], data.get("provider_id"), data.get("ProviderName", ""),
          data.get("Payor", ""), data.get("EDIStatus", "Not Started"),
          data.get("ERAStatus", "Not Started"), data.get("EFTStatus", "Not Started"),
          data.get("SubmittedDate", ""), data.get("GoLiveDate", ""),
-         data.get("PayerID", ""), data.get("Owner", ""), data.get("Notes", "")))
+         data.get("PayerID", ""), data.get("Owner", ""), data.get("Notes", ""), data.get("sub_profile", "")))
     conn.commit()
     eid = cur.lastrowid
     conn.close()
@@ -928,7 +960,7 @@ def update_edi(rec_id: int, data: dict):
     conn = get_db()
     cur = conn.cursor()
     allowed = ["ProviderName", "Payor", "EDIStatus", "ERAStatus", "EFTStatus",
-               "SubmittedDate", "GoLiveDate", "PayerID", "Owner", "Notes"]
+               "SubmittedDate", "GoLiveDate", "PayerID", "Owner", "Notes", "sub_profile"]
     parts, params = ["updated_at=?"], [datetime.now().isoformat()]
     for f in allowed:
         if f in data:
@@ -947,12 +979,23 @@ def delete_edi(rec_id: int):
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
-def get_dashboard(client_id: int = None):
-    """Full KPI dashboard — pass client_id=None for admin (all clients)."""
+def get_dashboard(client_id: int = None, sub_profile: str = None):
+    """Full KPI dashboard — pass client_id=None for admin (all clients).
+       Pass sub_profile='MHP' or 'OMT' to filter by sub-profile."""
     conn = get_db()
     cur = conn.cursor()
-    cond = "WHERE client_id=?" if client_id else ""
-    p = [client_id] if client_id else []
+
+    # Build condition fragments
+    conditions = []
+    p = []
+    if client_id:
+        conditions.append("client_id=?")
+        p.append(client_id)
+    if sub_profile:
+        conditions.append("sub_profile=?")
+        p.append(sub_profile)
+    cond = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
     today = date.today()
     mtd_start = today.replace(day=1).isoformat()
     ytd_start = today.replace(month=1, day=1).isoformat()
@@ -977,8 +1020,7 @@ def get_dashboard(client_id: int = None):
     # Denials MTD
     denied_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate >= ?",
                     p + [mtd_start])
-    denied_all = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus IN ('Denied','Appeals')",
-                    p + ["Denied", "Appeals"] if cond else ["Denied", "Appeals"])
+    denied_all = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus IN ('Denied','Appeals')", p)
 
     # Payments MTD
     pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {cond} {'AND' if cond else 'WHERE'} PostDate >= ?",
@@ -989,12 +1031,9 @@ def get_dashboard(client_id: int = None):
     # Totals for rates
     total_submitted = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate != ''", p)
     total_denied = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate != ''", p)
-    total_paid_count = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus='Paid'",
-                          p + ["Paid"] if cond else ["Paid"])
+    total_paid_count = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus='Paid'", p)
     # Clean claim = paid without denial
-    no_denial_p = p + ["Paid", ""]
-    clean_claims = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus='Paid' AND DenialReason=''",
-                      no_denial_p)
+    clean_claims = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus='Paid' AND DenialReason=''", p)
 
     clean_rate = round(clean_claims / max(total_submitted, 1) * 100, 1)
     denial_rate = round(total_denied / max(total_submitted, 1) * 100, 1)
@@ -1006,8 +1045,7 @@ def get_dashboard(client_id: int = None):
     avg_days_to_pay = round(row[0] or 0, 1)
 
     # SLA breaches
-    sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1",
-                      p + [1] if cond else [1])
+    sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1", p)
 
     # Net collection rate
     total_charge = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond}", p)

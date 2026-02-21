@@ -1591,6 +1591,12 @@
         <button class="btn-logout" onclick="doLogout()">Sign Out</button>
       </div>
     </div>
+    <!-- Sub-Profile Filter Bar (MHP/OMT) — visible only for Luminary-type clients -->
+    <div id="subProfileBar" style="display:none;background:linear-gradient(135deg,#eef2ff,#e0e7ff);border-bottom:1px solid #c7d2fe;padding:6px 24px;
+      display:none;align-items:center;gap:12px;font-size:13px;">
+      <span style="font-weight:700;color:#4338ca;letter-spacing:.3px">📊 Reporting View:</span>
+      <div id="subProfileTabs" style="display:flex;gap:6px"></div>
+    </div>
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileSidebar()"></div>
 
     <div class="app-body">
@@ -2471,6 +2477,8 @@
     // ═══════════════════════════════════════
     let currentUser = null;
     let activeClientId = null;
+    let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
+    let activeClientPracticeType = '';
     let clientsList = [];
     let allClaims = [];
     let activeQueueStatus = 'All';
@@ -2557,7 +2565,7 @@
 
     async function doLogout() {
       await fetch('/hub/api/logout', { method: 'POST' });
-      currentUser = null; activeClientId = null;
+      currentUser = null; activeClientId = null; activeSubProfile = null; activeClientPracticeType = '';
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'none';
       document.getElementById('loginScreen').style.display = 'block';
@@ -2589,6 +2597,7 @@
 
     function selectAccount(clientId, company) {
       activeClientId = clientId;
+      activeSubProfile = null;  // reset sub-profile when switching accounts
       document.getElementById('accountSelect').style.display = 'none';
       document.getElementById('appShell').style.display = 'block';
       document.getElementById('topAccount').textContent = company;
@@ -2598,8 +2607,57 @@
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
+      activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
+      updateSubProfileBar();
       navTo('dashboard');
+    }
+
+    function updateSubProfileBar() {
+      const bar = document.getElementById('subProfileBar');
+      if (activeClientPracticeType === 'MHP+OMT') {
+        bar.style.display = 'flex';
+        renderSubProfileTabs();
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function renderSubProfileTabs() {
+      const tabs = [
+        { key: null, label: 'All (Combined)' },
+        { key: 'MHP', label: '🧠 MHP (Mental Health)' },
+        { key: 'OMT', label: '🦴 OMT (Manual Therapy)' },
+      ];
+      document.getElementById('subProfileTabs').innerHTML = tabs.map(t => {
+        const active = activeSubProfile === t.key;
+        return `<button onclick="setSubProfile(${t.key === null ? 'null' : "'" + t.key + "'"})"
+          style="padding:5px 14px;border-radius:6px;font-size:12px;font-weight:${active ? '700' : '500'};
+          cursor:pointer;border:1px solid ${active ? '#4338ca' : '#a5b4fc'};
+          background:${active ? '#4338ca' : '#fff'};color:${active ? '#fff' : '#4338ca'};
+          transition:all .15s">${t.label}</button>`;
+      }).join('');
+    }
+
+    function setSubProfile(sp) {
+      activeSubProfile = sp;
+      renderSubProfileTabs();
+      // Refresh the current panel
+      const activePanel = document.querySelector('.hub-panel.active');
+      if (activePanel) {
+        const id = activePanel.id.replace('panel-', '');
+        if (id === 'dashboard') loadDashboard();
+        else if (id === 'claims') loadClaims();
+        else if (id === 'credentialing') loadCred();
+        else if (id === 'enrollment') loadEnroll();
+        else if (id === 'edi') loadEdi();
+        else if (id === 'providers') loadProviders();
+      }
+    }
+
+    // Build query string helper for sub_profile
+    function subProfileParam(sep) {
+      return activeSubProfile ? `${sep}sub_profile=${encodeURIComponent(activeSubProfile)}` : '';
     }
 
     function updateNavForPracticeType(pt) {
@@ -2669,7 +2727,7 @@
     // ═══════════════════════════════════════
     async function loadDashboard() {
       const url = activeClientId
-        ? `/hub/api/dashboard/client/${activeClientId}`
+        ? `/hub/api/dashboard/client/${activeClientId}${activeSubProfile ? '?sub_profile=' + encodeURIComponent(activeSubProfile) : ''}`
         : '/hub/api/dashboard';
       try {
         const r = await fetch(url);
@@ -2680,8 +2738,9 @@
 
     function renderDashboard(d) {
       const adminView = currentUser && currentUser.role === 'admin';
-      document.getElementById('dashTitle').textContent = d.user
-        ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
+      let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
+      if (activeSubProfile) title += ` — ${activeSubProfile}`;
+      document.getElementById('dashTitle').textContent = title;
 
       // ── Profile card ──────────────────────────────────────
       const prof = d.profile || {};
@@ -2841,7 +2900,12 @@
     // ═══════════════════════════════════════
     async function loadClaims() {
       buildQueueTabs([]);
-      const r = await fetch(`/hub/api/claims${activeClientId ? `?client_id=${activeClientId}` : ''}`);
+      let url = '/hub/api/claims';
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      if (params.toString()) url += '?' + params;
+      const r = await fetch(url);
       const d = await r.json();
       allClaims = d.claims || [];
       buildQueueTabs(allClaims);
@@ -2988,6 +3052,7 @@
           data.client_id = currentUser.role === 'admin'
             ? parseInt(document.getElementById('fClaimClient').value) || activeClientId
             : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
           const r = await fetch('/hub/api/claims', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -3089,6 +3154,7 @@
       const params = new URLSearchParams();
       if (status) params.set('status', status);
       if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       const r = await fetch('/hub/api/credentialing?' + params);
       const d = await r.json();
       const items = d.credentialing || d || [];
@@ -3165,6 +3231,7 @@
           data.client_id = currentUser.role === 'admin'
             ? parseInt(document.getElementById('fCredClient').value) || activeClientId
             : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
           await fetch('/hub/api/credentialing', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -3182,6 +3249,7 @@
       const params = new URLSearchParams();
       if (status) params.set('status', status);
       if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       const r = await fetch('/hub/api/enrollment?' + params);
       const d = await r.json();
       const items = d.enrollment || d || [];
@@ -3258,6 +3326,7 @@
           data.client_id = currentUser.role === 'admin'
             ? parseInt(document.getElementById('fEnrollClient').value) || activeClientId
             : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
           await fetch('/hub/api/enrollment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -3271,8 +3340,10 @@
     // EDI
     // ═══════════════════════════════════════
     async function loadEdi() {
-      const params = activeClientId ? `?client_id=${activeClientId}` : '';
-      const r = await fetch('/hub/api/edi' + params);
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      const r = await fetch('/hub/api/edi' + (params.toString() ? '?' + params : ''));
       const d = await r.json();
       const items = d.edi || d || [];
       const tbody = document.getElementById('ediTbody');
@@ -3348,6 +3419,7 @@
           data.client_id = currentUser.role === 'admin'
             ? parseInt(document.getElementById('fEdiClient').value) || activeClientId
             : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
           await fetch('/hub/api/edi', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -3361,8 +3433,10 @@
     // PROVIDERS
     // ═══════════════════════════════════════
     async function loadProviders() {
-      const params = activeClientId ? `?client_id=${activeClientId}` : '';
-      const r = await fetch('/hub/api/providers' + params);
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      const r = await fetch('/hub/api/providers' + (params.toString() ? '?' + params : ''));
       const d = await r.json();
       const items = d.providers || d || [];
       const tbody = document.getElementById('providerTbody');
@@ -3435,6 +3509,7 @@
           data.client_id = currentUser.role === 'admin'
             ? parseInt(document.getElementById('fProvClient').value) || activeClientId
             : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
           await fetch('/hub/api/providers', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -3653,7 +3728,8 @@
 
     async function loadCompletionTracker() {
       try {
-        const url = activeClientId ? `/hub/api/dashboard/client/${activeClientId}` : '/hub/api/dashboard';
+        let url = activeClientId ? `/hub/api/dashboard/client/${activeClientId}` : '/hub/api/dashboard';
+        if (activeSubProfile && activeClientId) url += '?sub_profile=' + encodeURIComponent(activeSubProfile);
         const r = await fetch(url);
         const d = await r.json();
         const tracker = document.getElementById('completionTracker');
