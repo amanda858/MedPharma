@@ -1164,7 +1164,7 @@ def add_file(client_id: int, filename: str, original_name: str, file_type: str,
     cur.execute("""
         INSERT INTO client_files
         (client_id,filename,original_name,file_type,file_size,category,description,row_count,uploaded_by,status)
-        VALUES (?,?,?,?,?,?,?,?,'Uploaded')
+        VALUES (?,?,?,?,?,?,?,?,?,'Uploaded')
     """, (client_id, filename, original_name, file_type, file_size, category, description, row_count, uploaded_by))
     conn.commit()
     new_id = cur.lastrowid
