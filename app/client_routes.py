@@ -53,10 +53,8 @@ def _require_admin(hub_session: Optional[str] = Cookie(None)):
 
 
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin)."""
-    if user["role"] == "admin":
-        return None
-    return user["id"]
+    """Return client_id filter — None means all (any user sees all data)."""
+    return None
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -96,10 +94,7 @@ def me(hub_session: Optional[str] = Cookie(None)):
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    if user["role"] == "admin":
-        return list_clients()
-    return [{"id": user["id"], "company": user["company"],
-             "contact_name": user["contact_name"], "email": user["email"]}]
+    return list_clients()
 
 
 # ─── Clients (admin) ──────────────────────────────────────────────────────────
@@ -158,7 +153,7 @@ class PracticeProfileUpdate(BaseModel):
 
 @router.get("/clients")
 def get_clients(hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     return list_clients()
 
 

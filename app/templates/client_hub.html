@@ -1728,7 +1728,8 @@
               </select>
               <input class="form-control btn-sm" type="text" id="claimSearch" placeholder="🔍 Search claims…"
                 oninput="filterClaimsTable()" style="width:200px">
-              <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
+              <button class="btn btn-primary btn-sm" onclick="openClaimModal()" style="display:none">+ New
+                Claim</button>
             </div>
           </div>
           <div class="queue-tabs" id="queueTabs"></div>
@@ -1772,7 +1773,7 @@
                 <option>Denied</option>
                 <option>Expired</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openCredModal()">+ Add</button>
+              <button class="btn btn-primary btn-sm" onclick="openCredModal()" style="display:none">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -1813,7 +1814,7 @@
                 <option>Enrolled</option>
                 <option>Denied</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
+              <button class="btn btn-primary btn-sm" onclick="openEnrollModal()" style="display:none">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -1845,7 +1846,7 @@
           <div class="page-header">
             <div class="page-title">EDI Setup</div>
             <div class="page-actions">
-              <button class="btn btn-primary btn-sm" onclick="openEdiModal()">+ Add</button>
+              <button class="btn btn-primary btn-sm" onclick="openEdiModal()" style="display:none">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -2570,19 +2571,10 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
-      if (currentUser.role === 'admin') {
-        const r = await fetch('/hub/api/clients');
-        const d = await r.json();
-        clientsList = d.clients || d || [];
-      } else {
-        // Non-admin: skip account selector, go straight to dashboard
-        clientsList = [{
-          id: currentUser.id, company: currentUser.company,
-          contact_name: currentUser.contact_name, email: currentUser.email
-        }];
-        selectAccount(currentUser.id, currentUser.company);
-        return;
-      }
+      // All users see all client accounts
+      const r = await fetch('/hub/api/accounts');
+      const d = await r.json();
+      clientsList = d.clients || d || [];
 
       const grid = document.getElementById('accountGrid');
       grid.innerHTML = clientsList.map(c => `
@@ -2602,7 +2594,7 @@
       document.getElementById('topAccount').textContent = company;
       document.getElementById('topUser').textContent = currentUser.username;
       document.getElementById('topRole').textContent = currentUser.role;
-      if (currentUser.role === 'admin') document.getElementById('adminNav').style.display = 'block';
+      document.getElementById('adminNav').style.display = 'block';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
