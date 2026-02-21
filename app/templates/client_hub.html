@@ -1922,6 +1922,12 @@
                 <option value="mtd">Month to Date</option>
                 <option value="ytd">Year to Date</option>
               </select>
+              <button class="btn btn-sm" id="btnAINarrative" onclick="generateGPTNarrative()"
+                style="background:linear-gradient(135deg,#7c3aed,#6366f1);color:#fff;border:none;font-weight:600">
+                🤖 Generate AI Report</button>
+              <button class="btn btn-sm" onclick="downloadPDF()"
+                style="background:linear-gradient(135deg,#0d47a1,#1565c0);color:#fff;border:none;font-weight:600">
+                📄 Download PDF</button>
               <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV()">📥 Download CSV</button>
               <button class="btn btn-primary btn-sm" onclick="printReport()">🖨️ Print Report</button>
             </div>
@@ -1929,8 +1935,9 @@
 
           <!-- AI Narrative Summary -->
           <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
-            <div class="card-header">
+            <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
               <div class="card-title">🤖 AI Account Summary</div>
+              <span id="aiNarrativeSource" style="font-size:10px;color:var(--gray-400);font-style:italic"></span>
             </div>
             <div id="reportAINarrative" style="padding:16px;line-height:1.7;font-size:13.5px;color:var(--gray-700)">
               <p style="color:var(--gray-400);font-size:13px">Loading AI summary…</p>
@@ -1990,7 +1997,7 @@
               </div>
               <div class="card" style="border-top:4px solid #0ea5e9">
                 <div class="card-header">
-                  <div class="card-title">MHP — Michigan Health Partners</div>
+                  <div class="card-title">MHP — Michigan Health Partners (Ancillary)</div>
                 </div>
                 <div id="reportMHP" style="padding:12px">
                   <p style="color:var(--gray-400);font-size:13px">No MHP data</p>
@@ -2146,11 +2153,11 @@
             <div class="form-grid" style="margin-top:12px">
               <div class="form-group">
                 <label>Practice / Company Name</label>
-                <input class="form-control" id="pf-company" placeholder="e.g. Luminary MHP">
+                <input class="form-control" id="pf-company" placeholder="e.g. ABC Medical Group">
               </div>
               <div class="form-group">
                 <label>Specialty</label>
-                <input class="form-control" id="pf-specialty" placeholder="e.g. Mental Health">
+                <input class="form-control" id="pf-specialty" placeholder="e.g. Family Medicine">
               </div>
               <div class="form-group">
                 <label>Tax ID (EIN)</label>
@@ -2747,7 +2754,7 @@
     function renderSubProfileTabs() {
       const tabs = [
         { key: null, label: 'All (Combined)' },
-        { key: 'MHP', label: '🧠 MHP (Mental Health)' },
+        { key: 'MHP', label: '🏥 MHP (Michigan Health Partners)' },
         { key: 'OMT', label: '🦴 OMT (Manual Therapy)' },
       ];
       document.getElementById('subProfileTabs').innerHTML = tabs.map(t => {
@@ -4101,6 +4108,7 @@
 
       // AI Narrative
       document.getElementById('reportAINarrative').innerHTML = generateAINarrative(d);
+      document.getElementById('aiNarrativeSource').textContent = 'Template-based — Click "Generate AI Report" for GPT analysis';
 
       // Summary KPIs
       const cl = d.claims || {};
@@ -4443,6 +4451,77 @@
       const w = window.open('', '_blank', 'width=1000,height=800');
       w.document.write(html); w.document.close(); w.focus();
       setTimeout(() => w.print(), 400);
+    }
+
+    /* ── GPT AI Narrative Generation ── */
+    let lastGPTNarrative = null;
+
+    async function generateGPTNarrative() {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      const btn = document.getElementById('btnAINarrative');
+      const origText = btn.innerHTML;
+      btn.innerHTML = '⏳ Generating...';
+      btn.disabled = true;
+      const srcEl = document.getElementById('aiNarrativeSource');
+      const narEl = document.getElementById('reportAINarrative');
+      narEl.innerHTML = '<div style="text-align:center;padding:24px"><div style="font-size:32px;margin-bottom:8px">🤖</div><div style="color:var(--gray-500);font-size:13px">AI is analyzing your data and writing a professional report...<br><span style="font-size:11px;color:var(--gray-400)">This may take 10-20 seconds</span></div></div>';
+
+      try {
+        const r = await fetch(`/hub/api/report/${activeClientId}/ai-narrative`, { method: 'POST' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.detail || 'AI generation failed');
+        }
+        const data = await r.json();
+        lastGPTNarrative = data.narrative;
+        // Render the narrative with nice formatting
+        const formatted = data.narrative
+          .replace(/\n\n/g, '</p><p style="margin:10px 0">')
+          .replace(/\n/g, '<br>');
+        narEl.innerHTML = `<p style="margin:10px 0">${formatted}</p>`;
+        srcEl.textContent = `Powered by GPT (${data.model}) — ${new Date().toLocaleString()}`;
+        toast('AI report generated!', 'success');
+      } catch (e) {
+        // Fallback to template narrative
+        narEl.innerHTML = `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;color:#92400e">
+          ⚠️ AI generation unavailable: ${esc(e.message)}<br>Showing template-based summary instead.</div>` +
+          (lastReportData ? generateAINarrative(lastReportData) : '<p style="color:var(--gray-400)">Load report data first</p>');
+        srcEl.textContent = 'Template-based (AI unavailable)';
+      }
+      btn.innerHTML = origText;
+      btn.disabled = false;
+    }
+
+    /* ── PDF Download ── */
+    async function downloadPDF() {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      toast('Generating PDF...', 'info');
+      try {
+        const period = document.getElementById('reportPeriod')?.value || 'all';
+        const sp = activeSubProfile ? `&sub_profile=${encodeURIComponent(activeSubProfile)}` : '';
+        const url = `/hub/api/report/${activeClientId}/pdf?period=${period}${sp}`;
+        let r;
+        if (lastGPTNarrative) {
+          r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ narrative: lastGPTNarrative })
+          });
+        } else {
+          r = await fetch(url);
+        }
+        if (!r.ok) throw new Error('PDF generation failed');
+        const blob = await r.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        const cd = r.headers.get('content-disposition') || '';
+        const fnMatch = cd.match(/filename=([^;]+)/);
+        a.download = fnMatch ? fnMatch[1] : `Report_${new Date().toISOString().slice(0, 10)}.pdf`;
+        a.click();
+        URL.revokeObjectURL(blobUrl);
+        toast('PDF downloaded!', 'success');
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     // ═══════════════════════════════════════
@@ -4796,7 +4875,7 @@
     }
 
     function showAddSubProfilePrompt() {
-      const name = prompt('Enter sub-profile name (e.g. MHP, OMT, Behavioral):');
+      const name = prompt('Enter sub-profile name (e.g. MHP, OMT, Ancillary):');
       if (!name || !name.trim()) return;
       const cid = activeClientId;
       const url = cid ? `/hub/api/practice-profiles/${cid}/${name.trim()}` : `/hub/api/practice-profiles/${name.trim()}`;

@@ -353,7 +353,7 @@ def _seed_data(conn):
            (username,password,salt,company,contact_name,email,role,
             tax_id,group_npi,individual_npi,ptan_group,ptan_individual,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Eric", "eric@medprosc.com", "client",
+        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
          "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "MHP+OMT")
     )
     luminary_id = cur.lastrowid
@@ -373,7 +373,7 @@ def _seed_data(conn):
         """INSERT INTO practice_profiles
            (client_id,profile_name,practice_type,specialty,tax_id,group_npi,individual_npi,ptan_group,ptan_individual)
            VALUES (?,?,?,?,?,?,?,?,?)""",
-        (luminary_id, "MHP", "Ancillary", "Mental Health",
+        (luminary_id, "MHP", "Ancillary", "Michigan Health Partners",
          "334707784", "1033901723", "1497174478", "MI120440", "MI20440001")
     )
     cur.execute(

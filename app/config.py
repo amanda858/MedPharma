@@ -22,6 +22,9 @@ DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
 # Hunter.io API key (set via environment variable)
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 
+# OpenAI API key (set via environment variable for AI report generation)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
 # Search defaults
 DEFAULT_RESULTS_LIMIT = 50
 MAX_RESULTS_LIMIT = 200

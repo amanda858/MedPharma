@@ -1252,3 +1252,375 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
     scope = _client_scope(user)
     delete_file_record(file_id, scope)
     return {"ok": True}
+
+
+# ─── AI Report Generation (OpenAI GPT) ───────────────────────────────────────
+
+@router.post("/report/{client_id}/ai-narrative")
+async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
+    _require_user(hub_session)
+    from app.config import OPENAI_API_KEY
+    from app.client_db import get_db
+    from datetime import date
+
+    if not OPENAI_API_KEY:
+        raise HTTPException(400, "OpenAI API key not configured. Set OPENAI_API_KEY environment variable.")
+
+    # Gather all report data
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    client_row = conn.execute("SELECT company,contact_name,email,phone,practice_type,specialty FROM clients WHERE id=?", (client_id,)).fetchone()
+    client_info = dict(client_row) if client_row else {}
+    practice_type = client_info.get("practice_type", "") or ""
+
+    overall = _build_section_data(conn, client_id, "", "")
+    sub_profiles = {}
+    if practice_type == "MHP+OMT":
+        for sp_name in ["OMT", "MHP"]:
+            sp_filter = f" AND sub_profile='{sp_name}'"
+            sub_profiles[sp_name] = _build_section_data(conn, client_id, sp_filter, "")
+    conn.close()
+
+    # Build concise data summary for GPT
+    cl = overall.get("claims", {})
+    cred = overall.get("credentialing", {})
+    enr = overall.get("enrollment", {})
+    edi = overall.get("edi", {})
+    pay = overall.get("payments", {})
+
+    data_summary = f"""
+PRACTICE: {client_info.get('company', 'Unknown')}
+SPECIALTY: {client_info.get('specialty', 'N/A')}
+PRACTICE TYPE: {practice_type or 'Standard'}
+REPORT DATE: {date.today().isoformat()}
+
+CLAIMS OVERVIEW:
+- Total Claims: {cl.get('total', 0)}
+- Total Charged: ${cl.get('total_charged', 0):,.2f}
+- Total Paid: ${cl.get('total_paid', 0):,.2f}
+- Outstanding A/R: ${cl.get('total_balance', 0):,.2f}
+- Collection Rate: {round((cl.get('total_paid',0) / cl.get('total_charged',1)) * 100, 1) if cl.get('total_charged') else 0}%
+
+CLAIMS BY STATUS:
+{chr(10).join(f"  - {s.get('status','?')}: {s.get('count',0)} claims, ${s.get('charged',0):,.2f} charged, ${s.get('paid',0):,.2f} paid" for s in cl.get('by_status', []))}
+
+TOP DENIAL CATEGORIES:
+{chr(10).join(f"  - {d.get('category','?')}: {d.get('count',0)}" for d in cl.get('top_denials', [])) or '  None'}
+
+CREDENTIALING: {len(cred.get('detail', []))} records
+{chr(10).join(f"  - {c.get('provider','?')} / {c.get('payor','?')}: {c.get('status','?')}" for c in cred.get('detail', [])[:10])}
+
+ENROLLMENT: {len(enr.get('detail', []))} records
+{chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: {e.get('status','?')}" for e in enr.get('detail', [])[:10])}
+
+EDI SETUP: {len(edi.get('detail', []))} connections
+{chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
+
+PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
+"""
+
+    # Sub-profile data
+    if sub_profiles:
+        for sp_name, sp_data in sub_profiles.items():
+            sc = sp_data.get("claims", {})
+            data_summary += f"""
+SUB-PROFILE: {sp_name}
+  Claims: {sc.get('total', 0)} | Charged: ${sc.get('total_charged', 0):,.2f} | Paid: ${sc.get('total_paid', 0):,.2f} | AR: ${sc.get('total_balance', 0):,.2f}
+  Credentialing: {len(sp_data.get('credentialing', {}).get('detail', []))} | Enrollment: {len(sp_data.get('enrollment', {}).get('detail', []))} | EDI: {len(sp_data.get('edi', {}).get('detail', []))}
+"""
+
+    system_prompt = """You are a senior Revenue Cycle Management (RCM) analyst at MedPharma SC, a healthcare credentialing and billing company. 
+Write a detailed, professional narrative report that a healthcare practice owner can read and understand.
+
+Your report should include:
+1. EXECUTIVE SUMMARY — 2-3 sentences on overall account health
+2. FINANCIAL PERFORMANCE — Analyze charges, collections, A/R, collection rate with context
+3. CLAIMS ANALYSIS — Break down claim statuses, flag concerns, note denials
+4. DENIAL MANAGEMENT — If denials exist, explain significance and recommend actions
+5. CREDENTIALING STATUS — Summarize progress, flag pending items
+6. ENROLLMENT STATUS — Summarize payor enrollment position
+7. EDI CONNECTIVITY — Note setup status
+8. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
+9. RECOMMENDED ACTIONS — Specific, prioritized action items
+10. OUTLOOK — Brief forward-looking statement
+
+Write in a professional medical billing tone. Use specific numbers from the data.
+Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).
+Keep it concise but thorough — aim for 400-600 words."""
+
+    try:
+        import openai
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Generate the narrative report based on this data:\n\n{data_summary}"}
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+        narrative = response.choices[0].message.content
+        return {"narrative": narrative, "model": "gpt-4o-mini", "company": client_info.get("company", "")}
+    except Exception as e:
+        raise HTTPException(500, f"AI generation failed: {str(e)}")
+
+
+# ─── PDF Report Generation ───────────────────────────────────────────────────
+
+@router.api_route("/report/{client_id}/pdf", methods=["GET", "POST"])
+async def download_report_pdf(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
+                              hub_session: Optional[str] = Cookie(None),
+                              request: Request = None):
+    """Generate and return a branded PDF report."""
+    _require_user(hub_session)
+    from app.client_db import get_db
+    from datetime import date
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
+    from fastapi.responses import StreamingResponse
+
+    # Extract narrative from POST body if available
+    narrative = None
+    if request and request.method == "POST":
+        try:
+            body = await request.json()
+            narrative = body.get("narrative")
+        except Exception:
+            pass
+
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+
+    # Period filter
+    where_date = ""
+    if period == "mtd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(day=1).isoformat()}'"
+    elif period == "ytd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(month=1,day=1).isoformat()}'"
+    sp_filter = f" AND sub_profile='{sub_profile}'" if sub_profile else ""
+
+    client_row = conn.execute("SELECT company,contact_name,email,phone,practice_type,specialty FROM clients WHERE id=?", (client_id,)).fetchone()
+    client_info = dict(client_row) if client_row else {}
+    practice_type = client_info.get("practice_type", "") or ""
+    company = client_info.get("company", "Client")
+
+    overall = _build_section_data(conn, client_id, sp_filter, where_date)
+    sub_profiles_data = {}
+    if practice_type == "MHP+OMT" and not sub_profile:
+        for sp_name in ["OMT", "MHP"]:
+            sp_f = f" AND sub_profile='{sp_name}'"
+            sub_profiles_data[sp_name] = _build_section_data(conn, client_id, sp_f, where_date)
+    conn.close()
+
+    cl = overall.get("claims", {})
+    cred = overall.get("credentialing", {})
+    enr = overall.get("enrollment", {})
+    edi_data = overall.get("edi", {})
+    pay = overall.get("payments", {})
+
+    # Build PDF
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            topMargin=0.5*inch, bottomMargin=0.5*inch,
+                            leftMargin=0.6*inch, rightMargin=0.6*inch)
+
+    styles = getSampleStyleSheet()
+    blue = HexColor("#0d47a1")
+    light_blue = HexColor("#e3f2fd")
+    dark = HexColor("#1a1a2e")
+    gray = HexColor("#6b7280")
+    green = HexColor("#059669")
+    red = HexColor("#dc2626")
+    white = HexColor("#ffffff")
+
+    # Custom styles
+    styles.add(ParagraphStyle('ReportTitle', parent=styles['Title'], fontSize=22, textColor=blue, spaceAfter=4, alignment=TA_LEFT))
+    styles.add(ParagraphStyle('ReportSubtitle', parent=styles['Normal'], fontSize=10, textColor=gray, spaceAfter=16))
+    styles.add(ParagraphStyle('SectionHead', parent=styles['Heading2'], fontSize=13, textColor=blue, spaceBefore=18, spaceAfter=8,
+                               borderWidth=0, leftIndent=0))
+    styles.add(ParagraphStyle('BodyText2', parent=styles['Normal'], fontSize=10, textColor=dark, leading=14, alignment=TA_JUSTIFY, spaceAfter=6))
+    styles.add(ParagraphStyle('KPILabel', parent=styles['Normal'], fontSize=8, textColor=gray, alignment=TA_CENTER))
+    styles.add(ParagraphStyle('KPIValue', parent=styles['Normal'], fontSize=16, textColor=blue, alignment=TA_CENTER, leading=20))
+    styles.add(ParagraphStyle('SmallGray', parent=styles['Normal'], fontSize=8, textColor=gray))
+    styles.add(ParagraphStyle('NarrativeText', parent=styles['Normal'], fontSize=10, textColor=dark, leading=15, alignment=TA_JUSTIFY, spaceAfter=8))
+
+    story = []
+    period_label = {"all": "All Time", "mtd": "Month to Date", "ytd": "Year to Date"}.get(period, period)
+
+    # ── Header ──
+    story.append(Paragraph(f"MedPharma SC", styles['ReportTitle']))
+    story.append(Paragraph(f"Revenue Cycle Management & Credentialing Report", styles['ReportSubtitle']))
+    story.append(HRFlowable(width="100%", thickness=2, color=blue, spaceAfter=12))
+    story.append(Paragraph(f"<b>{company}</b> — {period_label} Report  |  Generated: {date.today().strftime('%B %d, %Y')}", styles['BodyText2']))
+    if practice_type:
+        story.append(Paragraph(f"Practice Type: {practice_type}  |  Specialty: {client_info.get('specialty', 'N/A')}", styles['SmallGray']))
+    story.append(Spacer(1, 12))
+
+    # ── KPI Summary Table ──
+    coll_rate = round((cl.get('total_paid', 0) / cl.get('total_charged', 1)) * 100, 1) if cl.get('total_charged') else 0
+    kpi_data = [
+        [Paragraph('<b>Total Claims</b>', styles['KPILabel']),
+         Paragraph('<b>Total Charged</b>', styles['KPILabel']),
+         Paragraph('<b>Total Paid</b>', styles['KPILabel']),
+         Paragraph('<b>Outstanding A/R</b>', styles['KPILabel']),
+         Paragraph('<b>Collection Rate</b>', styles['KPILabel'])],
+        [Paragraph(f"<font size='16' color='#0d47a1'><b>{cl.get('total', 0)}</b></font>", styles['KPIValue']),
+         Paragraph(f"<font size='16' color='#7c3aed'><b>${cl.get('total_charged', 0):,.0f}</b></font>", styles['KPIValue']),
+         Paragraph(f"<font size='16' color='#059669'><b>${cl.get('total_paid', 0):,.0f}</b></font>", styles['KPIValue']),
+         Paragraph(f"<font size='16' color='#dc2626'><b>${cl.get('total_balance', 0):,.0f}</b></font>", styles['KPIValue']),
+         Paragraph(f"<font size='16' color='#d97706'><b>{coll_rate}%</b></font>", styles['KPIValue'])]
+    ]
+    kpi_table = Table(kpi_data, colWidths=[doc.width/5]*5)
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), light_blue),
+        ('BOX', (0, 0), (-1, -1), 1, blue),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#bfdbfe")),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(kpi_table)
+    story.append(Spacer(1, 16))
+
+    # ── AI Narrative (if provided) ──
+    if narrative:
+        story.append(Paragraph("AI Account Summary", styles['SectionHead']))
+        # Clean HTML tags for reportlab compatibility
+        clean = narrative.replace('\n\n', '<br/><br/>').replace('\n', '<br/>')
+        clean = clean.replace('<b>', '<b>').replace('</b>', '</b>')
+        story.append(Paragraph(clean, styles['NarrativeText']))
+        story.append(Spacer(1, 8))
+
+    # ── Claims by Status ──
+    by_status = cl.get('by_status', [])
+    if by_status:
+        story.append(Paragraph("Claims by Status", styles['SectionHead']))
+        tdata = [['Status', 'Count', 'Charged', 'Paid']]
+        for s in by_status:
+            tdata.append([s.get('status', ''), str(s.get('count', 0)),
+                         f"${s.get('charged', 0):,.2f}", f"${s.get('paid', 0):,.2f}"])
+        tdata.append(['TOTAL', str(cl.get('total', 0)),
+                      f"${cl.get('total_charged', 0):,.2f}", f"${cl.get('total_paid', 0):,.2f}"])
+        t = Table(tdata, colWidths=[doc.width*0.35, doc.width*0.15, doc.width*0.25, doc.width*0.25])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BACKGROUND', (0, -1), (-1, -1), light_blue),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── Credentialing ──
+    cred_detail = cred.get('detail', [])
+    if cred_detail:
+        story.append(Paragraph("Credentialing", styles['SectionHead']))
+        tdata = [['Provider', 'Payor', 'Type', 'Status', 'Submitted', 'Approved']]
+        for r in cred_detail[:20]:
+            tdata.append([r.get('provider', '')[:25], r.get('payor', '')[:25], r.get('type', ''),
+                         r.get('status', ''), r.get('submitted', '-'), r.get('approved', '-')])
+        cw = [doc.width*0.2, doc.width*0.2, doc.width*0.12, doc.width*0.15, doc.width*0.16, doc.width*0.17]
+        t = Table(tdata, colWidths=cw)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── Enrollment ──
+    enr_detail = enr.get('detail', [])
+    if enr_detail:
+        story.append(Paragraph("Enrollment", styles['SectionHead']))
+        tdata = [['Provider', 'Payor', 'Type', 'Status', 'Submitted', 'Effective']]
+        for r in enr_detail[:20]:
+            tdata.append([r.get('provider', '')[:25], r.get('payor', '')[:25], r.get('type', ''),
+                         r.get('status', ''), r.get('submitted', '-'), r.get('effective', '-')])
+        t = Table(tdata, colWidths=cw)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── EDI Setup ──
+    edi_detail = edi_data.get('detail', [])
+    if edi_detail:
+        story.append(Paragraph("EDI Setup", styles['SectionHead']))
+        tdata = [['Provider', 'Payor', 'Payer ID', 'EDI', 'ERA', 'EFT', 'Go-Live']]
+        for r in edi_detail[:20]:
+            tdata.append([r.get('provider', '')[:20], r.get('payor', '')[:20], r.get('payer_id', ''),
+                         r.get('edi', ''), r.get('era', ''), r.get('eft', ''), r.get('go_live', '-')])
+        edw = [doc.width*0.16]*7
+        t = Table(tdata, colWidths=edw)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── Sub-Profile Comparison ──
+    if sub_profiles_data:
+        story.append(Paragraph("Sub-Profile Comparison", styles['SectionHead']))
+        tdata = [['Sub-Profile', 'Claims', 'Charged', 'Paid', 'A/R', 'Coll. Rate']]
+        for sp_name, sp_d in sub_profiles_data.items():
+            sc = sp_d.get('claims', {})
+            sr = round((sc.get('total_paid', 0) / sc.get('total_charged', 1)) * 100, 1) if sc.get('total_charged') else 0
+            tdata.append([sp_name, str(sc.get('total', 0)),
+                         f"${sc.get('total_charged', 0):,.2f}", f"${sc.get('total_paid', 0):,.2f}",
+                         f"${sc.get('total_balance', 0):,.2f}", f"{sr}%"])
+        spw = [doc.width*0.18, doc.width*0.12, doc.width*0.2, doc.width*0.18, doc.width*0.18, doc.width*0.14]
+        t = Table(tdata, colWidths=spw)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── Payments ──
+    story.append(Paragraph("Payments Summary", styles['SectionHead']))
+    story.append(Paragraph(f"Total Payments: <b>${pay.get('total', 0):,.2f}</b>  |  Payment Count: <b>{pay.get('count', 0)}</b>", styles['BodyText2']))
+
+    # ── Footer ──
+    story.append(Spacer(1, 24))
+    story.append(HRFlowable(width="100%", thickness=1, color=gray, spaceAfter=8))
+    story.append(Paragraph(f"<i>This report was generated by MedPharma SC — Revenue Cycle Management & Credentialing Solutions</i>",
+                           styles['SmallGray']))
+    story.append(Paragraph(f"<i>Confidential — For internal use only  |  {date.today().strftime('%B %d, %Y')}</i>", styles['SmallGray']))
+
+    doc.build(story)
+    buf.seek(0)
+    safe_name = company.replace(" ", "_").replace("/", "-")
+    filename = f"{safe_name}_Report_{date.today().isoformat()}.pdf"
+    return StreamingResponse(buf, media_type="application/pdf",
+                             headers={"Content-Disposition": f"attachment; filename={filename}"})
