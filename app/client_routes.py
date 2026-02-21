@@ -967,6 +967,9 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
     return imported, errors
+
+
+def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.
@@ -1106,9 +1109,6 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                 today_str,
                 today_str,
                 str(mapped.get("sub_profile", "")),
-                str(mapped.get("Owner", "")),
-                today_str,
-                today_str,
             ))
             imported += 1
         except Exception as e:
