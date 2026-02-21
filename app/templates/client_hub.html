@@ -1469,9 +1469,9 @@
                 <label>Password</label>
                 <div style="position:relative">
                   <input type="password" id="loginPass" placeholder="Enter password" autocomplete="current-password"
-                    style="width:100%;padding-right:44px">
+                    style="width:100%;padding-right:60px">
                   <button type="button" onclick="togglePw()" id="btnShowPw"
-                    style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#94a3b8;font-size:13px;padding:4px">Show</button>
+                    style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:6px;cursor:pointer;color:#1e88e5;font-size:11px;font-weight:700;padding:5px 10px;letter-spacing:.3px;transition:all .2s">SHOW</button>
                 </div>
               </div>
               <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In →</button>
@@ -1574,15 +1574,32 @@
 
         <!-- ═══ DASHBOARD ═══ -->
         <div class="hub-panel active" id="panel-dashboard">
-          <div class="page-header">
-            <div class="page-title" id="dashTitle">Dashboard</div>
-            <div class="page-actions">
-              <select id="dashPeriod" class="form-control btn-sm" onchange="loadDashboard()" style="width:auto">
-                <option value="mtd">Month to Date</option>
-                <option value="wtd">Week to Date</option>
-                <option value="ytd">Year to Date</option>
-                <option value="all">All Time</option>
-              </select>
+          <!-- Hero Welcome Banner -->
+          <div
+            style="background:linear-gradient(135deg,#0d47a1 0%,#1565c0 40%,#1e88e5 100%);border-radius:16px;padding:28px 32px;margin-bottom:20px;position:relative;overflow:hidden">
+            <div
+              style="position:absolute;top:-40px;right:-20px;width:200px;height:200px;background:rgba(255,255,255,.06);border-radius:50%">
+            </div>
+            <div
+              style="position:absolute;bottom:-60px;right:80px;width:160px;height:160px;background:rgba(255,255,255,.04);border-radius:50%">
+            </div>
+            <div
+              style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;position:relative;z-index:1">
+              <div>
+                <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:-.3px" id="dashTitle">Dashboard
+                </div>
+                <div style="font-size:13px;color:rgba(255,255,255,.7);margin-top:4px">MedPharma SC — Revenue Cycle
+                  Management & Credentialing Solutions</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <select id="dashPeriod" class="form-control btn-sm" onchange="loadDashboard()"
+                  style="width:auto;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(8px)">
+                  <option value="mtd" style="color:#333">Month to Date</option>
+                  <option value="wtd" style="color:#333">Week to Date</option>
+                  <option value="ytd" style="color:#333">Year to Date</option>
+                  <option value="all" style="color:#333">All Time</option>
+                </select>
+              </div>
             </div>
           </div>
           <!-- Profile Card -->
@@ -2023,8 +2040,9 @@
           <div class="page-header">
             <div class="page-title">📂 Documents</div>
             <div class="page-actions" style="gap:8px;display:flex;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Rename
-                Tabs</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleAddFolder()">📁 Add Folder</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Manage
+                Folders</button>
               <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
                 Upload File</button>
               <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
@@ -2032,20 +2050,26 @@
             </div>
           </div>
 
-          <!-- Rename tabs inline editor -->
+          <!-- Add New Folder inline -->
+          <div id="addFolderForm"
+            style="display:none;background:var(--info-light);border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:12px">
+            <div style="font-size:13px;font-weight:700;color:var(--info);margin-bottom:8px">📁 Create New Folder</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="form-control" id="newFolderName" placeholder="Enter folder name…"
+                style="flex:1;max-width:300px" onkeydown="if(event.key==='Enter')addNewFolder()">
+              <button class="btn btn-primary btn-sm" onclick="addNewFolder()">Create</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleAddFolder()">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Manage Folders editor -->
           <div id="renameDocTabsForm"
             style="display:none;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:16px;margin-bottom:16px">
-            <div style="font-size:13px;font-weight:700;color:var(--gray-600);margin-bottom:12px">✏️ Edit Tab Names (5
-              categories)</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
-              <input class="form-control" id="docTabName0" placeholder="Tab 1 name">
-              <input class="form-control" id="docTabName1" placeholder="Tab 2 name">
-              <input class="form-control" id="docTabName2" placeholder="Tab 3 name">
-              <input class="form-control" id="docTabName3" placeholder="Tab 4 name">
-              <input class="form-control" id="docTabName4" placeholder="Tab 5 name">
-            </div>
+            <div style="font-size:13px;font-weight:700;color:var(--gray-600);margin-bottom:12px">✏️ Manage Folders —
+              Rename or Remove</div>
+            <div id="manageFoldersList" style="display:flex;flex-direction:column;gap:8px"></div>
             <div style="margin-top:12px;display:flex;gap:8px">
-              <button class="btn btn-primary btn-sm" onclick="saveDocTabNames()">Save Tab Names</button>
+              <button class="btn btn-primary btn-sm" onclick="saveFolderNames()">💾 Save Changes</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()">Cancel</button>
             </div>
           </div>
@@ -2599,34 +2623,46 @@
       btn.disabled = true;
       btn.textContent = 'Signing in…';
       statusEl.style.display = 'block';
-      try {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 45000);
-        const r = await fetch('/hub/api/login', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-          signal: controller.signal
-        });
-        clearTimeout(tid);
-        if (!r.ok) {
-          const d = await r.json().catch(() => ({}));
-          throw new Error(d.detail || 'Invalid credentials');
+
+      // Retry logic for cold-start servers
+      let lastErr = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          if (attempt > 1) {
+            statusEl.textContent = `Retrying… (attempt ${attempt}/3)`;
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 30000);
+          const r = await fetch('/hub/api/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+            signal: controller.signal
+          });
+          clearTimeout(tid);
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            throw new Error(d.detail || 'Invalid credentials');
+          }
+          const d = await r.json();
+          currentUser = d.user;
+          statusEl.style.display = 'none';
+          showAccountSelector();
+          return;
+        } catch (e) {
+          lastErr = e;
+          if (e.message === 'Invalid credentials') break; // Don't retry wrong passwords
+          if (attempt === 3) break;
         }
-        const d = await r.json();
-        currentUser = d.user;
-        statusEl.style.display = 'none';
-        showAccountSelector();
-      } catch (e) {
-        statusEl.style.display = 'none';
-        if (e.name === 'AbortError') {
-          showLoginError('Server is waking up — please try again in 30 seconds');
-        } else {
-          showLoginError(e.message || 'Login failed. Check your username and password.');
-        }
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Sign In →';
       }
+      statusEl.style.display = 'none';
+      if (lastErr?.name === 'AbortError') {
+        showLoginError('Server is waking up — please wait a moment and try again');
+      } else {
+        showLoginError(lastErr?.message || 'Login failed. Check your username and password.');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Sign In →';
     }
 
     function showLoginError(msg) {
@@ -2637,8 +2673,8 @@
     function togglePw() {
       const inp = document.getElementById('loginPass');
       const btn = document.getElementById('btnShowPw');
-      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
-      else { inp.type = 'password'; btn.textContent = 'Show'; }
+      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'HIDE'; btn.style.background = 'linear-gradient(135deg,#dbeafe,#bfdbfe)'; }
+      else { inp.type = 'password'; btn.textContent = 'SHOW'; btn.style.background = 'linear-gradient(135deg,#eff6ff,#dbeafe)'; }
     }
 
     async function doLogout() {
@@ -2960,14 +2996,14 @@
         : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No payor data</p>';
 
       // Credentialing stats
-      const cs = d.credentialing_stats || {};
-      const csMax = Math.max(...Object.values(cs).map(Number), 1);
+      const credStats = d.credentialing_stats || {};
+      const csMax = Math.max(...Object.values(credStats).map(Number), 1);
       const csColors = {
         Approved: 'bf-green', Submitted: 'bf-blue', 'In Progress': 'bf-amber',
         'Not Started': 'bf-indigo', Denied: 'bf-red', Expired: 'bf-red'
       };
-      document.getElementById('credChart').innerHTML = Object.entries(cs).length
-        ? Object.entries(cs).map(([s, c]) => `
+      document.getElementById('credChart').innerHTML = Object.entries(credStats).length
+        ? Object.entries(credStats).map(([s, c]) => `
       <div class="bar-row">
         <div class="bar-lbl">${esc(s)}</div>
         <div class="bar-track">
@@ -2977,14 +3013,14 @@
         : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No credentialing data</p>';
 
       // Enrollment stats
-      const es = d.enrollment_stats || {};
-      const esMax = Math.max(...Object.values(es).map(Number), 1);
+      const enrStats = d.enrollment_stats || {};
+      const esMax = Math.max(...Object.values(enrStats).map(Number), 1);
       const esColors = {
         Active: 'bf-green', Pending: 'bf-amber', Submitted: 'bf-blue',
         Approved: 'bf-green', Denied: 'bf-red', Terminated: 'bf-red'
       };
-      document.getElementById('enrollChart').innerHTML = Object.entries(es).length
-        ? Object.entries(es).map(([s, c]) => `
+      document.getElementById('enrollChart').innerHTML = Object.entries(enrStats).length
+        ? Object.entries(enrStats).map(([s, c]) => `
       <div class="bar-row">
         <div class="bar-lbl">${esc(s)}</div>
         <div class="bar-track">
@@ -4428,7 +4464,7 @@
         allDocFiles = (await fr.json()).files || [];
         if (pr && pr.ok) {
           const pd = await pr.json();
-          if (pd.doc_tabs && pd.doc_tabs.length === 5) currentDocTabs = pd.doc_tabs;
+          if (pd.doc_tabs && pd.doc_tabs.length > 0) currentDocTabs = pd.doc_tabs;
           else currentDocTabs = [...DEFAULT_DOC_TABS];
         }
         renderDocTabs();
@@ -4490,38 +4526,86 @@
       }).join('');
     }
 
+    /* ── Add Folder toggle ── */
+    let addFolderOpen = false;
+    function toggleAddFolder() {
+      addFolderOpen = !addFolderOpen;
+      document.getElementById('addFolderForm').style.display = addFolderOpen ? '' : 'none';
+      if (addFolderOpen) { document.getElementById('newFolderName').value = ''; document.getElementById('newFolderName').focus(); }
+    }
+
+    async function addNewFolder() {
+      const name = (document.getElementById('newFolderName').value || '').trim();
+      if (!name) { toast('Enter a folder name', 'error'); return; }
+      if (currentDocTabs.some(t => t.toLowerCase() === name.toLowerCase())) { toast('Folder "' + name + '" already exists', 'error'); return; }
+      currentDocTabs.push(name);
+      await saveFoldersToServer();
+      toggleAddFolder();
+      renderDocTabs();
+      renderDocFiles();
+      toast('Folder "' + name + '" created!', 'success');
+    }
+
+    /* ── Manage Folders toggle ── */
     let renameTabsOpen = false;
     function toggleRenameDocTabs() {
       renameTabsOpen = !renameTabsOpen;
       const form = document.getElementById('renameDocTabsForm');
       form.style.display = renameTabsOpen ? '' : 'none';
-      if (renameTabsOpen) {
-        currentDocTabs.forEach((t, i) => {
-          const el = document.getElementById('docTabName' + i);
-          if (el) el.value = t;
-        });
-      }
+      if (renameTabsOpen) buildManageFoldersList();
     }
 
-    async function saveDocTabNames() {
-      const tabs = [0, 1, 2, 3, 4].map(i => {
-        const el = document.getElementById('docTabName' + i);
-        return (el && el.value.trim()) ? el.value.trim() : DEFAULT_DOC_TABS[i];
-      });
+    function buildManageFoldersList() {
+      const container = document.getElementById('manageFoldersList');
+      container.innerHTML = currentDocTabs.map((t, i) => {
+        const fileCount = allDocFiles.filter(f => f.category === t).length;
+        return `<div style="display:flex;gap:8px;align-items:center" data-folder-idx="${i}">
+          <input class="form-control" id="folderRename_${i}" value="${esc(t)}" style="flex:1;max-width:280px">
+          <span style="font-size:11px;color:var(--gray-400);min-width:60px">${fileCount} file${fileCount !== 1 ? 's' : ''}</span>
+          <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="removeFolderAt(${i})" title="Remove folder">✕ Remove</button>
+        </div>`;
+      }).join('');
+    }
+
+    function removeFolderAt(idx) {
+      const folderName = currentDocTabs[idx];
+      const fileCount = allDocFiles.filter(f => f.category === folderName).length;
+      if (fileCount > 0) {
+        if (!confirm('Folder "' + folderName + '" has ' + fileCount + ' file(s). Files will remain but be uncategorized. Continue?')) return;
+      }
+      currentDocTabs.splice(idx, 1);
+      buildManageFoldersList();
+    }
+
+    async function saveFolderNames() {
+      // Collect renamed values from inputs
+      const newTabs = [];
+      for (let i = 0; ; i++) {
+        const el = document.getElementById('folderRename_' + i);
+        if (!el) break;
+        const val = el.value.trim();
+        if (val) newTabs.push(val);
+      }
+      if (newTabs.length === 0) { toast('You must have at least one folder', 'error'); return; }
+      currentDocTabs = newTabs;
+      await saveFoldersToServer();
+      renameTabsOpen = false;
+      document.getElementById('renameDocTabsForm').style.display = 'none';
+      if (activeDocTab !== 'All' && !currentDocTabs.includes(activeDocTab)) activeDocTab = 'All';
+      renderDocTabs();
+      renderDocFiles();
+      toast('Folders updated!', 'success');
+    }
+
+    async function saveFoldersToServer() {
       try {
         const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
-        const method = activeClientId ? 'PUT' : 'PUT';
-        const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doc_tabs: tabs }) });
-        if (!r.ok) throw new Error('Failed to save tab names');
-        currentDocTabs = tabs;
-        activeDocTab = 'All';
-        renameTabsOpen = false;
-        document.getElementById('renameDocTabsForm').style.display = 'none';
-        renderDocTabs();
-        renderDocFiles();
-        toast('Tab names saved!', 'success');
+        const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ doc_tabs: currentDocTabs }) });
+        if (!r.ok) throw new Error('Failed to save folders');
       } catch (e) { toast(e.message, 'error'); }
     }
+
+    async function saveDocTabNames() { await saveFolderNames(); }
 
     async function loadCompletionTracker() {
       try {

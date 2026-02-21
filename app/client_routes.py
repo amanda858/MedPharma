@@ -727,8 +727,8 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".pdf"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf files allowed")
+    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf, .doc, .docx files allowed")
 
     file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
     unique_name = f"{uuid.uuid4().hex}{ext}"
