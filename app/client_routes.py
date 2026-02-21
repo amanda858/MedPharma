@@ -201,7 +201,10 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 
 @router.put("/profile/{cid}")
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    user = _require_user(hub_session)
+    # Allow admin to edit any profile, or client to edit their own
+    if user.get("role") != "admin" and user.get("id") != cid:
+        raise HTTPException(403, "You can only edit your own profile")
     data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
