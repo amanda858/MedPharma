@@ -275,6 +275,23 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_pp_client ON practice_profiles(client_id);
+
+        -- ── Team production daily logs ─────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS team_production (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id     INTEGER NOT NULL,
+            work_date     TEXT NOT NULL,
+            username      TEXT NOT NULL,
+            category      TEXT DEFAULT '',
+            task_description TEXT DEFAULT '',
+            quantity      INTEGER DEFAULT 0,
+            time_spent    REAL DEFAULT 0,
+            notes         TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tp_client ON team_production(client_id);
+        CREATE INDEX IF NOT EXISTS idx_tp_date   ON team_production(work_date);
     """)
     conn.commit()
 
@@ -1058,7 +1075,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
     net_coll_rate = round(total_paid / max(total_charge, 1) * 100, 1)
 
     # AR Aging buckets (by BillDate proxy for age)
-    aging = {"0_30": 0, "31_60": 0, "61_90": 0, "over_90": 0}
+    aging = {"current": 0, "days_31_60": 0, "days_61_90": 0, "days_90_plus": 0}
     ar_p = p + ["Paid", "Closed"]
     cur.execute(f"""SELECT BalanceRemaining,
                     CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) as age
@@ -1067,26 +1084,25 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
     for row in cur.fetchall():
         bal, age = row
         age = age or 0
-        if age <= 30:   aging["0_30"] += bal
-        elif age <= 60: aging["31_60"] += bal
-        elif age <= 90: aging["61_90"] += bal
-        else:           aging["over_90"] += bal
+        if age <= 30:   aging["current"] += bal
+        elif age <= 60: aging["days_31_60"] += bal
+        elif age <= 90: aging["days_61_90"] += bal
+        else:           aging["days_90_plus"] += bal
     aging = {k: round(v, 2) for k, v in aging.items()}
 
-    # Status distribution
-    cur.execute(f"SELECT ClaimStatus, COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} GROUP BY ClaimStatus", p)
-    status_dist = {r[0]: {"count": r[1], "charge": round(r[2], 2)} for r in cur.fetchall()}
+    # Status distribution (flat: status → count, for frontend bar chart)
+    cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {cond} GROUP BY ClaimStatus", p)
+    status_dist = {r[0]: r[1] for r in cur.fetchall()}
 
-    # Payor mix
-    cur.execute(f"""SELECT Payor, COUNT(*), COALESCE(SUM(ChargeAmount),0), COALESCE(SUM(PaidAmount),0)
-                    FROM claims_master {cond} GROUP BY Payor ORDER BY SUM(ChargeAmount) DESC LIMIT 8""", p)
-    payor_mix = [{"payor": r[0], "count": r[1], "charge": round(r[2], 2), "paid": round(r[3], 2)}
-                 for r in cur.fetchall()]
+    # Payor mix (flat: payor → count, for frontend bar chart)
+    cur.execute(f"""SELECT Payor, COUNT(*)
+                    FROM claims_master {cond} GROUP BY Payor ORDER BY COUNT(*) DESC LIMIT 8""", p)
+    payor_mix = {r[0]: r[1] for r in cur.fetchall()}
 
-    # Denial categories
+    # Denial categories (flat: category → count, for frontend bar chart)
     cur.execute(f"""SELECT DenialCategory, COUNT(*) FROM claims_master
                     {cond} {'AND' if cond else 'WHERE'} DenialCategory != '' GROUP BY DenialCategory ORDER BY COUNT(*) DESC""", p)
-    denial_cats = [{"category": r[0], "count": r[1]} for r in cur.fetchall()]
+    denial_cats = {r[0]: r[1] for r in cur.fetchall()}
 
     # Payment trend (last 6 months)
     cur.execute(f"""SELECT strftime('%Y-%m', PostDate) as mo, COALESCE(SUM(PaymentAmount),0)
@@ -1140,6 +1156,126 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
         "credentialing_stats": cred_stats,
         "enrollment_stats": enroll_stats,
         "profile": profile,
+    }
+
+
+# ─── Team Production ──────────────────────────────────────────────────────
+
+def list_production_logs(client_id: int = None, start_date: str = None, end_date: str = None, username: str = None):
+    conn = get_db()
+    cur = conn.cursor()
+    conditions, p = [], []
+    if client_id:
+        conditions.append("client_id=?")
+        p.append(client_id)
+    if start_date:
+        conditions.append("work_date>=?")
+        p.append(start_date)
+    if end_date:
+        conditions.append("work_date<=?")
+        p.append(end_date)
+    if username:
+        conditions.append("username=?")
+        p.append(username)
+    cond = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    cur.execute(f"SELECT * FROM team_production {cond} ORDER BY work_date DESC, created_at DESC", p)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_production_log(data: dict) -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO team_production (client_id, work_date, username, category, task_description, quantity, time_spent, notes)
+        VALUES (?,?,?,?,?,?,?,?)
+    """, (
+        data["client_id"], data["work_date"], data["username"],
+        data.get("category", ""), data.get("task_description", ""),
+        data.get("quantity", 0), data.get("time_spent", 0),
+        data.get("notes", "")
+    ))
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    return new_id
+
+
+def delete_production_log(log_id: int, client_id: int = None):
+    conn = get_db()
+    if client_id:
+        conn.execute("DELETE FROM team_production WHERE id=? AND client_id=?", (log_id, client_id))
+    else:
+        conn.execute("DELETE FROM team_production WHERE id=?", (log_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_production_report(client_id: int = None, start_date: str = None, end_date: str = None):
+    """Weekly production report — aggregated by user and category."""
+    conn = get_db()
+    cur = conn.cursor()
+    conditions, p = [], []
+    if client_id:
+        conditions.append("client_id=?")
+        p.append(client_id)
+    if start_date:
+        conditions.append("work_date>=?")
+        p.append(start_date)
+    if end_date:
+        conditions.append("work_date<=?")
+        p.append(end_date)
+    cond = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Summary by user
+    cur.execute(f"""
+        SELECT username,
+               COUNT(*) as total_entries,
+               SUM(quantity) as total_quantity,
+               ROUND(SUM(time_spent),1) as total_hours,
+               COUNT(DISTINCT work_date) as days_worked
+        FROM team_production {cond}
+        GROUP BY username ORDER BY username
+    """, p)
+    by_user = [dict(r) for r in cur.fetchall()]
+
+    # Summary by category
+    cur.execute(f"""
+        SELECT category,
+               COUNT(*) as total_entries,
+               SUM(quantity) as total_quantity,
+               ROUND(SUM(time_spent),1) as total_hours
+        FROM team_production {cond}
+        GROUP BY category ORDER BY total_hours DESC
+    """, p)
+    by_category = [dict(r) for r in cur.fetchall()]
+
+    # Daily breakdown
+    cur.execute(f"""
+        SELECT work_date, username, category, task_description, quantity, time_spent, notes
+        FROM team_production {cond}
+        ORDER BY work_date DESC, username, category
+    """, p)
+    details = [dict(r) for r in cur.fetchall()]
+
+    # Time management flags — users averaging < 6 hrs/day worked
+    flags = []
+    for u in by_user:
+        if u["days_worked"] > 0:
+            avg_hrs = round(u["total_hours"] / u["days_worked"], 1)
+            u["avg_hours_per_day"] = avg_hrs
+            if avg_hrs < 6:
+                flags.append({"username": u["username"], "avg_hours_per_day": avg_hrs,
+                              "days_worked": u["days_worked"],
+                              "recommendation": "Below 6hr/day average — review time management"})
+
+    conn.close()
+    return {
+        "by_user": by_user,
+        "by_category": by_category,
+        "details": details,
+        "time_management_flags": flags,
     }
 
 

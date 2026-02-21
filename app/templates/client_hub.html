@@ -206,8 +206,8 @@
     }
 
     .login-stat {
-      background: rgba(255,255,255,.06);
-      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255, 255, 255, .06);
+      border: 1px solid rgba(255, 255, 255, .08);
       border-radius: 12px;
       padding: 16px 20px;
       text-align: center;
@@ -223,7 +223,7 @@
 
     .login-stat-label {
       font-size: 11px;
-      color: rgba(255,255,255,.5);
+      color: rgba(255, 255, 255, .5);
       margin-top: 4px;
       text-transform: uppercase;
       letter-spacing: .5px;
@@ -1673,15 +1673,18 @@
           <div class="login-hero-features">
             <div class="login-hero-feature">
               <div class="feat-icon">📋</div>
-              <div class="feat-text"><strong>Claims & RCM</strong> — Reduce denials, optimize reimbursements, strengthen cash flow</div>
+              <div class="feat-text"><strong>Claims & RCM</strong> — Reduce denials, optimize reimbursements, strengthen
+                cash flow</div>
             </div>
             <div class="login-hero-feature">
               <div class="feat-icon">🎓</div>
-              <div class="feat-text"><strong>Credentialing & Enrollment</strong> — Streamlined payor onboarding & tracking</div>
+              <div class="feat-text"><strong>Credentialing & Enrollment</strong> — Streamlined payor onboarding &
+                tracking</div>
             </div>
             <div class="login-hero-feature">
               <div class="feat-icon">📊</div>
-              <div class="feat-text"><strong>Real-Time Analytics</strong> — AI-powered reports with actionable insights</div>
+              <div class="feat-text"><strong>Real-Time Analytics</strong> — AI-powered reports with actionable insights
+              </div>
             </div>
           </div>
 
@@ -1760,6 +1763,10 @@
     <div class="account-body">
       <h2>Select an Account</h2>
       <p>Choose a client account to open the dashboard</p>
+      <div style="margin-bottom:16px;text-align:right">
+        <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
+          style="font-size:13px;padding:8px 18px">+ New Client</button>
+      </div>
       <div class="account-grid" id="accountGrid"></div>
     </div>
   </div>
@@ -1821,6 +1828,10 @@
         <div class="nav-section">Documents</div>
         <div class="nav-item" data-panel="files" onclick="navTo('files')">
           <span class="ni">📂</span> Documents
+        </div>
+        <div class="nav-section">Team</div>
+        <div class="nav-item" data-panel="production" onclick="navTo('production')">
+          <span class="ni">⏱️</span> Team Production
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -2488,6 +2499,122 @@
           </div>
         </div>
 
+        <!-- ═══ TEAM PRODUCTION ═══ -->
+        <div class="hub-panel" id="panel-production">
+          <div class="page-header">
+            <div class="page-title">⏱️ Team Production</div>
+            <div class="page-actions" style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
+                Weekly Report</button>
+              <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
+                Log</button>
+            </div>
+          </div>
+
+          <!-- Daily Log Entry View -->
+          <div id="prodLogView">
+            <div class="card" style="margin-bottom:18px">
+              <div class="card-header">
+                <div class="card-title">📝 Log Today's Work</div>
+              </div>
+              <div style="margin-top:12px">
+                <div class="form-grid">
+                  <div class="form-group">
+                    <label>Date</label>
+                    <input class="form-control" type="date" id="prodDate">
+                  </div>
+                  <div class="form-group">
+                    <label>Category</label>
+                    <select class="form-control" id="prodCategory">
+                      <option value="Claims Processing">Claims Processing</option>
+                      <option value="Credentialing">Credentialing</option>
+                      <option value="Enrollment">Enrollment</option>
+                      <option value="EDI Setup">EDI Setup</option>
+                      <option value="Denial Management">Denial Management</option>
+                      <option value="A/R Follow-up">A/R Follow-up</option>
+                      <option value="Appeals">Appeals</option>
+                      <option value="Patient Calls">Patient Calls</option>
+                      <option value="Payor Calls">Payor Calls</option>
+                      <option value="Data Entry">Data Entry</option>
+                      <option value="Reporting">Reporting</option>
+                      <option value="Admin/Meeting">Admin/Meeting</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="grid-column:span 2">
+                    <label>Task Description</label>
+                    <input class="form-control" id="prodTask" placeholder="Describe the work completed…">
+                  </div>
+                  <div class="form-group">
+                    <label>Quantity (items processed)</label>
+                    <input class="form-control" type="number" id="prodQty" value="0" min="0">
+                  </div>
+                  <div class="form-group">
+                    <label>Time Spent (hours)</label>
+                    <input class="form-control" type="number" id="prodHours" value="0" min="0" step="0.25">
+                  </div>
+                  <div class="form-group" style="grid-column:span 2">
+                    <label>Notes</label>
+                    <input class="form-control" id="prodNotes" placeholder="Optional notes…">
+                  </div>
+                </div>
+                <div style="margin-top:12px;text-align:right">
+                  <button class="btn btn-primary btn-sm" onclick="saveProductionLog()">➕ Add Entry</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Filter by date -->
+            <div class="card" style="margin-bottom:18px">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <label style="font-weight:600;font-size:13px">Filter date:</label>
+                <input class="form-control" type="date" id="prodFilterDate" style="width:180px"
+                  onchange="loadProduction()">
+                <button class="btn btn-secondary btn-sm"
+                  onclick="document.getElementById('prodFilterDate').value='';loadProduction()">Show All</button>
+              </div>
+            </div>
+
+            <div class="card" style="padding:0">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>User</th>
+                      <th>Category</th>
+                      <th>Task</th>
+                      <th>Qty</th>
+                      <th>Hours</th>
+                      <th>Notes</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="prodTbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Weekly Report View -->
+          <div id="prodReportView" style="display:none">
+            <div class="card" style="margin-bottom:18px">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <label style="font-weight:600;font-size:13px">Report period:</label>
+                <input class="form-control" type="date" id="prodRptStart" style="width:170px">
+                <span style="font-size:13px;color:var(--gray-400)">to</span>
+                <input class="form-control" type="date" id="prodRptEnd" style="width:170px">
+                <button class="btn btn-primary btn-sm" onclick="loadProductionReport()">Generate Report</button>
+              </div>
+            </div>
+
+            <div id="prodReportContent">
+              <p style="color:var(--gray-400);font-size:14px;padding:20px;text-align:center">Select a date range and
+                click Generate Report</p>
+            </div>
+          </div>
+        </div>
+
       </div><!-- main-content -->
     </div><!-- app-body -->
   </div><!-- appShell -->
@@ -3082,6 +3209,7 @@
       if (panel === 'files') loadDocuments();
       if (panel === 'profile') loadProfile();
       if (panel === 'reporting') loadReport();
+      if (panel === 'production') loadProduction();
     }
 
     function toggleMobileSidebar() {
@@ -3184,8 +3312,8 @@
 
       // Data Summary Card (shows record counts per section)
       const summaryCard = document.getElementById('dashSummaryCard');
-      const cs = d.cred_stats || {};
-      const es = d.enroll_stats || {};
+      const cs = d.credentialing_stats || {};
+      const es = d.enrollment_stats || {};
       const claimCount = d.active_claims || 0;
       const credCount = Object.values(cs).reduce((a, b) => a + (b || 0), 0);
       const enrCount = Object.values(es).reduce((a, b) => a + (b || 0), 0);
@@ -5219,6 +5347,247 @@
       fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
         .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
         .catch(e => toast(e.message, 'error'));
+    }
+
+    const name = prompt('Enter sub-profile name (e.g. MHP, OMT, Ancillary):');
+    if (!name || !name.trim()) return;
+    const cid = activeClientId;
+    const url = cid ? `/hub/api/practice-profiles/${cid}/${name.trim()}` : `/hub/api/practice-profiles/${name.trim()}`;
+    fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
+      .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
+      .catch(e => toast(e.message, 'error'));
+    }
+
+    // ═══════════════════════════════════════
+    // TEAM PRODUCTION
+    // ═══════════════════════════════════════
+    let prodViewMode = 'log'; // 'log' or 'report'
+
+    function toggleProductionView(mode) {
+      prodViewMode = mode;
+      document.getElementById('prodLogView').style.display = mode === 'log' ? '' : 'none';
+      document.getElementById('prodReportView').style.display = mode === 'report' ? '' : 'none';
+      document.getElementById('btnProdLog').className = mode === 'log' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      document.getElementById('btnProdReport').className = mode === 'report' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      if (mode === 'log') loadProduction();
+    }
+
+    async function loadProduction() {
+      if (!activeClientId) return;
+      // Set today's date as default
+      const dateEl = document.getElementById('prodDate');
+      if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
+
+      // Set default report dates (last 7 days)
+      const rptStart = document.getElementById('prodRptStart');
+      const rptEnd = document.getElementById('prodRptEnd');
+      if (rptStart && !rptStart.value) {
+        const d = new Date(); d.setDate(d.getDate() - 7);
+        rptStart.value = d.toISOString().split('T')[0];
+      }
+      if (rptEnd && !rptEnd.value) rptEnd.value = new Date().toISOString().split('T')[0];
+
+      const filterDate = document.getElementById('prodFilterDate')?.value || '';
+      let url = `/hub/api/production?client_id=${activeClientId}`;
+      if (filterDate) url += `&start_date=${filterDate}&end_date=${filterDate}`;
+
+      try {
+        const r = await fetch(url);
+        const d = await r.json();
+        const logs = d.logs || [];
+        const tbody = document.getElementById('prodTbody');
+        if (!logs.length) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">No production entries yet. Log your first task above!</td></tr>';
+          return;
+        }
+        tbody.innerHTML = logs.map(l => `<tr>
+          <td style="font-weight:600;white-space:nowrap">${esc(l.work_date)}</td>
+          <td><span class="badge badge-blue">${esc(l.username)}</span></td>
+          <td><span class="badge badge-purple">${esc(l.category)}</span></td>
+          <td>${esc(l.task_description)}</td>
+          <td style="text-align:center;font-weight:600">${l.quantity}</td>
+          <td style="text-align:center;font-weight:600">${l.time_spent}h</td>
+          <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
+          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
+        </tr>`).join('');
+      } catch (e) { console.error(e); }
+    }
+
+    async function saveProductionLog() {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      const data = {
+        client_id: activeClientId,
+        work_date: document.getElementById('prodDate').value,
+        category: document.getElementById('prodCategory').value,
+        task_description: document.getElementById('prodTask').value,
+        quantity: parseInt(document.getElementById('prodQty').value) || 0,
+        time_spent: parseFloat(document.getElementById('prodHours').value) || 0,
+        notes: document.getElementById('prodNotes').value,
+      };
+      if (!data.work_date) { toast('Please select a date', 'error'); return; }
+      if (!data.task_description) { toast('Please describe the task', 'error'); return; }
+      if (data.time_spent <= 0) { toast('Please enter time spent', 'error'); return; }
+      try {
+        const r = await fetch('/hub/api/production', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Production entry logged!', 'success');
+        document.getElementById('prodTask').value = '';
+        document.getElementById('prodQty').value = '0';
+        document.getElementById('prodHours').value = '0';
+        document.getElementById('prodNotes').value = '';
+        loadProduction();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteProductionLog(id) {
+      if (!confirm('Delete this production entry?')) return;
+      try {
+        const r = await fetch(`/hub/api/production/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Failed');
+        toast('Entry deleted', 'success');
+        loadProduction();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function loadProductionReport() {
+      const start = document.getElementById('prodRptStart').value;
+      const end = document.getElementById('prodRptEnd').value;
+      if (!start || !end) { toast('Please select start and end dates', 'error'); return; }
+
+      let url = `/hub/api/production/report?start_date=${start}&end_date=${end}`;
+      if (activeClientId) url += `&client_id=${activeClientId}`;
+
+      try {
+        const r = await fetch(url);
+        const d = await r.json();
+        renderProductionReport(d, start, end);
+      } catch (e) { toast('Failed to load report', 'error'); console.error(e); }
+    }
+
+    function renderProductionReport(data, start, end) {
+      const el = document.getElementById('prodReportContent');
+      const byUser = data.by_user || [];
+      const byCat = data.by_category || [];
+      const details = data.details || [];
+      const flags = data.time_management_flags || [];
+
+      let html = '';
+
+      // Time management flags
+      if (flags.length) {
+        html += `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--danger)">
+          <div class="card-header"><div class="card-title" style="color:var(--danger)">⚠️ Time Management Alerts</div></div>
+          <div style="margin-top:8px">
+            ${flags.map(f => `<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center">
+              <div><strong>${esc(f.username)}</strong> — averaging <strong>${f.avg_hours_per_day}h/day</strong> over ${f.days_worked} day(s)</div>
+              <span class="badge badge-red">${f.recommendation}</span>
+            </div>`).join('')}
+          </div>
+        </div>`;
+      }
+
+      // Summary by user
+      html += `<div class="card" style="margin-bottom:18px">
+        <div class="card-header"><div class="card-title">👥 Team Summary (${esc(start)} to ${esc(end)})</div></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Avg Hrs/Day</th></tr></thead>
+          <tbody>${byUser.map(u => `<tr>
+            <td style="font-weight:600">${esc(u.username)}</td>
+            <td style="text-align:center">${u.days_worked}</td>
+            <td style="text-align:center">${u.total_entries}</td>
+            <td style="text-align:center;font-weight:600">${u.total_quantity || 0}</td>
+            <td style="text-align:center;font-weight:600">${u.total_hours || 0}h</td>
+            <td style="text-align:center"><span class="badge ${(u.avg_hours_per_day || 0) < 6 ? 'badge-red' : 'badge-green'}">${u.avg_hours_per_day || 0}h</span></td>
+          </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+
+      // Summary by category
+      html += `<div class="card" style="margin-bottom:18px">
+        <div class="card-header"><div class="card-title">📊 Work by Category</div></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Category</th><th>Entries</th><th>Items</th><th>Hours</th></tr></thead>
+          <tbody>${byCat.map(c => `<tr>
+            <td><span class="badge badge-purple">${esc(c.category || 'Uncategorized')}</span></td>
+            <td style="text-align:center">${c.total_entries}</td>
+            <td style="text-align:center">${c.total_quantity || 0}</td>
+            <td style="text-align:center;font-weight:600">${c.total_hours || 0}h</td>
+          </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+
+      // Detailed daily log
+      html += `<div class="card">
+        <div class="card-header"><div class="card-title">📋 Detailed Daily Log</div></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Date</th><th>User</th><th>Category</th><th>Task</th><th>Qty</th><th>Hours</th><th>Notes</th></tr></thead>
+          <tbody>${details.map(d => `<tr>
+            <td style="white-space:nowrap;font-weight:600">${esc(d.work_date)}</td>
+            <td><span class="badge badge-blue">${esc(d.username)}</span></td>
+            <td><span class="badge badge-purple">${esc(d.category)}</span></td>
+            <td>${esc(d.task_description)}</td>
+            <td style="text-align:center">${d.quantity}</td>
+            <td style="text-align:center">${d.time_spent}h</td>
+            <td style="font-size:12px;color:var(--gray-500)">${esc(d.notes || '')}</td>
+          </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--gray-400)">No entries in this period</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+
+      el.innerHTML = html;
+    }
+
+    // ═══════════════════════════════════════
+    // NEW CLIENT FROM ACCOUNT SELECTOR
+    // ═══════════════════════════════════════
+    function showNewClientFromSelector() {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:#fff;border-radius:16px;padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3)';
+      box.innerHTML = `
+        <div style="font-size:18px;font-weight:700;color:var(--gray-800);margin-bottom:16px">🏢 Create New Client</div>
+        <div class="form-grid">
+          <div class="form-group"><label>Username *</label><input class="form-control" id="ncUsername" placeholder="login username"></div>
+          <div class="form-group"><label>Password *</label><input class="form-control" type="password" id="ncPassword" placeholder="password"></div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>Company Name *</label><input class="form-control" id="ncCompany" placeholder="e.g. ABC Medical"></div>
+          <div class="form-group"><label>Contact Name</label><input class="form-control" id="ncContact" placeholder="Full name"></div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>Email</label><input class="form-control" type="email" id="ncEmail" placeholder="email@example.com"></div>
+          <div class="form-group"><label>Phone</label><input class="form-control" id="ncPhone" placeholder="(555) 000-0000"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" id="ncSubmitBtn" style="flex:1">Create Client</button>
+          <button class="btn btn-secondary" id="ncCancelBtn" style="flex:1">Cancel</button>
+        </div>`;
+      overlay.appendChild(box);
+      overlay.addEventListener('click', e => { if (e.target === overlay) { document.body.removeChild(overlay); } });
+      box.querySelector('#ncCancelBtn').addEventListener('click', () => document.body.removeChild(overlay));
+      box.querySelector('#ncSubmitBtn').addEventListener('click', async () => {
+        const data = {
+          username: document.getElementById('ncUsername').value.trim(),
+          password: document.getElementById('ncPassword').value,
+          company: document.getElementById('ncCompany').value.trim(),
+          contact_name: document.getElementById('ncContact').value.trim(),
+          email: document.getElementById('ncEmail').value.trim(),
+          phone: document.getElementById('ncPhone').value.trim(),
+        };
+        if (!data.username || !data.password || !data.company) { toast('Username, password, and company are required', 'error'); return; }
+        try {
+          const r = await fetch('/hub/api/clients', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+          if (!r.ok) throw new Error((await r.json()).detail || 'Failed to create');
+          document.body.removeChild(overlay);
+          toast('Client created!', 'success');
+          showAccountSelector();  // Refresh the account list
+        } catch (e) { toast(e.message, 'error'); }
+      });
+      document.body.appendChild(overlay);
     }
 
     async function saveProfile() {

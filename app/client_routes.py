@@ -23,6 +23,7 @@ from app.client_db import (
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, delete_file_record,
+    list_production_logs, add_production_log, delete_production_log, get_production_report,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -161,7 +162,7 @@ def get_clients(hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/clients")
 def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     cid = create_client(body.model_dump())
     return {"id": cid, "ok": True}
 
@@ -379,7 +380,7 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
-    return get_claims(scope, status, sub_profile=sub_profile)
+    return {"claims": get_claims(scope, status, sub_profile=sub_profile)}
 
 
 @router.get("/claims/statuses")
@@ -706,6 +707,60 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
 UPLOAD_DIR = os.path.join("data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+# ─── Team Production ──────────────────────────────────────────────────────────
+
+class ProductionLogIn(BaseModel):
+    client_id: Optional[int] = None
+    work_date: str
+    category: str = ""
+    task_description: str = ""
+    quantity: int = 0
+    time_spent: float = 0
+    notes: str = ""
+
+
+@router.get("/production")
+def get_production(client_id: Optional[int] = None,
+                   start_date: Optional[str] = None,
+                   end_date: Optional[str] = None,
+                   hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    logs = list_production_logs(scope, start_date, end_date, username=None)
+    return {"logs": logs}
+
+
+@router.post("/production")
+def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = body.client_id or _client_scope(user) or user["id"]
+    data = body.model_dump()
+    data["client_id"] = scope
+    data["username"] = user["username"]
+    log_id = add_production_log(data)
+    return {"id": log_id, "ok": True}
+
+
+@router.delete("/production/{log_id}")
+def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    delete_production_log(log_id)
+    return {"ok": True}
+
+
+@router.get("/production/report")
+def production_report(client_id: Optional[int] = None,
+                      start_date: Optional[str] = None,
+                      end_date: Optional[str] = None,
+                      hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    report = get_production_report(scope, start_date, end_date)
+    return report
+
+
+# ─── Files ────────────────────────────────────────────────────────────────────
 
 @router.get("/files")
 def get_files(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
@@ -1197,10 +1252,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     counter = 1
 
     for row in rows:
-        # Normalize keys
+        # Normalize keys (strip, lowercase, replace underscores with spaces)
         mapped = {}
         for raw_key, val in row.items():
-            norm = (raw_key or "").strip().lower()
+            norm = (raw_key or "").strip().lower().replace("_", " ")
             db_col = COLUMN_MAP.get(norm)
             if db_col:
                 mapped[db_col] = val
