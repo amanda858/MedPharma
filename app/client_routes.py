@@ -793,30 +793,8 @@ async def upload_file(
 
 # ─── Client Report ────────────────────────────────────────────────────────────
 
-@router.get("/report/{client_id}")
-def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
-               hub_session: Optional[str] = Cookie(None)):
-    """Generate a comprehensive cross-section report for CSV / print."""
-    _require_user(hub_session)
-    from app.client_db import get_db
-    from datetime import date, datetime
-
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-
-    # Period filter
-    where_date = ""
-    if period == "mtd":
-        where_date = f" AND date(DOS) >= '{date.today().replace(day=1).isoformat()}'"
-    elif period == "ytd":
-        where_date = f" AND date(DOS) >= '{date.today().replace(month=1,day=1).isoformat()}'"
-
-    sp_filter = f" AND sub_profile='{sub_profile}'" if sub_profile else ""
-
-    # Client info
-    client_row = conn.execute("SELECT company,contact_name,email,phone FROM clients WHERE id=?", (client_id,)).fetchone()
-    client_info = dict(client_row) if client_row else {}
-
+def _build_section_data(conn, client_id, sp_filter, where_date):
+    """Build claims/cred/enroll/edi/payments data for one filter set."""
     # Claims
     base = f"SELECT * FROM claims_master WHERE client_id=?{sp_filter}{where_date}"
     claims = [dict(r) for r in conn.execute(base, (client_id,)).fetchall()]
@@ -879,12 +857,7 @@ def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] =
     pay_rows = conn.execute("SELECT COALESCE(SUM(PaidAmount),0) as total, COUNT(*) as cnt FROM payments WHERE client_id=?", (client_id,)).fetchone()
     payments = {"total": float(pay_rows["total"]) if pay_rows else 0, "count": int(pay_rows["cnt"]) if pay_rows else 0}
 
-    conn.close()
-
     return {
-        "generated_at": date.today().isoformat(),
-        "period": period,
-        "client": client_info,
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
                     "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
@@ -892,6 +865,56 @@ def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] =
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
         "payments": payments,
     }
+
+
+@router.get("/report/{client_id}")
+def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
+               hub_session: Optional[str] = Cookie(None)):
+    """Generate a comprehensive cross-section report for CSV / print, with sub-profile breakdowns."""
+    _require_user(hub_session)
+    from app.client_db import get_db
+    from datetime import date, datetime
+
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+
+    # Period filter
+    where_date = ""
+    if period == "mtd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(day=1).isoformat()}'"
+    elif period == "ytd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(month=1,day=1).isoformat()}'"
+
+    sp_filter = f" AND sub_profile='{sub_profile}'" if sub_profile else ""
+
+    # Client info (including practice_type)
+    client_row = conn.execute("SELECT company,contact_name,email,phone,practice_type FROM clients WHERE id=?", (client_id,)).fetchone()
+    client_info = dict(client_row) if client_row else {}
+    practice_type = client_info.get("practice_type", "") or ""
+
+    # Build overall data
+    overall = _build_section_data(conn, client_id, sp_filter, where_date)
+
+    # Build per-sub-profile breakdowns if MHP+OMT
+    sub_profiles = {}
+    if practice_type == "MHP+OMT" and not sub_profile:
+        for sp_name in ["OMT", "MHP"]:
+            sp_f = f" AND sub_profile='{sp_name}'"
+            sub_profiles[sp_name] = _build_section_data(conn, client_id, sp_f, where_date)
+
+    conn.close()
+
+    result = {
+        "generated_at": date.today().isoformat(),
+        "period": period,
+        "client": client_info,
+        "practice_type": practice_type,
+        **overall,
+    }
+    if sub_profiles:
+        result["sub_profiles"] = sub_profiles
+
+    return result
 
 
 # ─── Direct Excel Import (per-section) ───────────────────────────────────────

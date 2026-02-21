@@ -1909,6 +1909,18 @@
               <button class="btn btn-primary btn-sm" onclick="printReport()">🖨️ Print Report</button>
             </div>
           </div>
+
+          <!-- AI Narrative Summary -->
+          <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
+            <div class="card-header">
+              <div class="card-title">🤖 AI Account Summary</div>
+            </div>
+            <div id="reportAINarrative" style="padding:16px;line-height:1.7;font-size:13.5px;color:var(--gray-700)">
+              <p style="color:var(--gray-400);font-size:13px">Loading AI summary…</p>
+            </div>
+          </div>
+
+          <!-- Overall KPI Cards -->
           <div class="card" style="margin-bottom:16px">
             <div class="card-header">
               <div class="card-title">Summary Overview</div>
@@ -1917,6 +1929,60 @@
               <p style="color:var(--gray-400);font-size:13px">Loading report…</p>
             </div>
           </div>
+
+          <!-- Charts Section -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">📊 Claims by Status</div>
+              </div>
+              <div id="chartClaimsStatus" style="padding:16px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">📊 Financials Overview</div>
+              </div>
+              <div id="chartFinancials" style="padding:16px"></div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">📊 Credentialing Status</div>
+              </div>
+              <div id="chartCredStatus" style="padding:16px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">📊 Enrollment Status</div>
+              </div>
+              <div id="chartEnrollStatus" style="padding:16px"></div>
+            </div>
+          </div>
+
+          <!-- Sub-Profile Breakdowns (OMT / MHP) -->
+          <div id="reportSubProfiles" style="display:none;margin-bottom:16px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div class="card" style="border-top:4px solid #6366f1">
+                <div class="card-header">
+                  <div class="card-title">OMT — Osteopathic Manipulative Treatment</div>
+                </div>
+                <div id="reportOMT" style="padding:12px">
+                  <p style="color:var(--gray-400);font-size:13px">No OMT data</p>
+                </div>
+              </div>
+              <div class="card" style="border-top:4px solid #0ea5e9">
+                <div class="card-header">
+                  <div class="card-title">MHP — Michigan Health Partners</div>
+                </div>
+                <div id="reportMHP" style="padding:12px">
+                  <p style="color:var(--gray-400);font-size:13px">No MHP data</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Detail tables -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
             <div class="card">
               <div class="card-header">
@@ -3726,9 +3792,12 @@
     // ═══════════════════════════════════════
     let lastReportData = null;
 
+    const SP_LABELS = { OMT: 'OMT (Osteopathic Manipulative Treatment)', MHP: 'MHP (Michigan Health Partners)' };
+    const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#64748b'];
+
     async function loadReport() {
       if (!activeClientId) {
-        document.getElementById('reportSummary').innerHTML = '<p style="color:var(--gray-400);font-size:13px">Select a client account first.</p>';
+        document.getElementById('reportAINarrative').innerHTML = '<p style="color:var(--gray-400);font-size:13px">Select a client account first.</p>';
         return;
       }
       const period = document.getElementById('reportPeriod')?.value || 'all';
@@ -3741,19 +3810,271 @@
       } catch (e) { console.error(e); }
     }
 
+    /* ── CSS bar chart builder ── */
+    function renderBarChart(containerId, items, valueKey, labelKey, colorArr) {
+      const el = document.getElementById(containerId);
+      if (!items || !items.length) { el.innerHTML = '<p style="color:var(--gray-400);font-size:12px;text-align:center">No data available</p>'; return; }
+      const maxVal = Math.max(...items.map(i => i[valueKey] || 0), 1);
+      el.innerHTML = items.map((item, idx) => {
+        const pct = Math.round(((item[valueKey] || 0) / maxVal) * 100);
+        const color = (colorArr || CHART_COLORS)[idx % (colorArr || CHART_COLORS).length];
+        return `<div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:3px;color:var(--gray-700)">
+            <span>${esc(item[labelKey] || 'Unknown')}</span>
+            <span>${typeof item[valueKey] === 'number' && valueKey.toLowerCase().includes('amount') ? '$' + fmt(item[valueKey]) : item[valueKey]}</span>
+          </div>
+          <div style="background:var(--gray-100);border-radius:6px;height:22px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${color};border-radius:6px;transition:width .5s ease"></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    /* ── Donut / ring chart with SVG ── */
+    function renderDonutChart(containerId, items, valueKey, labelKey) {
+      const el = document.getElementById(containerId);
+      if (!items || !items.length) { el.innerHTML = '<p style="color:var(--gray-400);font-size:12px;text-align:center">No data available</p>'; return; }
+      const total = items.reduce((s, i) => s + (i[valueKey] || 0), 0);
+      if (!total) { el.innerHTML = '<p style="color:var(--gray-400);font-size:12px;text-align:center">No data</p>'; return; }
+      const R = 60, cx = 80, cy = 80, sw = 18;
+      let acc = 0;
+      const paths = items.map((item, idx) => {
+        const val = item[valueKey] || 0;
+        const frac = val / total;
+        const startAngle = acc * 2 * Math.PI - Math.PI / 2;
+        acc += frac;
+        const endAngle = acc * 2 * Math.PI - Math.PI / 2;
+        const large = frac > 0.5 ? 1 : 0;
+        const x1 = cx + R * Math.cos(startAngle), y1 = cy + R * Math.sin(startAngle);
+        const x2 = cx + R * Math.cos(endAngle), y2 = cy + R * Math.sin(endAngle);
+        const color = CHART_COLORS[idx % CHART_COLORS.length];
+        if (frac >= 0.999) return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${color}" stroke-width="${sw}"/>`;
+        return `<path d="M${x1},${y1} A${R},${R} 0 ${large} 1 ${x2},${y2}" fill="none" stroke="${color}" stroke-width="${sw}"/>`;
+      });
+      const legend = items.map((item, idx) => {
+        const pct = Math.round(((item[valueKey] || 0) / total) * 100);
+        return `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:4px">
+          <div style="width:10px;height:10px;border-radius:50%;background:${CHART_COLORS[idx % CHART_COLORS.length]};flex-shrink:0"></div>
+          <span style="color:var(--gray-700)">${esc(item[labelKey] || 'Unknown')} — ${item[valueKey]} (${pct}%)</span>
+        </div>`;
+      }).join('');
+      el.innerHTML = `<div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <svg width="160" height="160" viewBox="0 0 160 160">
+          ${paths.join('')}
+          <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" style="font-size:18px;font-weight:700;fill:var(--gray-700)">${total}</text>
+        </svg>
+        <div>${legend}</div>
+      </div>`;
+    }
+
+    /* ── AI Narrative Summary Generator ── */
+    function generateAINarrative(d) {
+      const company = d.client?.company || 'Client';
+      const period = { all: 'All Time', mtd: 'Month to Date', ytd: 'Year to Date' }[d.period] || d.period;
+      const cl = d.claims || {};
+      const pay = d.payments || {};
+      const cred = d.credentialing || {};
+      const enr = d.enrollment || {};
+      const edi = d.edi || {};
+      const subs = d.sub_profiles || {};
+
+      let narrative = [];
+
+      // Header
+      narrative.push(`<strong style="font-size:15px;color:var(--gray-800)">📋 Account Intelligence Report — ${esc(company)}</strong>`);
+      narrative.push(`<span style="font-size:12px;color:var(--gray-400)">Period: ${period} | Generated: ${d.generated_at}</span>`);
+      narrative.push('');
+
+      // Overall Summary
+      narrative.push(`<strong>Overall Account Summary:</strong>`);
+      if (cl.total) {
+        const collectionRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+        narrative.push(`The account currently has <strong>${cl.total} claims</strong> with <strong>$${fmt(cl.total_charged)}</strong> in total charges. Collections of <strong>$${fmt(cl.total_paid)}</strong> represent a <strong>${collectionRate}% collection rate</strong>. Outstanding accounts receivable sits at <strong>$${fmt(cl.total_balance)}</strong>.`);
+
+        // Status breakdown insights
+        const byStatus = cl.by_status || [];
+        const denied = byStatus.find(s => (s.status || '').toLowerCase().includes('denied') || (s.status || '').toLowerCase().includes('denial'));
+        const pending = byStatus.find(s => (s.status || '').toLowerCase().includes('pending') || (s.status || '').toLowerCase().includes('submitted'));
+        const paid = byStatus.find(s => (s.status || '').toLowerCase().includes('paid') || (s.status || '').toLowerCase().includes('approved'));
+        if (denied && denied.count > 0) {
+          const denialRate = Math.round((denied.count / cl.total) * 100);
+          narrative.push(`⚠️ <strong>${denied.count} claims (${denialRate}%)</strong> are in denial status totaling <strong>$${fmt(denied.charged)}</strong> in charges — this requires attention for appeals and follow-up.`);
+        }
+        if (pending && pending.count > 0) {
+          narrative.push(`🔄 <strong>${pending.count} claims</strong> are currently pending/submitted, representing <strong>$${fmt(pending.charged)}</strong> in outstanding charges.`);
+        }
+        // Top denials
+        if (cl.top_denials && cl.top_denials.length > 0) {
+          const topDen = cl.top_denials[0];
+          narrative.push(`📌 Top denial category: <strong>${esc(topDen.category)}</strong> with ${topDen.count} occurrence(s).`);
+        }
+      } else {
+        narrative.push('No claims data is currently on file for this account.');
+      }
+      narrative.push('');
+
+      // Credentialing
+      const credTotal = (cred.detail || []).length;
+      if (credTotal) {
+        const credApproved = (cred.summary || []).filter(s => (s.status || '').toLowerCase().includes('approved') || (s.status || '').toLowerCase().includes('active'));
+        const credPending = (cred.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending') || (s.status || '').toLowerCase().includes('in progress'));
+        const approvedCount = credApproved.reduce((s, i) => s + i.count, 0);
+        const pendingCount = credPending.reduce((s, i) => s + i.count, 0);
+        narrative.push(`<strong>Credentialing:</strong> ${credTotal} total credentialing records tracked. <strong>${approvedCount}</strong> approved/active, <strong>${pendingCount}</strong> pending.${pendingCount > 0 ? ' Follow-up recommended on pending applications.' : ''}`);
+      }
+
+      // Enrollment
+      const enrTotal = (enr.detail || []).length;
+      if (enrTotal) {
+        const enrActive = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('active') || (s.status || '').toLowerCase().includes('enrolled'));
+        const enrPending = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending') || (s.status || '').toLowerCase().includes('submitted'));
+        const activeCount = enrActive.reduce((s, i) => s + i.count, 0);
+        const pendCount = enrPending.reduce((s, i) => s + i.count, 0);
+        narrative.push(`<strong>Enrollment:</strong> ${enrTotal} payor enrollment records. <strong>${activeCount}</strong> active, <strong>${pendCount}</strong> pending.`);
+      }
+
+      // EDI
+      const ediTotal = (edi.detail || []).length;
+      if (ediTotal) {
+        const ediActive = (edi.summary || []).filter(s => (s.status || '').toLowerCase().includes('active') || (s.status || '').toLowerCase().includes('live'));
+        const activeEdi = ediActive.reduce((s, i) => s + i.count, 0);
+        narrative.push(`<strong>EDI Setup:</strong> ${ediTotal} EDI connections configured. <strong>${activeEdi}</strong> live/active.`);
+      }
+
+      // Payments
+      if (pay.count > 0) {
+        narrative.push(`<strong>Payments:</strong> ${pay.count} payment(s) received totaling <strong>$${fmt(pay.total)}</strong>.`);
+      }
+      narrative.push('');
+
+      // Sub-profile breakdowns
+      if (Object.keys(subs).length > 0) {
+        narrative.push(`<strong style="font-size:14px">Sub-Profile Breakdown:</strong>`);
+        for (const [spName, spData] of Object.entries(subs)) {
+          const label = SP_LABELS[spName] || spName;
+          const sc = spData.claims || {};
+          const scRate = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
+          narrative.push('');
+          narrative.push(`<strong style="color:${spName === 'OMT' ? '#6366f1' : '#0ea5e9'}">${label}:</strong>`);
+          if (sc.total) {
+            narrative.push(`• <strong>${sc.total} claims</strong> — Charged: <strong>$${fmt(sc.total_charged)}</strong>, Paid: <strong>$${fmt(sc.total_paid)}</strong> (${scRate}% collection rate), AR: <strong>$${fmt(sc.total_balance)}</strong>`);
+          } else {
+            narrative.push(`• No claims data recorded.`);
+          }
+          const spCredTotal = (spData.credentialing?.detail || []).length;
+          const spEnrTotal = (spData.enrollment?.detail || []).length;
+          const spEdiTotal = (spData.edi?.detail || []).length;
+          if (spCredTotal) narrative.push(`• ${spCredTotal} credentialing record(s)`);
+          if (spEnrTotal) narrative.push(`• ${spEnrTotal} enrollment record(s)`);
+          if (spEdiTotal) narrative.push(`• ${spEdiTotal} EDI setup record(s)`);
+        }
+        narrative.push('');
+
+        // Comparison insight
+        const omtCl = subs.OMT?.claims || {};
+        const mhpCl = subs.MHP?.claims || {};
+        if (omtCl.total && mhpCl.total) {
+          const biggerLabel = omtCl.total >= mhpCl.total ? 'OMT' : 'MHP (Michigan Health Partners)';
+          const biggerCount = Math.max(omtCl.total, mhpCl.total);
+          const smallerCount = Math.min(omtCl.total, mhpCl.total);
+          narrative.push(`💡 <strong>Insight:</strong> ${biggerLabel} represents the larger volume with ${biggerCount} claims vs ${smallerCount}. `);
+          const omtRate = omtCl.total_charged > 0 ? Math.round((omtCl.total_paid / omtCl.total_charged) * 100) : 0;
+          const mhpRate = mhpCl.total_charged > 0 ? Math.round((mhpCl.total_paid / mhpCl.total_charged) * 100) : 0;
+          if (omtRate !== mhpRate) {
+            const betterLabel = omtRate >= mhpRate ? 'OMT' : 'MHP';
+            narrative.push(`Collection rate comparison: OMT ${omtRate}% vs MHP ${mhpRate}% — ${betterLabel} is performing better on collections.`);
+          }
+        }
+      }
+
+      // Action items
+      narrative.push('');
+      narrative.push(`<strong>🎯 Recommended Actions:</strong>`);
+      const actions = [];
+      const byStatus = cl.by_status || [];
+      const deniedItems = byStatus.filter(s => (s.status || '').toLowerCase().includes('denied') || (s.status || '').toLowerCase().includes('denial'));
+      if (deniedItems.length) actions.push('Review and appeal denied claims to recover outstanding revenue.');
+      const credPendingCount = (cred.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
+      if (credPendingCount) actions.push(`Follow up on ${credPendingCount} pending credentialing application(s).`);
+      const enrPendingCount = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
+      if (enrPendingCount) actions.push(`Track ${enrPendingCount} pending enrollment submission(s).`);
+      if (cl.total_balance > 0) actions.push(`Work outstanding AR of $${fmt(cl.total_balance)} through systematic follow-up.`);
+      if (!actions.length) actions.push('Account is in good standing. Continue monitoring KPIs.');
+      actions.forEach(a => narrative.push(`• ${a}`));
+
+      return narrative.join('<br>');
+    }
+
+    /* ── Sub-profile card renderer ── */
+    function renderSubProfileCard(containerId, spData, spName) {
+      const el = document.getElementById(containerId);
+      const cl = spData.claims || {};
+      const cred = spData.credentialing || {};
+      const enr = spData.enrollment || {};
+      const edi = spData.edi || {};
+      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+      const color = spName === 'OMT' ? '#6366f1' : '#0ea5e9';
+
+      let html = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+        <div style="background:${color}10;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:${color}">${cl.total || 0}</div>
+          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Claims</div>
+        </div>
+        <div style="background:${color}10;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:${color}">$${fmt(cl.total_charged)}</div>
+          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Charged</div>
+        </div>
+        <div style="background:${color}10;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:${color}">${collRate}%</div>
+          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Collection Rate</div>
+        </div>
+      </div>`;
+
+      // Mini bar chart for claims by status
+      const byStatus = cl.by_status || [];
+      if (byStatus.length) {
+        const maxV = Math.max(...byStatus.map(s => s.count), 1);
+        html += `<div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:6px">Claims by Status</div>`;
+        byStatus.forEach((s, i) => {
+          const pct = Math.round((s.count / maxV) * 100);
+          html += `<div style="margin-bottom:6px">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-600);margin-bottom:2px">
+              <span>${esc(s.status)}</span><span style="font-weight:600">${s.count}</span>
+            </div>
+            <div style="background:var(--gray-100);border-radius:4px;height:14px;overflow:hidden">
+              <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;opacity:${0.5 + (i * 0.15)}"></div>
+            </div>
+          </div>`;
+        });
+      }
+
+      // Summary counts
+      html += `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">`;
+      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">📋 ${(cred.detail || []).length} Cred</span>`;
+      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">📝 ${(enr.detail || []).length} Enroll</span>`;
+      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">🔗 ${(edi.detail || []).length} EDI</span>`;
+      html += `</div>`;
+
+      el.innerHTML = html;
+    }
+
     function renderReport(d) {
       const periodLabel = { all: 'All Time', mtd: 'Month to Date', ytd: 'Year to Date' }[d.period] || d.period;
       const company = d.client?.company || 'Client';
       const genDate = d.generated_at || new Date().toISOString().slice(0, 10);
 
-      // Summary
+      // AI Narrative
+      document.getElementById('reportAINarrative').innerHTML = generateAINarrative(d);
+
+      // Summary KPIs
       const cl = d.claims || {};
+      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
       document.getElementById('reportSummary').innerHTML = `
         <div style="margin-bottom:14px;padding:12px 16px;background:var(--gray-50);border-radius:10px;border:1px solid var(--gray-200)">
           <div style="font-size:16px;font-weight:700;color:var(--gray-800);margin-bottom:4px">${esc(company)} — ${periodLabel} Report</div>
-          <div style="font-size:12px;color:var(--gray-400)">Generated: ${genDate}${activeSubProfile ? ' | Sub-Profile: ' + activeSubProfile : ''}</div>
+          <div style="font-size:12px;color:var(--gray-400)">Generated: ${genDate}${activeSubProfile ? ' | Sub-Profile: ' + activeSubProfile : ''}${d.practice_type ? ' | Practice: ' + d.practice_type : ''}</div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:12px">
           <div style="background:var(--info-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--info)">${cl.total || 0}</div>
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Total Claims</div>
@@ -3771,6 +4092,10 @@
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Outstanding AR</div>
           </div>
           <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:24px;font-weight:700;color:var(--warning)">${collRate}%</div>
+            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Collection Rate</div>
+          </div>
+          <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--warning)">${d.payments?.count || 0}</div>
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Payments</div>
           </div>
@@ -3780,7 +4105,42 @@
           </div>
         </div>`;
 
-      // Claims by status
+      // Charts
+      // Claims status bar chart
+      const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));
+      renderBarChart('chartClaimsStatus', claimStatusData, 'value', 'label');
+
+      // Financials donut
+      const parts = [];
+      if (cl.total_paid > 0) parts.push({ label: 'Paid', value: Math.round(cl.total_paid) });
+      if (cl.total_balance > 0) parts.push({ label: 'Outstanding AR', value: Math.round(cl.total_balance) });
+      const uncharged = (cl.total_charged || 0) - (cl.total_paid || 0) - (cl.total_balance || 0);
+      if (uncharged > 0) parts.push({ label: 'Adjustments', value: Math.round(uncharged) });
+      if (parts.length) {
+        renderDonutChart('chartFinancials', parts, 'value', 'label');
+      } else {
+        document.getElementById('chartFinancials').innerHTML = '<p style="color:var(--gray-400);font-size:12px;text-align:center">No financial data</p>';
+      }
+
+      // Credentialing status donut
+      const credSummary = (d.credentialing?.summary || []).map(s => ({ label: s.status, value: s.count }));
+      renderDonutChart('chartCredStatus', credSummary, 'value', 'label');
+
+      // Enrollment status donut
+      const enrSummary = (d.enrollment?.summary || []).map(s => ({ label: s.status, value: s.count }));
+      renderDonutChart('chartEnrollStatus', enrSummary, 'value', 'label');
+
+      // Sub-profile breakdowns
+      const spSection = document.getElementById('reportSubProfiles');
+      if (d.sub_profiles && Object.keys(d.sub_profiles).length > 0) {
+        spSection.style.display = '';
+        if (d.sub_profiles.OMT) renderSubProfileCard('reportOMT', d.sub_profiles.OMT, 'OMT');
+        if (d.sub_profiles.MHP) renderSubProfileCard('reportMHP', d.sub_profiles.MHP, 'MHP');
+      } else {
+        spSection.style.display = 'none';
+      }
+
+      // Claims by status table
       const cbs = cl.by_status || [];
       document.getElementById('reportClaims').innerHTML = cbs.length ? `
         <table style="width:100%;font-size:13px;border-collapse:collapse">
@@ -3885,6 +4245,27 @@
       const lines = [];
       lines.push(`${company} Report - Generated ${d.generated_at}`);
       lines.push('');
+
+      // AI Narrative (plain text version)
+      lines.push('AI ACCOUNT SUMMARY');
+      const cl = d.claims || {};
+      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+      lines.push(`Total Claims: ${cl.total || 0} | Charged: $${cl.total_charged || 0} | Paid: $${cl.total_paid || 0} | Collection Rate: ${collRate}% | AR: $${cl.total_balance || 0}`);
+      lines.push('');
+
+      // Sub-profile summary
+      if (d.sub_profiles) {
+        for (const [spName, spData] of Object.entries(d.sub_profiles)) {
+          const label = SP_LABELS[spName] || spName;
+          const sc = spData.claims || {};
+          const sr = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
+          lines.push(`${label}`);
+          lines.push(`Claims: ${sc.total || 0} | Charged: $${sc.total_charged || 0} | Paid: $${sc.total_paid || 0} | Collection Rate: ${sr}% | AR: $${sc.total_balance || 0}`);
+          lines.push(`Credentialing: ${(spData.credentialing?.detail || []).length} | Enrollment: ${(spData.enrollment?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}`);
+          lines.push('');
+        }
+      }
+
       lines.push('CLAIMS SUMMARY');
       lines.push('Status,Count,Charged,Paid');
       (d.claims?.by_status || []).forEach(s => {
@@ -3926,27 +4307,85 @@
       const d = lastReportData;
       const company = d.client?.company || 'Client';
       const periodLabel = { all: 'All Time', mtd: 'Month to Date', ytd: 'Year to Date' }[d.period] || d.period;
+      const cl = d.claims || {};
+      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+
       let html = `<html><head><title>${company} Report</title><style>
-        body{font-family:Arial,sans-serif;font-size:12px;color:#333;padding:24px;max-width:900px;margin:0 auto}
-        h1{font-size:18px;font-weight:700;margin-bottom:4px} h2{font-size:14px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #e5e7eb;text-transform:uppercase;letter-spacing:.5px;color:#4b5563}
-        .meta{font-size:11px;color:#888;margin-bottom:16px} table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
-        th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;font-weight:600;color:#6b7280;border-bottom:2px solid #e5e7eb}
-        td{padding:6px 8px;border-bottom:1px solid #f3f4f6}
+        body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#333;padding:24px;max-width:1000px;margin:0 auto}
+        h1{font-size:20px;font-weight:700;margin-bottom:4px;color:#1e40af} h2{font-size:14px;font-weight:700;margin:24px 0 10px;padding-bottom:4px;border-bottom:2px solid #3b82f6;text-transform:uppercase;letter-spacing:.5px;color:#1e40af}
+        .meta{font-size:11px;color:#888;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
+        th{background:#eff6ff;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;font-weight:600;color:#3b82f6;border-bottom:2px solid #bfdbfe}
+        td{padding:6px 8px;border-bottom:1px solid #f0f0f0}
         .sg{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
-        .sb{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;text-align:center}
-        .sb .v{font-size:18px;font-weight:700} .sb .l{font-size:9px;text-transform:uppercase;color:#888;margin-top:2px}
-        @media print{body{padding:0}@page{margin:16mm}}
+        .sb{background:#f0f9ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px;text-align:center}
+        .sb .v{font-size:20px;font-weight:700;color:#1e40af} .sb .l{font-size:9px;text-transform:uppercase;color:#6b7280;margin-top:2px}
+        .narrative{background:#f0f9ff;border:1px solid #bfdbfe;border-left:4px solid #3b82f6;border-radius:8px;padding:16px;margin-bottom:20px;line-height:1.7;font-size:12px}
+        .sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+        .sp-card{border:1px solid #e5e7eb;border-radius:8px;padding:14px;border-top:4px solid}
+        .sp-card h3{font-size:13px;font-weight:700;margin:0 0 10px}
+        .sp-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}
+        .sp-kpi div{text-align:center;background:#f9fafb;border-radius:6px;padding:8px}
+        .sp-kpi .kv{font-size:16px;font-weight:700} .sp-kpi .kl{font-size:9px;color:#888;text-transform:uppercase}
+        .bar-row{margin-bottom:6px} .bar-label{display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px}
+        .bar-bg{background:#e5e7eb;border-radius:4px;height:12px;overflow:hidden} .bar-fill{height:100%;border-radius:4px}
+        @media print{body{padding:0}@page{margin:14mm}}
       </style></head><body>`;
+
       html += `<h1>${esc(company)} — ${periodLabel} Report</h1>`;
-      html += `<div class="meta">Report Date: ${d.generated_at}${activeSubProfile ? ' | Profile: ' + activeSubProfile : ''}</div>`;
+      html += `<div class="meta">Report Date: ${d.generated_at}${d.practice_type ? ' | Practice Type: ' + d.practice_type : ''}</div>`;
+
+      // AI Narrative section
+      html += `<div class="narrative"><strong>🤖 AI Account Summary</strong><br><br>`;
+      html += generateAINarrative(d).replace(/<strong[^>]*>/g, '<b>').replace(/<\/strong>/g, '</b>');
+      html += `</div>`;
+
+      // KPIs
       html += `<div class="sg">
-        <div class="sb"><div class="v">${d.claims?.total || 0}</div><div class="l">Total Claims</div></div>
-        <div class="sb"><div class="v">$${fmt(d.claims?.total_charged)}</div><div class="l">Total Charged</div></div>
-        <div class="sb"><div class="v">$${fmt(d.claims?.total_paid)}</div><div class="l">Total Paid</div></div>
-        <div class="sb"><div class="v">$${fmt(d.claims?.total_balance)}</div><div class="l">Outstanding AR</div></div>
+        <div class="sb"><div class="v">${cl.total || 0}</div><div class="l">Total Claims</div></div>
+        <div class="sb"><div class="v">$${fmt(cl.total_charged)}</div><div class="l">Total Charged</div></div>
+        <div class="sb"><div class="v">$${fmt(cl.total_paid)}</div><div class="l">Total Paid</div></div>
+        <div class="sb"><div class="v">$${fmt(cl.total_balance)}</div><div class="l">Outstanding AR</div></div>
       </div>`;
+      html += `<div class="sg">
+        <div class="sb"><div class="v">${collRate}%</div><div class="l">Collection Rate</div></div>
+        <div class="sb"><div class="v">${d.payments?.count || 0}</div><div class="l">Payments</div></div>
+        <div class="sb"><div class="v">$${fmt(d.payments?.total)}</div><div class="l">Payment Total</div></div>
+        <div class="sb"><div class="v">${(d.credentialing?.detail || []).length}</div><div class="l">Cred Records</div></div>
+      </div>`;
+
+      // Sub-profile section
+      if (d.sub_profiles && Object.keys(d.sub_profiles).length > 0) {
+        html += `<h2>Sub-Profile Breakdown</h2><div class="sp-grid">`;
+        for (const [spName, spData] of Object.entries(d.sub_profiles)) {
+          const label = SP_LABELS[spName] || spName;
+          const sc = spData.claims || {};
+          const sr = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
+          const bdrColor = spName === 'OMT' ? '#6366f1' : '#0ea5e9';
+          html += `<div class="sp-card" style="border-top-color:${bdrColor}"><h3 style="color:${bdrColor}">${label}</h3>`;
+          html += `<div class="sp-kpi">
+            <div><div class="kv">${sc.total || 0}</div><div class="kl">Claims</div></div>
+            <div><div class="kv">$${fmt(sc.total_charged)}</div><div class="kl">Charged</div></div>
+            <div><div class="kv">${sr}%</div><div class="kl">Coll. Rate</div></div>
+          </div>`;
+          // Mini bars for status
+          const bySt = sc.by_status || [];
+          if (bySt.length) {
+            const mx = Math.max(...bySt.map(s => s.count), 1);
+            bySt.forEach(s => {
+              const pct = Math.round((s.count / mx) * 100);
+              html += `<div class="bar-row"><div class="bar-label"><span>${s.status}</span><span>${s.count}</span></div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${bdrColor}"></div></div></div>`;
+            });
+          }
+          html += `<div style="font-size:10px;color:#888;margin-top:8px">Cred: ${(spData.credentialing?.detail || []).length} | Enroll: ${(spData.enrollment?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}</div>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+      }
+
+      // Detail tables
       html += `<h2>Claims by Status</h2><table><tr><th>Status</th><th>Count</th><th>Charged</th><th>Paid</th></tr>`;
-      (d.claims?.by_status || []).forEach(s => { html += `<tr><td>${s.status}</td><td>${s.count}</td><td>$${fmt(s.charged)}</td><td>$${fmt(s.paid)}</td></tr>`; });
+      (cl.by_status || []).forEach(s => { html += `<tr><td>${s.status}</td><td>${s.count}</td><td>$${fmt(s.charged)}</td><td>$${fmt(s.paid)}</td></tr>`; });
       html += `</table>`;
       if ((d.credentialing?.detail || []).length) {
         html += `<h2>Credentialing</h2><table><tr><th>Provider</th><th>Payor</th><th>Type</th><th>Status</th><th>Submitted</th><th>Approved</th><th>Expires</th></tr>`;
@@ -3965,7 +4404,7 @@
       }
       html += `<h2>Payments</h2><p>Total: <strong>$${fmt(d.payments?.total)}</strong> | Count: <strong>${d.payments?.count || 0}</strong></p>`;
       html += `</body></html>`;
-      const w = window.open('', '_blank', 'width=900,height=700');
+      const w = window.open('', '_blank', 'width=1000,height=800');
       w.document.write(html); w.document.close(); w.focus();
       setTimeout(() => w.print(), 400);
     }
