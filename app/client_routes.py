@@ -202,9 +202,7 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 @router.put("/profile/{cid}")
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Allow admin to edit any profile, or client to edit their own
-    if user.get("role") != "admin" and user.get("id") != cid:
-        raise HTTPException(403, "You can only edit your own profile")
+    # Any authenticated user can edit any client profile
     data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
@@ -775,12 +773,21 @@ async def upload_file(
         uploaded_by=user["username"],
     )
 
-    # ── Auto-import claims when category is "Claims" and file is Excel/CSV ──
+    # ── Auto-import data when category matches a known section and file is Excel/CSV ──
     imported = 0
     import_errors = []
-    if file_type == "excel" and category == "Claims":
+    import_category = None
+    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
+        import_category = category
         try:
-            imported, import_errors = _import_claims_from_excel(content, ext, scope)
+            if category == "Claims":
+                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+            elif category == "Credentialing":
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+            elif category == "Enrollment":
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+            elif category == "EDI":
+                imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
 
@@ -789,7 +796,8 @@ async def upload_file(
         "filename": unique_name,
         "original_name": file.filename,
         "row_count": row_count,
-        "imported_claims": imported,
+        "imported": imported,
+        "import_category": import_category,
         "import_errors": import_errors[:5],
     }
 

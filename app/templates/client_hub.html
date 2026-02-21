@@ -1247,6 +1247,15 @@
       background: var(--danger)
     }
 
+    .toast.info {
+      background: #1e88e5
+    }
+
+    .toast.warning {
+      background: #f59e0b;
+      color: #1a1a2e
+    }
+
     @keyframes toastIn {
       from {
         transform: translateY(20px);
@@ -3796,7 +3805,7 @@
     }
 
     // ═══════════════════════════════════════
-    // EXCEL IMPORT (per-section)
+    // EXCEL IMPORT (per-section) — imports data AND saves file as hard copy
     // ═══════════════════════════════════════
     async function importExcel(input, category) {
       if (!input.files || !input.files.length) return;
@@ -3806,24 +3815,31 @@
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category', category);
+      fd.append('description', `${category} import — ${file.name}`);
       fd.append('client_id', activeClientId);
       toast(`Importing ${file.name} into ${category}…`, 'info');
       try {
-        const r = await fetch('/hub/api/import-excel', { method: 'POST', body: fd });
+        // Use /files/upload which both saves the file AND auto-imports data
+        const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
         const d = await r.json();
         if (!r.ok) { toast(d.detail || 'Import failed', 'error'); return; }
-        toast(`✅ Imported ${d.imported} rows into ${category}`, 'success');
-        if (d.errors && d.errors.length) {
-          console.warn('Import errors:', d.errors);
-          toast(`⚠️ ${d.errors.length} row(s) had errors`, 'warning');
+        if (d.imported > 0) {
+          toast(`✅ Imported ${d.imported} rows into ${category} — file saved as hard copy`, 'success');
+        } else {
+          toast(`⚠️ File saved but no rows imported — check column headers`, 'warning');
+        }
+        if (d.import_errors && d.import_errors.length) {
+          console.warn('Import errors:', d.import_errors);
+          toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
         }
         // Refresh the active panel
         if (category === 'Claims') loadClaims();
         else if (category === 'Credentialing') loadCred();
         else if (category === 'Enrollment') loadEnroll();
         else if (category === 'EDI') loadEdi();
-        // Also refresh dashboard summary
+        // Also refresh dashboard summary + documents
         loadDashboard();
+        loadDocuments();
       } catch (e) {
         console.error(e);
         toast('Import failed: ' + e.message, 'error');
@@ -4736,24 +4752,93 @@
       input.value = '';
     }
     function handleFileDrop(e) {
+      e.preventDefault();
       Array.from(e.dataTransfer.files).forEach(f => uploadFile(f));
     }
 
     async function uploadFile(file) {
-      const category = (activeDocTab && activeDocTab !== 'All') ? activeDocTab : (currentDocTabs[0] || 'General');
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      const isExcel = ['xlsx', 'xls', 'csv'].includes(ext);
+
+      // Determine the category — for Excel files, ask the user where data should go
+      let category = (activeDocTab && activeDocTab !== 'All') ? activeDocTab : (currentDocTabs[0] || 'General');
+
+      if (isExcel && activeClientId) {
+        const choice = await showImportChoice(file.name);
+        if (choice === 'cancel') return;
+        // Use chosen category — data sections auto-import AND save file as hard copy
+        if (choice !== 'document') category = choice;
+      }
+
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+
       const description = document.getElementById('fileDesc')?.value || '';
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category', category);
       fd.append('description', description);
-      if (activeClientId) fd.append('client_id', activeClientId);
+      fd.append('client_id', activeClientId);
+
+      const isDataImport = isExcel && ['Claims', 'Credentialing', 'Enrollment', 'EDI'].includes(category);
+      toast(isDataImport ? `Importing ${file.name} into ${category}…` : `Uploading ${file.name}…`, 'info');
+
       try {
-        toast('Uploading ' + file.name + '...', 'info');
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
-        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Upload failed'); }
-        toast(file.name + ' uploaded!', 'success');
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Upload failed');
+
+        if (d.imported > 0) {
+          toast(`✅ Imported ${d.imported} rows into ${d.import_category} — file saved as hard copy`, 'success');
+          if (d.import_errors && d.import_errors.length) toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
+          // Refresh the relevant data section
+          if (d.import_category === 'Claims') loadClaims();
+          else if (d.import_category === 'Credentialing') loadCred();
+          else if (d.import_category === 'Enrollment') loadEnroll();
+          else if (d.import_category === 'EDI') loadEdi();
+          loadDashboard();
+        } else {
+          toast(`${file.name} uploaded!`, 'success');
+        }
         loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function showImportChoice(filename) {
+      return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:16px;padding:28px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3)';
+        box.innerHTML = `
+          <div style="font-size:18px;font-weight:700;color:var(--gray-800);margin-bottom:6px">📊 Import Data from Excel?</div>
+          <div style="font-size:13px;color:var(--gray-500);margin-bottom:18px"><strong>${esc(filename)}</strong> — Where should this data go?</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+            <button onclick="this.closest('.import-choice').resolve('Claims')" class="btn btn-sm" style="padding:12px;background:var(--info-light);color:var(--info);border:2px solid var(--info);border-radius:10px;font-weight:700;font-size:13px">💰 Claims</button>
+            <button onclick="this.closest('.import-choice').resolve('Credentialing')" class="btn btn-sm" style="padding:12px;background:#f0fdf4;color:#059669;border:2px solid #059669;border-radius:10px;font-weight:700;font-size:13px">📋 Credentialing</button>
+            <button onclick="this.closest('.import-choice').resolve('Enrollment')" class="btn btn-sm" style="padding:12px;background:#fffbeb;color:#d97706;border:2px solid #d97706;border-radius:10px;font-weight:700;font-size:13px">🏥 Enrollment</button>
+            <button onclick="this.closest('.import-choice').resolve('EDI')" class="btn btn-sm" style="padding:12px;background:#faf5ff;color:#7c3aed;border:2px solid #7c3aed;border-radius:10px;font-weight:700;font-size:13px">🔌 EDI Setup</button>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onclick="this.closest('.import-choice').resolve('document')" class="btn btn-secondary btn-sm" style="flex:1">📂 Just Save as Document</button>
+            <button onclick="this.closest('.import-choice').resolve('cancel')" class="btn btn-sm" style="flex:1;background:var(--gray-100);color:var(--gray-500);border:none">Cancel</button>
+          </div>`;
+        overlay.className = 'import-choice';
+        overlay.resolve = (val) => { document.body.removeChild(overlay); resolve(val); };
+        overlay.appendChild(box);
+        // Wire up button clicks via event delegation
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) { document.body.removeChild(overlay); resolve('cancel'); }
+        });
+        box.querySelectorAll('button').forEach(btn => {
+          const origOnclick = btn.getAttribute('onclick');
+          if (origOnclick) {
+            btn.removeAttribute('onclick');
+            const match = origOnclick.match(/resolve\('(\w+)'\)/);
+            if (match) btn.addEventListener('click', () => overlay.resolve(match[1]));
+          }
+        });
+        document.body.appendChild(overlay);
+      });
     }
 
     async function deleteFile(id) {
