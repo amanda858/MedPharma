@@ -2906,7 +2906,14 @@
       document.getElementById('appShell').style.display = 'block';
       document.getElementById('topAccount').textContent = company;
       document.getElementById('topUser').textContent = currentUser.username;
-      document.getElementById('topRole').textContent = currentUser.role === 'client' ? 'Internal' : currentUser.role;
+      // Hide the role pill for regular users; only show for admin
+      const rolePill = document.getElementById('topRole');
+      if (currentUser.role === 'admin') {
+        rolePill.textContent = 'Admin';
+        rolePill.style.display = '';
+      } else {
+        rolePill.style.display = 'none';
+      }
       document.getElementById('adminNav').style.display = 'block';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
