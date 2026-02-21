@@ -94,7 +94,8 @@ def me(hub_session: Optional[str] = Cookie(None)):
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    return list_clients()
+    # Filter out admin accounts – only real client accounts should appear
+    return [c for c in list_clients() if c.get("role") != "admin"]
 
 
 # ─── Clients (admin) ──────────────────────────────────────────────────────────

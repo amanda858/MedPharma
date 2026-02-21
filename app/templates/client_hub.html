@@ -9,6 +9,8 @@
   <meta http-equiv="Expires" content="0">
   <title>MedPharma Internal Hub</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+    rel="stylesheet">
   <style>
     :root {
       --primary: #1e88e5;
@@ -41,6 +43,10 @@
       --shadow: 0 1px 3px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .05);
       --shadow-md: 0 4px 16px rgba(0, 0, 0, .08);
       --shadow-lg: 0 20px 50px rgba(0, 0, 0, .12);
+      --accent: #1EDE8F;
+      --accent-glow: rgba(30, 222, 143, .35);
+      --dark: #050d1a;
+      --dark-card: rgba(255, 255, 255, .06);
     }
 
     * {
@@ -57,114 +63,296 @@
       -webkit-font-smoothing: antialiased
     }
 
-    /* ── Login ── */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    /* ══════════════════════════════════════════════════════════
+       LOGIN — Premium Modern Design 
+       ══════════════════════════════════════════════════════════ */
 
     .login-wrap {
       min-height: 100vh;
       display: flex;
-      align-items: stretch;
+      align-items: center;
+      justify-content: center;
       position: relative;
       overflow: hidden;
-      font-family: 'Inter', sans-serif
+      font-family: 'Inter', 'DM Sans', sans-serif;
+      background: var(--dark);
     }
 
+    /* Animated mesh gradient background */
     .login-bg {
       position: absolute;
       inset: 0;
-      background-image: url('https://medpharmasc.com/wp-content/uploads/2024/11/blur-hospital-scaled.jpg');
-      background-size: cover;
-      background-position: center;
-      filter: blur(3px) brightness(.35);
-      transform: scale(1.05)
+      background:
+        radial-gradient(ellipse 80% 60% at 10% 90%, rgba(30, 222, 143, .18) 0%, transparent 50%),
+        radial-gradient(ellipse 60% 50% at 90% 20%, rgba(30, 136, 229, .15) 0%, transparent 50%),
+        radial-gradient(ellipse 70% 70% at 50% 50%, rgba(139, 92, 246, .08) 0%, transparent 50%);
+      animation: bgShift 12s ease-in-out infinite alternate;
+    }
+
+    @keyframes bgShift {
+      0% {
+        transform: scale(1) translate(0, 0);
+        opacity: 1;
+      }
+
+      50% {
+        transform: scale(1.08) translate(-2%, 1%);
+        opacity: .9;
+      }
+
+      100% {
+        transform: scale(1) translate(1%, -1%);
+        opacity: 1;
+      }
     }
 
     .login-bg-overlay {
       position: absolute;
       inset: 0;
-      background: linear-gradient(135deg, rgba(5, 27, 46, .92) 0%, rgba(9, 36, 60, .85) 50%, rgba(30, 222, 143, .08) 100%)
+      background:
+        linear-gradient(180deg, rgba(5, 13, 26, .95) 0%, rgba(5, 13, 26, .7) 50%, rgba(5, 13, 26, .92) 100%);
     }
 
-    .login-left {
+    /* Floating geometric orbs */
+    .login-wrap::before,
+    .login-wrap::after {
+      content: '';
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      z-index: 1;
+      animation: float 8s ease-in-out infinite;
+    }
+
+    .login-wrap::before {
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(30, 222, 143, .2), transparent 70%);
+      top: -10%;
+      left: -5%;
+      animation-delay: 0s;
+    }
+
+    .login-wrap::after {
+      width: 350px;
+      height: 350px;
+      background: radial-gradient(circle, rgba(30, 136, 229, .15), transparent 70%);
+      bottom: -10%;
+      right: -5%;
+      animation-delay: -4s;
+    }
+
+    @keyframes float {
+
+      0%,
+      100% {
+        transform: translateY(0px) scale(1);
+      }
+
+      50% {
+        transform: translateY(-30px) scale(1.05);
+      }
+    }
+
+    /* Grid pattern overlay */
+    .login-grid-pattern {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background-image:
+        linear-gradient(rgba(30, 222, 143, .03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(30, 222, 143, .03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black, transparent);
+    }
+
+    /* Main login container */
+    .login-container {
       position: relative;
-      z-index: 2;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 1100px;
+      padding: 40px 24px;
+      gap: 40px;
+    }
+
+    /* Hero section */
+    .login-hero {
+      text-align: center;
+      animation: fadeUp .8s ease-out;
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(24px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .login-hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(30, 222, 143, .1);
+      border: 1px solid rgba(30, 222, 143, .2);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 16px;
+      border-radius: 100px;
+      margin-bottom: 24px;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+    }
+
+    .login-hero-badge .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        box-shadow: 0 0 0 0 var(--accent-glow);
+      }
+
+      50% {
+        opacity: .7;
+        box-shadow: 0 0 0 8px transparent;
+      }
+    }
+
+    .login-hero h1 {
+      font-size: clamp(36px, 5vw, 56px);
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -2px;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+
+    .login-hero h1 .accent {
+      background: linear-gradient(135deg, var(--accent), #4ade80);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .login-hero p {
+      font-size: clamp(15px, 2vw, 18px);
+      color: rgba(255, 255, 255, .5);
+      max-width: 520px;
+      margin: 0 auto;
+      line-height: 1.7;
+    }
+
+    /* Bottom section: stats + card */
+    .login-bottom {
+      display: flex;
+      align-items: stretch;
+      gap: 40px;
+      width: 100%;
+      animation: fadeUp .8s ease-out .15s both;
+    }
+
+    /* Left: Feature cards / stats */
+    .login-features-col {
       flex: 1;
       display: flex;
       flex-direction: column;
+      gap: 16px;
       justify-content: center;
-      padding: 60px 64px;
-      max-width: 560px
     }
 
-    .login-left .site-logo {
-      width: 220px;
-      height: auto;
-      margin-bottom: 48px;
-      filter: brightness(0) invert(1)
+    .feature-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px 22px;
+      background: var(--dark-card);
+      border: 1px solid rgba(255, 255, 255, .06);
+      border-radius: 16px;
+      transition: all .3s ease;
+      backdrop-filter: blur(12px);
     }
 
-    .login-left h2 {
-      font-size: 38px;
+    .feature-card:hover {
+      background: rgba(255, 255, 255, .1);
+      border-color: rgba(30, 222, 143, .2);
+      transform: translateY(-2px);
+    }
+
+    .feature-card .fc-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .feature-card:nth-child(1) .fc-icon {
+      background: rgba(30, 222, 143, .12);
+    }
+
+    .feature-card:nth-child(2) .fc-icon {
+      background: rgba(59, 130, 246, .12);
+    }
+
+    .feature-card:nth-child(3) .fc-icon {
+      background: rgba(139, 92, 246, .12);
+    }
+
+    .feature-card:nth-child(4) .fc-icon {
+      background: rgba(245, 158, 11, .12);
+    }
+
+    .feature-card .fc-text h4 {
+      font-size: 14px;
       font-weight: 700;
       color: #fff;
-      line-height: 1.2;
-      margin-bottom: 16px;
-      letter-spacing: -1px
+      margin-bottom: 4px;
     }
 
-    .login-left h2 span {
-      color: #1EDE8F
+    .feature-card .fc-text p {
+      font-size: 12px;
+      color: rgba(255, 255, 255, .4);
+      line-height: 1.5;
     }
 
-    .login-left p {
-      font-size: 16px;
-      color: rgba(255, 255, 255, .65);
-      line-height: 1.7;
-      max-width: 400px
-    }
-
-    .login-features {
-      margin-top: 40px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px
-    }
-
-    .login-feature {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      color: rgba(255, 255, 255, .8);
-      font-size: 14px
-    }
-
-    .login-feature-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #1EDE8F;
-      flex-shrink: 0
-    }
-
-    .login-right {
-      position: relative;
-      z-index: 2;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 40px;
+    /* Right: Login card */
+    .login-card-col {
       flex-shrink: 0;
-      width: 480px
+      width: 420px;
+      display: flex;
+      align-items: center;
     }
 
     .login-card {
-      background: #fff;
+      background: rgba(255, 255, 255, .04);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255, 255, 255, .08);
       border-radius: 24px;
-      padding: 48px 44px;
+      padding: 44px 40px;
       width: 100%;
-      max-width: 420px;
-      box-shadow: 0 30px 80px rgba(0, 0, 0, .4), 0 0 0 1px rgba(255, 255, 255, .05);
-      position: relative
+      position: relative;
+      overflow: hidden;
     }
 
     .login-card::before {
@@ -173,178 +361,244 @@
       top: 0;
       left: 0;
       right: 0;
-      height: 4px;
-      border-radius: 24px 24px 0 0;
-      background: linear-gradient(90deg, #09243C, #1EDE8F)
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), #3b82f6, var(--accent));
+      background-size: 200% 100%;
+      animation: shimmer 3s linear infinite;
     }
 
-    .login-logo {
+    @keyframes shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    .login-card-header {
       text-align: center;
-      margin-bottom: 32px
+      margin-bottom: 32px;
     }
 
-    .login-logo img.brand-img {
-      max-width: 190px;
-      height: auto;
-      display: block;
-      margin: 0 auto 12px
+    .login-card-brand {
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -1px;
+      margin-bottom: 6px;
     }
 
-    .login-logo .login-title {
-      font-size: 18px;
-      font-weight: 700;
-      color: #09243C;
-      letter-spacing: -.3px
+    .login-card-brand .accent {
+      color: var(--accent);
     }
 
-    .login-logo .login-sub {
-      font-size: 13px;
-      color: #68747A;
-      margin-top: 4px
+    .login-card-title {
+      font-size: 14px;
+      color: rgba(255, 255, 255, .4);
+      font-weight: 500;
+      letter-spacing: .3px;
     }
 
-    .login-logo .badge {
-      display: inline-block;
-      background: rgba(30, 222, 143, .12);
-      color: #0a8a54;
+    .login-card-secure {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(30, 222, 143, .08);
+      border: 1px solid rgba(30, 222, 143, .15);
+      color: var(--accent);
       font-size: 11px;
       font-weight: 600;
-      padding: 4px 14px;
-      border-radius: 20px;
-      margin-top: 10px;
-      letter-spacing: .3px;
-      border: 1px solid rgba(30, 222, 143, .3)
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-top: 12px;
     }
 
     .login-divider {
       height: 1px;
-      background: #DADEE2;
-      margin: 24px 0
+      background: rgba(255, 255, 255, .06);
+      margin: 0 0 28px;
     }
 
     .login-field {
-      margin-bottom: 18px
+      margin-bottom: 20px;
     }
 
     .login-field label {
       display: block;
       font-size: 11px;
       font-weight: 700;
-      color: #09243C;
+      color: rgba(255, 255, 255, .5);
       text-transform: uppercase;
-      letter-spacing: .8px;
-      margin-bottom: 8px
+      letter-spacing: 1px;
+      margin-bottom: 8px;
     }
 
     .login-field input {
       width: 100%;
-      padding: 13px 16px;
-      border: 1.5px solid #DADEE2;
-      border-radius: 10px;
+      padding: 14px 16px;
+      border: 1.5px solid rgba(255, 255, 255, .1);
+      border-radius: 12px;
       font-size: 15px;
       font-family: inherit;
       outline: none;
-      transition: border .2s, box-shadow .2s;
-      background: #f8f9fa;
-      color: #09243C
+      transition: border .2s, box-shadow .2s, background .2s;
+      background: rgba(255, 255, 255, .04);
+      color: #fff;
+    }
+
+    .login-field input::placeholder {
+      color: rgba(255, 255, 255, .25);
     }
 
     .login-field input:focus {
-      border-color: #1EDE8F;
-      box-shadow: 0 0 0 3px rgba(30, 222, 143, .15);
-      background: #fff
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(30, 222, 143, .12);
+      background: rgba(255, 255, 255, .06);
     }
 
     .btn-login {
       width: 100%;
       padding: 15px;
-      background: #09243C;
-      color: #fff;
+      background: linear-gradient(135deg, var(--accent), #0fa968);
+      color: var(--dark);
       border: none;
-      border-radius: 10px;
+      border-radius: 12px;
       font-size: 15px;
-      font-weight: 700;
+      font-weight: 800;
       font-family: inherit;
       cursor: pointer;
-      transition: all .2s;
+      transition: all .25s;
       letter-spacing: .3px;
       margin-top: 8px;
       position: relative;
-      overflow: hidden
+      overflow: hidden;
     }
 
     .btn-login::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, transparent 0%, rgba(30, 222, 143, .15) 100%);
-      opacity: 0;
-      transition: opacity .2s
+      display: none;
     }
 
     .btn-login:hover {
-      background: #051B2E;
-      transform: translateY(-1px);
-      box-shadow: 0 8px 24px rgba(9, 36, 60, .35)
-    }
-
-    .btn-login:hover::after {
-      opacity: 1
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(30, 222, 143, .35);
     }
 
     .btn-login:active {
-      transform: translateY(0)
+      transform: translateY(0);
     }
 
     .login-error {
-      color: var(--danger);
+      color: #fca5a5;
       font-size: 13px;
       text-align: center;
       margin-top: 14px;
       padding: 10px;
-      background: var(--danger-light);
-      border-radius: 8px;
-      display: none
+      background: rgba(239, 68, 68, .12);
+      border: 1px solid rgba(239, 68, 68, .2);
+      border-radius: 10px;
+      display: none;
     }
 
     .login-footer {
       text-align: center;
-      margin-top: 24px;
+      margin-top: 28px;
       font-size: 12px;
-      color: #B3C0CE
+      color: rgba(255, 255, 255, .25);
     }
 
-    @media (max-width: 860px) {
-      .login-left {
-        display: none
+    /* Trust bar at bottom */
+    .login-trust-bar {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      padding-top: 8px;
+      animation: fadeUp .8s ease-out .3s both;
+    }
+
+    .trust-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255, 255, 255, .3);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .trust-item .ti-icon {
+      font-size: 16px;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .login-bottom {
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
       }
 
-      .login-right {
+      .login-features-col {
         width: 100%;
-        padding: 24px;
-        justify-content: center;
-        align-items: flex-start;
-        padding-top: 40px
+        max-width: 420px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 10px;
       }
 
-      .login-card {
-        max-width: 100%
+      .feature-card {
+        flex: 1 1 calc(50% - 6px);
+        min-width: 180px;
+        padding: 14px 16px;
+      }
+
+      .feature-card .fc-icon {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+      }
+
+      .feature-card .fc-text h4 {
+        font-size: 13px;
+      }
+
+      .feature-card .fc-text p {
+        display: none;
+      }
+
+      .login-card-col {
+        width: 100%;
+        max-width: 420px;
       }
     }
 
-    @media (max-width: 480px) {
-      .login-right {
-        padding: 16px;
-        padding-top: 24px
+    @media (max-width: 540px) {
+      .login-container {
+        padding: 24px 16px;
+        gap: 28px;
+      }
+
+      .login-hero h1 {
+        letter-spacing: -1px;
+      }
+
+      .login-features-col {
+        display: none;
+      }
+
+      .login-card-col {
+        width: 100%;
       }
 
       .login-card {
         padding: 32px 24px;
-        border-radius: 16px
+        border-radius: 20px;
       }
 
-      .login-logo img.brand-img {
-        max-width: 150px
+      .login-trust-bar {
+        gap: 16px;
+        flex-wrap: wrap;
+        justify-content: center;
       }
     }
 
@@ -1499,62 +1753,97 @@
     <div class="login-wrap">
       <div class="login-bg"></div>
       <div class="login-bg-overlay"></div>
+      <div class="login-grid-pattern"></div>
 
-      <!-- Left branding panel -->
-      <div class="login-left">
-        <div class="site-logo" style="margin-bottom:48px;font-size:36px;font-weight:700;color:#fff;letter-spacing:-1px">
-          Med<span style="color:#1EDE8F">Pharma</span></div>
-        <h2>Internal<br><span>Access</span></h2>
-        <p>Your secure portal for credentialing, enrollment, billing, and claims management.</p>
-        <div class="login-features">
-          <div class="login-feature">
-            <div class="login-feature-dot"></div>Credentialing &amp; Provider Enrollment
+      <div class="login-container">
+
+        <!-- Hero text -->
+        <div class="login-hero">
+          <div class="login-hero-badge">
+            <span class="pulse-dot"></span> Healthcare Solutions Platform
           </div>
-          <div class="login-feature">
-            <div class="login-feature-dot"></div>Claims Queue &amp; EDI Management
-          </div>
-          <div class="login-feature">
-            <div class="login-feature-dot"></div>Real-Time Dashboard &amp; Reporting
-          </div>
-          <div class="login-feature">
-            <div class="login-feature-dot"></div>Secure Document Storage
-          </div>
+          <h1>Med<span class="accent">Pharma</span></h1>
+          <p>Revenue cycle management, credentialing, and claims intelligence — all in one secure platform.</p>
         </div>
-      </div>
 
-      <!-- Right sign-in card -->
-      <div class="login-right">
-        <div class="login-card">
-          <div class="login-logo">
-            <div style="font-size:28px;font-weight:700;color:#09243C;letter-spacing:-1px;margin-bottom:8px">Med<span
-                style="color:#1EDE8F">Pharma</span></div>
-            <div class="login-title">Internal Access</div>
-            <div class="login-sub">Sign in to access your account</div>
-            <div class="badge">&#128274; Secure Access</div>
-          </div>
-          <div class="login-divider"></div>
-          <div class="login-field">
-            <label>Username</label>
-            <input type="text" id="loginUser" placeholder="e.g. eric" autofocus autocomplete="username"
-              autocorrect="off" autocapitalize="none" spellcheck="false">
-          </div>
-          <div class="login-field">
-            <label>Password</label>
-            <div style="position:relative">
-              <input type="password" id="loginPass" placeholder="Enter your password" autocomplete="current-password"
-                style="width:100%;padding-right:44px">
-              <button type="button" onclick="togglePw()" id="btnShowPw"
-                style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#888;font-size:13px;padding:4px">Show</button>
+        <!-- Bottom: Features + Login Card -->
+        <div class="login-bottom">
+
+          <!-- Feature cards -->
+          <div class="login-features-col">
+            <div class="feature-card">
+              <div class="fc-icon">⚡</div>
+              <div class="fc-text">
+                <h4>Real-Time Analytics</h4>
+                <p>Live dashboards with KPIs, AR aging, and denial tracking</p>
+              </div>
+            </div>
+            <div class="feature-card">
+              <div class="fc-icon">🛡️</div>
+              <div class="fc-text">
+                <h4>Credentialing & Enrollment</h4>
+                <p>End-to-end provider credentialing and payor enrollment</p>
+              </div>
+            </div>
+            <div class="feature-card">
+              <div class="fc-icon">📊</div>
+              <div class="fc-text">
+                <h4>Claims Intelligence</h4>
+                <p>Smart claims queue with status tracking and SLA monitoring</p>
+              </div>
+            </div>
+            <div class="feature-card">
+              <div class="fc-icon">🔒</div>
+              <div class="fc-text">
+                <h4>Secure Document Hub</h4>
+                <p>Encrypted file storage with role-based access controls</p>
+              </div>
             </div>
           </div>
-          <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In &rarr;</button>
-          <div class="login-error" id="loginError"></div>
-          <div id="loginStatus" style="text-align:center;font-size:13px;color:#888;margin-top:8px;display:none">
-            Connecting to server…</div>
-          <div class="login-footer">MedPharma &copy; 2026 &nbsp;&middot;&nbsp; medpharmasc.com &nbsp;&middot;&nbsp;
-            <span style="color:#1EDE8F;font-weight:700">v2.3</span>
+
+          <!-- Sign-in card -->
+          <div class="login-card-col">
+            <div class="login-card">
+              <div class="login-card-header">
+                <div class="login-card-brand">Med<span class="accent">Pharma</span></div>
+                <div class="login-card-title">Internal Access</div>
+                <div class="login-card-secure">🔐 Secure Sign In</div>
+              </div>
+              <div class="login-divider"></div>
+              <div class="login-field">
+                <label>Username</label>
+                <input type="text" id="loginUser" placeholder="Enter username" autofocus autocomplete="username"
+                  autocorrect="off" autocapitalize="none" spellcheck="false">
+              </div>
+              <div class="login-field">
+                <label>Password</label>
+                <div style="position:relative">
+                  <input type="password" id="loginPass" placeholder="Enter password" autocomplete="current-password"
+                    style="width:100%;padding-right:44px">
+                  <button type="button" onclick="togglePw()" id="btnShowPw"
+                    style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:rgba(255,255,255,.35);font-size:13px;padding:4px">Show</button>
+                </div>
+              </div>
+              <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In →</button>
+              <div class="login-error" id="loginError"></div>
+              <div id="loginStatus"
+                style="text-align:center;font-size:13px;color:rgba(255,255,255,.4);margin-top:8px;display:none">
+                Connecting to server…</div>
+              <div class="login-footer">MedPharma © 2026 · medpharmasc.com · <span
+                  style="color:var(--accent);font-weight:700">v2.3</span></div>
+            </div>
           </div>
+
         </div>
+
+        <!-- Trust bar -->
+        <div class="login-trust-bar">
+          <div class="trust-item"><span class="ti-icon">🔒</span> 256-bit Encryption</div>
+          <div class="trust-item"><span class="ti-icon">☁️</span> Cloud Hosted</div>
+          <div class="trust-item"><span class="ti-icon">🏥</span> HIPAA Compliant</div>
+          <div class="trust-item"><span class="ti-icon">⚡</span> 99.9% Uptime</div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -2602,7 +2891,7 @@
       document.getElementById('appShell').style.display = 'block';
       document.getElementById('topAccount').textContent = company;
       document.getElementById('topUser').textContent = currentUser.username;
-      document.getElementById('topRole').textContent = currentUser.role;
+      document.getElementById('topRole').textContent = currentUser.role === 'client' ? 'Internal' : currentUser.role;
       document.getElementById('adminNav').style.display = 'block';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
