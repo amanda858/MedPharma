@@ -924,7 +924,7 @@ def _build_section_data(conn, client_id, sp_filter, where_date):
                    "owner": r.get("Owner","")} for r in edi_rows]
 
     # Payments
-    pay_rows = conn.execute("SELECT COALESCE(SUM(PaidAmount),0) as total, COUNT(*) as cnt FROM payments WHERE client_id=?", (client_id,)).fetchone()
+    pay_rows = conn.execute("SELECT COALESCE(SUM(PaymentAmount),0) as total, COUNT(*) as cnt FROM payments WHERE client_id=?", (client_id,)).fetchone()
     payments = {"total": float(pay_rows["total"]) if pay_rows else 0, "count": int(pay_rows["cnt"]) if pay_rows else 0}
 
     return {
@@ -1856,7 +1856,8 @@ def dashboard_filtered(client_id: Optional[int] = None,
     scope = client_id or _client_scope(user)
     # Run SLA auto-flagging on dashboard load
     auto_flag_sla(scope)
-    data = get_dashboard(scope, sub_profile=sub_profile)
+    data = get_dashboard(scope, sub_profile=sub_profile,
+                         date_from=start_date, date_to=end_date)
     data["user"] = user
     data["alerts"] = get_alerts(scope)
     return data

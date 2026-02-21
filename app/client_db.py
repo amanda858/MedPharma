@@ -696,7 +696,7 @@ def create_claim(data: dict) -> int:
     cur = conn.cursor()
     now = datetime.now().isoformat()
     cur.execute("""
-        INSERT INTO claims_master
+        INSERT OR REPLACE INTO claims_master
         (client_id,ClaimKey,PatientID,PatientName,Payor,ProviderName,NPI,DOS,CPTCode,Description,
          ChargeAmount,AllowedAmount,AdjustmentAmount,PaidAmount,BalanceRemaining,
          ClaimStatus,StatusStartDate,BillDate,DeniedDate,PaidDate,LastTouchedDate,
@@ -1015,22 +1015,38 @@ def delete_edi(rec_id: int):
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
-def get_dashboard(client_id: int = None, sub_profile: str = None):
+def get_dashboard(client_id: int = None, sub_profile: str = None,
+                  date_from: str = None, date_to: str = None):
     """Full KPI dashboard — pass client_id=None for admin (all clients).
-       Pass sub_profile='MHP' or 'OMT' to filter by sub-profile."""
+       Pass sub_profile='MHP' or 'OMT' to filter by sub-profile.
+       Pass date_from / date_to (YYYY-MM-DD) for date range filtering on DOS."""
     conn = get_db()
     cur = conn.cursor()
 
-    # Build condition fragments
-    conditions = []
-    p = []
+    # Base conditions (apply to all tables)
+    base_conditions = []
+    base_p = []
     if client_id:
-        conditions.append("client_id=?")
-        p.append(client_id)
+        base_conditions.append("client_id=?")
+        base_p.append(client_id)
     if sub_profile:
-        conditions.append("sub_profile=?")
-        p.append(sub_profile)
-    cond = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        base_conditions.append("sub_profile=?")
+        base_p.append(sub_profile)
+
+    # Claims-specific conditions (include DOS date filter)
+    claims_conditions = list(base_conditions)
+    claims_p = list(base_p)
+    if date_from:
+        claims_conditions.append("DOS >= ?")
+        claims_p.append(date_from)
+    if date_to:
+        claims_conditions.append("DOS <= ?")
+        claims_p.append(date_to)
+
+    cond = ("WHERE " + " AND ".join(claims_conditions)) if claims_conditions else ""
+    p = claims_p
+    # Base cond for non-claims tables (payments, credentialing, etc.)
+    base_cond = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
 
     today = date.today()
     mtd_start = today.replace(day=1).isoformat()
@@ -1058,11 +1074,11 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
                     p + [mtd_start])
     denied_all = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus IN ('Denied','Appeals')", p)
 
-    # Payments MTD
-    pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {cond} {'AND' if cond else 'WHERE'} PostDate >= ?",
-                 p + [mtd_start])
-    pay_ytd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {cond} {'AND' if cond else 'WHERE'} PostDate >= ?",
-                 p + [ytd_start])
+    # Payments MTD (payments table has no DOS column — use base_cond)
+    pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate >= ?",
+                 base_p + [mtd_start])
+    pay_ytd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate >= ?",
+                 base_p + [ytd_start])
 
     # Totals for rates
     total_submitted = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate != ''", p)
@@ -1118,17 +1134,17 @@ def get_dashboard(client_id: int = None, sub_profile: str = None):
                     {cond} {'AND' if cond else 'WHERE'} DenialCategory != '' GROUP BY DenialCategory ORDER BY COUNT(*) DESC""", p)
     denial_cats = {r[0]: r[1] for r in cur.fetchall()}
 
-    # Payment trend (last 6 months)
+    # Payment trend (last 6 months — payments table, use base_cond)
     cur.execute(f"""SELECT strftime('%Y-%m', PostDate) as mo, COALESCE(SUM(PaymentAmount),0)
-                    FROM payments {cond} {'AND' if cond else 'WHERE'} PostDate != '' GROUP BY mo ORDER BY mo DESC LIMIT 6""", p)
+                    FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate != '' GROUP BY mo ORDER BY mo DESC LIMIT 6""", base_p)
     pay_trend = [{"month": r[0], "amount": round(r[1], 2)} for r in reversed(cur.fetchall())]
 
-    # Credentialing stats
-    cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {cond} GROUP BY Status", p)
+    # Credentialing stats (no DOS column — use base_cond)
+    cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {base_cond} GROUP BY Status", base_p)
     cred_stats = {r[0]: r[1] for r in cur.fetchall()}
 
-    # Enrollment stats
-    cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {cond} GROUP BY Status", p)
+    # Enrollment stats (no DOS column — use base_cond)
+    cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {base_cond} GROUP BY Status", base_p)
     enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
 
     # Client profile
