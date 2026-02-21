@@ -364,7 +364,7 @@ def _seed_data(conn):
         """INSERT INTO clients
            (username,password,salt,company,contact_name,email,role,specialty,practice_type)
            VALUES (?,?,?,?,?,?,?,?,?)""",
-        ("rcm", _hash_pw("rcm123", s2), s2, "TruPath", "RCM Team", "rcm@medprosc.com", "client",
+        ("rcm", _hash_pw("rcm123", s2), s2, "TruPath", "TruPath Laboratory", "info@trupath.com", "client",
          "Laboratory", "Laboratory")
     )
 
