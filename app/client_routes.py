@@ -182,10 +182,7 @@ def get_my_profile(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/profile/{cid}")
 def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    # admin can get any profile; clients can only get their own
-    if user["role"] != "admin" and user["id"] != cid:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_user(hub_session)
     return get_profile(cid)
 
 
@@ -221,9 +218,7 @@ def list_practice_profiles(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/practice-profiles/{cid}")
 def list_practice_profiles_admin(cid: int, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    if user["role"] != "admin" and user["id"] != cid:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_user(hub_session)
     return {"profiles": get_practice_profiles(cid)}
 
 
@@ -674,9 +669,6 @@ def dashboard(hub_session: Optional[str] = Cookie(None)):
 @router.get("/dashboard/client/{client_id}")
 def dashboard_for_client(client_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Clients can only view their own dashboard
-    if user["role"] != "admin" and user["id"] != client_id:
-        raise HTTPException(403, "Forbidden")
     data = get_dashboard(client_id)
     data["user"] = user
     return data
