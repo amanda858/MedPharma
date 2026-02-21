@@ -331,6 +331,11 @@ def init_client_hub_db():
             conn.commit()
             _seed_data(conn)
 
+        # Auto-migrate: fix client profile data — usernames are login users, not clients
+        cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
+        cur.execute("UPDATE clients SET contact_name='TruPath Laboratory', email='info@trupath.com' WHERE username='rcm' AND contact_name='RCM Team'")
+        conn.commit()
+
     conn.close()
 
 
