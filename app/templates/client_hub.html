@@ -3207,7 +3207,7 @@
 
       try {
         const r = await fetch('/hub/api/me');
-        if (r.ok) { const u = await r.json(); currentUser = u; showAccountSelector(); }
+        if (r.ok) { const u = await r.json(); currentUser = u; await showAccountSelector(); }
       } catch (_) { }
     });
 
@@ -3231,11 +3231,13 @@
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           if (attempt > 1) {
-            statusEl.textContent = `Retrying… (attempt ${attempt}/3)`;
-            await new Promise(r => setTimeout(r, 2000));
+            statusEl.textContent = `Server waking up… retrying (attempt ${attempt}/3)`;
+            await new Promise(r => setTimeout(r, 3000));
+          } else {
+            statusEl.textContent = 'Connecting to server…';
           }
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 30000);
+          const tid = setTimeout(() => controller.abort(), 45000);
           const r = await fetch('/hub/api/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -3249,7 +3251,7 @@
           const d = await r.json();
           currentUser = d.user;
           statusEl.style.display = 'none';
-          showAccountSelector();
+          await showAccountSelector();
           return;
         } catch (e) {
           lastErr = e;
@@ -3280,11 +3282,16 @@
     }
 
     async function doLogout() {
-      await fetch('/hub/api/logout', { method: 'POST' });
+      await fetch('/hub/api/logout', { method: 'POST' }).catch(() => { });
       currentUser = null; activeClientId = null; activeSubProfile = null; activeClientPracticeType = '';
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'none';
       document.getElementById('loginScreen').style.display = 'block';
+      // Reset login form state
+      const btn = document.getElementById('btnLogin');
+      btn.disabled = false; btn.textContent = 'Sign In →';
+      document.getElementById('loginError').style.display = 'none';
+      document.getElementById('loginStatus').style.display = 'none';
     }
 
     // ═══════════════════════════════════════
@@ -3295,13 +3302,30 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
-      // All users see all client accounts
-      const r = await fetch('/hub/api/accounts');
-      const d = await r.json();
-      clientsList = d.clients || d || [];
+      // All users see all client accounts — with error handling for cold starts
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 30000);
+        const r = await fetch('/hub/api/accounts', { signal: controller.signal });
+        clearTimeout(tid);
+        if (!r.ok) throw new Error('Failed to load accounts (status ' + r.status + ')');
+        const d = await r.json();
+        clientsList = Array.isArray(d) ? d : (Array.isArray(d.clients) ? d.clients : []);
+      } catch (e) {
+        console.error('showAccountSelector error:', e);
+        clientsList = [];
+      }
 
       const grid = document.getElementById('accountGrid');
-      grid.innerHTML = clientsList.map(c => `
+      if (clientsList.length === 0) {
+        grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px 20px;">
+          <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
+          <div style="color:#64748b;margin-bottom:16px;">Could not load accounts. The server may still be waking up.</div>
+          <button onclick="showAccountSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">Retry</button>
+          <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
+        </div>`;
+      } else {
+        grid.innerHTML = clientsList.map(c => `
     <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
       <div class="ac-icon">🏥</div>
       <div class="ac-name">${esc(c.company)}</div>
@@ -3309,6 +3333,7 @@
       <div class="ac-badge"><span>●</span> Active</div>
     </div>
   `).join('');
+      }
     }
 
     function selectAccount(clientId, company) {
