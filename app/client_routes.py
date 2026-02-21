@@ -3,6 +3,7 @@
 import os
 import json as _json
 import shutil
+import sqlite3
 import uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Cookie, Response, Request, UploadFile, File as FastAPIFile, Form
@@ -787,6 +788,109 @@ async def upload_file(
         "row_count": row_count,
         "imported_claims": imported,
         "import_errors": import_errors[:5],
+    }
+
+
+# ─── Client Report ────────────────────────────────────────────────────────────
+
+@router.get("/report/{client_id}")
+def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
+               hub_session: Optional[str] = Cookie(None)):
+    """Generate a comprehensive cross-section report for CSV / print."""
+    _require_user(hub_session)
+    from app.client_db import get_db
+    from datetime import date, datetime
+
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+
+    # Period filter
+    where_date = ""
+    if period == "mtd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(day=1).isoformat()}'"
+    elif period == "ytd":
+        where_date = f" AND date(DOS) >= '{date.today().replace(month=1,day=1).isoformat()}'"
+
+    sp_filter = f" AND sub_profile='{sub_profile}'" if sub_profile else ""
+
+    # Client info
+    client_row = conn.execute("SELECT company,contact_name,email,phone FROM clients WHERE id=?", (client_id,)).fetchone()
+    client_info = dict(client_row) if client_row else {}
+
+    # Claims
+    base = f"SELECT * FROM claims_master WHERE client_id=?{sp_filter}{where_date}"
+    claims = [dict(r) for r in conn.execute(base, (client_id,)).fetchall()]
+    total_charged = sum(float(c.get("ChargeAmount") or 0) for c in claims)
+    total_paid = sum(float(c.get("PaidAmount") or 0) for c in claims)
+    total_balance = sum(float(c.get("BalanceRemaining") or 0) for c in claims)
+
+    status_agg = {}
+    for c in claims:
+        st = c.get("ClaimStatus") or "Unknown"
+        if st not in status_agg:
+            status_agg[st] = {"count": 0, "charged": 0, "paid": 0}
+        status_agg[st]["count"] += 1
+        status_agg[st]["charged"] += float(c.get("ChargeAmount") or 0)
+        status_agg[st]["paid"] += float(c.get("PaidAmount") or 0)
+    by_status = [{"status": k, **v} for k, v in status_agg.items()]
+
+    denial_agg = {}
+    for c in claims:
+        dc = c.get("DenialCategory") or ""
+        if dc:
+            denial_agg[dc] = denial_agg.get(dc, 0) + 1
+    top_denials = sorted([{"category": k, "count": v} for k, v in denial_agg.items()], key=lambda x: -x["count"])[:10]
+
+    # Credentialing
+    cred_base = f"SELECT * FROM credentialing WHERE client_id=?{sp_filter}"
+    cred_rows = [dict(r) for r in conn.execute(cred_base, (client_id,)).fetchall()]
+    cred_summary = {}
+    for r in cred_rows:
+        st = r.get("Status") or "Unknown"
+        cred_summary[st] = cred_summary.get(st, 0) + 1
+    cred_detail = [{"provider": r.get("ProviderName",""), "payor": r.get("Payor",""), "type": r.get("CredType",""),
+                    "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""), "approved": r.get("ApprovedDate",""),
+                    "expires": r.get("ExpirationDate",""), "owner": r.get("Owner","")} for r in cred_rows]
+
+    # Enrollment
+    enr_base = f"SELECT * FROM enrollment WHERE client_id=?{sp_filter}"
+    enr_rows = [dict(r) for r in conn.execute(enr_base, (client_id,)).fetchall()]
+    enr_summary = {}
+    for r in enr_rows:
+        st = r.get("Status") or "Unknown"
+        enr_summary[st] = enr_summary.get(st, 0) + 1
+    enr_detail = [{"provider": r.get("ProviderName",""), "payor": r.get("Payor",""), "type": r.get("EnrollType",""),
+                   "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""),
+                   "effective": r.get("EffectiveDate",""), "owner": r.get("Owner","")} for r in enr_rows]
+
+    # EDI
+    edi_base = f"SELECT * FROM edi_setup WHERE client_id=?{sp_filter}"
+    edi_rows = [dict(r) for r in conn.execute(edi_base, (client_id,)).fetchall()]
+    edi_summary = {}
+    for r in edi_rows:
+        st = r.get("EDIStatus") or "Unknown"
+        edi_summary[st] = edi_summary.get(st, 0) + 1
+    edi_detail = [{"provider": r.get("ProviderName",""), "payor": r.get("Payor",""), "payer_id": r.get("PayerID",""),
+                   "edi": r.get("EDIStatus",""), "era": r.get("ERAStatus",""), "eft": r.get("EFTStatus",""),
+                   "submitted": r.get("SubmittedDate",""), "go_live": r.get("GoLiveDate",""),
+                   "owner": r.get("Owner","")} for r in edi_rows]
+
+    # Payments
+    pay_rows = conn.execute("SELECT COALESCE(SUM(PaidAmount),0) as total, COUNT(*) as cnt FROM payments WHERE client_id=?", (client_id,)).fetchone()
+    payments = {"total": float(pay_rows["total"]) if pay_rows else 0, "count": int(pay_rows["cnt"]) if pay_rows else 0}
+
+    conn.close()
+
+    return {
+        "generated_at": date.today().isoformat(),
+        "period": period,
+        "client": client_info,
+        "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
+                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
+        "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
+        "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
+        "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
+        "payments": payments,
     }
 
 
