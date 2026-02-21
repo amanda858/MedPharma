@@ -2998,7 +2998,7 @@
       <td style="font-size:12px">${esc(c.Owner || '—')}</td>
       <td style="font-size:12px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.NextAction || '—')}</td>
       <td style="font-size:12px;${c.NextActionDueDate && new Date(c.NextActionDueDate) < new Date() ? 'color:var(--danger);font-weight:600' : ''}">${c.NextActionDueDate || '—'}</td>
-      <td><button class="btn btn-secondary btn-sm" onclick="editClaim(${c.id})">Edit</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editClaim(${c.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteClaimRow(${c.id})">🗑</button></td>
     </tr>`;
       }).join('');
     }
@@ -3214,7 +3214,7 @@
     <td style="font-size:12px;${i.ExpirationDate && new Date(i.ExpirationDate) < new Date() ? 'color:var(--danger);font-weight:600' : ''}">${i.ExpirationDate || '—'}</td>
     <td style="font-size:12px">${esc(i.Owner || '—')}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td><button class="btn btn-secondary btn-sm" onclick="editCredItem(${i.id})">Edit</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editCredItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteCredRow(${i.id})">🗑</button></td>
   </tr>`).join('');
     }
 
@@ -3309,7 +3309,7 @@
     <td style="font-size:12px">${i.EffectiveDate || '—'}</td>
     <td style="font-size:12px">${esc(i.Owner || '—')}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td><button class="btn btn-secondary btn-sm" onclick="editEnrollItem(${i.id})">Edit</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editEnrollItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEnrollRow(${i.id})">🗑</button></td>
   </tr>`).join('');
     }
 
@@ -3402,7 +3402,7 @@
     <td style="font-size:12px">${i.GoLiveDate || '—'}</td>
     <td style="font-size:12px">${esc(i.Owner || '—')}</td>
     <td style="font-size:12px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td><button class="btn btn-secondary btn-sm" onclick="editEdiItem(${i.id})">Edit</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editEdiItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEdiRow(${i.id})">🗑</button></td>
   </tr>`).join('');
     }
 
@@ -3632,6 +3632,40 @@
         'inactive': 'badge-gray', 'not-enrolled': 'badge-gray',
       };
       return `<span class="badge ${map[s] || 'badge-gray'}">${esc(status)}</span>`;
+    }
+
+    // ─── Delete functions ───
+    async function deleteClaimRow(id) {
+      if (!confirm('Delete this claim? This cannot be undone.')) return;
+      try {
+        const r = await fetch(`/hub/api/claims/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        toast('Claim deleted', 'success'); loadClaims(); loadDashboard();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function deleteCredRow(id) {
+      if (!confirm('Delete this credentialing record?')) return;
+      try {
+        const r = await fetch(`/hub/api/credentialing/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        toast('Record deleted', 'success'); loadCred();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function deleteEnrollRow(id) {
+      if (!confirm('Delete this enrollment record?')) return;
+      try {
+        const r = await fetch(`/hub/api/enrollment/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        toast('Record deleted', 'success'); loadEnroll();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function deleteEdiRow(id) {
+      if (!confirm('Delete this EDI record?')) return;
+      try {
+        const r = await fetch(`/hub/api/edi/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        toast('Record deleted', 'success'); loadEdi();
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     function fmt(n) {
