@@ -790,7 +790,183 @@ async def upload_file(
     }
 
 
-def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
+# ─── Direct Excel Import (per-section) ───────────────────────────────────────
+
+@router.post("/import-excel")
+async def import_excel(
+    file: UploadFile = FastAPIFile(...),
+    category: str = Form("Claims"),
+    client_id: Optional[int] = Form(None),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI)."""
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user) or user["id"]
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv files supported for import")
+
+    content = await file.read()
+    imported = 0
+    errors = []
+
+    try:
+        if category == "Claims":
+            imported, errors = _import_claims_from_excel(content, ext, scope)
+        elif category == "Credentialing":
+            imported, errors = _import_credentialing_from_excel(content, ext, scope)
+        elif category == "Enrollment":
+            imported, errors = _import_enrollment_from_excel(content, ext, scope)
+        elif category == "EDI":
+            imported, errors = _import_edi_from_excel(content, ext, scope)
+        else:
+            raise HTTPException(400, f"Unknown category: {category}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        errors = [str(e)]
+
+    return {
+        "category": category,
+        "imported": imported,
+        "errors": errors[:10],
+        "original_name": file.filename,
+    }
+
+
+def _parse_excel_rows(content: bytes, ext: str):
+    """Parse Excel/CSV bytes into list of dict rows."""
+    import csv, io
+    rows = []
+    if ext == ".csv":
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
+        rows = list(reader)
+    else:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        headers = None
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                headers = [str(c).strip() if c else "" for c in row]
+            else:
+                rows.append(dict(zip(headers, row)))
+        wb.close()
+    return rows
+
+
+def _norm_key(k):
+    return (k or "").strip().lower().replace("_", " ")
+
+
+def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
+    from app.client_db import create_credentialing
+    COL_MAP = {
+        "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "type": "CredType", "credtype": "CredType", "cred type": "CredType",
+        "credential type": "CredType", "credentialing type": "CredType",
+        "status": "Status",
+        "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
+        "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
+        "expiration": "ExpirationDate", "expires": "ExpirationDate", "expiration date": "ExpirationDate",
+        "expirationdate": "ExpirationDate",
+        "owner": "Owner", "notes": "Notes",
+        "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
+    }
+    rows = _parse_excel_rows(content, ext)
+    if not rows:
+        return 0, ["No rows found"]
+    imported, errors = 0, []
+    for i, row in enumerate(rows):
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = COL_MAP.get(_norm_key(raw_key))
+            if db_col and val is not None:
+                mapped[db_col] = str(val).strip()
+        if not mapped.get("ProviderName") and not mapped.get("Payor"):
+            continue
+        mapped["client_id"] = client_id
+        try:
+            create_credentialing(mapped)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+2}: {e}")
+    return imported, errors
+
+
+def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
+    from app.client_db import create_enrollment
+    COL_MAP = {
+        "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "type": "EnrollType", "enrolltype": "EnrollType", "enroll type": "EnrollType",
+        "enrollment type": "EnrollType",
+        "status": "Status",
+        "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
+        "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
+        "effective": "EffectiveDate", "effective date": "EffectiveDate", "effectivedate": "EffectiveDate",
+        "owner": "Owner", "notes": "Notes",
+        "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
+    }
+    rows = _parse_excel_rows(content, ext)
+    if not rows:
+        return 0, ["No rows found"]
+    imported, errors = 0, []
+    for i, row in enumerate(rows):
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = COL_MAP.get(_norm_key(raw_key))
+            if db_col and val is not None:
+                mapped[db_col] = str(val).strip()
+        if not mapped.get("ProviderName") and not mapped.get("Payor"):
+            continue
+        mapped["client_id"] = client_id
+        try:
+            create_enrollment(mapped)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+2}: {e}")
+    return imported, errors
+
+
+def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
+    from app.client_db import create_edi
+    COL_MAP = {
+        "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "payer id": "PayerID", "payerid": "PayerID", "payer_id": "PayerID",
+        "edi": "EDIStatus", "edi status": "EDIStatus", "edistatus": "EDIStatus",
+        "era": "ERAStatus", "era status": "ERAStatus", "erastatus": "ERAStatus",
+        "eft": "EFTStatus", "eft status": "EFTStatus", "eftstatus": "EFTStatus",
+        "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "go live": "GoLiveDate", "golivedate": "GoLiveDate", "go live date": "GoLiveDate",
+        "go-live": "GoLiveDate",
+        "owner": "Owner", "notes": "Notes",
+        "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
+    }
+    rows = _parse_excel_rows(content, ext)
+    if not rows:
+        return 0, ["No rows found"]
+    imported, errors = 0, []
+    for i, row in enumerate(rows):
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = COL_MAP.get(_norm_key(raw_key))
+            if db_col and val is not None:
+                mapped[db_col] = str(val).strip()
+        if not mapped.get("ProviderName") and not mapped.get("Payor"):
+            continue
+        mapped["client_id"] = client_id
+        try:
+            create_edi(mapped)
+            imported += 1
+        except Exception as e:
+            errors.append(f"Row {i+2}: {e}")
+    return imported, errors
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.

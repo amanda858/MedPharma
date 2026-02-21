@@ -2023,8 +2023,11 @@
               </select>
               <input class="form-control btn-sm" type="text" id="claimSearch" placeholder="🔍 Search claims…"
                 oninput="filterClaimsTable()" style="width:200px">
-              <button class="btn btn-primary btn-sm" onclick="openClaimModal()" style="display:none">+ New
-                Claim</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('claimsExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="claimsExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+                onchange="importExcel(this,'Claims')">
+              <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
             </div>
           </div>
           <div class="queue-tabs" id="queueTabs"></div>
@@ -2068,7 +2071,11 @@
                 <option>Denied</option>
                 <option>Expired</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openCredModal()" style="display:none">+ Add</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('credExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="credExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+                onchange="importExcel(this,'Credentialing')">
+              <button class="btn btn-primary btn-sm" onclick="openCredModal()">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -2109,7 +2116,11 @@
                 <option>Enrolled</option>
                 <option>Denied</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openEnrollModal()" style="display:none">+ Add</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('enrollExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="enrollExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+                onchange="importExcel(this,'Enrollment')">
+              <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -2141,7 +2152,11 @@
           <div class="page-header">
             <div class="page-title">EDI Setup</div>
             <div class="page-actions">
-              <button class="btn btn-primary btn-sm" onclick="openEdiModal()" style="display:none">+ Add</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ediExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="ediExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+                onchange="importExcel(this,'EDI')">
+              <button class="btn btn-primary btn-sm" onclick="openEdiModal()">+ Add</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -3899,6 +3914,39 @@
       t.className = `toast ${type}`; t.textContent = msg;
       document.body.appendChild(t);
       setTimeout(() => t.remove(), 3500);
+    }
+
+    // ═══════════════════════════════════════
+    // EXCEL IMPORT (per-section)
+    // ═══════════════════════════════════════
+    async function importExcel(input, category) {
+      if (!input.files || !input.files.length) return;
+      const file = input.files[0];
+      input.value = '';  // reset so same file can be re-selected
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category', category);
+      fd.append('client_id', activeClientId);
+      toast(`Importing ${file.name} into ${category}…`, 'info');
+      try {
+        const r = await fetch('/hub/api/import-excel', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) { toast(d.detail || 'Import failed', 'error'); return; }
+        toast(`✅ Imported ${d.imported} rows into ${category}`, 'success');
+        if (d.errors && d.errors.length) {
+          console.warn('Import errors:', d.errors);
+          toast(`⚠️ ${d.errors.length} row(s) had errors`, 'warning');
+        }
+        // Refresh the active panel
+        if (category === 'Claims') loadClaims();
+        else if (category === 'Credentialing') loadCred();
+        else if (category === 'Enrollment') loadEnroll();
+        else if (category === 'EDI') loadEdi();
+      } catch (e) {
+        console.error(e);
+        toast('Import failed: ' + e.message, 'error');
+      }
     }
 
     // ═══════════════════════════════════════
