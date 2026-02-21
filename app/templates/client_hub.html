@@ -113,10 +113,11 @@
     }
 
     .login-hero-logo {
-      width: 280px;
-      max-width: 80%;
-      margin-bottom: 32px;
-      filter: drop-shadow(0 4px 20px rgba(0, 0, 0, .3));
+      width: 340px;
+      max-width: 85%;
+      margin-bottom: 40px;
+      filter: drop-shadow(0 8px 30px rgba(0, 0, 0, .4));
+      border-radius: 8px;
     }
 
     .login-hero-tagline {
@@ -196,61 +197,36 @@
       font-weight: 600;
     }
 
-    /* Website preview card */
-    .login-site-preview {
-      margin-top: 32px;
-      background: rgba(255, 255, 255, .04);
-      border: 1px solid rgba(255, 255, 255, .08);
-      border-radius: 14px;
-      padding: 3px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
-      overflow: hidden;
-      max-width: 420px;
-      width: 100%;
-    }
-
-    .login-site-preview-bar {
+    /* Stats row on login */
+    .login-stats {
       display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, .06);
-      border-radius: 11px 11px 0 0;
+      gap: 16px;
+      margin-top: 36px;
+      justify-content: center;
     }
 
-    .login-site-preview-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, .2);
+    .login-stat {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px;
+      padding: 16px 20px;
+      text-align: center;
+      min-width: 100px;
+      backdrop-filter: blur(8px);
     }
 
-    .login-site-preview-dot:nth-child(1) {
-      background: #ff5f57;
+    .login-stat-num {
+      font-size: 24px;
+      font-weight: 800;
+      color: #FFCC53;
     }
 
-    .login-site-preview-dot:nth-child(2) {
-      background: #ffbd2e;
-    }
-
-    .login-site-preview-dot:nth-child(3) {
-      background: #28ca41;
-    }
-
-    .login-site-preview-url {
-      flex: 1;
-      background: rgba(255, 255, 255, .06);
-      border-radius: 4px;
-      padding: 3px 10px;
-      font-size: 10px;
-      color: rgba(255, 255, 255, .4);
-      margin-left: 8px;
-    }
-
-    .login-site-preview img {
-      width: 100%;
-      display: block;
-      border-radius: 0 0 11px 11px;
+    .login-stat-label {
+      font-size: 11px;
+      color: rgba(255,255,255,.5);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
     }
 
     /* Right panel — login form */
@@ -493,7 +469,7 @@
       }
 
       .login-hero-features,
-      .login-site-preview {
+      .login-stats {
         display: none;
       }
 
@@ -1681,10 +1657,10 @@
   <div id="loginScreen">
     <div class="login-wrap">
 
-      <!-- LEFT — Hero / Brand Showcase -->
+      <!-- LEFT — Hero / Brand Panel -->
       <div class="login-hero-panel">
         <div class="login-hero-content">
-          <img src="https://medpharmasc.com/wp-content/uploads/2024/11/logo.png" alt="MedPharma"
+          <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma"
             class="login-hero-logo">
 
           <div class="login-hero-tagline">
@@ -1697,35 +1673,35 @@
           <div class="login-hero-features">
             <div class="login-hero-feature">
               <div class="feat-icon">📋</div>
-              <div class="feat-text"><strong>Claims & RCM</strong> — Reduce denials, optimize reimbursements, strengthen
-                cash flow</div>
+              <div class="feat-text"><strong>Claims & RCM</strong> — Reduce denials, optimize reimbursements, strengthen cash flow</div>
             </div>
             <div class="login-hero-feature">
               <div class="feat-icon">🎓</div>
-              <div class="feat-text"><strong>Credentialing & Enrollment</strong> — Streamlined payor onboarding &
-                tracking</div>
+              <div class="feat-text"><strong>Credentialing & Enrollment</strong> — Streamlined payor onboarding & tracking</div>
             </div>
             <div class="login-hero-feature">
               <div class="feat-icon">📊</div>
-              <div class="feat-text"><strong>Real-Time Analytics</strong> — AI-powered reports with actionable insights
-              </div>
+              <div class="feat-text"><strong>Real-Time Analytics</strong> — AI-powered reports with actionable insights</div>
             </div>
           </div>
 
-          <!-- Website Preview -->
-          <div class="login-site-preview">
-            <div class="login-site-preview-bar">
-              <div class="login-site-preview-dot"></div>
-              <div class="login-site-preview-dot"></div>
-              <div class="login-site-preview-dot"></div>
-              <div class="login-site-preview-url">medpharmasc.com</div>
+          <div class="login-stats">
+            <div class="login-stat">
+              <div class="login-stat-num">500+</div>
+              <div class="login-stat-label">Providers</div>
             </div>
-            <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma Website"
-              loading="lazy">
+            <div class="login-stat">
+              <div class="login-stat-num">98%</div>
+              <div class="login-stat-label">Clean Claims</div>
+            </div>
+            <div class="login-stat">
+              <div class="login-stat-num">24/7</div>
+              <div class="login-stat-label">Support</div>
+            </div>
           </div>
 
           <div class="login-hero-site">
-            🌐 <a href="https://medpharmasc.com" target="_blank">medpharmasc.com</a> · Smart Workflow Solutions
+            🌐 <a href="https://medpharmasc.com" target="blank">medpharmasc.com</a>
           </div>
         </div>
       </div>
