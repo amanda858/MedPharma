@@ -5584,15 +5584,6 @@
         .catch(e => toast(e.message, 'error'));
     }
 
-    const name = prompt('Enter sub-profile name (e.g. MHP, OMT, Ancillary):');
-    if (!name || !name.trim()) return;
-    const cid = activeClientId;
-    const url = cid ? `/hub/api/practice-profiles/${cid}/${name.trim()}` : `/hub/api/practice-profiles/${name.trim()}`;
-    fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
-      .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
-      .catch(e => toast(e.message, 'error'));
-    }
-
     // ═══════════════════════════════════════
     // TEAM PRODUCTION
     // ═══════════════════════════════════════
