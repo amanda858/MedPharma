@@ -3081,7 +3081,7 @@
     let clientsList = [];
     let allClaims = [];
     let activeQueueStatus = 'All';
-    const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-up', 'Appeal', 'Paid'];
+    const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
 
     // ═══════════════════════════════════════
     // BOOT
@@ -3581,7 +3581,7 @@
 
     function buildQueueTabs(claims) {
       const counts = {};
-      QUEUE_STATUSES.forEach(s => { counts[s] = s === 'All' ? claims.length : claims.filter(c => c.ClaimStatus === s).length; });
+      QUEUE_STATUSES.forEach(s => { counts[s] = s === 'All' ? claims.length : claims.filter(c => (c.ClaimStatus || '').toLowerCase() === s.toLowerCase()).length; });
       document.getElementById('queueTabs').innerHTML = `
         <button class="btn btn-danger btn-sm" style="margin-right:16px" onclick="bulkDeleteClaims()">🗑 Bulk Delete Selected</button>
       ` + QUEUE_STATUSES.map(s => `
@@ -3598,7 +3598,7 @@
 
     function renderClaimsForStatus(status) {
       const datePick = document.getElementById('claimsDatePicker')?.value || '';
-      let list = status === 'All' ? allClaims : allClaims.filter(c => c.ClaimStatus === status);
+      let list = status === 'All' ? allClaims : allClaims.filter(c => (c.ClaimStatus || '').toLowerCase() === status.toLowerCase());
       if (datePick) list = list.filter(c => (c.DOS || '') === datePick || (c.StatusStartDate || '') === datePick);
       const search = document.getElementById('claimSearch')?.value?.toLowerCase() || '';
       const filtered = search ? list.filter(c =>
@@ -5325,15 +5325,21 @@
         if (d.imported > 0) {
           toast(`✅ Imported ${d.imported} rows into ${d.import_category} — file saved as hard copy`, 'success');
           if (d.import_errors && d.import_errors.length) toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
-          // Refresh the relevant data section
-          if (d.import_category === 'Claims') loadClaims();
-          else if (d.import_category === 'Credentialing') loadCred();
-          else if (d.import_category === 'Enrollment') loadEnroll();
-          else if (d.import_category === 'EDI') loadEdi();
-          loadDashboard();
+        } else if (d.import_category) {
+          toast(`⚠️ File saved but no rows imported — check column headers match expected format`, 'warning');
+          if (d.import_errors && d.import_errors.length) {
+            console.warn('Import errors:', d.import_errors);
+            d.import_errors.forEach(e => toast(e, 'warning'));
+          }
         } else {
           toast(`${file.name} uploaded!`, 'success');
         }
+        // Always refresh the relevant data section after upload
+        if (d.import_category === 'Claims') loadClaims();
+        else if (d.import_category === 'Credentialing') loadCred();
+        else if (d.import_category === 'Enrollment') loadEnroll();
+        else if (d.import_category === 'EDI') loadEdi();
+        loadDashboard();
         loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
     }
