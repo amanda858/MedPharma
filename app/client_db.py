@@ -345,26 +345,18 @@ def init_client_hub_db():
     if total == 0:
         _seed_data(conn)
     else:
-        # Auto-fix: ensure BOTH expected client accounts exist.
-        # If either is missing the DB has stale/wrong seed data — wipe and re-seed.
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username IN ('eric','rcm')")
-        found = cur.fetchone()[0]
-        if found < 2:
-            for tbl in (
-                "sessions", "claims_master", "payments", "notes_log",
-                "credentialing", "enrollment", "edi_setup", "providers",
-                "client_files", "clients"
-            ):
-                try:
-                    cur.execute(f"DELETE FROM {tbl}")
-                except Exception:
-                    pass
-            conn.commit()
-            _seed_data(conn)
-
-        # Auto-migrate: fix client profile data — usernames are login users, not clients
+        # Auto-migrate: fix client profile data
         cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        cur.execute("UPDATE clients SET contact_name='TruPath Laboratory', email='info@trupath.com' WHERE username='rcm' AND contact_name='RCM Team'")
+        # Remove legacy TruPath seed account if present
+        cur.execute("DELETE FROM clients WHERE username='rcm'")
+        # Ensure jessica account exists
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
+        if cur.fetchone()[0] == 0:
+            jsalt = secrets.token_hex(16)
+            cur.execute(
+                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "client")
+            )
         conn.commit()
 
     conn.close()
@@ -394,14 +386,11 @@ def _seed_data(conn):
     )
     luminary_id = cur.lastrowid
 
-    # Client 2 — TruPath (Laboratory — uses Group Contracting, not individual credentialing)
+    # Client 2 — Jessica
     s2 = secrets.token_hex(16)
     cur.execute(
-        """INSERT INTO clients
-           (username,password,salt,company,contact_name,email,role,specialty,practice_type)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        ("rcm", _hash_pw("rcm123", s2), s2, "TruPath", "TruPath Laboratory", "info@trupath.com", "client",
-         "Laboratory", "Laboratory")
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("jessica", _hash_pw("jessica123", s2), s2, "MedPharma SC", "Jessica", "", "client")
     )
 
     # Sub-profiles for Luminary: MHP and OMT (both Ancillary)
