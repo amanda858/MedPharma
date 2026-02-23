@@ -1063,45 +1063,97 @@ def _parse_excel_rows(content: bytes, ext: str):
     else:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        ws = wb.active
-        headers = None
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
-            if i == 0:
-                headers = [str(c).strip() if c else "" for c in row]
-            else:
-                rows.append(dict(zip(headers, row)))
+        # Try all sheets — use the one with the most data rows
+        best_rows, best_headers = [], []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            sheet_headers = None
+            sheet_rows = []
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i == 0:
+                    sheet_headers = [str(c).strip() if c else "" for c in row]
+                elif sheet_headers:
+                    # Skip completely empty rows
+                    if any(c is not None and str(c).strip() for c in row):
+                        sheet_rows.append(dict(zip(sheet_headers, row)))
+            if len(sheet_rows) > len(best_rows):
+                best_rows = sheet_rows
+                best_headers = sheet_headers
+        rows = best_rows
         wb.close()
     return rows
 
 
 def _norm_key(k):
-    return (k or "").strip().lower().replace("_", " ")
+    """Normalize an Excel header: lowercase, strip, collapse whitespace, remove _/-/# chars."""
+    import re
+    s = (k or "").strip().lower()
+    s = s.replace("_", " ").replace("-", " ").replace("#", "").replace(".", " ")
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _fuzzy_match_column(header, col_map):
+    """Try exact match first, then substring/contains matching as fallback."""
+    norm = _norm_key(header)
+    if norm in col_map:
+        return col_map[norm]
+    # Try if any map key is contained in the header
+    for map_key, db_col in col_map.items():
+        if len(map_key) >= 3 and map_key in norm:
+            return db_col
+    return None
 
 
 def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import create_credentialing
     COL_MAP = {
+        # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "rendering provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+        "rendering": "ProviderName", "servicing provider": "ProviderName",
+        # Payor
         "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "insurance name": "Payor", "insurance company": "Payor", "plan": "Payor",
+        "plan name": "Payor", "payer name": "Payor", "carrier": "Payor",
+        "insurance plan": "Payor", "health plan": "Payor", "ins": "Payor",
+        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+        # Type
         "type": "CredType", "credtype": "CredType", "cred type": "CredType",
         "credential type": "CredType", "credentialing type": "CredType",
-        "status": "Status",
+        "application type": "CredType", "app type": "CredType",
+        # Status
+        "status": "Status", "cred status": "Status", "credentialing status": "Status",
+        "app status": "Status", "application status": "Status", "current status": "Status",
+        # Dates
         "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "date submitted": "SubmittedDate", "submission date": "SubmittedDate", "app submitted": "SubmittedDate",
+        "application submitted": "SubmittedDate", "submit date": "SubmittedDate",
         "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
+        "followup": "FollowUpDate", "followup date": "FollowUpDate", "next follow up": "FollowUpDate",
+        "fu date": "FollowUpDate", "f/u date": "FollowUpDate", "f/u": "FollowUpDate",
         "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
+        "approval date": "ApprovedDate", "date approved": "ApprovedDate",
         "expiration": "ExpirationDate", "expires": "ExpirationDate", "expiration date": "ExpirationDate",
-        "expirationdate": "ExpirationDate",
-        "owner": "Owner", "notes": "Notes",
+        "expirationdate": "ExpirationDate", "exp date": "ExpirationDate", "expiry": "ExpirationDate",
+        "expiry date": "ExpirationDate", "renewal date": "ExpirationDate",
+        "effective": "ApprovedDate", "effective date": "ApprovedDate",
+        # Owner / Notes
+        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
+        "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
     }
     rows = _parse_excel_rows(content, ext)
     if not rows:
         return 0, ["No rows found"]
+    # Log detected headers for debugging
+    first_row_keys = list(rows[0].keys()) if rows else []
     imported, errors = 0, []
     for i, row in enumerate(rows):
         mapped = {}
         for raw_key, val in row.items():
-            db_col = COL_MAP.get(_norm_key(raw_key))
+            db_col = _fuzzy_match_column(raw_key, COL_MAP)
             if db_col and val is not None:
                 mapped[db_col] = str(val).strip()
         if not mapped.get("ProviderName") and not mapped.get("Payor"):
@@ -1124,32 +1176,57 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
+    if not imported and first_row_keys:
+        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
+        errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Expiration")
     return imported, errors
 
 
 def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import create_enrollment
     COL_MAP = {
+        # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "rendering provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+        "rendering": "ProviderName", "servicing provider": "ProviderName",
+        # Payor
         "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "insurance name": "Payor", "insurance company": "Payor", "plan": "Payor",
+        "plan name": "Payor", "payer name": "Payor", "carrier": "Payor",
+        "insurance plan": "Payor", "health plan": "Payor", "ins": "Payor",
+        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+        # Type
         "type": "EnrollType", "enrolltype": "EnrollType", "enroll type": "EnrollType",
-        "enrollment type": "EnrollType",
-        "status": "Status",
+        "enrollment type": "EnrollType", "application type": "EnrollType",
+        # Status
+        "status": "Status", "enrollment status": "Status", "enroll status": "Status",
+        "app status": "Status", "application status": "Status", "current status": "Status",
+        # Dates
         "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "date submitted": "SubmittedDate", "submission date": "SubmittedDate", "submit date": "SubmittedDate",
+        "application submitted": "SubmittedDate", "app submitted": "SubmittedDate",
         "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
+        "followup": "FollowUpDate", "followup date": "FollowUpDate", "next follow up": "FollowUpDate",
+        "fu date": "FollowUpDate", "f/u date": "FollowUpDate", "f/u": "FollowUpDate",
         "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
+        "approval date": "ApprovedDate", "date approved": "ApprovedDate",
         "effective": "EffectiveDate", "effective date": "EffectiveDate", "effectivedate": "EffectiveDate",
-        "owner": "Owner", "notes": "Notes",
+        "eff date": "EffectiveDate", "start date": "EffectiveDate",
+        # Owner / Notes
+        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
+        "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
     }
     rows = _parse_excel_rows(content, ext)
     if not rows:
         return 0, ["No rows found"]
+    first_row_keys = list(rows[0].keys()) if rows else []
     imported, errors = 0, []
     for i, row in enumerate(rows):
         mapped = {}
         for raw_key, val in row.items():
-            db_col = COL_MAP.get(_norm_key(raw_key))
+            db_col = _fuzzy_match_column(raw_key, COL_MAP)
             if db_col and val is not None:
                 mapped[db_col] = str(val).strip()
         if not mapped.get("ProviderName") and not mapped.get("Payor"):
@@ -1172,32 +1249,48 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
+    if not imported and first_row_keys:
+        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
+        errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Effective")
     return imported, errors
 
 
 def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import create_edi
     COL_MAP = {
+        # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "rendering provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+        # Payor
         "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "insurance name": "Payor", "insurance company": "Payor", "plan": "Payor",
+        "plan name": "Payor", "payer name": "Payor", "carrier": "Payor",
+        "insurance plan": "Payor", "health plan": "Payor",
+        # EDI-specific
         "payer id": "PayerID", "payerid": "PayerID", "payer_id": "PayerID",
         "edi": "EDIStatus", "edi status": "EDIStatus", "edistatus": "EDIStatus",
         "era": "ERAStatus", "era status": "ERAStatus", "erastatus": "ERAStatus",
         "eft": "EFTStatus", "eft status": "EFTStatus", "eftstatus": "EFTStatus",
+        # Dates
         "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "date submitted": "SubmittedDate", "submission date": "SubmittedDate",
         "go live": "GoLiveDate", "golivedate": "GoLiveDate", "go live date": "GoLiveDate",
-        "go-live": "GoLiveDate",
-        "owner": "Owner", "notes": "Notes",
+        "go-live": "GoLiveDate", "golive": "GoLiveDate", "live date": "GoLiveDate",
+        # Owner / Notes
+        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
+        "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
     }
     rows = _parse_excel_rows(content, ext)
     if not rows:
         return 0, ["No rows found"]
+    first_row_keys = list(rows[0].keys()) if rows else []
     imported, errors = 0, []
     for i, row in enumerate(rows):
         mapped = {}
         for raw_key, val in row.items():
-            db_col = COL_MAP.get(_norm_key(raw_key))
+            db_col = _fuzzy_match_column(raw_key, COL_MAP)
             if db_col and val is not None:
                 mapped[db_col] = str(val).strip()
         if not mapped.get("ProviderName") and not mapped.get("Payor"):
@@ -1220,6 +1313,9 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
             imported += 1
         except Exception as e:
             errors.append(f"Row {i+2}: {e}")
+    if not imported and first_row_keys:
+        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
+        errors.append("Expected headers like: Provider, Payor/Insurance, Payer ID, EDI Status, ERA Status, EFT Status")
     return imported, errors
 
 
@@ -1234,35 +1330,86 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     from datetime import date as _date
 
     COLUMN_MAP = {
-        # ClaimKey
-        "claimkey": "ClaimKey", "claim key": "ClaimKey", "claim #": "ClaimKey",
+        # ── ClaimKey ──
+        "claimkey": "ClaimKey", "claim key": "ClaimKey", "claim": "ClaimKey",
         "claim id": "ClaimKey", "claimid": "ClaimKey", "claim number": "ClaimKey",
-        # Patient
+        "claim no": "ClaimKey", "claimno": "ClaimKey", "claim num": "ClaimKey",
+        "account": "ClaimKey", "account number": "ClaimKey", "account no": "ClaimKey",
+        "acct": "ClaimKey", "acct no": "ClaimKey", "acct number": "ClaimKey",
+        "ticket": "ClaimKey", "ticket no": "ClaimKey", "ticket number": "ClaimKey",
+        "reference": "ClaimKey", "ref": "ClaimKey", "ref no": "ClaimKey",
+        "icn": "ClaimKey", "tcn": "ClaimKey", "dcn": "ClaimKey",
+        # ── Patient ──
         "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
-        "patientid": "PatientID", "patient id": "PatientID",
-        # Provider / Payor
+        "patientid": "PatientID", "patient id": "PatientID", "member id": "PatientID",
+        "memberid": "PatientID", "member": "PatientName", "subscriber": "PatientName",
+        "subscriber name": "PatientName", "insured name": "PatientName",
+        "patient last name": "PatientName", "last name": "PatientName", "name": "PatientName",
+        "first name": "PatientName",
+        # ── Provider ──
         "providername": "ProviderName", "provider name": "ProviderName", "provider": "ProviderName",
-        "npi": "NPI",
+        "rendering provider": "ProviderName", "rendering": "ProviderName",
+        "servicing provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+        "attending": "ProviderName", "attending provider": "ProviderName",
+        "billing provider": "ProviderName", "referring provider": "ProviderName",
+        "npi": "NPI", "provider npi": "NPI", "rendering npi": "NPI",
+        # ── Payor / Insurance ──
         "payor": "Payor", "payer": "Payor", "insurance": "Payor",
-        # DOS / CPT
+        "insurance name": "Payor", "insurance company": "Payor", "ins": "Payor",
+        "plan": "Payor", "plan name": "Payor", "payer name": "Payor",
+        "carrier": "Payor", "insurance plan": "Payor", "health plan": "Payor",
+        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+        "ins name": "Payor", "ins company": "Payor", "financial class": "Payor",
+        "fc": "Payor", "fin class": "Payor",
+        # ── DOS / CPT ──
         "dos": "DOS", "date of service": "DOS", "service date": "DOS",
+        "svc date": "DOS", "from date": "DOS", "from": "DOS", "date from": "DOS",
+        "service from": "DOS", "from dos": "DOS",
         "cptcode": "CPTCode", "cpt code": "CPTCode", "cpt": "CPTCode",
-        "description": "Description", "desc": "Description",
-        # Financials
-        "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount", "billed": "ChargeAmount",
+        "procedure": "CPTCode", "procedure code": "CPTCode", "proc code": "CPTCode",
+        "proc": "CPTCode", "service code": "CPTCode", "hcpcs": "CPTCode",
+        "description": "Description", "desc": "Description", "service description": "Description",
+        "procedure description": "Description", "proc desc": "Description",
+        # ── Financials ──
+        "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount",
+        "billed": "ChargeAmount", "billed amount": "ChargeAmount", "total charge": "ChargeAmount",
+        "total charges": "ChargeAmount", "charges": "ChargeAmount", "amount billed": "ChargeAmount",
+        "gross charge": "ChargeAmount", "original amount": "ChargeAmount", "fee": "ChargeAmount",
         "allowedamount": "AllowedAmount", "allowed amount": "AllowedAmount", "allowed": "AllowedAmount",
+        "approved amount": "AllowedAmount", "contracted amount": "AllowedAmount",
         "adjustmentamount": "AdjustmentAmount", "adjustment": "AdjustmentAmount", "adj": "AdjustmentAmount",
+        "adjustment amount": "AdjustmentAmount", "adj amount": "AdjustmentAmount",
+        "write off": "AdjustmentAmount", "writeoff": "AdjustmentAmount", "contractual": "AdjustmentAmount",
         "paidamount": "PaidAmount", "paid amount": "PaidAmount", "paid": "PaidAmount",
-        "balanceremaining": "BalanceRemaining", "balance": "BalanceRemaining", "balance remaining": "BalanceRemaining",
-        # Status / dates
+        "payment": "PaidAmount", "payment amount": "PaidAmount", "payments": "PaidAmount",
+        "total paid": "PaidAmount", "total payments": "PaidAmount", "amount paid": "PaidAmount",
+        "ins paid": "PaidAmount", "insurance paid": "PaidAmount", "reimbursement": "PaidAmount",
+        "balanceremaining": "BalanceRemaining", "balance": "BalanceRemaining",
+        "balance remaining": "BalanceRemaining", "bal": "BalanceRemaining",
+        "ar balance": "BalanceRemaining", "outstanding": "BalanceRemaining",
+        "amount due": "BalanceRemaining", "total balance": "BalanceRemaining",
+        "patient balance": "BalanceRemaining", "ins balance": "BalanceRemaining",
+        "remaining": "BalanceRemaining", "net balance": "BalanceRemaining",
+        # ── Status / dates ──
         "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
-        "billdate": "BillDate", "bill date": "BillDate",
-        "denieddate": "DeniedDate", "denied date": "DeniedDate",
-        "paiddate": "PaidDate", "paid date": "PaidDate",
-        "denialreason": "DenialReason", "denial reason": "DenialReason", "denial": "DenialReason",
+        "current status": "ClaimStatus", "ar status": "ClaimStatus",
+        "billdate": "BillDate", "bill date": "BillDate", "billed date": "BillDate",
+        "date billed": "BillDate", "submission date": "BillDate", "submitted date": "BillDate",
+        "date submitted": "BillDate",
+        "denieddate": "DeniedDate", "denied date": "DeniedDate", "date denied": "DeniedDate",
+        "denial date": "DeniedDate",
+        "paiddate": "PaidDate", "paid date": "PaidDate", "date paid": "PaidDate",
+        "payment date": "PaidDate", "check date": "PaidDate", "remit date": "PaidDate",
+        "eob date": "PaidDate",
+        "denialreason": "DenialReason", "denial reason": "DenialReason",
+        "denial": "DenialReason", "reason": "DenialReason", "remark": "DenialReason",
+        "remark code": "DenialReason", "carc": "DenialReason", "rarc": "DenialReason",
+        "denial code": "DenialReason",
         "denialcategory": "DenialCategory", "denial category": "DenialCategory",
-        "owner": "Owner",
-        # Sub-profile (MHP or OMT for Luminary)
+        "denial type": "DenialCategory",
+        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "worked by": "Owner",
+        # ── Sub-profile ──
         "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
         "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
     }
@@ -1277,9 +1424,17 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         if not v:
             return ""
         s = str(v).strip()
-        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%Y%m%d"):
+        # Handle datetime objects from openpyxl directly
+        from datetime import datetime, date as _dt_date
+        if isinstance(v, (datetime, _dt_date)):
+            return v.strftime("%Y-%m-%d")
+        # Strip time component if present (e.g. "2025-07-07 00:00:00")
+        if " " in s and len(s) > 10:
+            s = s.split(" ")[0]
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%Y%m%d",
+                     "%d-%b-%Y", "%d-%b-%y", "%b %d, %Y", "%B %d, %Y",
+                     "%d/%m/%Y", "%Y/%m/%d"):
             try:
-                from datetime import datetime
                 return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
             except Exception:
                 pass
@@ -1313,11 +1468,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     counter = 1
 
     for row in rows:
-        # Normalize keys (strip, lowercase, replace underscores with spaces)
+        # Use fuzzy column matching for flexible header support
         mapped = {}
         for raw_key, val in row.items():
-            norm = (raw_key or "").strip().lower().replace("_", " ")
-            db_col = COLUMN_MAP.get(norm)
+            db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
             if db_col:
                 mapped[db_col] = val
 
@@ -1370,6 +1524,12 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
 
     conn.commit()
     conn.close()
+    # Report unmapped headers as info for debugging
+    if rows:
+        first_row_keys = list(rows[0].keys())
+        unmapped = [k for k in first_row_keys if not _fuzzy_match_column(k, COLUMN_MAP)]
+        if unmapped:
+            errors.append(f"Unmapped Excel columns (ignored): {unmapped[:10]}")
     return imported, errors
 
 
