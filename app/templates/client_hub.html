@@ -2106,10 +2106,9 @@
           <div class="page-header">
             <div class="page-title">Claims Queue</div>
             <div class="page-actions" style="flex-wrap:wrap;gap:8px;">
-              <select id="weekRangeSelect" class="form-control btn-sm" onchange="filterClaimsTable()"
-                style="width:auto;min-width:190px;font-weight:600">
-                <option value="">All Weeks</option>
-              </select>
+              <input type="date" id="claimsDatePicker" class="form-control btn-sm" min="2026-02-20"
+                style="width:auto;min-width:190px;font-weight:600" onchange="filterClaimsTable()">
+              <button class="btn btn-sm btn-secondary" onclick="clearClaimsDatePicker()">All Dates</button>
               <input class="form-control btn-sm" type="text" id="claimSearch" placeholder="🔍 Search claims…"
                 oninput="filterClaimsTable()" style="width:200px">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('claims')">📤 Export CSV</button>
@@ -3687,10 +3686,12 @@
     function buildQueueTabs(claims) {
       const counts = {};
       QUEUE_STATUSES.forEach(s => { counts[s] = s === 'All' ? claims.length : claims.filter(c => c.ClaimStatus === s).length; });
-      document.getElementById('queueTabs').innerHTML = QUEUE_STATUSES.map(s => `
-    <button class="qtab ${s === activeQueueStatus ? 'active' : ''}" onclick="setQueueTab('${s}')">
-      ${s} <span class="cnt">${counts[s] || 0}</span>
-    </button>`).join('');
+      document.getElementById('queueTabs').innerHTML = `
+        <button class="btn btn-danger btn-sm" style="margin-right:16px" onclick="bulkDeleteClaims()">🗑 Bulk Delete Selected</button>
+      ` + QUEUE_STATUSES.map(s => `
+        <button class="qtab ${s === activeQueueStatus ? 'active' : ''}" onclick="setQueueTab('${s}')">
+          ${s} <span class="cnt">${counts[s] || 0}</span>
+        </button>`).join('');
     }
 
     function setQueueTab(status) {
@@ -3700,7 +3701,9 @@
     }
 
     function renderClaimsForStatus(status) {
-      const list = status === 'All' ? allClaims : allClaims.filter(c => c.ClaimStatus === status);
+      const datePick = document.getElementById('claimsDatePicker')?.value || '';
+      let list = status === 'All' ? allClaims : allClaims.filter(c => c.ClaimStatus === status);
+      if (datePick) list = list.filter(c => (c.DOS || '') === datePick || (c.StatusStartDate || '') === datePick);
       const search = document.getElementById('claimSearch')?.value?.toLowerCase() || '';
       const filtered = search ? list.filter(c =>
         (c.ClaimKey || '').toLowerCase().includes(search) ||
@@ -3731,12 +3734,33 @@
       <td style="font-size:12px">${esc(c.Owner || '—')}</td>
       <td style="font-size:12px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.NextAction || '—')}</td>
       <td style="font-size:12px;${c.NextActionDueDate && new Date(c.NextActionDueDate) < new Date() ? 'color:var(--danger);font-weight:600' : ''}">${c.NextActionDueDate || '—'}</td>
-      <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editClaim(${c.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteClaimRow(${c.id})">🗑</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editClaim(${c.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteClaimRow(${c.id})">🗑 Delete</button></td>
     </tr>`;
       }).join('');
     }
 
+    async function bulkDeleteClaims() {
+      const checked = Array.from(document.querySelectorAll('.claim-cb:checked')).map(cb => cb.value);
+      if (!checked.length) { toast('No claims selected', 'warning'); return; }
+      if (!confirm(`Delete ${checked.length} selected claim(s)? This cannot be undone.`)) return;
+      let deleted = 0;
+      for (const id of checked) {
+        try {
+          const r = await fetch(`/hub/api/claims/${id}`, { method: 'DELETE' });
+          if (r.ok) deleted++;
+        } catch (e) { /* continue */ }
+      }
+      toast(`Deleted ${deleted} claim(s)`, 'success');
+      loadClaims(); loadDashboard();
+    }
+
     function filterClaimsTable() { renderClaimsForStatus(activeQueueStatus); }
+
+    function clearClaimsDatePicker() {
+      const input = document.getElementById('claimsDatePicker');
+      if (input) input.value = '';
+      filterClaimsTable();
+    }
 
     function openClaimModal(claim) {
       const editId = claim?.id || '';

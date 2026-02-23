@@ -311,7 +311,7 @@ def edit_provider(pid: int, body: ProviderUpdate, hub_session: Optional[str] = C
 
 @router.delete("/providers/{pid}")
 def remove_provider(pid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     delete_provider(pid)
     return {"ok": True}
 
@@ -420,7 +420,7 @@ def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Co
 
 @router.delete("/claims/{claim_id}")
 def remove_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     delete_claim(claim_id)
     return {"ok": True}
 
@@ -553,7 +553,7 @@ def edit_cred(rid: int, body: CredUpdate, hub_session: Optional[str] = Cookie(No
 
 @router.delete("/credentialing/{rid}")
 def remove_cred(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     delete_credentialing(rid)
     return {"ok": True}
 
@@ -618,7 +618,7 @@ def edit_enroll(rid: int, body: EnrollUpdate, hub_session: Optional[str] = Cooki
 
 @router.delete("/enrollment/{rid}")
 def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     delete_enrollment(rid)
     return {"ok": True}
 
@@ -682,7 +682,7 @@ def edit_edi(rid: int, body: EDIUpdate, hub_session: Optional[str] = Cookie(None
 
 @router.delete("/edi/{rid}")
 def remove_edi(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_user(hub_session)
     delete_edi(rid)
     return {"ok": True}
 
@@ -843,6 +843,8 @@ async def upload_file(
                 imported, import_errors = _import_claims_from_excel(content, ext, scope)
             elif category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+                if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
+                    import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
             elif category == "Enrollment":
                 imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
             elif category == "EDI":
@@ -859,6 +861,25 @@ async def upload_file(
         "import_category": import_category,
         "import_errors": import_errors[:5],
     }
+
+
+# ─── Credentialing Excel Template ─────────────────────────────────────────────
+import io, csv
+from fastapi.responses import StreamingResponse
+
+@router.get("/files/template/credentialing")
+def download_credentialing_template():
+    headers = ["Provider", "Payor", "Type", "Status", "Submitted", "Follow Up", "Approved", "Expiration", "Owner", "Notes", "Sub Profile"]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    writer.writerow(["John Smith", "Aetna", "Initial", "Submitted", "2026-02-20", "2026-02-27", "", "", "Jane Admin", "", "MHP"])
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=credentialing_template.csv"}
+    )
 
 
 # ─── Client Report ────────────────────────────────────────────────────────────

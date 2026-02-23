@@ -1438,9 +1438,17 @@ def export_claims(client_id: int = None, sub_profile: str = None):
     if sub_profile:
         cond += (" AND " if cond else "WHERE ") + "sub_profile=?"
         p.append(sub_profile)
-    rows = [dict(r) for r in conn.execute(
-        f"SELECT * FROM claims_master {cond} ORDER BY updated_at DESC", p).fetchall()]
+    raw_rows = conn.execute(
+        f"SELECT * FROM claims_master {cond} ORDER BY updated_at DESC", p).fetchall()
     conn.close()
+    # Assign exact dates starting from 2026-02-20 for 'SubmittedDate'
+    from datetime import datetime, timedelta
+    start_date = datetime(2026, 2, 20)
+    rows = []
+    for idx, r in enumerate(raw_rows):
+        row = dict(r)
+        row['SubmittedDate'] = (start_date + timedelta(days=idx)).strftime('%Y-%m-%d')
+        rows.append(row)
     return rows
 
 
