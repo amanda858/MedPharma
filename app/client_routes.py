@@ -12,6 +12,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Cookie, Response, Request, UploadFile, File as FastAPIFile, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT in production
+
 from app.client_db import (
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client,
@@ -78,7 +81,14 @@ def login(body: LoginIn, response: Response):
     user, token = authenticate(body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    response.set_cookie("hub_session", token, httponly=True, samesite="lax", secure=True, max_age=86400 * 30)
+    response.set_cookie(
+        "hub_session", token,
+        httponly=True,
+        samesite="lax",
+        secure=IS_PROD,        # Only require HTTPS in production (Render)
+        path="/",              # Explicit root path — available to ALL routes
+        max_age=86400 * 30,
+    )
     return {"ok": True, "user": user}
 
 
@@ -86,7 +96,7 @@ def login(body: LoginIn, response: Response):
 def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
     if hub_session:
         logout_session(hub_session)
-    response.delete_cookie("hub_session")
+    response.delete_cookie("hub_session", path="/")
     return {"ok": True}
 
 
@@ -1079,8 +1089,10 @@ async def import_excel(
     }
 
 
-def _parse_excel_rows(content: bytes, ext: str):
-    """Parse Excel/CSV bytes into list of dict rows with smart header detection."""
+def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
+    """Parse Excel/CSV bytes into list of dict rows with smart header detection.
+    If combine_sheets=True and multiple sheets share the same header structure,
+    rows from all matching sheets are combined (useful for multi-tab claim files)."""
     import csv, io
     rows = []
     if ext == ".csv":
@@ -1089,36 +1101,57 @@ def _parse_excel_rows(content: bytes, ext: str):
     else:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        # Try all sheets — use the one with the most data rows
-        best_rows, best_headers = [], []
+        # Collect parsed rows per sheet with their headers
+        sheet_results = []  # list of (headers_tuple, rows_list)
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             all_sheet_rows = []
             for row in ws.iter_rows(values_only=True):
                 all_sheet_rows.append(row)
-            # Smart header detection: find the best header row (the row with the most non-empty text cells)
+            if not all_sheet_rows:
+                continue
+            # Smart header detection: find the best header row
             header_row_idx = 0
             best_header_score = 0
-            for idx, row in enumerate(all_sheet_rows[:10]):  # Check first 10 rows
+            for idx, row in enumerate(all_sheet_rows[:10]):
                 if not row:
                     continue
                 non_empty = sum(1 for c in row if c is not None and str(c).strip())
                 text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
-                # Headers should be mostly text and have multiple non-empty cells
+                # Require at least 3 non-empty cells to be a real header row
                 score = text_cells * 2 + non_empty
-                if score > best_header_score and non_empty >= 2:
+                if score > best_header_score and non_empty >= 3:
                     best_header_score = score
                     header_row_idx = idx
             if header_row_idx < len(all_sheet_rows):
                 sheet_headers = [str(c).strip() if c else "" for c in all_sheet_rows[header_row_idx]]
+                # Filter out empty header columns
+                valid_cols = [i for i, h in enumerate(sheet_headers) if h]
+                if len(valid_cols) < 2:
+                    continue
                 sheet_rows = []
                 for row in all_sheet_rows[header_row_idx + 1:]:
                     if any(c is not None and str(c).strip() for c in row):
                         sheet_rows.append(dict(zip(sheet_headers, row)))
-                if len(sheet_rows) > len(best_rows):
-                    best_rows = sheet_rows
-                    best_headers = sheet_headers
-        rows = best_rows
+                if sheet_rows:
+                    # Use a normalized header key (sorted, lowered) for grouping
+                    hdr_key = tuple(sorted(h.lower() for h in sheet_headers if h))
+                    sheet_results.append((hdr_key, sheet_headers, sheet_rows))
+
+        if sheet_results:
+            if combine_sheets:
+                # Group sheets by header structure and combine sheets with same headers
+                from collections import defaultdict
+                groups = defaultdict(list)
+                for hdr_key, hdrs, srows in sheet_results:
+                    groups[hdr_key].extend(srows)
+                # Pick the group with the most total rows
+                best_group = max(groups.values(), key=len)
+                rows = best_group
+            else:
+                # Pick single sheet with most rows
+                best = max(sheet_results, key=lambda x: len(x[2]))
+                rows = best[2]
         wb.close()
     return rows
 
@@ -1161,6 +1194,58 @@ def _clean_val(val):
 def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
+
+    # ── Status normalization — maps Excel values to dropdown filter values ──
+    CRED_STATUS_NORMALIZE = {
+        # Not Started
+        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "not begun": "Not Started", "n/a": "Not Started",
+        "to do": "Not Started", "open": "Not Started",
+        # In Progress
+        "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
+        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
+        "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
+        "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
+        "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
+        "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
+        # Submitted
+        "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
+        "application submitted": "Submitted", "app submitted": "Submitted",
+        "mailed": "Submitted", "faxed": "Submitted", "uploaded": "Submitted",
+        "received": "Submitted", "acknowledged": "Submitted",
+        # Approved
+        "approved": "Approved", "completed": "Approved", "credentialed": "Approved",
+        "active - approved": "Approved", "accepted": "Approved", "enrolled": "Approved",
+        "effective": "Approved", "live": "Approved", "done": "Approved",
+        "granted": "Approved", "passed": "Approved",
+        # Denied
+        "denied": "Denied", "rejected": "Denied", "declined": "Denied",
+        "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
+        "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
+        # Expired
+        "expired": "Expired", "lapsed": "Expired", "renewal needed": "Expired",
+        "expiring": "Expired", "past due": "Expired", "overdue": "Expired",
+        "renewal": "Expired", "recredentialing": "Expired",
+    }
+
+    VALID_CRED_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Denied", "Expired"}
+
+    def _normalize_cred_status(raw):
+        if not raw:
+            return "Not Started"
+        s = str(raw).strip()
+        key = s.lower()
+        if key in CRED_STATUS_NORMALIZE:
+            return CRED_STATUS_NORMALIZE[key]
+        for map_key, normalized in CRED_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
+        # If raw already matches a valid status (case-insensitive), use it
+        for vs in VALID_CRED_STATUSES:
+            if vs.lower() == key:
+                return vs
+        return "In Progress"  # Safe default for unrecognized statuses
+
     COL_MAP = {
         # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
@@ -1175,10 +1260,12 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "insurance plan": "Payor", "health plan": "Payor", "ins": "Payor",
         "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
         "ins name": "Payor", "ins company": "Payor",
-        # Type
+        # Type / Subtask
         "type": "CredType", "credtype": "CredType", "cred type": "CredType",
         "credential type": "CredType", "credentialing type": "CredType",
         "application type": "CredType", "app type": "CredType",
+        "subtask": "CredType", "sub task": "CredType", "task": "CredType",
+        "cred subtask": "CredType", "task type": "CredType",
         # Status
         "status": "Status", "cred status": "Status", "credentialing status": "Status",
         "app status": "Status", "application status": "Status", "current status": "Status",
@@ -1187,10 +1274,13 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "date submitted": "SubmittedDate", "submission date": "SubmittedDate", "app submitted": "SubmittedDate",
         "application submitted": "SubmittedDate", "submit date": "SubmittedDate",
         "date": "SubmittedDate", "start date": "SubmittedDate",
+        "date started": "SubmittedDate", "started": "SubmittedDate", "start": "SubmittedDate",
         "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
         "followup": "FollowUpDate", "followup date": "FollowUpDate", "next follow up": "FollowUpDate",
         "fu date": "FollowUpDate", "f/u date": "FollowUpDate", "f/u": "FollowUpDate",
         "next action date": "FollowUpDate", "due date": "FollowUpDate",
+        "last follow up": "FollowUpDate", "last followup": "FollowUpDate",
+        "last fu": "FollowUpDate", "last f/u": "FollowUpDate",
         "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
         "approval date": "ApprovedDate", "date approved": "ApprovedDate",
         "expiration": "ExpirationDate", "expires": "ExpirationDate", "expiration date": "ExpirationDate",
@@ -1201,7 +1291,12 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
         "representative": "Owner", "rep": "Owner", "analyst": "Owner",
         "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
+        # Reference / Tracking
+        "reference": "Notes", "tracking id": "Notes", "reference / tracking id": "Notes",
+        "reference id": "Notes", "tracking": "Notes", "ref id": "Notes",
+        # Sub-profile / LOB
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
+        "lob": "sub_profile", "line of business": "sub_profile",
     }
     rows = _parse_excel_rows(content, ext)
     if not rows:
@@ -1220,6 +1315,8 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
+            # Normalize status to match filter dropdown values
+            mapped["Status"] = _normalize_cred_status(mapped.get("Status", ""))
             try:
                 existing = conn.execute(
                     "SELECT id FROM credentialing WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1260,6 +1357,56 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
 def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
+
+    # ── Status normalization — maps Excel values to dropdown filter values ──
+    ENROLL_STATUS_NORMALIZE = {
+        # Not Started
+        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "n/a": "Not Started", "to do": "Not Started",
+        "open": "Not Started",
+        # In Progress
+        "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
+        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
+        "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
+        "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
+        "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
+        "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
+        # Submitted
+        "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
+        "application submitted": "Submitted", "app submitted": "Submitted",
+        "mailed": "Submitted", "faxed": "Submitted", "uploaded": "Submitted",
+        "received": "Submitted", "acknowledged": "Submitted",
+        # Approved
+        "approved": "Approved", "completed": "Approved", "credentialed": "Approved",
+        "accepted": "Approved", "effective": "Approved", "live": "Approved",
+        "done": "Approved", "granted": "Approved", "passed": "Approved",
+        # Enrolled
+        "enrolled": "Enrolled", "active - enrolled": "Enrolled", "participating": "Enrolled",
+        "contracted": "Enrolled", "in network": "Enrolled", "in-network": "Enrolled",
+        "par": "Enrolled",
+        # Denied
+        "denied": "Denied", "rejected": "Denied", "declined": "Denied",
+        "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
+        "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
+    }
+
+    VALID_ENROLL_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Enrolled", "Denied"}
+
+    def _normalize_enroll_status(raw):
+        if not raw:
+            return "Not Started"
+        s = str(raw).strip()
+        key = s.lower()
+        if key in ENROLL_STATUS_NORMALIZE:
+            return ENROLL_STATUS_NORMALIZE[key]
+        for map_key, normalized in ENROLL_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
+        for vs in VALID_ENROLL_STATUSES:
+            if vs.lower() == key:
+                return vs
+        return "In Progress"  # Safe default for unrecognized statuses
+
     COL_MAP = {
         # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
@@ -1310,6 +1457,8 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
+            # Normalize status to match filter dropdown values
+            mapped["Status"] = _normalize_enroll_status(mapped.get("Status", ""))
             try:
                 existing = conn.execute(
                     "SELECT id FROM enrollment WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1349,6 +1498,50 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
 def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
+
+    # ── Status normalization for EDI/ERA/EFT — maps to dropdown values ──
+    EDI_STATUS_NORMALIZE = {
+        # Not Started
+        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "n/a": "Not Started", "to do": "Not Started",
+        "open": "Not Started",
+        # In Process
+        "in process": "In Process", "in-process": "In Process", "in progress": "In Process",
+        "in-progress": "In Process", "pending": "In Process", "processing": "In Process",
+        "working": "In Process", "active": "In Process", "submitted": "In Process",
+        "sent": "In Process", "filed": "In Process", "in review": "In Process",
+        "under review": "In Process", "need action": "In Process", "needs action": "In Process",
+        "waiting": "In Process", "awaiting": "In Process", "testing": "In Process",
+        # Live
+        "live": "Live", "completed": "Live", "active - live": "Live",
+        "approved": "Live", "enrolled": "Live", "effective": "Live",
+        "done": "Live", "connected": "Live", "enabled": "Live",
+        "set up": "Live", "setup": "Live", "configured": "Live",
+        "production": "Live", "go live": "Live", "go-live": "Live",
+        # Failed
+        "failed": "Failed", "denied": "Failed", "rejected": "Failed",
+        "error": "Failed", "not accepted": "Failed", "terminated": "Failed",
+        "closed": "Failed", "cancelled": "Failed", "canceled": "Failed",
+        "expired": "Failed", "disconnected": "Failed",
+    }
+
+    VALID_EDI_STATUSES = {"Not Started", "In Process", "Live", "Failed"}
+
+    def _normalize_edi_status(raw):
+        if not raw:
+            return "Not Started"
+        s = str(raw).strip()
+        key = s.lower()
+        if key in EDI_STATUS_NORMALIZE:
+            return EDI_STATUS_NORMALIZE[key]
+        for map_key, normalized in EDI_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
+        for vs in VALID_EDI_STATUSES:
+            if vs.lower() == key:
+                return vs
+        return "In Process"  # Safe default for unrecognized statuses
+
     COL_MAP = {
         # Provider
         "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
@@ -1390,6 +1583,10 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
+            # Normalize all three EDI status fields to match dropdown values
+            mapped["EDIStatus"] = _normalize_edi_status(mapped.get("EDIStatus", ""))
+            mapped["ERAStatus"] = _normalize_edi_status(mapped.get("ERAStatus", ""))
+            mapped["EFTStatus"] = _normalize_edi_status(mapped.get("EFTStatus", ""))
             try:
                 existing = conn.execute(
                     "SELECT id FROM edi_setup WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1537,8 +1734,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "plan": "Payor", "plan name": "Payor", "payer name": "Payor",
         "carrier": "Payor", "insurance plan": "Payor", "health plan": "Payor",
         "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+        "primary payer name": "Payor", "primary insurance name": "Payor",
         "ins name": "Payor", "ins company": "Payor", "financial class": "Payor",
-        "fc": "Payor", "fin class": "Payor",
+        "fc": "Payor", "fin class": "Payor", "payer type": "Payor",
         # ── DOS / CPT ──
         "dos": "DOS", "date of service": "DOS", "service date": "DOS",
         "svc date": "DOS", "from date": "DOS", "from": "DOS", "date from": "DOS",
@@ -1548,6 +1746,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "proc": "CPTCode", "service code": "CPTCode", "hcpcs": "CPTCode",
         "description": "Description", "desc": "Description", "service description": "Description",
         "procedure description": "Description", "proc desc": "Description",
+        "modifiers": "Description", "modifier": "Description", "mod": "Description",
+        "scrub notes": "DenialReason", "scrub note": "DenialReason",
+        "timely filing status": "ClaimStatus", "timely filing": "ClaimStatus",
         # ── Financials ──
         "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount",
         "billed": "ChargeAmount", "billed amount": "ChargeAmount", "total charge": "ChargeAmount",

@@ -923,6 +923,73 @@
       color: var(--gray-600)
     }
 
+    /* ── Section Status Chart Strip ── */
+    .section-chart-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+      padding: 0;
+    }
+
+    .section-chart-strip:empty {
+      display: none
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all .2s ease;
+      border: 2px solid transparent;
+      min-width: 120px;
+      flex: 1 1 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .status-pill:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, .1)
+    }
+
+    .status-pill.active-filter {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-light)
+    }
+
+    .status-pill .sp-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      border-radius: 0 0 8px 8px;
+      transition: width .6s ease;
+    }
+
+    .sp-count {
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1
+    }
+
+    .sp-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      opacity: .85
+    }
+
+    .sp-pct {
+      font-size: 10px;
+      font-weight: 700;
+      opacity: .7
+    }
+
     /* ── Buttons ── */
     .btn {
       padding: 9px 18px;
@@ -2027,6 +2094,8 @@
             <button class="btn btn-primary btn-sm" onclick="applyBulkUpdate()">✅ Apply</button>
             <button class="btn btn-secondary btn-sm" onclick="clearBulkSelection()">✖ Clear</button>
           </div>
+          <!-- Claims Status Summary Chart -->
+          <div id="claimsStatusChart" class="section-chart-strip"></div>
           <div class="queue-tabs" id="queueTabs"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
@@ -2078,6 +2147,8 @@
               <button class="btn btn-primary btn-sm" onclick="openCredModal()">+ Add</button>
             </div>
           </div>
+          <!-- Credentialing Status Summary Chart -->
+          <div id="credStatusChart" class="section-chart-strip"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
               <table>
@@ -2124,6 +2195,8 @@
               <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
             </div>
           </div>
+          <!-- Enrollment Status Summary Chart -->
+          <div id="enrollStatusChart" class="section-chart-strip"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
               <table>
@@ -2161,6 +2234,8 @@
               <button class="btn btn-primary btn-sm" onclick="openEdiModal()">+ Add</button>
             </div>
           </div>
+          <!-- EDI Status Summary Chart -->
+          <div id="ediStatusChart" class="section-chart-strip"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
               <table>
@@ -3084,6 +3159,26 @@
     const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
 
     // ═══════════════════════════════════════
+    // GLOBAL FETCH WRAPPER — auth for ALL API calls
+    // ═══════════════════════════════════════
+    const _nativeFetch = window.fetch.bind(window);
+    window.fetch = async function (url, opts = {}) {
+      // For all hub API calls, ensure credentials are sent and handle 401
+      if (typeof url === 'string' && url.startsWith('/hub/api/')) {
+        opts.credentials = opts.credentials || 'same-origin';
+        const resp = await _nativeFetch(url, opts);
+        // If 401 on any API call (except /me and /login), session is expired
+        if (resp.status === 401 && !url.includes('/login') && !url.includes('/me')) {
+          toast('Session expired — please sign in again', 'error');
+          setTimeout(() => doLogout(), 500);
+          return resp;
+        }
+        return resp;
+      }
+      return _nativeFetch(url, opts);
+    };
+
+    // ═══════════════════════════════════════
     // BOOT
     // ═══════════════════════════════════════
     document.addEventListener('DOMContentLoaded', async () => {
@@ -3577,6 +3672,13 @@
       allClaims = d.claims || [];
       buildQueueTabs(allClaims);
       renderClaimsForStatus(activeQueueStatus);
+      // Render interactive status chart for claims
+      const CLAIMS_CHART_STATUSES = ['Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
+      renderSectionChart('claimsStatusChart', allClaims, 'ClaimStatus', CLAIMS_CHART_STATUSES, (status) => {
+        if (status) { activeQueueStatus = status; } else { activeQueueStatus = 'All'; }
+        buildQueueTabs(allClaims);
+        renderClaimsForStatus(activeQueueStatus);
+      });
     }
 
     function buildQueueTabs(claims) {
@@ -3842,15 +3944,35 @@
     // ═══════════════════════════════════════
     // CREDENTIALING
     // ═══════════════════════════════════════
+    let allCredItems = [];
+    let activeCredFilter = '';
     async function loadCred() {
-      const status = document.getElementById('credFilter').value;
+      // Always fetch ALL items for chart, then filter locally
       const params = new URLSearchParams();
-      if (status) params.set('status', status);
       if (activeClientId) params.set('client_id', activeClientId);
       if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       const r = await fetch('/hub/api/credentialing?' + params);
       const d = await r.json();
-      const items = d.credentialing || d || [];
+      allCredItems = d.credentialing || d || [];
+
+      // Render chart strip
+      const CRED_STATUSES = ['Not Started', 'In Progress', 'Submitted', 'Approved', 'Denied', 'Expired'];
+      renderSectionChart('credStatusChart', allCredItems, 'Status', CRED_STATUSES, (status) => {
+        activeCredFilter = status || '';
+        document.getElementById('credFilter').value = activeCredFilter;
+        renderCredTable();
+      });
+
+      // Sync dropdown with pill state
+      activeCredFilter = document.getElementById('credFilter').value;
+      syncPillHighlight('credStatusChart', activeCredFilter);
+      renderCredTable();
+    }
+
+    function renderCredTable() {
+      const items = activeCredFilter
+        ? allCredItems.filter(i => (i.Status || '').toLowerCase() === activeCredFilter.toLowerCase())
+        : allCredItems;
       const tbody = document.getElementById('credTbody');
       if (!items.length) {
         tbody.innerHTML = `<tr><td colspan="11"><div class="empty-state"><div class="es-icon">🎓</div><p>No credentialing items</p></div></td></tr>`;
@@ -3937,15 +4059,35 @@
     // ═══════════════════════════════════════
     // ENROLLMENT
     // ═══════════════════════════════════════
+    let allEnrollItems = [];
+    let activeEnrollFilter = '';
     async function loadEnroll() {
-      const status = document.getElementById('enrollFilter').value;
+      // Always fetch ALL items for chart, then filter locally
       const params = new URLSearchParams();
-      if (status) params.set('status', status);
       if (activeClientId) params.set('client_id', activeClientId);
       if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       const r = await fetch('/hub/api/enrollment?' + params);
       const d = await r.json();
-      const items = d.enrollment || d || [];
+      allEnrollItems = d.enrollment || d || [];
+
+      // Render chart strip
+      const ENROLL_STATUSES = ['Not Started', 'In Progress', 'Submitted', 'Approved', 'Enrolled', 'Denied'];
+      renderSectionChart('enrollStatusChart', allEnrollItems, 'Status', ENROLL_STATUSES, (status) => {
+        activeEnrollFilter = status || '';
+        document.getElementById('enrollFilter').value = activeEnrollFilter;
+        renderEnrollTable();
+      });
+
+      // Sync dropdown with pill state
+      activeEnrollFilter = document.getElementById('enrollFilter').value;
+      syncPillHighlight('enrollStatusChart', activeEnrollFilter);
+      renderEnrollTable();
+    }
+
+    function renderEnrollTable() {
+      const items = activeEnrollFilter
+        ? allEnrollItems.filter(i => (i.Status || '').toLowerCase() === activeEnrollFilter.toLowerCase())
+        : allEnrollItems;
       const tbody = document.getElementById('enrollTbody');
       if (!items.length) {
         tbody.innerHTML = `<tr><td colspan="11"><div class="empty-state"><div class="es-icon">📝</div><p>No enrollment items</p></div></td></tr>`;
@@ -4032,13 +4174,38 @@
     // ═══════════════════════════════════════
     // EDI
     // ═══════════════════════════════════════
+    let allEdiItems = [];
+    let activeEdiFilter = '';
     async function loadEdi() {
       const params = new URLSearchParams();
       if (activeClientId) params.set('client_id', activeClientId);
       if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       const r = await fetch('/hub/api/edi' + (params.toString() ? '?' + params : ''));
       const d = await r.json();
-      const items = d.edi || d || [];
+      allEdiItems = (d.edi || d || []).map(i => {
+        // Derive composite status from EDI/ERA/EFT fields and store on each item
+        const statuses = [i.EDIStatus, i.ERAStatus, i.EFTStatus].map(s => (s || 'Not Started').trim().toLowerCase());
+        let composite;
+        if (statuses.some(s => s === 'failed')) composite = 'Failed';
+        else if (statuses.every(s => s === 'live')) composite = 'Live';
+        else if (statuses.some(s => s === 'in process' || s === 'live')) composite = 'In Process';
+        else composite = 'Not Started';
+        return { ...i, _composite: composite };
+      });
+
+      const EDI_STATUSES = ['Not Started', 'In Process', 'Live', 'Failed'];
+      renderSectionChart('ediStatusChart', allEdiItems, '_composite', EDI_STATUSES, (status) => {
+        activeEdiFilter = status || '';
+        renderEdiTable();
+      });
+
+      renderEdiTable();
+    }
+
+    function renderEdiTable() {
+      const items = activeEdiFilter
+        ? allEdiItems.filter(i => (i._composite || '').toLowerCase() === activeEdiFilter.toLowerCase())
+        : allEdiItems;
       const tbody = document.getElementById('ediTbody');
       if (!items.length) {
         tbody.innerHTML = `<tr><td colspan="11"><div class="empty-state"><div class="es-icon">🔗</div><p>No EDI setups</p></div></td></tr>`;
@@ -4271,6 +4438,98 @@
 
     function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
 
+    // ═══════════════════════════════════════
+    // INTERACTIVE STATUS CHARTS (pills)
+    // ═══════════════════════════════════════
+    const PILL_COLORS = {
+      // Claims
+      'Intake': { bg: '#eef2ff', text: '#4338ca', bar: '#6366f1' },
+      'Verification': { bg: '#eef2ff', text: '#4338ca', bar: '#6366f1' },
+      'Coding': { bg: '#eef2ff', text: '#4338ca', bar: '#6366f1' },
+      'Billed/Submitted': { bg: '#dbeafe', text: '#1e40af', bar: '#3b82f6' },
+      'Rejected': { bg: '#fef2f2', text: '#991b1b', bar: '#ef4444' },
+      'Denied': { bg: '#fef2f2', text: '#991b1b', bar: '#ef4444' },
+      'A/R Follow-Up': { bg: '#eef2ff', text: '#4338ca', bar: '#6366f1' },
+      'Appeals': { bg: '#faf5ff', text: '#7e22ce', bar: '#a855f7' },
+      'Paid': { bg: '#ecfdf5', text: '#065f46', bar: '#10b981' },
+      'Closed': { bg: '#f3f4f6', text: '#4b5563', bar: '#9ca3af' },
+      // Credentialing / Enrollment / EDI shared
+      'Not Started': { bg: '#fffbeb', text: '#92400e', bar: '#f59e0b' },
+      'In Progress': { bg: '#fffbeb', text: '#92400e', bar: '#f59e0b' },
+      'Submitted': { bg: '#dbeafe', text: '#1e40af', bar: '#3b82f6' },
+      'Approved': { bg: '#ecfdf5', text: '#065f46', bar: '#10b981' },
+      'Enrolled': { bg: '#ecfdf5', text: '#065f46', bar: '#10b981' },
+      'Expired': { bg: '#fef2f2', text: '#991b1b', bar: '#ef4444' },
+      'In Process': { bg: '#dbeafe', text: '#1e40af', bar: '#3b82f6' },
+      'Live': { bg: '#ecfdf5', text: '#065f46', bar: '#10b981' },
+      'Failed': { bg: '#fef2f2', text: '#991b1b', bar: '#ef4444' },
+    };
+    const PILL_DEFAULT = { bg: '#f3f4f6', text: '#4b5563', bar: '#9ca3af' };
+
+    /**
+     * Render interactive status pills into a container.
+     * @param {string}   containerId  - DOM id of the chart strip div
+     * @param {Array}    items        - all items (unfiltered)
+     * @param {string}   statusField  - property name on each item (e.g. 'Status', 'ClaimStatus')
+     * @param {string[]} statuses     - ordered list of status names to show
+     * @param {Function} onFilter     - callback(statusName) when a pill is clicked; null=All
+     */
+    function renderSectionChart(containerId, items, statusField, statuses, onFilter) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      const total = items.length;
+      // build counts
+      const counts = {};
+      statuses.forEach(s => { counts[s] = 0; });
+      items.forEach(item => {
+        const v = (item[statusField] || '').trim();
+        // match case-insensitive
+        const match = statuses.find(s => s.toLowerCase() === v.toLowerCase());
+        if (match) counts[match]++;
+        // else it falls into none of the pills — that's ok
+      });
+
+      el.innerHTML = statuses.map(s => {
+        const c = counts[s];
+        const pct = total ? Math.round((c / total) * 100) : 0;
+        const col = PILL_COLORS[s] || PILL_DEFAULT;
+        return `
+          <div class="status-pill" data-status="${esc(s)}" title="${esc(s)}: ${c}"
+               style="background:${col.bg};color:${col.text}">
+            <div>
+              <div class="sp-count">${c}</div>
+              <div class="sp-pct">${pct}%</div>
+            </div>
+            <div class="sp-label">${esc(s)}</div>
+            <div class="sp-bar" style="width:${pct}%;background:${col.bar}"></div>
+          </div>`;
+      }).join('');
+
+      // click handlers
+      el.querySelectorAll('.status-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          const isActive = pill.classList.contains('active-filter');
+          el.querySelectorAll('.status-pill').forEach(p => p.classList.remove('active-filter'));
+          if (isActive) {
+            // deselect → show all
+            onFilter(null);
+          } else {
+            pill.classList.add('active-filter');
+            onFilter(pill.dataset.status);
+          }
+        });
+      });
+    }
+
+    /** Highlight the pill matching a status (or clear all if empty). */
+    function syncPillHighlight(containerId, status) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      el.querySelectorAll('.status-pill').forEach(p => {
+        p.classList.toggle('active-filter', !!status && p.dataset.status === status);
+      });
+    }
+
     function statusBadge(status) {
       if (!status) return '<span class="badge badge-gray">—</span>';
       const s = status.toLowerCase().replace(/[\s/]+/g, '-');
@@ -4340,6 +4599,17 @@
     }
 
     // ═══════════════════════════════════════
+    // SESSION CHECK HELPER — verify auth before large operations
+    // ═══════════════════════════════════════
+    async function checkSession() {
+      try {
+        const r = await _nativeFetch('/hub/api/me', { credentials: 'same-origin' });
+        if (!r.ok) { toast('Session expired — please sign in again', 'error'); doLogout(); return false; }
+        return true;
+      } catch (_) { toast('Cannot reach server — please try again', 'error'); return false; }
+    }
+
+    // ═══════════════════════════════════════
     // EXCEL IMPORT (per-section) — imports data AND saves file as hard copy
     // ═══════════════════════════════════════
     async function importExcel(input, category) {
@@ -4347,6 +4617,8 @@
       const file = input.files[0];
       input.value = '';  // reset so same file can be re-selected
       if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      // Verify session is still valid before uploading
+      if (!(await checkSession())) return;
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category', category);
@@ -5292,6 +5564,8 @@
     }
 
     async function uploadFile(file) {
+      // Verify session is still valid before uploading
+      if (!(await checkSession())) return;
       const ext = (file.name || '').split('.').pop().toLowerCase();
       const isExcel = ['xlsx', 'xls', 'csv'].includes(ext);
 

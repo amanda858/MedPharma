@@ -887,12 +887,14 @@ def delete_claim(claim_id: int):
 
 def get_payments(client_id: int, claim_key: str):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM payments WHERE client_id=? AND ClaimKey=? ORDER BY PostDate DESC",
-                (client_id, claim_key))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM payments WHERE client_id=? AND ClaimKey=? ORDER BY PostDate DESC",
+                    (client_id, claim_key))
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        conn.close()
 
 
 def create_payment(data: dict) -> int:
