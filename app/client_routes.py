@@ -34,6 +34,8 @@ from app.client_db import (
     global_search, bulk_update_claims, export_claims, export_table,
 )
 
+from app.notifications import notify_activity, notify_bulk_activity
+
 router = APIRouter(prefix="/hub/api")
 
 
@@ -426,20 +428,26 @@ def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
     if user["role"] != "admin":
         data["client_id"] = user["id"]
     cid = create_claim(data)
+    notify_activity(user["username"], "created", "Claims",
+                    f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
     return {"id": cid, "ok": True}
 
 
 @router.put("/claims/{claim_id}")
 def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    update_claim(claim_id, {k: v for k, v in body.model_dump().items() if v is not None})
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_claim(claim_id, changes)
+    notify_activity(user["username"], "updated", "Claims",
+                    f"Claim #{claim_id}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
 @router.delete("/claims/{claim_id}")
 def remove_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
     delete_claim(claim_id)
+    notify_activity(user["username"], "deleted", "Claims", f"Claim #{claim_id}")
     return {"ok": True}
 
 
@@ -563,20 +571,26 @@ def add_cred(body: CredIn, hub_session: Optional[str] = Cookie(None)):
     if user["role"] != "admin":
         data["client_id"] = user["id"]
     rid = create_credentialing(data)
+    notify_activity(user["username"], "created", "Credentialing",
+                    f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
     return {"id": rid, "ok": True}
 
 
 @router.put("/credentialing/{rid}")
 def edit_cred(rid: int, body: CredUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    update_credentialing(rid, {k: v for k, v in body.model_dump().items() if v is not None})
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_credentialing(rid, changes)
+    notify_activity(user["username"], "updated", "Credentialing",
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
 @router.delete("/credentialing/{rid}")
 def remove_cred(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
     delete_credentialing(rid)
+    notify_activity(user["username"], "deleted", "Credentialing", f"Record #{rid}")
     return {"ok": True}
 
 
@@ -628,20 +642,26 @@ def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
     if user["role"] != "admin":
         data["client_id"] = user["id"]
     eid = create_enrollment(data)
+    notify_activity(user["username"], "created", "Enrollment",
+                    f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
     return {"id": eid, "ok": True}
 
 
 @router.put("/enrollment/{rid}")
 def edit_enroll(rid: int, body: EnrollUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    update_enrollment(rid, {k: v for k, v in body.model_dump().items() if v is not None})
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_enrollment(rid, changes)
+    notify_activity(user["username"], "updated", "Enrollment",
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
 @router.delete("/enrollment/{rid}")
 def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
     delete_enrollment(rid)
+    notify_activity(user["username"], "deleted", "Enrollment", f"Record #{rid}")
     return {"ok": True}
 
 
@@ -692,20 +712,26 @@ def add_edi(body: EDIIn, hub_session: Optional[str] = Cookie(None)):
     if user["role"] != "admin":
         data["client_id"] = user["id"]
     eid = create_edi(data)
+    notify_activity(user["username"], "created", "EDI Setup",
+                    f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
     return {"id": eid, "ok": True}
 
 
 @router.put("/edi/{rid}")
 def edit_edi(rid: int, body: EDIUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    update_edi(rid, {k: v for k, v in body.model_dump().items() if v is not None})
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_edi(rid, changes)
+    notify_activity(user["username"], "updated", "EDI Setup",
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
 @router.delete("/edi/{rid}")
 def remove_edi(rid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
     delete_edi(rid)
+    notify_activity(user["username"], "deleted", "EDI Setup", f"Record #{rid}")
     return {"ok": True}
 
 
@@ -765,6 +791,8 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
     data["client_id"] = scope
     data["username"] = user["username"]
     log_id = add_production_log(data)
+    notify_activity(user["username"], "logged production", "Time Tracking",
+                    f"{data.get('hours',0)}h — {data.get('task_type','')}: {data.get('description','')[:60]}")
     return {"id": log_id, "ok": True}
 
 
@@ -772,6 +800,7 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
 def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     delete_production_log(log_id)
+    notify_activity(user["username"], "deleted", "Time Tracking", f"Log #{log_id}")
     return {"ok": True}
 
 
@@ -1080,6 +1109,11 @@ async def import_excel(
         raise
     except Exception as e:
         errors = [str(e)]
+
+    # Notify admin of team imports
+    if imported > 0:
+        notify_bulk_activity(user["username"], "imported", category, imported,
+                             f"File: {file.filename}")
 
     return {
         "category": category,
@@ -2317,6 +2351,8 @@ def bulk_status_update(body: BulkStatusIn, hub_session: Optional[str] = Cookie(N
     # Audit log
     log_audit(scope, user.get("username", ""), "bulk_status_update",
               "claims", None, f"Updated {updated} claims: {data}")
+    notify_bulk_activity(user["username"], "bulk updated", "Claims", updated,
+                         f"Status: {body.ClaimStatus or 'N/A'}, Owner: {body.Owner or 'N/A'}")
     return {"ok": True, "updated": updated}
 
 

@@ -25,6 +25,20 @@ HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 # OpenAI API key (set via environment variable for AI report generation)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
+# ── Notification settings ──
+# Email (SMTP) — for sending activity alerts
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")          # e.g. alerts@medprosc.com
+SMTP_PASS = os.getenv("SMTP_PASS", "")          # Gmail: use App Passwords
+NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "eric@medprosc.com")
+
+# SMS (Twilio) — for text message alerts
+TWILIO_SID = os.getenv("TWILIO_SID", "")
+TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
+TWILIO_FROM = os.getenv("TWILIO_FROM", "")       # Twilio phone number
+NOTIFY_PHONE = os.getenv("NOTIFY_PHONE", "+18036263500")
+
 # Search defaults
 DEFAULT_RESULTS_LIMIT = 50
 MAX_RESULTS_LIMIT = 200
