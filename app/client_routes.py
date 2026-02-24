@@ -32,6 +32,7 @@ from app.client_db import (
     list_production_logs, add_production_log, delete_production_log, get_production_report,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
+    get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
 )
 
 from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
@@ -160,6 +161,7 @@ class ProfileUpdate(BaseModel):
     notes: Optional[str] = None
     practice_type: Optional[str] = None
     doc_tabs: Optional[list] = None
+    report_tabs: Optional[list] = None
 
 
 class PracticeProfileUpdate(BaseModel):
@@ -218,9 +220,11 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
     user = _require_user(hub_session)
     scope = _client_scope(user)
     cid = scope if scope is not None else user["id"]
-    data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
+    if body.report_tabs is not None:
+        data["report_tab_names"] = _json.dumps(body.report_tabs)
     update_profile(cid, data)
     return {"ok": True}
 
@@ -229,10 +233,51 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     # Any authenticated user can edit any client profile
-    data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
+    if body.report_tabs is not None:
+        data["report_tab_names"] = _json.dumps(body.report_tabs)
     update_profile(cid, data)
+    return {"ok": True}
+
+
+# ─── Report Notes (custom report tab content) ──────────────────────────────────
+
+class ReportNoteBody(BaseModel):
+    tab_name: str
+    content: str = ""
+
+class ReportNoteRenameBody(BaseModel):
+    old_name: str
+    new_name: str
+
+@router.get("/report-notes/{cid}")
+def get_client_report_notes(cid: int, tab_name: Optional[str] = None,
+                             hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    notes = get_report_notes(cid, tab_name)
+    return {"notes": notes}
+
+@router.put("/report-notes/{cid}")
+def save_report_note(cid: int, body: ReportNoteBody,
+                     hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    upsert_report_note(cid, body.tab_name, body.content, user.get("username", ""))
+    return {"ok": True}
+
+@router.delete("/report-notes/{cid}/{tab_name}")
+def remove_report_note(cid: int, tab_name: str,
+                       hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    delete_report_note(cid, tab_name)
+    return {"ok": True}
+
+@router.put("/report-notes/{cid}/rename")
+def rename_report_note_endpoint(cid: int, body: ReportNoteRenameBody,
+                                hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    rename_report_note(cid, body.old_name, body.new_name)
     return {"ok": True}
 
 

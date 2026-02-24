@@ -53,7 +53,8 @@ def init_client_hub_db():
             specialty        TEXT DEFAULT '',
             notes            TEXT DEFAULT '',
             doc_tab_names    TEXT DEFAULT '',
-            practice_type    TEXT DEFAULT ''
+            practice_type    TEXT DEFAULT '',
+            report_tab_names TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -306,6 +307,20 @@ def init_client_hub_db():
         );
         CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log(client_id);
         CREATE INDEX IF NOT EXISTS idx_audit_time   ON audit_log(created_at);
+
+        -- ── Report notes (custom report tab content) ──────────────────────────
+        CREATE TABLE IF NOT EXISTS report_notes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            tab_name    TEXT NOT NULL,
+            content     TEXT DEFAULT '',
+            updated_by  TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(client_id, tab_name),
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rn_client ON report_notes(client_id);
     """)
     conn.commit()
 
@@ -321,6 +336,7 @@ def init_client_hub_db():
         ("notes", "TEXT DEFAULT ''"),
         ("doc_tab_names", "TEXT DEFAULT ''"),
         ("practice_type", "TEXT DEFAULT ''"),
+        ("report_tab_names", "TEXT DEFAULT ''"),
     ]
     cur.execute("PRAGMA table_info(clients)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -352,16 +368,44 @@ def init_client_hub_db():
     if total == 0:
         _seed_data(conn)
     else:
-        # Auto-migrate: fix client profile data (only if the old value exists)
+        # Auto-migrate: fix client profile data
         cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # Ensure jessica account exists
+        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
+        # Ensure jessica account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
             jsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "client")
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
             )
+        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
+        # Reset rcm password so login works
+        rcm_salt = secrets.token_hex(16)
+        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
+                    (_hash_pw("rcm123", rcm_salt), rcm_salt))
+        # Ensure rcm account exists as admin
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
+        if cur.fetchone()[0] == 0:
+            rcm_salt2 = secrets.token_hex(16)
+            cur.execute(
+                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
+            )
+        # Ensure TruPath client exists (separate from rcm user)
+        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
+        if cur.fetchone()[0] == 0:
+            tpsalt = secrets.token_hex(16)
+            cur.execute(
+                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+                ("trupath", _hash_pw("trupath123", tpsalt), tpsalt, "TruPath", "TruPath", "", "client")
+            )
+        # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
+        cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
+                       ptan_group='', ptan_individual='', specialty=''
+                       WHERE username='eric' AND practice_type='MHP+OMT'""")
         conn.commit()
 
     conn.close()
@@ -380,22 +424,36 @@ def _seed_data(conn):
     )
 
     # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
+    # NOTE: Luminary has NO own profile fields — all profile data lives in sub-profiles (MHP/OMT)
     s1 = secrets.token_hex(16)
     cur.execute(
         """INSERT INTO clients
-           (username,password,salt,company,contact_name,email,role,
-            tax_id,group_npi,individual_npi,ptan_group,ptan_individual,practice_type)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           (username,password,salt,company,contact_name,email,role,practice_type)
+           VALUES (?,?,?,?,?,?,?,?)""",
         ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
-         "334707784", "1033901723", "1497174478", "MI120440", "MI20440001", "MHP+OMT")
+         "MHP+OMT")
     )
     luminary_id = cur.lastrowid
 
-    # Client 2 — Jessica
+    # Client 2 — TruPath
     s2 = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("jessica", _hash_pw("jessica123", s2), s2, "MedPharma SC", "Jessica", "", "client")
+        ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
+    )
+
+    # Jessica — MedPharma staff user (admin), NOT a client
+    jsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
+    )
+
+    # RCM — MedPharma staff user (admin), sees all client accounts
+    rsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
     )
 
     # Sub-profiles for Luminary: MHP and OMT (both Ancillary)
@@ -527,6 +585,7 @@ def update_client(cid: int, data: dict):
 
 
 DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
+DEFAULT_REPORT_TABS = ["Claims", "Credentialing", "EDI"]
 
 
 def get_profile(client_id: int) -> dict:
@@ -537,7 +596,7 @@ def get_profile(client_id: int) -> dict:
         cur.execute("""
             SELECT company, contact_name, email, phone,
                    tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
-                   address, specialty, notes, doc_tab_names, practice_type
+                   address, specialty, notes, doc_tab_names, practice_type, report_tab_names
             FROM clients WHERE id=?""", [client_id])
         row = cur.fetchone()
     finally:
@@ -546,12 +605,16 @@ def get_profile(client_id: int) -> dict:
         return {}
     cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
             "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-            "doc_tab_names", "practice_type"]
+            "doc_tab_names", "practice_type", "report_tab_names"]
     d = {c: (row[i] or "") for i, c in enumerate(cols)}
     try:
         d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
     except Exception:
         d["doc_tabs"] = DEFAULT_DOC_TABS[:]
+    try:
+        d["report_tabs"] = _json.loads(d["report_tab_names"]) if d["report_tab_names"] else DEFAULT_REPORT_TABS[:]
+    except Exception:
+        d["report_tabs"] = DEFAULT_REPORT_TABS[:]
     return d
 
 
@@ -559,7 +622,7 @@ def update_profile(client_id: int, data: dict):
     import json as _json
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-               "doc_tab_names", "practice_type"]
+               "doc_tab_names", "practice_type", "report_tab_names"]
     update_client(client_id, {k: v for k, v in data.items() if k in allowed})
 
 
@@ -2016,6 +2079,62 @@ def delete_file_record(file_id: int, client_id: int = None):
             conn.execute("DELETE FROM client_files WHERE id=? AND client_id=?", (file_id, client_id))
         else:
             conn.execute("DELETE FROM client_files WHERE id=?", (file_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── Report Notes (custom report tab content) ──────────────────────────────────
+def get_report_notes(client_id: int, tab_name: str = None) -> list:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if tab_name:
+            cur.execute("SELECT * FROM report_notes WHERE client_id=? AND tab_name=?",
+                        [client_id, tab_name])
+        else:
+            cur.execute("SELECT * FROM report_notes WHERE client_id=? ORDER BY tab_name",
+                        [client_id])
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def upsert_report_note(client_id: int, tab_name: str, content: str, username: str = ""):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM report_notes WHERE client_id=? AND tab_name=?",
+                    [client_id, tab_name])
+        row = cur.fetchone()
+        now = datetime.now().isoformat()
+        if row:
+            cur.execute("""UPDATE report_notes SET content=?, updated_by=?, updated_at=?
+                           WHERE id=?""", [content, username, now, row[0]])
+        else:
+            cur.execute("""INSERT INTO report_notes (client_id, tab_name, content, updated_by, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        [client_id, tab_name, content, username, now, now])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_report_note(client_id: int, tab_name: str):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM report_notes WHERE client_id=? AND tab_name=?",
+                     [client_id, tab_name])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def rename_report_note(client_id: int, old_name: str, new_name: str):
+    conn = get_db()
+    try:
+        conn.execute("UPDATE report_notes SET tab_name=?, updated_at=? WHERE client_id=? AND tab_name=?",
+                     [new_name, datetime.now().isoformat(), client_id, old_name])
         conn.commit()
     finally:
         conn.close()
