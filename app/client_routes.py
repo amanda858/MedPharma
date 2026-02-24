@@ -186,7 +186,8 @@ def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cooki
 @router.get("/profile")
 def get_my_profile(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    cid = _client_scope(user) or user["id"]
+    scope = _client_scope(user)
+    cid = scope if scope is not None else user["id"]
     return get_profile(cid)
 
 
@@ -199,7 +200,8 @@ def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
 @router.put("/profile")
 def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    cid = _client_scope(user) or user["id"]
+    scope = _client_scope(user)
+    cid = scope if scope is not None else user["id"]
     data = {k: v for k, v in body.model_dump().items() if v is not None and k != "doc_tabs"}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
@@ -223,7 +225,8 @@ def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[s
 @router.get("/practice-profiles")
 def list_practice_profiles(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    cid = _client_scope(user) or user["id"]
+    scope = _client_scope(user)
+    cid = scope if scope is not None else user["id"]
     return {"profiles": get_practice_profiles(cid)}
 
 
@@ -237,7 +240,8 @@ def list_practice_profiles_admin(cid: int, hub_session: Optional[str] = Cookie(N
 def save_practice_profile(profile_name: str, body: PracticeProfileUpdate,
                           hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    cid = _client_scope(user) or user["id"]
+    scope = _client_scope(user)
+    cid = scope if scope is not None else user["id"]
     upsert_practice_profile(cid, profile_name, body.model_dump(exclude_none=True))
     return {"ok": True}
 
@@ -253,7 +257,8 @@ def save_practice_profile_admin(cid: int, profile_name: str, body: PracticeProfi
 @router.delete("/practice-profiles/{pp_id}")
 def remove_practice_profile(pp_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    cid = _client_scope(user) or user["id"]
+    scope = _client_scope(user)
+    cid = scope if scope is not None else user["id"]
     delete_practice_profile(pp_id, cid)
     return {"ok": True}
 
@@ -745,7 +750,7 @@ def get_production(client_id: Optional[int] = None,
 @router.post("/production")
 def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = body.client_id or _client_scope(user) or user["id"]
+    scope = body.client_id if body.client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
     data = body.model_dump()
     data["client_id"] = scope
     data["username"] = user["username"]
@@ -790,7 +795,7 @@ async def upload_file(
     hub_session: Optional[str] = Cookie(None),
 ):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user) or user["id"]
+    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -1040,7 +1045,7 @@ async def import_excel(
 ):
     """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI)."""
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user) or user["id"]
+    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".xlsx", ".xls", ".csv"):

@@ -329,6 +329,13 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_def}")
     conn.commit()
 
+    # ── Migrate existing DBs: add expires_at column to sessions ──────────
+    cur.execute("PRAGMA table_info(sessions)")
+    session_cols = {row[1] for row in cur.fetchall()}
+    if "expires_at" not in session_cols:
+        cur.execute("ALTER TABLE sessions ADD COLUMN expires_at TEXT")
+    conn.commit()
+
     # ── Migrate existing DBs: add sub_profile column to data tables ───────
     sub_profile_tables = ["claims_master", "payments", "providers",
                           "credentialing", "enrollment", "edi_setup"]
