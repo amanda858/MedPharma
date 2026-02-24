@@ -34,7 +34,7 @@ from app.client_db import (
     global_search, bulk_update_claims, export_claims, export_table,
 )
 
-from app.notifications import notify_activity, notify_bulk_activity
+from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
 
 router = APIRouter(prefix="/hub/api")
 
@@ -96,6 +96,10 @@ def login(body: LoginIn, response: Response):
 
 @router.post("/logout")
 def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
+    # Flush daily activity summary before destroying session
+    user = _get_user(hub_session) if hub_session else None
+    if user:
+        flush_and_notify(user["username"])
     if hub_session:
         logout_session(hub_session)
     response.delete_cookie("hub_session", path="/")
