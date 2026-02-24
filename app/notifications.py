@@ -546,3 +546,473 @@ def _send_sms(message: str):
             log.error(f"Twilio SMS failed ({resp.status_code}): {resp.text}")
     except Exception as e:
         log.error(f"Failed to send SMS: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  DAILY OVERALL ACCOUNT SUMMARY — Scheduled at 6 PM EST
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _fmt_money(val):
+    """Format a number as $X,XXX.XX"""
+    return f"${val:,.2f}"
+
+
+def _generate_account_ai_summary(d: dict, date_str: str) -> str:
+    """
+    Use OpenAI to generate a concise executive summary of the overall account
+    health.  Falls back to rule-based if OpenAI unavailable.
+    """
+    prompt = f"""You are a healthcare RCM operations manager writing a brief end-of-day executive summary.
+
+Date: {date_str}
+
+Key metrics:
+- Total AR: ${d['total_ar']:,.2f} across {d['total_claims']} claims ({d['active_claims']} active)
+- Today: {d['submitted_today']} submitted, {d['paid_today']} paid, {d['denied_today']} denied
+- MTD: {d['submitted_mtd']} submitted, {d['paid_mtd']} paid, {d['denied_mtd']} denied
+- Payments today: ${d['payments_today']:,.2f} | MTD: ${d['payments_mtd']:,.2f} | YTD: ${d['payments_ytd']:,.2f}
+- Clean claim rate: {d['clean_claim_rate']}% | Denial rate: {d['denial_rate']}% | Net collection: {d['net_collection_rate']}%
+- Avg days to pay: {d['avg_days_to_pay']} | SLA breaches: {d['sla_breaches']}
+- AR Aging: Current ${d['ar_aging']['current']:,.2f} | 31-60 ${d['ar_aging']['31_60']:,.2f} | 61-90 ${d['ar_aging']['61_90']:,.2f} | 90+ ${d['ar_aging']['90_plus']:,.2f}
+- Credentialing: {d['cred_total']} total ({d['cred_approved']} approved, {d['cred_pending']} pending, {d['cred_not_started']} not started)
+- Enrollment: {d['enroll_total']} total ({d['enroll_approved']} approved, {d['enroll_pending']} pending)
+- EDI: {d['edi_total']} total ({d['edi_live']} live)
+- Serving {d['total_clients']} clients | {d['today_actions']} system actions today
+
+Industry benchmarks for context:
+- Clean claim rate should be ≥95%, denial rate ≤5%, net collection ≥95%
+- Avg days to pay: <30 days is excellent, 30-45 acceptable, >45 needs attention
+- AR >90 days should be <15% of total AR
+
+Write a 4-6 sentence executive summary that:
+1. Highlights the overall financial health of the practice
+2. Calls out any red flags (high denial rate, aging AR, SLA breaches)
+3. Notes today's productivity (claims flow, payments received)
+4. Provides one key recommendation for tomorrow
+Keep it professional and data-driven. No greeting, no bullet points — paragraph form only.
+"""
+    if not OPENAI_API_KEY:
+        return _rule_based_account_summary(d)
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": "You are a healthcare RCM executive."},
+                      {"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        log.error(f"OpenAI account summary failed: {e}")
+        return _rule_based_account_summary(d)
+
+
+def _rule_based_account_summary(d: dict) -> str:
+    """Fallback account summary without AI."""
+    flags = []
+    if d["denial_rate"] > 5:
+        flags.append(f"denial rate of {d['denial_rate']}% exceeds the 5% industry target")
+    if d["clean_claim_rate"] < 95:
+        flags.append(f"clean claim rate of {d['clean_claim_rate']}% is below the 95% benchmark")
+    if d["avg_days_to_pay"] > 45:
+        flags.append(f"average days to pay of {d['avg_days_to_pay']} exceeds the 45-day threshold")
+    if d["sla_breaches"] > 0:
+        flags.append(f"{d['sla_breaches']} SLA breaches require attention")
+
+    total_aging = sum(d["ar_aging"].values())
+    if total_aging > 0 and d["ar_aging"]["90_plus"] / total_aging > 0.15:
+        flags.append(f"AR >90 days represents {d['ar_aging']['90_plus']/total_aging*100:.0f}% of outstanding balances")
+
+    summary = (
+        f"The practice manages ${d['total_ar']:,.2f} in total accounts receivable across "
+        f"{d['active_claims']} active claims with a net collection rate of {d['net_collection_rate']}%. "
+        f"Today saw {d['submitted_today']} claims submitted, {d['paid_today']} paid, and "
+        f"${d['payments_today']:,.2f} in payments posted. "
+    )
+
+    if flags:
+        summary += "Areas needing attention: " + "; ".join(flags) + ". "
+    else:
+        summary += "All key performance indicators are within healthy ranges. "
+
+    if d["cred_pending"] > 0:
+        summary += f"Credentialing has {d['cred_pending']} applications pending completion. "
+
+    summary += "Continue monitoring AR aging and prioritize follow-up on accounts approaching SLA deadlines."
+    return summary
+
+
+def send_daily_account_summary():
+    """
+    Compile and send the Overall Account Summary email + SMS.
+    Called by the scheduler at 6 PM EST daily.
+    """
+    try:
+        from app.client_db import get_daily_account_summary
+        d = get_daily_account_summary()
+    except Exception as e:
+        log.error(f"Failed to fetch daily account summary data: {e}")
+        return
+
+    now = datetime.now()
+    date_str = now.strftime("%B %d, %Y")
+    day_of_week = now.strftime("%A")
+
+    # AI summary
+    ai_summary = _generate_account_ai_summary(d, date_str)
+
+    # ── Status distribution rows ──
+    status_rows_html = ""
+    for status, count in sorted(d.get("status_distribution", {}).items(), key=lambda x: -x[1]):
+        if status == "Paid":
+            color = "#22c55e"
+        elif status in ("Denied", "Appeals"):
+            color = "#ef4444"
+        elif status in ("Submitted", "In Progress"):
+            color = "#3b82f6"
+        else:
+            color = "#64748b"
+        status_rows_html += f"""
+        <tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;font-size:13px">{status}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;font-size:13px;color:{color}">{count:,}</td>
+        </tr>"""
+
+    # ── Payor rows ──
+    payor_rows_html = ""
+    for p in d.get("top_payors", [])[:8]:
+        payor_rows_html += f"""
+        <tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;font-size:12px">{p['payor']}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px">{p['count']:,}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px">{_fmt_money(p['charges'])}</td>
+        </tr>"""
+
+    # ── Credentialing status rows ──
+    cred_rows_html = ""
+    for status, count in sorted(d.get("cred_stats", {}).items(), key=lambda x: -x[1]):
+        cred_rows_html += f'<span style="display:inline-block;background:#f1f5f9;border-radius:6px;padding:4px 10px;margin:2px;font-size:12px"><b>{count}</b> {status}</span>'
+
+    # ── Enrollment status rows ──
+    enroll_rows_html = ""
+    for status, count in sorted(d.get("enroll_stats", {}).items(), key=lambda x: -x[1]):
+        enroll_rows_html += f'<span style="display:inline-block;background:#f1f5f9;border-radius:6px;padding:4px 10px;margin:2px;font-size:12px"><b>{count}</b> {status}</span>'
+
+    # ── EDI status rows ──
+    edi_rows_html = ""
+    for status, count in sorted(d.get("edi_stats", {}).items(), key=lambda x: -x[1]):
+        edi_rows_html += f'<span style="display:inline-block;background:#f1f5f9;border-radius:6px;padding:4px 10px;margin:2px;font-size:12px"><b>{count}</b> {status}</span>'
+
+    # ── AR Aging bar ──
+    aging = d.get("ar_aging", {})
+    total_aging = sum(aging.values()) or 1
+
+    html_body = f"""
+    <html>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
+        <div style="max-width: 700px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: white;">
+
+            <!-- HEADER -->
+            <div style="background: linear-gradient(135deg, #1e3a5f, #2563eb); padding: 28px 32px;">
+                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">📋 OVERALL ACCOUNT SUMMARY</h1>
+                <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; font-weight: 500;">{day_of_week}, {date_str} — 6:00 PM EST Daily Report</p>
+                <p style="color: rgba(255,255,255,0.65); margin: 4px 0 0; font-size: 12px;">MedPharma Revenue Cycle Management — {d['total_clients']} Active Client{'s' if d['total_clients']!=1 else ''}</p>
+            </div>
+
+            <div style="padding: 28px 32px;">
+
+                <!-- AI EXECUTIVE SUMMARY -->
+                <div style="background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-left:4px solid #6366f1;border-radius:8px;padding:18px 20px;margin-bottom:28px;">
+                    <div style="font-size:12px;font-weight:800;text-transform:uppercase;color:#4338ca;letter-spacing:1px;margin-bottom:8px;">🤖 AI Executive Summary</div>
+                    <div style="font-size:13px;line-height:1.7;color:#1e293b;">{ai_summary}</div>
+                </div>
+
+                <!-- FINANCIAL KPIs -->
+                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
+                    💰 Financial Overview
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;">
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
+                        <div style="font-size:22px;font-weight:800;color:#15803d">{_fmt_money(d['total_ar'])}</div>
+                        <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase">Total AR</div>
+                    </div>
+                    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
+                        <div style="font-size:22px;font-weight:800;color:#2563eb">{_fmt_money(d['payments_mtd'])}</div>
+                        <div style="font-size:10px;font-weight:700;color:#3b82f6;text-transform:uppercase">Payments MTD</div>
+                    </div>
+                    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
+                        <div style="font-size:22px;font-weight:800;color:#ca8a04">{d['net_collection_rate']}%</div>
+                        <div style="font-size:10px;font-weight:700;color:#d97706;text-transform:uppercase">Net Collection</div>
+                    </div>
+                    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
+                        <div style="font-size:22px;font-weight:800;color:#dc2626">{d['denial_rate']}%</div>
+                        <div style="font-size:10px;font-weight:700;color:#ef4444;text-transform:uppercase">Denial Rate</div>
+                    </div>
+                </div>
+
+                <!-- CLAIMS KPIs -->
+                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
+                    📄 Claims Overview
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:24px;font-weight:800;color:#1e293b">{d['total_claims']:,}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Total Claims</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:24px;font-weight:800;color:#2563eb">{d['active_claims']:,}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Active</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:24px;font-weight:800;color:#22c55e">{d['claims_paid']:,}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Paid</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:24px;font-weight:800;color:#ef4444">{d['claims_denied']:,}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Denied</div>
+                    </div>
+                </div>
+
+                <!-- TODAY'S ACTIVITY -->
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:12px;">
+                    <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:8px;">Today's Activity</div>
+                    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                        <div><span style="font-weight:800;color:#2563eb;font-size:18px">{d['submitted_today']}</span> <span style="font-size:12px;color:#64748b">Submitted</span></div>
+                        <div><span style="font-weight:800;color:#22c55e;font-size:18px">{d['paid_today']}</span> <span style="font-size:12px;color:#64748b">Paid</span></div>
+                        <div><span style="font-weight:800;color:#ef4444;font-size:18px">{d['denied_today']}</span> <span style="font-size:12px;color:#64748b">Denied</span></div>
+                        <div><span style="font-weight:800;color:#16a34a;font-size:18px">{_fmt_money(d['payments_today'])}</span> <span style="font-size:12px;color:#64748b">Payments</span></div>
+                    </div>
+                </div>
+
+                <!-- PERFORMANCE METRICS -->
+                <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;">
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:18px;font-weight:800;color:#1e293b">{d['clean_claim_rate']}%</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Clean Claim</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:18px;font-weight:800;color:#1e293b">{d['avg_days_to_pay']}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Avg Days to Pay</div>
+                    </div>
+                    <div style="background:{'#fee2e2' if d['sla_breaches']>0 else '#f8fafc'};border:1px solid {'#fecaca' if d['sla_breaches']>0 else '#e2e8f0'};border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:18px;font-weight:800;color:{'#dc2626' if d['sla_breaches']>0 else '#1e293b'}">{d['sla_breaches']}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">SLA Breaches</div>
+                    </div>
+                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;flex:1;min-width:100px;text-align:center">
+                        <div style="font-size:18px;font-weight:800;color:#1e293b">{d['today_actions']}</div>
+                        <div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">Actions Today</div>
+                    </div>
+                </div>
+
+                <!-- AR AGING -->
+                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:12px;">
+                    ⏳ AR Aging Distribution
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:8px;">
+                    <div style="flex:{aging.get('current',0)/total_aging};background:#22c55e;height:14px;border-radius:4px 0 0 4px" title="Current"></div>
+                    <div style="flex:{aging.get('31_60',0)/total_aging};background:#f59e0b;height:14px" title="31-60"></div>
+                    <div style="flex:{aging.get('61_90',0)/total_aging};background:#f97316;height:14px" title="61-90"></div>
+                    <div style="flex:{aging.get('90_plus',0)/total_aging};background:#ef4444;height:14px;border-radius:0 4px 4px 0" title="90+"></div>
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;font-size:12px;">
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Current: {_fmt_money(aging.get('current',0))}</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;margin-right:4px"></span>31-60: {_fmt_money(aging.get('31_60',0))}</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#f97316;border-radius:2px;margin-right:4px"></span>61-90: {_fmt_money(aging.get('61_90',0))}</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#ef4444;border-radius:2px;margin-right:4px"></span>90+: {_fmt_money(aging.get('90_plus',0))}</div>
+                </div>
+
+                <!-- STATUS DISTRIBUTION + TOP PAYORS side-by-side -->
+                <div style="display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:200px">
+                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:8px;">Claim Status Distribution</div>
+                        <table style="width:100%;border-collapse:collapse">{status_rows_html}</table>
+                    </div>
+                    <div style="flex:1;min-width:200px">
+                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:8px;">Top Payors</div>
+                        <table style="width:100%;border-collapse:collapse">
+                            <thead><tr>
+                                <th style="padding:4px 12px;text-align:left;font-size:10px;color:#94a3b8;text-transform:uppercase">Payor</th>
+                                <th style="padding:4px 12px;text-align:right;font-size:10px;color:#94a3b8;text-transform:uppercase">Claims</th>
+                                <th style="padding:4px 12px;text-align:right;font-size:10px;color:#94a3b8;text-transform:uppercase">Charges</th>
+                            </tr></thead>
+                            <tbody>{payor_rows_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- CREDENTIALING / ENROLLMENT / EDI -->
+                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
+                    🏥 Credentialing, Enrollment & EDI
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Credentialing ({d['cred_total']})</div>
+                        <div>{cred_rows_html or '<span style="font-size:12px;color:#94a3b8">No records</span>'}</div>
+                    </div>
+                    <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Enrollment ({d['enroll_total']})</div>
+                        <div>{enroll_rows_html or '<span style="font-size:12px;color:#94a3b8">No records</span>'}</div>
+                    </div>
+                    <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">EDI/ERA/EFT ({d['edi_total']})</div>
+                        <div>{edi_rows_html or '<span style="font-size:12px;color:#94a3b8">No records</span>'}</div>
+                    </div>
+                </div>
+
+                <!-- MTD COMPARISON -->
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:24px;">
+                    <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:8px;">Month-to-Date Summary</div>
+                    <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;">
+                        <div>📤 <b>{d['submitted_mtd']}</b> Submitted</div>
+                        <div>✅ <b>{d['paid_mtd']}</b> Paid</div>
+                        <div>❌ <b>{d['denied_mtd']}</b> Denied</div>
+                        <div>💵 <b>{_fmt_money(d['payments_mtd'])}</b> Collected</div>
+                        <div>📅 <b>{_fmt_money(d['payments_ytd'])}</b> YTD</div>
+                    </div>
+                </div>
+
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+                <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
+                    Overall Account Summary — MedPharma Hub — {date_str} 6:00 PM EST
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>"""
+
+    # ── Plain text version ──
+    body_lines = [
+        "═══════════════════════════════════════════",
+        "     OVERALL ACCOUNT SUMMARY",
+        f"     {day_of_week}, {date_str} — 6:00 PM EST",
+        "═══════════════════════════════════════════",
+        "",
+        "AI EXECUTIVE SUMMARY:",
+        ai_summary,
+        "",
+        "───── FINANCIAL ─────",
+        f"  Total AR:          {_fmt_money(d['total_ar'])}",
+        f"  Payments Today:    {_fmt_money(d['payments_today'])}",
+        f"  Payments MTD:      {_fmt_money(d['payments_mtd'])}",
+        f"  Payments YTD:      {_fmt_money(d['payments_ytd'])}",
+        f"  Net Collection:    {d['net_collection_rate']}%",
+        f"  Denial Rate:       {d['denial_rate']}%",
+        f"  Clean Claim Rate:  {d['clean_claim_rate']}%",
+        f"  Avg Days to Pay:   {d['avg_days_to_pay']}",
+        "",
+        "───── CLAIMS ─────",
+        f"  Total: {d['total_claims']:,}  |  Active: {d['active_claims']:,}  |  Paid: {d['claims_paid']:,}  |  Denied: {d['claims_denied']:,}",
+        f"  Today: {d['submitted_today']} submitted, {d['paid_today']} paid, {d['denied_today']} denied",
+        f"  MTD:   {d['submitted_mtd']} submitted, {d['paid_mtd']} paid, {d['denied_mtd']} denied",
+        "",
+        "───── AR AGING ─────",
+        f"  Current:  {_fmt_money(aging.get('current',0))}",
+        f"  31-60:    {_fmt_money(aging.get('31_60',0))}",
+        f"  61-90:    {_fmt_money(aging.get('61_90',0))}",
+        f"  90+:      {_fmt_money(aging.get('90_plus',0))}",
+        "",
+        "───── CREDENTIALING/ENROLLMENT/EDI ─────",
+        f"  Credentialing: {d['cred_total']} ({d['cred_approved']} approved, {d['cred_pending']} pending)",
+        f"  Enrollment:    {d['enroll_total']} ({d['enroll_approved']} approved, {d['enroll_pending']} pending)",
+        f"  EDI:           {d['edi_total']} ({d['edi_live']} live)",
+        "",
+        f"  SLA Breaches: {d['sla_breaches']}  |  System Actions Today: {d['today_actions']}",
+    ]
+    body = "\n".join(body_lines)
+
+    subject = f"Overall Account Summary — {date_str} — AR {_fmt_money(d['total_ar'])}"
+
+    # SMS — compact daily summary
+    sms = (f"MedPharma Daily: AR {_fmt_money(d['total_ar'])} | "
+           f"Today: {d['submitted_today']}sub/{d['paid_today']}paid/{d['denied_today']}den | "
+           f"MTD collected {_fmt_money(d['payments_mtd'])} | "
+           f"Collection {d['net_collection_rate']}%")
+    if len(sms) > 155:
+        sms = (f"MedPharma: AR {_fmt_money(d['total_ar'])} | "
+               f"{d['submitted_today']}sub/{d['paid_today']}paid | "
+               f"Collection {d['net_collection_rate']}%")
+        if len(sms) > 155:
+            sms = sms[:152] + "…"
+
+    threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
+    threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
+    log.info(f"Overall Account Summary sent: AR {_fmt_money(d['total_ar'])}, "
+             f"{d['total_claims']} claims, {d['active_claims']} active")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  SCHEDULER — 6 PM EST daily
+# ═══════════════════════════════════════════════════════════════════════════
+
+_scheduler_started = False
+
+def start_daily_scheduler():
+    """
+    Start APScheduler to fire `send_daily_account_summary` every day at 6 PM EST.
+    Safe to call multiple times — only starts once.
+    """
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        import pytz
+
+        est = pytz.timezone("US/Eastern")
+        scheduler = BackgroundScheduler(daemon=True)
+        scheduler.add_job(
+            send_daily_account_summary,
+            CronTrigger(hour=18, minute=0, timezone=est),
+            id="daily_account_summary",
+            name="6 PM EST Overall Account Summary",
+            replace_existing=True,
+        )
+        scheduler.start()
+        log.info("Daily account summary scheduler started — fires at 6:00 PM EST")
+    except ImportError:
+        # Fallback: use a simple threading timer that checks every 60 seconds
+        log.warning("apscheduler not installed — falling back to threading-based scheduler")
+        _start_thread_scheduler()
+    except Exception as e:
+        log.error(f"Failed to start scheduler: {e}")
+        _start_thread_scheduler()
+
+
+def _start_thread_scheduler():
+    """Fallback scheduler using threading — checks every 60s if it's 6 PM EST."""
+    import time as _time
+
+    def _check_loop():
+        last_sent_date = None
+        while True:
+            try:
+                # Get current time in US/Eastern
+                try:
+                    import pytz
+                    est = pytz.timezone("US/Eastern")
+                    now_est = datetime.now(est)
+                except ImportError:
+                    # No pytz — approximate EST as UTC-5
+                    from datetime import timedelta, timezone
+                    est_tz = timezone(timedelta(hours=-5))
+                    now_est = datetime.now(est_tz)
+
+                today = now_est.date()
+                # Fire if 6 PM hour and haven't sent today
+                if now_est.hour == 18 and now_est.minute < 5 and last_sent_date != today:
+                    last_sent_date = today
+                    log.info("Thread scheduler firing daily account summary")
+                    send_daily_account_summary()
+            except Exception as e:
+                log.error(f"Thread scheduler error: {e}")
+            _time.sleep(60)
+
+    t = threading.Thread(target=_check_loop, daemon=True)
+    t.start()
+    log.info("Fallback thread scheduler started — checks every 60s for 6 PM EST")

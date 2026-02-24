@@ -1365,6 +1365,162 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         conn.close()
 
 
+# ─── Daily Account Summary (for 6 PM scheduled report) ────────────────────
+
+def get_daily_account_summary():
+    """
+    Aggregate snapshot across ALL clients for the overall daily account summary.
+    Returns high-level KPIs suitable for the Team Lead / Manager report.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        today = date.today()
+        today_str = today.isoformat()
+        mtd_start = today.replace(day=1).isoformat()
+        ytd_start = today.replace(month=1, day=1).isoformat()
+
+        def q1(sql, params=None):
+            cur.execute(sql, params or [])
+            row = cur.fetchone()
+            return row[0] if row else 0
+
+        # ── Claims KPIs ──
+        total_claims       = q1("SELECT COUNT(*) FROM claims_master")
+        total_ar           = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master")
+        active_claims      = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed')")
+        claims_paid        = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid'")
+        claims_denied      = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus IN ('Denied','Appeals')")
+        claims_submitted   = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate != ''")
+        submitted_today    = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate=?", [today_str])
+        paid_today         = q1("SELECT COUNT(*) FROM claims_master WHERE PaidDate=?", [today_str])
+        denied_today       = q1("SELECT COUNT(*) FROM claims_master WHERE DeniedDate=?", [today_str])
+        submitted_mtd      = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate>=?", [mtd_start])
+        paid_mtd           = q1("SELECT COUNT(*) FROM claims_master WHERE PaidDate>=?", [mtd_start])
+        denied_mtd         = q1("SELECT COUNT(*) FROM claims_master WHERE DeniedDate>=?", [mtd_start])
+
+        total_charge       = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master")
+        total_paid_amt     = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master")
+        net_coll_rate      = round(total_paid_amt / max(total_charge, 1) * 100, 1)
+
+        clean_claims       = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid' AND DenialReason=''")
+        clean_rate         = round(clean_claims / max(claims_submitted, 1) * 100, 1)
+        denial_rate        = round(claims_denied / max(claims_submitted, 1) * 100, 1)
+
+        sla_breaches       = q1("SELECT COUNT(*) FROM claims_master WHERE SLABreached=1")
+
+        # Avg days to pay
+        cur.execute("SELECT AVG(CAST(julianday(PaidDate) - julianday(DOS) AS REAL)) FROM claims_master WHERE PaidDate != '' AND DOS != ''")
+        row = cur.fetchone()
+        avg_days_to_pay = round(row[0] or 0, 1)
+
+        # Payments
+        payments_today     = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate=?", [today_str])
+        payments_mtd       = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [mtd_start])
+        payments_ytd       = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [ytd_start])
+
+        # AR Aging
+        aging = {"current": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
+        cur.execute("""SELECT BalanceRemaining,
+                       CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) as age
+                       FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed') AND BalanceRemaining > 0""")
+        for row in cur.fetchall():
+            bal, age_days = row
+            age_days = age_days or 0
+            if age_days <= 30:   aging["current"] += bal
+            elif age_days <= 60: aging["31_60"] += bal
+            elif age_days <= 90: aging["61_90"] += bal
+            else:                aging["90_plus"] += bal
+        aging = {k: round(v, 2) for k, v in aging.items()}
+
+        # Status distribution
+        cur.execute("SELECT ClaimStatus, COUNT(*) FROM claims_master GROUP BY ClaimStatus ORDER BY COUNT(*) DESC")
+        status_dist = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Top payors
+        cur.execute("SELECT Payor, COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE Payor != '' GROUP BY Payor ORDER BY COUNT(*) DESC LIMIT 10")
+        top_payors = [{"payor": r[0], "count": r[1], "charges": round(r[2], 2)} for r in cur.fetchall()]
+
+        # ── Credentialing KPIs ──
+        cur.execute("SELECT Status, COUNT(*) FROM credentialing GROUP BY Status")
+        cred_stats = {r[0]: r[1] for r in cur.fetchall()}
+        cred_total          = sum(cred_stats.values())
+        cred_approved       = cred_stats.get("Approved", 0) + cred_stats.get("Active", 0)
+        cred_pending        = cred_stats.get("Pending", 0) + cred_stats.get("In Progress", 0) + cred_stats.get("Submitted", 0)
+        cred_not_started    = cred_stats.get("Not Started", 0)
+
+        # ── Enrollment KPIs ──
+        cur.execute("SELECT Status, COUNT(*) FROM enrollment GROUP BY Status")
+        enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
+        enroll_total     = sum(enroll_stats.values())
+        enroll_approved  = enroll_stats.get("Approved", 0) + enroll_stats.get("Active", 0) + enroll_stats.get("Enrolled", 0)
+        enroll_pending   = enroll_stats.get("Pending", 0) + enroll_stats.get("In Progress", 0) + enroll_stats.get("Submitted", 0)
+
+        # ── EDI KPIs ──
+        cur.execute("SELECT EDIStatus, COUNT(*) FROM edi_setup GROUP BY EDIStatus")
+        edi_stats = {r[0]: r[1] for r in cur.fetchall()}
+        edi_total = sum(edi_stats.values())
+        edi_live  = edi_stats.get("Live", 0) + edi_stats.get("Active", 0) + edi_stats.get("Complete", 0)
+
+        # ── Clients ──
+        total_clients = q1("SELECT COUNT(*) FROM clients WHERE role='client'")
+
+        # ── Today's audit activity ──
+        today_actions = q1("SELECT COUNT(*) FROM audit_log WHERE created_at >= ?", [today_str])
+
+        return {
+            # Claims
+            "total_claims": total_claims,
+            "total_ar": round(total_ar, 2),
+            "active_claims": active_claims,
+            "claims_paid": claims_paid,
+            "claims_denied": claims_denied,
+            "claims_submitted": claims_submitted,
+            "submitted_today": submitted_today,
+            "paid_today": paid_today,
+            "denied_today": denied_today,
+            "submitted_mtd": submitted_mtd,
+            "paid_mtd": paid_mtd,
+            "denied_mtd": denied_mtd,
+            "net_collection_rate": net_coll_rate,
+            "clean_claim_rate": clean_rate,
+            "denial_rate": denial_rate,
+            "avg_days_to_pay": avg_days_to_pay,
+            "sla_breaches": sla_breaches,
+            "total_charge": round(total_charge, 2),
+            "total_paid_amt": round(total_paid_amt, 2),
+            # Payments
+            "payments_today": round(payments_today, 2),
+            "payments_mtd": round(payments_mtd, 2),
+            "payments_ytd": round(payments_ytd, 2),
+            # Aging
+            "ar_aging": aging,
+            # Distribution
+            "status_distribution": status_dist,
+            "top_payors": top_payors,
+            # Credentialing
+            "cred_total": cred_total,
+            "cred_approved": cred_approved,
+            "cred_pending": cred_pending,
+            "cred_not_started": cred_not_started,
+            "cred_stats": cred_stats,
+            # Enrollment
+            "enroll_total": enroll_total,
+            "enroll_approved": enroll_approved,
+            "enroll_pending": enroll_pending,
+            "enroll_stats": enroll_stats,
+            # EDI
+            "edi_total": edi_total,
+            "edi_live": edi_live,
+            "edi_stats": edi_stats,
+            # General
+            "total_clients": total_clients,
+            "today_actions": today_actions,
+        }
+    finally:
+        conn.close()
+
+
 # ─── Audit Trail ──────────────────────────────────────────────────────────
 
 def log_audit(client_id: int, username: str, action: str,

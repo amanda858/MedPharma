@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app.client_db import init_client_hub_db, normalize_claim_statuses
 from app.client_routes import router as client_hub_router
+from app.notifications import start_daily_scheduler
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
 
@@ -22,6 +23,7 @@ async def startup():
     try:
         init_client_hub_db()
         normalize_claim_statuses()
+        start_daily_scheduler()
     except Exception as e:
         import logging
         logging.getLogger(__name__).exception("Startup DB init failed")
