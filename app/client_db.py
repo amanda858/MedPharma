@@ -1969,6 +1969,46 @@ def add_file(client_id: int, filename: str, original_name: str, file_type: str,
     return new_id
 
 
+def get_file_record(file_id: int, client_id: int = None):
+    """Fetch a single file record by ID."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if client_id:
+            cur.execute("SELECT * FROM client_files WHERE id=? AND client_id=?", (file_id, client_id))
+        else:
+            cur.execute("SELECT * FROM client_files WHERE id=?", (file_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def update_file_record(file_id: int, data: dict, client_id: int = None):
+    """Update a file record (filename, original_name, file_size, row_count, description, status, etc.)."""
+    conn = get_db()
+    try:
+        allowed = {"filename", "original_name", "file_type", "file_size", "category",
+                   "description", "row_count", "status", "uploaded_by"}
+        sets = []
+        vals = []
+        for k, v in data.items():
+            if k in allowed:
+                sets.append(f"{k}=?")
+                vals.append(v)
+        if not sets:
+            return
+        vals.append(file_id)
+        cond = "id=?"
+        if client_id:
+            cond += " AND client_id=?"
+            vals.append(client_id)
+        conn.execute(f"UPDATE client_files SET {', '.join(sets)} WHERE {cond}", vals)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def delete_file_record(file_id: int, client_id: int = None):
     conn = get_db()
     try:

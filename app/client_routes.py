@@ -28,7 +28,7 @@ from app.client_db import (
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
-    list_files, add_file, delete_file_record,
+    list_files, add_file, get_file_record, update_file_record, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
@@ -1086,7 +1086,8 @@ async def import_excel(
     client_id: Optional[int] = Form(None),
     hub_session: Optional[str] = Cookie(None),
 ):
-    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI)."""
+    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI).
+    Also saves a copy of the file in Documents under the appropriate category."""
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
@@ -1095,6 +1096,33 @@ async def import_excel(
         raise HTTPException(400, "Only .xlsx, .xls, .csv files supported for import")
 
     content = await file.read()
+
+    # ── Save a copy of the file in Documents ──
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(UPLOAD_DIR, unique_name)
+    with open(dest, "wb") as f:
+        f.write(content)
+    file_size = len(content)
+    row_count = 0
+    try:
+        import csv as _csv, io as _io
+        if ext == ".csv":
+            reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
+            row_count = max(0, sum(1 for _ in reader) - 1)
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+            row_count = max(0, sum(ws.max_row - 1 for ws in wb.worksheets if ws.max_row))
+            wb.close()
+    except Exception:
+        pass
+    file_id = add_file(
+        client_id=scope, filename=unique_name, original_name=file.filename or "file",
+        file_type="excel", file_size=file_size, category=category,
+        description=f"{category} import — {file.filename}",
+        row_count=row_count, uploaded_by=user["username"],
+    )
+
     imported = 0
     errors = []
 
@@ -1124,6 +1152,7 @@ async def import_excel(
         "imported": imported,
         "errors": errors[:10],
         "original_name": file.filename,
+        "file_id": file_id,
     }
 
 
@@ -1952,11 +1981,128 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
+@router.get("/files/{file_id}/download")
+def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Download the original uploaded file."""
+    user = _require_user(hub_session)
+    scope = _client_scope(user)
+    rec = get_file_record(file_id, scope)
+    if not rec:
+        raise HTTPException(404, "File not found")
+    path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if not os.path.isfile(path):
+        raise HTTPException(404, "File not found on disk")
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path,
+        filename=rec["original_name"],
+        media_type="application/octet-stream",
+    )
+
+
+@router.post("/files/{file_id}/replace")
+async def replace_file(
+    file_id: int,
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Replace an existing uploaded file with a new version.
+    The old file is deleted from disk and replaced with the new upload.
+    If it's an Excel in a data category, the data is re-imported."""
+    user = _require_user(hub_session)
+    scope = _client_scope(user)
+    rec = get_file_record(file_id, scope)
+    if not rec:
+        raise HTTPException(404, "File not found")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
+        raise HTTPException(400, "Unsupported file type")
+
+    content = await file.read()
+    file_size = len(content)
+
+    # Delete old file from disk
+    old_path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if os.path.isfile(old_path):
+        os.remove(old_path)
+
+    # Save new file
+    new_unique = f"{uuid.uuid4().hex}{ext}"
+    new_path = os.path.join(UPLOAD_DIR, new_unique)
+    with open(new_path, "wb") as f:
+        f.write(content)
+
+    # Count rows for Excel/CSV
+    row_count = 0
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    if file_type == "excel":
+        try:
+            import csv as _csv, io as _io
+            if ext == ".csv":
+                reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
+                row_count = max(0, sum(1 for _ in reader) - 1)
+            else:
+                import openpyxl
+                wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+                row_count = max(0, sum(ws.max_row - 1 for ws in wb.worksheets if ws.max_row))
+                wb.close()
+        except Exception:
+            pass
+
+    # Update DB record
+    update_file_record(file_id, {
+        "filename": new_unique,
+        "original_name": file.filename or rec["original_name"],
+        "file_type": file_type,
+        "file_size": file_size,
+        "row_count": row_count,
+        "uploaded_by": user["username"],
+        "status": "Replaced",
+    }, scope)
+
+    # Auto re-import if data category
+    imported = 0
+    import_errors = []
+    category = rec.get("category", "")
+    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
+        try:
+            if category == "Claims":
+                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+            elif category == "Credentialing":
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+            elif category == "Enrollment":
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+            elif category == "EDI":
+                imported, import_errors = _import_edi_from_excel(content, ext, scope)
+        except Exception as e:
+            import_errors = [str(e)]
+
+    notify_activity(user["username"], "replaced file", "Documents",
+                    f"{rec['original_name']} → {file.filename}")
+
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "original_name": file.filename,
+        "imported": imported,
+        "import_errors": import_errors[:5],
+    }
+
+
 @router.delete("/files/{file_id}")
 def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = _client_scope(user)
+    # Also delete the physical file from disk
+    rec = get_file_record(file_id, scope)
+    if rec:
+        path = os.path.join(UPLOAD_DIR, rec["filename"])
+        if os.path.isfile(path):
+            os.remove(path)
     delete_file_record(file_id, scope)
+    notify_activity(user["username"], "deleted file", "Documents",
+                    rec["original_name"] if rec else "")
     return {"ok": True}
 
 

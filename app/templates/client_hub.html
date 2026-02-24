@@ -5499,7 +5499,7 @@
       }
       tb.innerHTML = files.map(f => {
         const kb = f.file_size > 0 ? (f.file_size < 1024 ? f.file_size + 'B' : f.file_size < 1048576 ? Math.round(f.file_size / 1024) + 'KB' : Math.round(f.file_size / 1048576 * 10) / 10 + 'MB') : '-';
-        const stColor = f.status === 'Processed' ? 'badge-green' : f.status === 'Error' ? 'badge-red' : 'badge-blue';
+        const stColor = f.status === 'Processed' ? 'badge-green' : f.status === 'Replaced' ? 'badge-purple' : f.status === 'Error' ? 'badge-red' : 'badge-blue';
         const ext = (f.original_name || '').split('.').pop().toLowerCase();
         const icon = ext === 'pdf' ? '📕' : (ext === 'doc' || ext === 'docx') ? '📘' : '📗';
         return `<tr>
@@ -5510,7 +5510,11 @@
           <td>${esc(f.uploaded_by) || '-'}</td>
           <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
           <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
-          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none" onclick="deleteFile(${f.id})">Delete</button></td>
+          <td style="white-space:nowrap;display:flex;gap:4px;align-items:center">
+            <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Download">⬇ Download</a>
+            <button class="btn btn-sm" style="color:#7c3aed;background:#f5f3ff;border:none;font-size:12px" onclick="replaceFile(${f.id})" title="Replace with new version">🔄 Replace</button>
+            <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteFile(${f.id})" title="Delete">🗑 Delete</button>
+          </td>
         </tr>`;
       }).join('');
     }
@@ -5744,12 +5748,47 @@
     }
 
     async function deleteFile(id) {
-      if (!confirm('Delete this file?')) return;
+      if (!confirm('Delete this file? This cannot be undone.')) return;
       try {
         const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
         if (!r.ok) throw new Error('Failed');
         toast('File deleted', 'success'); loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function replaceFile(fileId) {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.xlsx,.xls,.csv,.pdf,.doc,.docx';
+      input.style.display = 'none';
+      input.onchange = async () => {
+        if (!input.files || !input.files.length) return;
+        const file = input.files[0];
+        if (!confirm(`Replace this file with "${file.name}"?\n\nIf this is an Excel in a data category (Claims, Credentialing, etc.), the data will be re-imported from the new file.`)) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        toast(`Replacing with ${file.name}…`, 'info');
+        try {
+          const r = await fetch(`/hub/api/files/${fileId}/replace`, { method: 'POST', body: fd });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || 'Replace failed');
+          if (d.imported > 0) {
+            toast(`✅ File replaced & re-imported ${d.imported} rows`, 'success');
+          } else {
+            toast(`✅ File replaced successfully`, 'success');
+          }
+          if (d.import_errors && d.import_errors.length) {
+            toast(`⚠️ ${d.import_errors.length} import error(s)`, 'warning');
+          }
+          loadDocuments();
+          loadDashboard();
+          // Refresh relevant section
+          loadClaims(); loadCred(); loadEnroll(); loadEdi();
+        } catch (e) { toast(e.message, 'error'); }
+        input.remove();
+      };
+      document.body.appendChild(input);
+      input.click();
     }
 
     // ═══════════════════════════════════════
