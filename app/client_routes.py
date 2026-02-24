@@ -2154,7 +2154,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
 
     # ── AI Narrative (if provided) ──
     if narrative:
-        story.append(Paragraph("AI Account Summary", styles['SectionHead']))
+        story.append(Paragraph("Overall Account Summary", styles['SectionHead']))
         # Clean HTML tags for reportlab compatibility
         clean = narrative.replace('\n\n', '<br/><br/>').replace('\n', '<br/>')
         clean = clean.replace('<b>', '<b>').replace('</b>', '</b>')

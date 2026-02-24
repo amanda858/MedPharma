@@ -2096,6 +2096,21 @@
           </div>
           <!-- Claims Status Summary Chart -->
           <div id="claimsStatusChart" class="section-chart-strip"></div>
+          <!-- Claims Visual Charts -->
+          <div id="claimsChartsRow" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+            <div class="card">
+              <div class="card-header"><div class="card-title">📊 Status Distribution</div></div>
+              <div id="claimsSectionDonut" style="padding:12px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><div class="card-title">📊 Payor Mix</div></div>
+              <div id="claimsSectionPayor" style="padding:12px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><div class="card-title">💰 Financial Summary</div></div>
+              <div id="claimsSectionFinancials" style="padding:12px"></div>
+            </div>
+          </div>
           <div class="queue-tabs" id="queueTabs"></div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
@@ -2149,6 +2164,17 @@
           </div>
           <!-- Credentialing Status Summary Chart -->
           <div id="credStatusChart" class="section-chart-strip"></div>
+          <!-- Credentialing Visual Charts -->
+          <div id="credChartsRow" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+            <div class="card">
+              <div class="card-header"><div class="card-title">📊 Status Distribution</div></div>
+              <div id="credSectionDonut" style="padding:12px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><div class="card-title">📊 Payor Breakdown</div></div>
+              <div id="credSectionPayor" style="padding:12px"></div>
+            </div>
+          </div>
           <div class="card" style="padding:0">
             <div class="table-wrap">
               <table>
@@ -2345,7 +2371,7 @@
           <!-- AI Narrative Summary -->
           <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
             <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-              <div class="card-title">🤖 AI Account Summary</div>
+              <div class="card-title">📋 Overall Account Summary</div>
               <span id="aiNarrativeSource" style="font-size:10px;color:var(--gray-400);font-style:italic"></span>
             </div>
             <div id="reportAINarrative" style="padding:16px;line-height:1.7;font-size:13.5px;color:var(--gray-700)">
@@ -3679,6 +3705,50 @@
         buildQueueTabs(allClaims);
         renderClaimsForStatus(activeQueueStatus);
       });
+
+      // Render visual charts for claims section
+      renderClaimsSectionCharts(allClaims);
+    }
+
+    function renderClaimsSectionCharts(claims) {
+      // Status distribution donut
+      const statusCounts = {};
+      claims.forEach(c => { const s = c.ClaimStatus || 'Unknown'; statusCounts[s] = (statusCounts[s] || 0) + 1; });
+      const statusData = Object.entries(statusCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+      renderDonutChart('claimsSectionDonut', statusData, 'value', 'label');
+
+      // Payor mix donut
+      const payorCounts = {};
+      claims.forEach(c => { const p = c.Payor || 'Unknown'; payorCounts[p] = (payorCounts[p] || 0) + 1; });
+      const payorData = Object.entries(payorCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8);
+      renderDonutChart('claimsSectionPayor', payorData, 'value', 'label');
+
+      // Financial summary bar
+      const totalCharged = claims.reduce((s, c) => s + (parseFloat(c.ChargeAmount) || 0), 0);
+      const totalPaid = claims.reduce((s, c) => s + (parseFloat(c.PaidAmount) || 0), 0);
+      const totalBalance = claims.reduce((s, c) => s + (parseFloat(c.BalanceRemaining) || 0), 0);
+      const totalAdj = claims.reduce((s, c) => s + (parseFloat(c.AdjustmentAmount) || 0), 0);
+      const finData = [
+        { label: 'Total Charged', value: Math.round(totalCharged) },
+        { label: 'Total Paid', value: Math.round(totalPaid) },
+        { label: 'Adjustments', value: Math.round(totalAdj) },
+        { label: 'Outstanding', value: Math.round(totalBalance) },
+      ].filter(d => d.value > 0);
+      if (finData.length) {
+        const fMax = Math.max(...finData.map(d => d.value), 1);
+        const fColors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444'];
+        document.getElementById('claimsSectionFinancials').innerHTML = finData.map((d, i) => `
+          <div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:3px;color:var(--gray-700)">
+              <span>${d.label}</span><span>$${d.value.toLocaleString()}</span>
+            </div>
+            <div style="background:var(--gray-100);border-radius:6px;height:22px;overflow:hidden">
+              <div style="width:${Math.max(6, (d.value / fMax) * 100)}%;height:100%;background:${fColors[i]};border-radius:6px;transition:width .5s"></div>
+            </div>
+          </div>`).join('');
+      } else {
+        document.getElementById('claimsSectionFinancials').innerHTML = '<p style="color:var(--gray-400);font-size:12px;text-align:center">No financial data</p>';
+      }
     }
 
     function buildQueueTabs(claims) {
@@ -3967,6 +4037,23 @@
       activeCredFilter = document.getElementById('credFilter').value;
       syncPillHighlight('credStatusChart', activeCredFilter);
       renderCredTable();
+
+      // Render visual charts for credentialing section
+      renderCredSectionCharts(allCredItems);
+    }
+
+    function renderCredSectionCharts(items) {
+      // Status distribution donut
+      const statusCounts = {};
+      items.forEach(c => { const s = c.Status || 'Unknown'; statusCounts[s] = (statusCounts[s] || 0) + 1; });
+      const statusData = Object.entries(statusCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+      renderDonutChart('credSectionDonut', statusData, 'value', 'label');
+
+      // Payor breakdown bar chart
+      const payorCounts = {};
+      items.forEach(c => { const p = c.Payor || 'Unknown'; payorCounts[p] = (payorCounts[p] || 0) + 1; });
+      const payorData = Object.entries(payorCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 10);
+      renderBarChart('credSectionPayor', payorData, 'value', 'label');
     }
 
     function renderCredTable() {
@@ -5114,7 +5201,7 @@
       lines.push('');
 
       // AI Narrative (plain text version)
-      lines.push('AI ACCOUNT SUMMARY');
+      lines.push('OVERALL ACCOUNT SUMMARY');
       const cl = d.claims || {};
       const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
       lines.push(`Total Claims: ${cl.total || 0} | Charged: $${cl.total_charged || 0} | Paid: $${cl.total_paid || 0} | Collection Rate: ${collRate}% | AR: $${cl.total_balance || 0}`);
@@ -5203,7 +5290,7 @@
       html += `<div class="meta">Report Date: ${d.generated_at}${d.practice_type ? ' | Practice Type: ' + d.practice_type : ''}</div>`;
 
       // AI Narrative section
-      html += `<div class="narrative"><strong>🤖 AI Account Summary</strong><br><br>`;
+      html += `<div class="narrative"><strong>📋 Overall Account Summary</strong><br><br>`;
       html += generateAINarrative(d).replace(/<strong[^>]*>/g, '<b>').replace(/<\/strong>/g, '</b>');
       html += `</div>`;
 
