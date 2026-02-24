@@ -66,8 +66,8 @@ def _require_admin(hub_session: Optional[str] = Cookie(None)):
 
 
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin sees all data)."""
-    if user.get("role") == "admin":
+    """Return client_id filter — None means all (admin/user staff see all data)."""
+    if user.get("role") in ("admin", "user"):
         return None
     return user["id"]
 
@@ -120,8 +120,8 @@ def me(hub_session: Optional[str] = Cookie(None)):
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Filter out admin accounts – only real client accounts should appear
-    return [c for c in list_clients() if c.get("role") != "admin"]
+    # Filter out staff accounts (admin/user) — only real client accounts should appear
+    return [c for c in list_clients() if c.get("role") not in ("admin", "user")]
 
 
 # ─── Clients (admin) ──────────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ def get_providers(client_id: Optional[int] = None, sub_profile: Optional[str] = 
 def add_provider(body: ProviderIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "user"):
         data["client_id"] = user["id"]
     pid = create_provider(data)
     return {"id": pid, "ok": True}
@@ -474,7 +474,7 @@ def get_single_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
 def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "user"):
         data["client_id"] = user["id"]
     cid = create_claim(data)
     notify_activity(user["username"], "created", "Claims",
@@ -617,7 +617,7 @@ def list_cred(status: Optional[str] = None, client_id: Optional[int] = None,
 def add_cred(body: CredIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "user"):
         data["client_id"] = user["id"]
     rid = create_credentialing(data)
     notify_activity(user["username"], "created", "Credentialing",
@@ -688,7 +688,7 @@ def list_enroll(status: Optional[str] = None, client_id: Optional[int] = None,
 def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "user"):
         data["client_id"] = user["id"]
     eid = create_enrollment(data)
     notify_activity(user["username"], "created", "Enrollment",
@@ -758,7 +758,7 @@ def list_edi(client_id: Optional[int] = None, sub_profile: Optional[str] = None,
 def add_edi(body: EDIIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "user"):
         data["client_id"] = user["id"]
     eid = create_edi(data)
     notify_activity(user["username"], "created", "EDI Setup",

@@ -370,32 +370,48 @@ def init_client_hub_db():
     else:
         # Auto-migrate: fix client profile data
         cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
-        # Ensure jessica account exists as admin
+        # eric is now the owner/admin of MedPharma, not a client login for Luminary
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC', contact_name='Eric' WHERE username='eric' AND role='client'")
+        # Ensure eric password works
+        eric_salt = secrets.token_hex(16)
+        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='eric'",
+                    (_hash_pw("eric123", eric_salt), eric_salt))
+        # jessica is a staff user (not admin, not client)
+        cur.execute("UPDATE clients SET role='user', company='MedPharma SC' WHERE username='jessica' AND role IN ('client','admin')")
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
             jsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "user")
             )
-        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
-        # Reset rcm password so login works
+        # Ensure jessica password works
+        jsalt2 = secrets.token_hex(16)
+        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='jessica'",
+                    (_hash_pw("jessica123", jsalt2), jsalt2))
+        # rcm is a staff user (not admin, not client)
+        cur.execute("UPDATE clients SET role='user', company='MedPharma SC' WHERE username='rcm' AND role IN ('client','admin')")
         rcm_salt = secrets.token_hex(16)
         cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
                     (_hash_pw("rcm123", rcm_salt), rcm_salt))
-        # Ensure rcm account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
         if cur.fetchone()[0] == 0:
             rcm_salt2 = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
+                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "user")
             )
-        # Ensure TruPath client exists (separate from rcm user)
-        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
+        # Ensure Luminary client exists (for data storage)
+        cur.execute("SELECT COUNT(*) FROM clients WHERE company LIKE '%Luminary%' AND role='client'")
+        if cur.fetchone()[0] == 0:
+            ls = secrets.token_hex(16)
+            cur.execute(
+                """INSERT INTO clients (username,password,salt,company,contact_name,email,role,practice_type)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                ("luminary", _hash_pw("luminary123", ls), ls, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client", "MHP+OMT")
+            )
+        # Ensure TruPath client exists
+        cur.execute("SELECT COUNT(*) FROM clients WHERE company LIKE '%TruPath%' AND role='client'")
         if cur.fetchone()[0] == 0:
             tpsalt = secrets.token_hex(16)
             cur.execute(
@@ -405,7 +421,7 @@ def init_client_hub_db():
         # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
         cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
                        ptan_group='', ptan_individual='', specialty=''
-                       WHERE username='eric' AND practice_type='MHP+OMT'""")
+                       WHERE company LIKE '%Luminary%' AND practice_type='MHP+OMT'""")
         conn.commit()
 
     conn.close()
@@ -416,11 +432,32 @@ def init_client_hub_db():
 def _seed_data(conn):
     cur = conn.cursor()
 
-    # Admin
+    # Admin — system admin
     asalt = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
+    )
+
+    # Eric — owner of MedPharma (admin)
+    esalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("eric", _hash_pw("eric123", esalt), esalt, "MedPharma SC", "Eric", "", "admin")
+    )
+
+    # Jessica — MedPharma staff user
+    jsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "user")
+    )
+
+    # RCM — MedPharma staff user
+    rsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "user")
     )
 
     # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
@@ -430,7 +467,7 @@ def _seed_data(conn):
         """INSERT INTO clients
            (username,password,salt,company,contact_name,email,role,practice_type)
            VALUES (?,?,?,?,?,?,?,?)""",
-        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
+        ("luminary", _hash_pw("luminary123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
          "MHP+OMT")
     )
     luminary_id = cur.lastrowid
@@ -440,20 +477,6 @@ def _seed_data(conn):
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
-    )
-
-    # Jessica — MedPharma staff user (admin), NOT a client
-    jsalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
-    )
-
-    # RCM — MedPharma staff user (admin), sees all client accounts
-    rsalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
     )
 
     # Sub-profiles for Luminary: MHP and OMT (both Ancillary)

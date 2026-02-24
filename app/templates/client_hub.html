@@ -3338,6 +3338,10 @@
     let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
     let activeClientPracticeType = '';
     let clientsList = [];
+
+    // Role helpers: admin=full admin, user=staff, client=actual client
+    function isAdmin() { return currentUser && currentUser.role === 'admin'; }
+    function isStaff() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'user'); }
     let allClaims = [];
     let activeQueueStatus = 'All';
     const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
@@ -3517,15 +3521,18 @@
       document.getElementById('appShell').style.display = 'block';
       document.getElementById('topAccount').textContent = company;
       document.getElementById('topUser').textContent = currentUser.username;
-      // Hide the role pill for regular users; only show for admin
+      // Show role pill for admin/user; hide for clients
       const rolePill = document.getElementById('topRole');
-      if (currentUser.role === 'admin') {
+      if (isAdmin()) {
         rolePill.textContent = 'Admin';
+        rolePill.style.display = '';
+      } else if (currentUser.role === 'user') {
+        rolePill.textContent = 'Staff';
         rolePill.style.display = '';
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = 'block';
+      document.getElementById('adminNav').style.display = isAdmin() ? 'block' : 'none';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
@@ -3663,7 +3670,7 @@
     }
 
     function renderDashboard(d) {
-      const adminView = currentUser && currentUser.role === 'admin';
+      const adminView = currentUser && isStaff();
       let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
       if (activeSubProfile) title += ` — ${activeSubProfile}`;
       document.getElementById('dashTitle').textContent = title;
@@ -4019,7 +4026,7 @@
       document.getElementById('fAppealStatus').value = claim?.AppealStatus || '';
       document.getElementById('fSLA').value = claim?.SLABreached || 0;
 
-      if (currentUser.role === 'admin') {
+      if (isStaff()) {
         document.getElementById('claimClientGroup').style.display = '';
         populateClientDrop('fClaimClient', claim?.client_id);
       }
@@ -4074,7 +4081,7 @@
           });
           if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaff()
             ? parseInt(document.getElementById('fClaimClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4262,7 +4269,7 @@
       document.getElementById('fCredExpires').value = item?.ExpirationDate || '';
       document.getElementById('fCredOwner').value = item?.Owner || '';
       document.getElementById('fCredNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaff()) {
         document.getElementById('credClientGroup').style.display = '';
         populateClientDrop('fCredClient', item?.client_id);
       }
@@ -4290,7 +4297,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaff()
             ? parseInt(document.getElementById('fCredClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4377,7 +4384,7 @@
       document.getElementById('fEnrollEffective').value = item?.EffectiveDate || '';
       document.getElementById('fEnrollOwner').value = item?.Owner || '';
       document.getElementById('fEnrollNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaff()) {
         document.getElementById('enrollClientGroup').style.display = '';
         populateClientDrop('fEnrollClient', item?.client_id);
       }
@@ -4405,7 +4412,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaff()
             ? parseInt(document.getElementById('fEnrollClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4495,7 +4502,7 @@
       document.getElementById('fEdiGoLive').value = item?.GoLiveDate || '';
       document.getElementById('fEdiOwner').value = item?.Owner || '';
       document.getElementById('fEdiNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaff()) {
         document.getElementById('ediClientGroup').style.display = '';
         populateClientDrop('fEdiClient', item?.client_id);
       }
@@ -4523,7 +4530,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaff()
             ? parseInt(document.getElementById('fEdiClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4586,7 +4593,7 @@
       document.getElementById('fProvStatus').value = item?.Status || 'Active';
       document.getElementById('fProvStart').value = item?.StartDate || '';
       document.getElementById('fProvNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaff()) {
         document.getElementById('provClientGroup').style.display = '';
         populateClientDrop('fProvClient', item?.client_id);
       }
@@ -4613,7 +4620,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaff()
             ? parseInt(document.getElementById('fProvClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4641,7 +4648,7 @@
     <td>${esc(c.contact_name || '—')}</td>
     <td style="font-size:12px">${esc(c.email || '—')}</td>
     <td style="font-size:12px">${esc(c.phone || '—')}</td>
-    <td><span class="badge ${c.role === 'admin' ? 'badge-purple' : 'badge-blue'}">${c.role}</span></td>
+    <td><span class="badge ${c.role === 'admin' ? 'badge-purple' : c.role === 'user' ? 'badge-green' : 'badge-blue'}">${c.role}</span></td>
     <td style="font-size:12px">${c.last_login || 'Never'}</td>
     <td>${c.is_active ? '✅' : '❌'}</td>
   </tr>`).join('');
