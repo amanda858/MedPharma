@@ -43,9 +43,9 @@ NOTIFY_PHONE = os.getenv("NOTIFY_PHONE", "+18036263500")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Users whose activity triggers notifications.
-# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
+# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="eric,jessica,rcm"
 # Use NOTIFY_ON_USERS="*" to enable for all users.
-_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "jessica,rcm").strip()
+_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "eric,jessica,rcm").strip()
 NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
@@ -1088,6 +1088,7 @@ def send_daily_account_summary():
 
 # User emails for individual reminders
 USER_EMAILS = {
+    "eric": "eric@medprosc.com",
     "jessica": "jessica@medprosc.com",
     "rcm": "rcm@medprosc.com",
 }
