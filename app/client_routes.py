@@ -31,6 +31,7 @@ from app.client_db import (
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
     update_production_log, log_user_event, get_login_log, get_user_time_report,
+    add_production_file, list_production_files, delete_production_file, has_production_data_today,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
@@ -38,7 +39,8 @@ from app.client_db import (
     get_ar_worklist, get_activity_feed,
 )
 
-from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
+from app.notifications import (notify_activity, notify_bulk_activity, flush_and_notify,
+                               send_daily_account_summary, send_production_reminders)
 
 router = APIRouter(prefix="/hub/api")
 
@@ -898,6 +900,94 @@ def edit_production_log(log_id: int, body: ProductionLogUpdate, hub_session: Opt
     return {"ok": True}
 
 
+# ─── Production File Uploads ─────────────────────────────────────────────────
+
+@router.post("/production/files/upload")
+async def upload_production_file(
+    file: UploadFile = FastAPIFile(...),
+    work_date: str = Form(""),
+    category: str = Form("General"),
+    notes: str = Form(""),
+    client_id: Optional[int] = Form(None),
+    hub_session: Optional[str] = Cookie(None),
+):
+    user = _require_user(hub_session)
+    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv", ".pdf"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf files allowed")
+
+    if not work_date:
+        from datetime import date
+        work_date = date.today().isoformat()
+
+    unique_name = f"prod_{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(UPLOAD_DIR, unique_name)
+    content = await file.read()
+    file_size = len(content)
+
+    if file_size > 50 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum is 50MB")
+
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    file_id = add_production_file({
+        "client_id": scope,
+        "username": user["username"],
+        "work_date": work_date,
+        "original_name": file.filename,
+        "stored_name": unique_name,
+        "file_type": file_type,
+        "file_size": file_size,
+        "category": category,
+        "notes": notes,
+    })
+    notify_activity(user["username"], "uploaded production file", "Production",
+                    f"{file.filename} ({category})")
+    return {"id": file_id, "ok": True}
+
+
+@router.get("/production/files")
+def get_production_files(client_id: Optional[int] = None,
+                         start_date: Optional[str] = None,
+                         end_date: Optional[str] = None,
+                         hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    files = list_production_files(scope, username=None, start_date=start_date, end_date=end_date)
+    return {"files": files}
+
+
+@router.delete("/production/files/{file_id}")
+def remove_production_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    stored_name = delete_production_file(file_id)
+    if stored_name:
+        path = os.path.join(UPLOAD_DIR, stored_name)
+        if os.path.exists(path):
+            os.remove(path)
+    notify_activity(user["username"], "deleted production file", "Production", f"File #{file_id}")
+    return {"ok": True}
+
+
+@router.get("/production/files/download/{file_id}")
+def download_production_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
+    from fastapi.responses import FileResponse
+    user = _require_user(hub_session)
+    # Find the file record
+    files = list_production_files()
+    target = next((f for f in files if f["id"] == file_id), None)
+    if not target:
+        raise HTTPException(404, "File not found")
+    path = os.path.join(UPLOAD_DIR, target["stored_name"])
+    if not os.path.exists(path):
+        raise HTTPException(404, "File not found on disk")
+    return FileResponse(path, filename=target["original_name"])
+
+
 # ─── User Login Tracking ─────────────────────────────────────────────────────
 
 @router.get("/login-log")
@@ -913,6 +1003,26 @@ def user_time_report_endpoint(start_date: Optional[str] = None,
                                hub_session: Optional[str] = Cookie(None)):
     _require_admin(hub_session)
     return {"users": get_user_time_report(start_date, end_date)}
+
+
+# ─── Admin: Test Email Triggers ───────────────────────────────────────────────
+
+@router.post("/admin/test-daily-report")
+def test_daily_report(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: immediately send the 6 PM daily account summary email."""
+    _require_admin(hub_session)
+    import threading
+    threading.Thread(target=send_daily_account_summary, daemon=True).start()
+    return {"ok": True, "message": "Daily report email is being sent now. Check your inbox."}
+
+
+@router.post("/admin/test-reminders")
+def test_production_reminders(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: immediately send 5:30 PM production reminder emails."""
+    _require_admin(hub_session)
+    import threading
+    threading.Thread(target=send_production_reminders, daemon=True).start()
+    return {"ok": True, "message": "Production reminders are being sent now."}
 
 
 # ─── Files ────────────────────────────────────────────────────────────────────

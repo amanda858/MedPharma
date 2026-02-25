@@ -298,6 +298,24 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_tp_client ON team_production(client_id);
         CREATE INDEX IF NOT EXISTS idx_tp_date   ON team_production(work_date);
 
+        -- ── Production file attachments ───────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS production_files (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id     INTEGER NOT NULL,
+            username      TEXT NOT NULL,
+            work_date     TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            stored_name   TEXT NOT NULL,
+            file_type     TEXT DEFAULT '',
+            file_size     INTEGER DEFAULT 0,
+            category      TEXT DEFAULT 'General',
+            notes         TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pf_client ON production_files(client_id);
+        CREATE INDEX IF NOT EXISTS idx_pf_user   ON production_files(username);
+
         -- ── Audit trail / activity log ────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS audit_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2169,6 +2187,87 @@ def update_production_log(log_id: int, data: dict):
         params.append(log_id)
         conn.execute(f"UPDATE team_production SET {','.join(parts)} WHERE id=?", params)
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── Production File Attachments ─────────────────────────────────────────────
+
+def add_production_file(data: dict) -> int:
+    """Add a production file attachment record."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO production_files (client_id, username, work_date, original_name, stored_name,
+                                          file_type, file_size, category, notes)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            data["client_id"], data["username"], data["work_date"],
+            data["original_name"], data["stored_name"],
+            data.get("file_type", ""), data.get("file_size", 0),
+            data.get("category", "General"), data.get("notes", "")
+        ))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_production_files(client_id: int = None, username: str = None, start_date: str = None, end_date: str = None):
+    """List production file attachments."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        conds, p = [], []
+        if client_id:
+            conds.append("client_id=?")
+            p.append(client_id)
+        if username:
+            conds.append("username=?")
+            p.append(username)
+        if start_date:
+            conds.append("work_date>=?")
+            p.append(start_date)
+        if end_date:
+            conds.append("work_date<=?")
+            p.append(end_date)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        cur.execute(f"SELECT * FROM production_files {where} ORDER BY created_at DESC", p)
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def delete_production_file(file_id: int):
+    """Delete a production file record and return the stored_name for disk cleanup."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT stored_name FROM production_files WHERE id=?", (file_id,))
+        row = cur.fetchone()
+        stored_name = row["stored_name"] if row else None
+        conn.execute("DELETE FROM production_files WHERE id=?", (file_id,))
+        conn.commit()
+        return stored_name
+    finally:
+        conn.close()
+
+
+def has_production_data_today(username: str, work_date: str) -> bool:
+    """Check if user has uploaded any production data (log OR file) for a given date."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as cnt FROM team_production WHERE username=? AND work_date=?",
+                    (username, work_date))
+        count = cur.fetchone()["cnt"]
+        if count > 0:
+            return True
+        cur.execute("SELECT COUNT(*) as cnt FROM production_files WHERE username=? AND work_date=?",
+                    (username, work_date))
+        count = cur.fetchone()["cnt"]
+        return count > 0
     finally:
         conn.close()
 

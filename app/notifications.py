@@ -953,14 +953,124 @@ def send_daily_account_summary():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SCHEDULER — 6 PM EST daily
+#  SCHEDULER — 5:30 PM & 6 PM EST daily
 # ═══════════════════════════════════════════════════════════════════════════
+
+# User emails for individual reminders
+USER_EMAILS = {
+    "jessica": "jessica@medprosc.com",
+    "rcm": "rcm@medprosc.com",
+}
 
 _scheduler_started = False
 
+
+def send_production_reminders():
+    """
+    Send reminder emails to jessica@medprosc.com and rcm@medprosc.com
+    at 5:30 PM EST if they have NOT uploaded any production data today.
+    """
+    from datetime import date
+    today = date.today().isoformat()
+
+    for username, email in USER_EMAILS.items():
+        try:
+            from app.client_db import has_production_data_today
+            if has_production_data_today(username, today):
+                log.info(f"Production reminder skipped for {username} — data already uploaded for {today}")
+                continue
+
+            subject = f"⏰ Reminder: Upload Your Daily Production — {datetime.now().strftime('%B %d, %Y')}"
+            html_body = f"""
+            <html>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
+                <div style="max-width: 560px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: white;">
+                    <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 24px 28px;">
+                        <h1 style="color: white; margin: 0; font-size: 20px; font-weight: 800;">⏰ Daily Production Reminder</h1>
+                        <p style="color: rgba(255,255,255,0.9); margin: 6px 0 0; font-size: 14px;">
+                            {datetime.now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
+                        </p>
+                    </div>
+                    <div style="padding: 24px 28px;">
+                        <p style="font-size: 15px; line-height: 1.7; margin: 0 0 16px;">
+                            Hi <strong>{username.title()}</strong>,
+                        </p>
+                        <div style="background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;">
+                            <p style="font-size: 14px; line-height: 1.6; margin: 0; color: #92400e;">
+                                📋 You have <strong>not uploaded</strong> any production data for today yet.
+                                Please log your daily work entries or upload your production report before end of day.
+                            </p>
+                        </div>
+                        <p style="font-size: 13px; color: #64748b; line-height: 1.6; margin: 0 0 20px;">
+                            Log in to <a href="https://medpharmasc.com" style="color: #2563eb; text-decoration: none; font-weight: 600;">MedPharma Hub</a>
+                            and go to <strong>User Production</strong> to submit your work for today. You can either
+                            log individual tasks or upload an Excel/PDF report.
+                        </p>
+                        <div style="text-align: center; margin: 24px 0;">
+                            <a href="https://medpharmasc.com" style="display:inline-block;background:#2563eb;color:white;padding:12px 32px;
+                                border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
+                                Log In & Upload Production
+                            </a>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+                        <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
+                            This is an automated reminder from MedPharma Hub. If you've already submitted your data, please disregard.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>"""
+            body = (f"Hi {username.title()}, you have not uploaded production data for today ({today}). "
+                    f"Please log in to MedPharma Hub and submit your daily work before end of day.")
+
+            _send_email_to(email, subject, body, html_body)
+            log.info(f"Production reminder sent to {username} ({email})")
+        except Exception as e:
+            log.error(f"Failed to send production reminder to {username}: {e}")
+
+
+def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
+    """Send email to a specific recipient via SendGrid v3 API."""
+    if not SENDGRID_API_KEY:
+        log.debug("Email skipped — SENDGRID_API_KEY not configured")
+        return
+    try:
+        import httpx
+        content = []
+        if body:
+            content.append({"type": "text/plain", "value": body})
+        if html_body:
+            content.append({"type": "text/html", "value": html_body})
+        if not content:
+            content.append({"type": "text/plain", "value": "(no content)"})
+
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+            "subject": subject,
+            "content": content,
+        }
+        resp = httpx.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 202):
+            log.info(f"Email sent to {to_email}: {subject}")
+        else:
+            log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
+    except Exception as e:
+        log.error(f"Failed to send email to {to_email}: {e}")
+
 def start_daily_scheduler():
     """
-    Start APScheduler to fire `send_daily_account_summary` every day at 6 PM EST.
+    Start APScheduler to fire:
+      - send_production_reminders at 5:30 PM EST (for jessica & rcm)
+      - send_daily_account_summary at 6:00 PM EST
     Safe to call multiple times — only starts once.
     """
     global _scheduler_started
@@ -975,6 +1085,17 @@ def start_daily_scheduler():
 
         est = pytz.timezone("US/Eastern")
         scheduler = BackgroundScheduler(daemon=True)
+
+        # 5:30 PM EST — Production reminders
+        scheduler.add_job(
+            send_production_reminders,
+            CronTrigger(hour=17, minute=30, timezone=est),
+            id="daily_production_reminders",
+            name="5:30 PM EST Production Reminders",
+            replace_existing=True,
+        )
+
+        # 6:00 PM EST — Account summary report
         scheduler.add_job(
             send_daily_account_summary,
             CronTrigger(hour=18, minute=0, timezone=est),
@@ -983,7 +1104,7 @@ def start_daily_scheduler():
             replace_existing=True,
         )
         scheduler.start()
-        log.info("Daily account summary scheduler started — fires at 6:00 PM EST")
+        log.info("Daily scheduler started — 5:30 PM reminders + 6:00 PM summary")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -994,10 +1115,11 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s if it's 6 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 5:30 PM and 6 PM EST."""
     import time as _time
 
     def _check_loop():
+        last_reminder_date = None
         last_sent_date = None
         while True:
             try:
@@ -1013,7 +1135,14 @@ def _start_thread_scheduler():
                     now_est = datetime.now(est_tz)
 
                 today = now_est.date()
-                # Fire if 6 PM hour and haven't sent today
+
+                # 5:30 PM — Production reminders
+                if now_est.hour == 17 and 30 <= now_est.minute < 35 and last_reminder_date != today:
+                    last_reminder_date = today
+                    log.info("Thread scheduler firing production reminders")
+                    send_production_reminders()
+
+                # 6:00 PM — Daily account summary
                 if now_est.hour == 18 and now_est.minute < 5 and last_sent_date != today:
                     last_sent_date = today
                     log.info("Thread scheduler firing daily account summary")
@@ -1024,4 +1153,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — checks every 60s for 6 PM EST")
+    log.info("Fallback thread scheduler started — 5:30 PM reminders + 6:00 PM summary")

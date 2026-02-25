@@ -1878,13 +1878,6 @@
         <div id="searchDropdown" class="search-dropdown" style="display:none"></div>
       </div>
       <div class="topbar-right">
-        <!-- Alerts Bell -->
-        <button id="alertsBell" onclick="navTo('alerts')" title="Alerts & Notifications"
-          style="position:relative;background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">
-          🔔<span id="alertsBadge"
-            style="display:none;position:absolute;top:-2px;right:0;background:var(--danger);color:#fff;
-            font-size:10px;font-weight:700;border-radius:50%;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px">0</span>
-        </button>
         <span id="topUser" style="font-weight:500"></span>
         <span class="role-pill" id="topRole"></span>
         <button class="btn-logout" onclick="doLogout()">Sign Out</button>
@@ -1944,7 +1937,7 @@
         </div>
         <div class="nav-section">Team</div>
         <div class="nav-item" data-panel="production" onclick="navTo('production')">
-          <span class="ni">⏱️</span> Team Production
+          <span class="ni">⏱️</span> User Production
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -2842,10 +2835,10 @@
           </div>
         </div>
 
-        <!-- ═══ TEAM PRODUCTION ═══ -->
+        <!-- ═══ USER PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">⏱️ Team Production</div>
+            <div class="page-title">⏱️ User Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
@@ -2919,6 +2912,55 @@
                   onchange="loadProduction()">
                 <button class="btn btn-secondary btn-sm"
                   onclick="document.getElementById('prodFilterDate').value='';loadProduction()">Show All</button>
+              </div>
+            </div>
+
+            <!-- File Upload Section -->
+            <div class="card" style="margin-bottom:18px">
+              <div class="card-header">
+                <div class="card-title">📎 Upload Production Report (Excel/PDF)</div>
+              </div>
+              <div style="margin-top:12px">
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+                  <div class="form-group" style="margin:0">
+                    <label style="font-size:12px">Date</label>
+                    <input class="form-control" type="date" id="prodFileDate" style="width:160px">
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label style="font-size:12px">Category</label>
+                    <select class="form-control" id="prodFileCategory" style="width:170px">
+                      <option value="Daily Report">Daily Report</option>
+                      <option value="Claims Processing">Claims Processing</option>
+                      <option value="Credentialing">Credentialing</option>
+                      <option value="A/R Follow-up">A/R Follow-up</option>
+                      <option value="Denial Management">Denial Management</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label style="font-size:12px">Notes</label>
+                    <input class="form-control" id="prodFileNotes" placeholder="Optional…" style="width:200px">
+                  </div>
+                  <div>
+                    <input type="file" id="prodFileInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none"
+                      onchange="uploadProductionFile()">
+                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('prodFileInput').click()">
+                      📤 Upload File
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Uploaded Files Gallery -->
+            <div id="prodFilesSection" style="margin-bottom:18px;display:none">
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">📁 Uploaded Production Files</div>
+                </div>
+                <div id="prodFilesGrid"
+                  style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">
+                </div>
               </div>
             </div>
 
@@ -3130,6 +3172,11 @@
               <button class="btn btn-secondary btn-sm" onclick="toggleLoginView('log')" id="btnLoginLog">📜 Login
                 History</button>
               <button class="btn btn-secondary btn-sm" onclick="loadLoginLog()">🔄 Refresh</button>
+              <span style="border-left:1px solid var(--gray-200);height:20px;margin:0 4px"></span>
+              <button class="btn btn-secondary btn-sm" onclick="testDailyReport()"
+                title="Send test daily report email now">📧 Test Daily Report</button>
+              <button class="btn btn-secondary btn-sm" onclick="testReminders()"
+                title="Send test production reminders now">⏰ Test Reminders</button>
             </div>
           </div>
 
@@ -3771,7 +3818,7 @@
 
       function updateNavForServices() {
         // Hide RCM-specific nav items for credentialing-only clients
-        const rcmPanels = ['claims', 'worklist', 'denials', 'payers'];
+        const rcmPanels = ['claims', 'worklist', 'denials', 'payers', 'edi', 'providers'];
         const credOnly = activeClientServices === 'credentialing';
         rcmPanels.forEach(p => {
           const el = document.querySelector(`[data-panel="${p}"]`);
@@ -6709,7 +6756,7 @@
       }
 
       // ═══════════════════════════════════════
-      // TEAM PRODUCTION
+      // USER PRODUCTION
       // ═══════════════════════════════════════
       let prodViewMode = 'log'; // 'log' or 'report'
 
@@ -6727,6 +6774,8 @@
         // Set today's date as default
         const dateEl = document.getElementById('prodDate');
         if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
+        const fileDateEl = document.getElementById('prodFileDate');
+        if (fileDateEl && !fileDateEl.value) fileDateEl.value = new Date().toISOString().split('T')[0];
 
         // Set default report dates (last 7 days)
         const rptStart = document.getElementById('prodRptStart');
@@ -6761,6 +6810,7 @@
           <td style="white-space:nowrap"><button class="btn btn-sm" style="color:var(--primary);background:var(--primary-light);border:none;font-size:11px;margin-right:4px" onclick="editProductionLog(${l.id},'${esc(l.work_date)}','${esc(l.category)}','${esc(l.task_description).replace(/'/g, "\\'")}',${l.quantity},${l.time_spent},'${esc(l.notes || '').replace(/'/g, "\\'")}')" title="Edit">✏️</button><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
         </tr>`).join('');
         } catch (e) { console.error(e); }
+        loadProductionFiles();
       }
 
       async function saveProductionLog() {
@@ -6834,7 +6884,7 @@
           if (filterUser) url += `&username=${encodeURIComponent(filterUser)}`;
           const r = await fetch(url);
           const d = await r.json();
-          const logs = d.logs || [];
+          const logs = d.events || [];
 
           // Populate user filter dropdown
           const sel = document.getElementById('loginFilterUser');
@@ -6877,7 +6927,7 @@
         try {
           const r = await fetch(`/hub/api/user-time-report?start_date=${start}&end_date=${end}`);
           const d = await r.json();
-          const report = d.report || [];
+          const report = d.users || [];
           const tbody = document.getElementById('loginReportTbody');
           if (!report.length) {
             tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px">No login data for this period</td></tr>';
@@ -6885,13 +6935,32 @@
           }
           tbody.innerHTML = report.map(u => `<tr>
             <td><span class="badge badge-blue">${esc(u.username)}</span></td>
-            <td style="text-align:center;font-weight:600">${u.total_logins || 0}</td>
-            <td style="text-align:center;font-weight:600">${u.total_logouts || 0}</td>
+            <td style="text-align:center;font-weight:600">${u.logins || 0}</td>
+            <td style="text-align:center;font-weight:600">${u.logouts || 0}</td>
             <td style="text-align:center;font-weight:600;color:var(--primary)">${(u.total_hours || 0).toFixed(1)}h</td>
             <td style="font-size:12px;color:var(--gray-500)">${u.first_seen ? new Date(u.first_seen).toLocaleString() : '—'}</td>
             <td style="font-size:12px;color:var(--gray-500)">${u.last_seen ? new Date(u.last_seen).toLocaleString() : '—'}</td>
           </tr>`).join('');
         } catch (e) { console.error(e); toast('Failed to load time report', 'error'); }
+      }
+
+      /* ─── ADMIN TEST EMAIL TRIGGERS ─── */
+      async function testDailyReport() {
+        if (!confirm('Send a test daily account summary email now?')) return;
+        try {
+          const r = await fetch('/hub/api/admin/test-daily-report', { method: 'POST' });
+          const d = await r.json();
+          toast(d.message || 'Daily report email sent!', 'success');
+        } catch (e) { toast('Failed to trigger test email', 'error'); }
+      }
+
+      async function testReminders() {
+        if (!confirm('Send test production reminder emails to jessica@medprosc.com and rcm@medprosc.com now?')) return;
+        try {
+          const r = await fetch('/hub/api/admin/test-reminders', { method: 'POST' });
+          const d = await r.json();
+          toast(d.message || 'Reminders sent!', 'success');
+        } catch (e) { toast('Failed to trigger test reminders', 'error'); }
       }
 
       /* ─── PRODUCTION EDIT ─── */
@@ -6952,6 +7021,85 @@
         }
         const cancelBtn = document.getElementById('prodCancelBtn');
         if (cancelBtn) cancelBtn.style.display = 'none';
+      }
+
+      /* ─── PRODUCTION FILE UPLOAD ─── */
+      async function uploadProductionFile() {
+        const fileInput = document.getElementById('prodFileInput');
+        if (!fileInput.files.length) return;
+        if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+
+        const file = fileInput.files[0];
+        const dateEl = document.getElementById('prodFileDate');
+        if (!dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('work_date', dateEl.value);
+        formData.append('category', document.getElementById('prodFileCategory').value);
+        formData.append('notes', document.getElementById('prodFileNotes').value);
+        formData.append('client_id', activeClientId);
+
+        try {
+          const r = await fetch('/hub/api/production/files/upload', { method: 'POST', body: formData });
+          if (!r.ok) throw new Error((await r.json()).detail || 'Upload failed');
+          toast('Production file uploaded!', 'success');
+          fileInput.value = '';
+          document.getElementById('prodFileNotes').value = '';
+          loadProductionFiles();
+        } catch (e) { toast(e.message, 'error'); }
+      }
+
+      async function loadProductionFiles() {
+        if (!activeClientId) return;
+        try {
+          const r = await fetch(`/hub/api/production/files?client_id=${activeClientId}`);
+          const d = await r.json();
+          const files = d.files || [];
+          const section = document.getElementById('prodFilesSection');
+          const grid = document.getElementById('prodFilesGrid');
+
+          if (!files.length) {
+            section.style.display = 'none';
+            return;
+          }
+          section.style.display = '';
+
+          grid.innerHTML = files.map(f => {
+            const isExcel = f.file_type === 'excel';
+            const icon = isExcel ? '📊' : '📄';
+            const bgColor = isExcel ? '#eff6ff' : '#fef2f2';
+            const borderColor = isExcel ? '#bfdbfe' : '#fecaca';
+            const sizeKB = (f.file_size / 1024).toFixed(1);
+            const dt = new Date(f.created_at).toLocaleString();
+            return `<div style="background:${bgColor};border:1px solid ${borderColor};border-radius:10px;padding:14px;position:relative">
+              <div style="font-size:28px;margin-bottom:6px">${icon}</div>
+              <div style="font-weight:700;font-size:13px;word-break:break-all;margin-bottom:4px">${esc(f.original_name)}</div>
+              <div style="font-size:11px;color:#64748b">
+                <span class="badge badge-purple" style="font-size:10px">${esc(f.category)}</span>
+                <span style="margin-left:4px">${sizeKB} KB</span>
+              </div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:4px">
+                📅 ${esc(f.work_date)} · 👤 ${esc(f.username)} · ${dt}
+              </div>
+              ${f.notes ? '<div style="font-size:11px;color:#64748b;margin-top:4px;font-style:italic">' + esc(f.notes) + '</div>' : ''}
+              <div style="margin-top:8px;display:flex;gap:6px">
+                <a href="/hub/api/production/files/download/${f.id}" class="btn btn-sm" style="font-size:11px;text-decoration:none;background:white;border:1px solid #e2e8f0" target="_blank">⬇️ Download</a>
+                <button class="btn btn-sm" style="font-size:11px;color:var(--danger);background:var(--danger-light);border:none" onclick="deleteProductionFile(${f.id})">🗑️</button>
+              </div>
+            </div>`;
+          }).join('');
+        } catch (e) { console.error(e); }
+      }
+
+      async function deleteProductionFile(fileId) {
+        if (!confirm('Delete this production file?')) return;
+        try {
+          const r = await fetch(`/hub/api/production/files/${fileId}`, { method: 'DELETE' });
+          if (!r.ok) throw new Error('Failed');
+          toast('File deleted', 'success');
+          loadProductionFiles();
+        } catch (e) { toast(e.message, 'error'); }
       }
 
       async function loadProductionReport() {
@@ -7179,15 +7327,12 @@
           const d = await r.json();
           const alerts = d.alerts || [];
 
-          // Update badges
-          const bellBadge = document.getElementById('alertsBadge');
+          // Update nav badge
           const navBadge = document.getElementById('navAlertsBadge');
           if (alerts.length > 0) {
-            bellBadge.textContent = alerts.length; bellBadge.style.display = '';
-            navBadge.textContent = alerts.length; navBadge.style.display = '';
+            if (navBadge) { navBadge.textContent = alerts.length; navBadge.style.display = ''; }
           } else {
-            bellBadge.style.display = 'none';
-            navBadge.style.display = 'none';
+            if (navBadge) navBadge.style.display = 'none';
           }
 
           // Render alerts panel
