@@ -1,5 +1,6 @@
 """Database models and persistence for saved leads."""
 
+import json
 import sqlite3
 import os
 from datetime import datetime
@@ -84,6 +85,43 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_emails_npi ON lead_emails(npi);
+
+        CREATE TABLE IF NOT EXISTS lead_enrichment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            npi TEXT UNIQUE NOT NULL,
+            organization_name TEXT DEFAULT '',
+            enriched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            -- Service-need scores (0-100)
+            overall_score INTEGER DEFAULT 0,
+            billing_score INTEGER DEFAULT 0,
+            payor_score INTEGER DEFAULT 0,
+            workflow_score INTEGER DEFAULT 0,
+            -- Priority level
+            priority TEXT DEFAULT 'low',
+            services_needed TEXT DEFAULT '',
+            recommendation TEXT DEFAULT '',
+            -- Enrichment detail blobs (JSON)
+            billing_reasons TEXT DEFAULT '[]',
+            payor_reasons TEXT DEFAULT '[]',
+            workflow_reasons TEXT DEFAULT '[]',
+            -- Key intelligence fields
+            clia_data TEXT DEFAULT '{}',
+            medicare_data TEXT DEFAULT '{}',
+            authorized_official TEXT DEFAULT '{}',
+            location_count INTEGER DEFAULT 0,
+            multi_state INTEGER DEFAULT 0,
+            states_present TEXT DEFAULT '[]',
+            taxonomy_count INTEGER DEFAULT 0,
+            -- Timestamps
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_enrichment_npi ON lead_enrichment(npi);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_overall ON lead_enrichment(overall_score);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_billing ON lead_enrichment(billing_score);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_payor ON lead_enrichment(payor_score);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_workflow ON lead_enrichment(workflow_score);
     """)
 
     conn.commit()
@@ -289,3 +327,144 @@ def get_all_leads_with_emails() -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─── Lead Enrichment Persistence ────────────────────────────────────
+
+def save_enrichment(npi: str, enrichment_data: dict) -> int:
+    """Save or update enrichment data for a lead."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    sn = enrichment_data.get("service_needs", {})
+    billing = sn.get("billing", {})
+    payor = sn.get("payor_contracting", {})
+    workflow = sn.get("workflow", {})
+
+    try:
+        cursor.execute("""
+            INSERT OR REPLACE INTO lead_enrichment (
+                npi, organization_name, enriched_at,
+                overall_score, billing_score, payor_score, workflow_score,
+                priority, services_needed, recommendation,
+                billing_reasons, payor_reasons, workflow_reasons,
+                clia_data, medicare_data, authorized_official,
+                location_count, multi_state, states_present, taxonomy_count,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            npi,
+            enrichment_data.get("organization_name", ""),
+            enrichment_data.get("enriched_at", datetime.now().isoformat()),
+            sn.get("overall_score", 0),
+            billing.get("score", 0),
+            payor.get("score", 0),
+            workflow.get("score", 0),
+            sn.get("priority", "low"),
+            json.dumps(sn.get("services_needed", [])),
+            sn.get("recommendation", ""),
+            json.dumps(billing.get("reasons", [])),
+            json.dumps(payor.get("reasons", [])),
+            json.dumps(workflow.get("reasons", [])),
+            json.dumps(enrichment_data.get("data_sources", {}).get("clia", {})),
+            json.dumps(enrichment_data.get("data_sources", {}).get("medicare", {})),
+            json.dumps(enrichment_data.get("authorized_official", {})),
+            enrichment_data.get("location_count", 0),
+            1 if enrichment_data.get("multi_state") else 0,
+            json.dumps(enrichment_data.get("states_present", [])),
+            len(enrichment_data.get("data_sources", {}).get("npi", {}).get("taxonomies", [])),
+            datetime.now().isoformat(),
+        ))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_enrichment(npi: str) -> dict:
+    """Get cached enrichment data for a lead."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM lead_enrichment WHERE npi = ?", (npi,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {}
+    result = dict(row)
+    # Parse JSON fields
+    for field in ("services_needed", "billing_reasons", "payor_reasons",
+                  "workflow_reasons", "clia_data", "medicare_data",
+                  "authorized_official", "states_present"):
+        try:
+            result[field] = json.loads(result.get(field, "{}"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return result
+
+
+def get_all_enrichments(min_overall: int = 0, service_filter: str = None) -> list:
+    """Get all enriched leads, optionally filtered by score or service need."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM lead_enrichment WHERE overall_score >= ?"
+    params = [min_overall]
+
+    if service_filter:
+        query += " AND services_needed LIKE ?"
+        params.append(f"%{service_filter}%")
+
+    query += " ORDER BY overall_score DESC, updated_at DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        r = dict(row)
+        for field in ("services_needed", "billing_reasons", "payor_reasons",
+                      "workflow_reasons", "clia_data", "medicare_data",
+                      "authorized_official", "states_present"):
+            try:
+                r[field] = json.loads(r.get(field, "{}"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        results.append(r)
+    return results
+
+
+def get_enrichment_stats() -> dict:
+    """Get enrichment dashboard statistics."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    stats = {}
+
+    cursor.execute("SELECT COUNT(*) FROM lead_enrichment")
+    stats["total_enriched"] = cursor.fetchone()[0]
+
+    cursor.execute("SELECT AVG(overall_score), AVG(billing_score), AVG(payor_score), AVG(workflow_score) FROM lead_enrichment")
+    row = cursor.fetchone()
+    stats["avg_overall"] = round(row[0] or 0, 1)
+    stats["avg_billing"] = round(row[1] or 0, 1)
+    stats["avg_payor"] = round(row[2] or 0, 1)
+    stats["avg_workflow"] = round(row[3] or 0, 1)
+
+    cursor.execute("SELECT priority, COUNT(*) FROM lead_enrichment GROUP BY priority")
+    stats["by_priority"] = {r[0]: r[1] for r in cursor.fetchall()}
+
+    cursor.execute("SELECT COUNT(*) FROM lead_enrichment WHERE billing_score >= 40")
+    stats["need_billing"] = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM lead_enrichment WHERE payor_score >= 40")
+    stats["need_payor"] = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM lead_enrichment WHERE workflow_score >= 40")
+    stats["need_workflow"] = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM lead_enrichment WHERE overall_score >= 70")
+    stats["high_priority"] = cursor.fetchone()[0]
+
+    conn.close()
+    return stats

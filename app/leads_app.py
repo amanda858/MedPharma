@@ -14,11 +14,14 @@ from app.database import (
     init_db, save_lead, get_saved_leads, update_lead,
     delete_lead, get_lead_stats, log_search,
     save_lead_emails, get_lead_emails, get_all_leads_with_emails,
+    save_enrichment, get_enrichment, get_all_enrichments, get_enrichment_stats,
 )
 from app.npi_client import (
     search_npi, search_npi_by_taxonomy, get_npi_detail, bulk_search_labs,
 )
 from app.email_finder import find_emails_for_lab
+from app.enrichment import enrich_lead, enrich_leads_bulk
+from app.lead_scraper import run_national_lead_pull
 
 app = FastAPI(
     title="MedPharma Lab Leads",
@@ -268,6 +271,152 @@ async def bulk_email_enrichment(items: List[BulkEmailItem]):
         else:
             output.append(res)
     return {"results": output, "total": len(output)}
+
+
+# ─── Client Intelligence / Enrichment ────────────────────────────────
+
+# ─── National AI Lead Pull ───────────────────────────────────────────
+
+@app.get("/api/leads/national")
+@app.post("/api/leads/national")
+async def national_lead_pull():
+    """
+    AI-powered national lead discovery — scrapes web/news for labs needing help,
+    enriches, and returns high-need prospects.
+    """
+    try:
+        leads = await run_national_lead_pull()
+        return {
+            "leads": leads,
+            "count": len(leads),
+            "source": "news+web",
+            "message": "No leads found right now" if not leads else "OK",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class EnrichRequest(BaseModel):
+    npi: str
+    org_name: Optional[str] = ""
+    state: Optional[str] = ""
+    city: Optional[str] = ""
+
+
+class BulkEnrichItem(BaseModel):
+    npi: str
+    org_name: Optional[str] = ""
+    state: Optional[str] = ""
+    city: Optional[str] = ""
+
+
+@app.post("/api/enrich/{npi}")
+async def enrich_single_lead(npi: str, req: EnrichRequest = None):
+    """
+    Full enrichment for a single lead — pulls CLIA, Medicare, NPI data
+    and scores billing / payor contracting / workflow service needs.
+    """
+    # Check cache first
+    cached = get_enrichment(npi)
+    if cached and req is None:
+        return {"npi": npi, "cached": True, "enrichment": cached}
+
+    try:
+        org = req.org_name if req else ""
+        state = req.state if req else ""
+        city = req.city if req else ""
+        result = await enrich_lead(npi, org_name=org, state=state, city=city)
+        # Persist
+        save_enrichment(npi, result)
+        return {"npi": npi, "cached": False, "enrichment": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/enrich/bulk")
+async def enrich_multiple_leads(items: List[BulkEnrichItem]):
+    """
+    Enrich multiple leads concurrently.
+    Checks cache first; only fetches fresh data for uncached NPIs.
+    """
+    to_enrich = []
+    results = []
+
+    for item in items:
+        cached = get_enrichment(item.npi)
+        if cached:
+            results.append({"npi": item.npi, "cached": True, "enrichment": cached})
+        else:
+            to_enrich.append({
+                "npi": item.npi,
+                "org_name": item.org_name or "",
+                "state": item.state or "",
+                "city": item.city or "",
+            })
+
+    if to_enrich:
+        fresh = await enrich_leads_bulk(to_enrich)
+        for result in fresh:
+            npi = result.get("npi", "")
+            if not result.get("error"):
+                save_enrichment(npi, result)
+            results.append({"npi": npi, "cached": False, "enrichment": result})
+
+    return {"results": results, "total": len(results), "freshly_enriched": len(to_enrich)}
+
+
+@app.get("/api/enrich/all")
+async def list_enrichments(
+    min_score: int = Query(0, ge=0, le=100),
+    service: Optional[str] = Query(None, description="Filter: Billing Services, Payor Contracting, Workflow Support"),
+):
+    """List all enriched leads with optional filters."""
+    enrichments = get_all_enrichments(min_overall=min_score, service_filter=service)
+    return {"enrichments": enrichments, "count": len(enrichments)}
+
+
+@app.get("/api/enrich/stats")
+async def enrichment_dashboard_stats():
+    """Dashboard stats for enrichment / service-need analysis."""
+    return get_enrichment_stats()
+
+
+@app.post("/api/enrich/saved")
+async def enrich_all_saved_leads():
+    """
+    Enrich ALL saved leads that haven't been enriched yet.
+    Runs in bulk with throttling.
+    """
+    leads = get_saved_leads()
+    to_enrich = []
+    already_done = 0
+
+    for lead in leads:
+        cached = get_enrichment(lead["npi"])
+        if cached:
+            already_done += 1
+        else:
+            to_enrich.append({
+                "npi": lead["npi"],
+                "org_name": lead.get("organization_name", ""),
+                "state": lead.get("state", ""),
+                "city": lead.get("city", ""),
+            })
+
+    results = []
+    if to_enrich:
+        fresh = await enrich_leads_bulk(to_enrich)
+        for result in fresh:
+            npi = result.get("npi", "")
+            if not result.get("error"):
+                save_enrichment(npi, result)
+            results.append(npi)
+
+    return {
+        "message": f"Enriched {len(results)} leads, {already_done} were already cached",
+        "enriched": len(results),
+        "already_cached": already_done,
+        "total_saved_leads": len(leads),
+    }
 
 
 # ─── Export ──────────────────────────────────────────────────────────

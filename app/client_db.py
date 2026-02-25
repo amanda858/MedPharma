@@ -419,6 +419,13 @@ def _seed_data(conn):
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
     )
 
+    # Client 3 — KinderCare
+    s3 = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("kindercare", _hash_pw("KinderCare123!", s3), s3, "KinderCare", "KinderCare Admin", "", "client")
+    )
+
     # Jessica — MedPharma staff user (admin), NOT a client
     jsalt = secrets.token_hex(16)
     cur.execute(

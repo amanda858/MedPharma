@@ -22,8 +22,11 @@ import os
 import logging
 import threading
 import json
+import smtplib
 from collections import defaultdict
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 log = logging.getLogger("notifications")
 
@@ -39,8 +42,19 @@ NOTIFY_PHONE = os.getenv("NOTIFY_PHONE", "+18036263500")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-# Users whose activity triggers notifications (non-admin team members)
-NOTIFY_ON_USERS = {"jessica", "rcm"}
+# Users whose activity triggers notifications.
+# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="eric,amanda,jessica,rcm"
+# Use NOTIFY_ON_USERS="*" to enable for all users.
+_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "eric,amanda,jessica,rcm").strip()
+NOTIFY_ON_USERS = {
+    u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
+} if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
+
+# SMTP fallback (used when SENDGRID_API_KEY is not configured)
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 
 # ── Industry-standard RCM benchmarks (actions per 8-hour day) ──
 # Sources: MGMA, HBMA, AAPC industry reports for medical billing / credentialing
@@ -68,10 +82,15 @@ _activity_buffer: dict[str, list[dict]] = defaultdict(list)
 _session_start: dict[str, datetime] = {}          # first activity time per user
 _buffer_lock = threading.Lock()
 
+# Auto-flush tuning (no manual logout required)
+AUTO_FLUSH_ACTION_THRESHOLD = int(os.getenv("NOTIFY_AUTO_FLUSH_THRESHOLD", "20"))
+AUTO_FLUSH_MAX_AGE_MINUTES = int(os.getenv("NOTIFY_AUTO_FLUSH_MAX_AGE_MINUTES", "60"))
+
 
 def _should_notify(username: str) -> bool:
     """Return True if this user's activity should trigger notifications."""
-    return username.lower() in NOTIFY_ON_USERS
+    u = (username or "").lower()
+    return "*" in NOTIFY_ON_USERS or u in NOTIFY_ON_USERS
 
 
 def _get_benchmark(section: str) -> dict:
@@ -194,6 +213,7 @@ def notify_activity(username: str, action: str, section: str, detail: str = ""):
     """Buffer a single activity event (does NOT send immediately)."""
     if not _should_notify(username):
         return
+    should_flush = False
     with _buffer_lock:
         now = datetime.now()
         key = username.lower()
@@ -206,12 +226,17 @@ def notify_activity(username: str, action: str, section: str, detail: str = ""):
             "timestamp": now.strftime("%I:%M %p"),
             "raw_ts": now,
         })
+        should_flush = len(_activity_buffer[key]) >= AUTO_FLUSH_ACTION_THRESHOLD
+
+    if should_flush:
+        threading.Thread(target=flush_and_notify, args=(username,), daemon=True).start()
 
 
 def notify_bulk_activity(username: str, action: str, section: str, count: int, detail: str = ""):
     """Buffer a bulk activity event (does NOT send immediately)."""
     if not _should_notify(username):
         return
+    should_flush = False
     with _buffer_lock:
         now = datetime.now()
         key = username.lower()
@@ -224,6 +249,35 @@ def notify_bulk_activity(username: str, action: str, section: str, count: int, d
             "timestamp": now.strftime("%I:%M %p"),
             "raw_ts": now,
         })
+        should_flush = len(_activity_buffer[key]) >= AUTO_FLUSH_ACTION_THRESHOLD
+
+    if should_flush:
+        threading.Thread(target=flush_and_notify, args=(username,), daemon=True).start()
+
+
+def flush_all_pending_notifications():
+    """
+    Flush buffered notifications for users with enough activity or stale sessions.
+    This prevents dependence on manual logout.
+    """
+    with _buffer_lock:
+        snapshot = {
+            user: list(items)
+            for user, items in _activity_buffer.items()
+            if items
+        }
+
+    now = datetime.now()
+    for user, items in snapshot.items():
+        if not items:
+            continue
+        last_ts = items[-1].get("raw_ts")
+        age_min = ((now - last_ts).total_seconds() / 60.0) if isinstance(last_ts, datetime) else 0
+        if len(items) >= AUTO_FLUSH_ACTION_THRESHOLD or age_min >= AUTO_FLUSH_MAX_AGE_MINUTES:
+            try:
+                flush_and_notify(user)
+            except Exception as e:
+                log.error(f"Auto flush failed for {user}: {e}")
 
 
 def flush_and_notify(username: str):
@@ -499,41 +553,68 @@ def flush_and_notify(username: str):
 
 def _send_email(subject: str, body: str, html_body: str = ""):
     """Send email notification via SendGrid v3 API."""
-    if not SENDGRID_API_KEY or not NOTIFY_EMAILS:
-        log.debug("Email notification skipped — SENDGRID_API_KEY/NOTIFY_EMAILS not configured")
+    if not NOTIFY_EMAILS:
+        log.debug("Email notification skipped — NOTIFY_EMAILS not configured")
         return
-    try:
-        import httpx
-        content = []
-        if body:
-            content.append({"type": "text/plain", "value": body})
-        if html_body:
-            content.append({"type": "text/html", "value": html_body})
-        if not content:
-            content.append({"type": "text/plain", "value": "(no content)"})
 
-        recipients = [{"email": addr} for addr in NOTIFY_EMAILS]
-        payload = {
-            "personalizations": [{"to": recipients}],
-            "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
-            "subject": subject,
-            "content": content,
-        }
-        resp = httpx.post(
-            "https://api.sendgrid.com/v3/mail/send",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {SENDGRID_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            timeout=15,
-        )
-        if resp.status_code in (200, 202):
-            log.info(f"Email sent via SendGrid to {', '.join(NOTIFY_EMAILS)}: {subject}")
-        else:
+    # Primary: SendGrid
+    if SENDGRID_API_KEY:
+        try:
+            import httpx
+            content = []
+            if body:
+                content.append({"type": "text/plain", "value": body})
+            if html_body:
+                content.append({"type": "text/html", "value": html_body})
+            if not content:
+                content.append({"type": "text/plain", "value": "(no content)"})
+
+            recipients = [{"email": addr} for addr in NOTIFY_EMAILS]
+            payload = {
+                "personalizations": [{"to": recipients}],
+                "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+                "subject": subject,
+                "content": content,
+            }
+            resp = httpx.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 202):
+                log.info(f"Email sent via SendGrid to {', '.join(NOTIFY_EMAILS)}: {subject}")
+                return
             log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            log.error(f"Failed to send email via SendGrid: {e}")
+
+    # Fallback: SMTP
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        log.error("Email notification skipped — no working provider configured (SendGrid/SMTP)")
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER or SENDGRID_FROM
+        msg["To"] = ", ".join(NOTIFY_EMAILS)
+
+        plain = body or "(no content)"
+        msg.attach(MIMEText(plain, "plain"))
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(msg["From"], NOTIFY_EMAILS, msg.as_string())
+        log.info(f"Email sent via SMTP to {', '.join(NOTIFY_EMAILS)}: {subject}")
     except Exception as e:
-        log.error(f"Failed to send email via SendGrid: {e}")
+        log.error(f"Failed to send email via SMTP: {e}")
 
 
 def _send_sms(message: str):
@@ -552,6 +633,69 @@ def _send_sms(message: str):
             log.error(f"Twilio SMS failed ({resp.status_code}): {resp.text}")
     except Exception as e:
         log.error(f"Failed to send SMS: {e}")
+
+
+def send_test_notification(triggered_by: str = "system") -> dict:
+    """Send an immediate test notification to configured recipients/channels."""
+    now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+    subject = f"MedPharma Hub Test Notification — {now}"
+    body = (
+        f"This is a test notification from MedPharma Hub.\n"
+        f"Triggered by: {triggered_by}\n"
+        f"Time: {now}\n"
+        f"Recipients: {', '.join(NOTIFY_EMAILS) if NOTIFY_EMAILS else 'none'}"
+    )
+    html_body = f"""
+    <html><body style=\"font-family:Arial,sans-serif;\">
+      <h3>MedPharma Hub Test Notification</h3>
+      <p><b>Triggered by:</b> {triggered_by}</p>
+      <p><b>Time:</b> {now}</p>
+      <p>If you received this, the Hub notification pipeline is active.</p>
+    </body></html>
+    """
+    sms = f"MedPharma Hub test notice OK | by {triggered_by} | {now}"
+    if len(sms) > 155:
+        sms = sms[:152] + "…"
+
+    threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
+    threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
+
+    status = get_notification_status()
+    status["ok"] = True
+    return status
+
+
+def get_notification_status() -> dict:
+    """Return current notification channel configuration status."""
+    sendgrid_configured = bool(SENDGRID_API_KEY)
+    smtp_configured = bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
+    twilio_configured = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and NOTIFY_PHONE)
+
+    missing_twilio = []
+    if not TWILIO_SID:
+        missing_twilio.append("TWILIO_SID")
+    if not TWILIO_TOKEN:
+        missing_twilio.append("TWILIO_TOKEN")
+    if not TWILIO_FROM:
+        missing_twilio.append("TWILIO_FROM")
+    if not NOTIFY_PHONE:
+        missing_twilio.append("NOTIFY_PHONE")
+
+    missing_email = []
+    if not sendgrid_configured and not smtp_configured:
+        missing_email.append("SENDGRID_API_KEY or SMTP_USER/SMTP_PASS")
+
+    return {
+        "email_recipients": NOTIFY_EMAILS,
+        "sms_target": NOTIFY_PHONE,
+        "sendgrid_configured": sendgrid_configured,
+        "smtp_configured": smtp_configured,
+        "twilio_configured": twilio_configured,
+        "email_configured": bool(sendgrid_configured or smtp_configured),
+        "missing_twilio_fields": missing_twilio,
+        "missing_email_fields": missing_email,
+        "notify_on_users": sorted(list(NOTIFY_ON_USERS)),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1017,40 +1161,65 @@ def send_production_reminders():
 
 def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
     """Send email to a specific recipient via SendGrid v3 API."""
-    if not SENDGRID_API_KEY:
-        log.debug("Email skipped — SENDGRID_API_KEY not configured")
+    if not to_email:
         return
-    try:
-        import httpx
-        content = []
-        if body:
-            content.append({"type": "text/plain", "value": body})
-        if html_body:
-            content.append({"type": "text/html", "value": html_body})
-        if not content:
-            content.append({"type": "text/plain", "value": "(no content)"})
 
-        payload = {
-            "personalizations": [{"to": [{"email": to_email}]}],
-            "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
-            "subject": subject,
-            "content": content,
-        }
-        resp = httpx.post(
-            "https://api.sendgrid.com/v3/mail/send",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {SENDGRID_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            timeout=15,
-        )
-        if resp.status_code in (200, 202):
-            log.info(f"Email sent to {to_email}: {subject}")
-        else:
+    # Primary: SendGrid
+    if SENDGRID_API_KEY:
+        try:
+            import httpx
+            content = []
+            if body:
+                content.append({"type": "text/plain", "value": body})
+            if html_body:
+                content.append({"type": "text/html", "value": html_body})
+            if not content:
+                content.append({"type": "text/plain", "value": "(no content)"})
+
+            payload = {
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+                "subject": subject,
+                "content": content,
+            }
+            resp = httpx.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 202):
+                log.info(f"Email sent to {to_email}: {subject}")
+                return
             log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            log.error(f"Failed to send email to {to_email} via SendGrid: {e}")
+
+    # Fallback: SMTP
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        log.error("Email skipped — no working provider configured (SendGrid/SMTP)")
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER or SENDGRID_FROM
+        msg["To"] = to_email
+        plain = body or "(no content)"
+        msg.attach(MIMEText(plain, "plain"))
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(msg["From"], [to_email], msg.as_string())
+        log.info(f"Email sent via SMTP to {to_email}: {subject}")
     except Exception as e:
-        log.error(f"Failed to send email to {to_email}: {e}")
+        log.error(f"Failed to send email to {to_email} via SMTP: {e}")
 
 def start_daily_scheduler():
     """
@@ -1089,8 +1258,17 @@ def start_daily_scheduler():
             name="6 PM EST Overall Account Summary",
             replace_existing=True,
         )
+
+        # Every 15 minutes — flush buffered user notifications automatically
+        scheduler.add_job(
+            flush_all_pending_notifications,
+            CronTrigger(minute="*/15", timezone=est),
+            id="auto_flush_user_notifications",
+            name="Auto Flush User Notifications",
+            replace_existing=True,
+        )
         scheduler.start()
-        log.info("Daily scheduler started — 5:30 PM reminders + 6:00 PM summary")
+        log.info("Daily scheduler started — reminders, summary, and 15-min auto flush")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -1133,6 +1311,10 @@ def _start_thread_scheduler():
                     last_sent_date = today
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
+
+                # Every 15 minutes — user notification auto flush
+                if now_est.minute % 15 == 0:
+                    flush_all_pending_notifications()
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")
             _time.sleep(60)

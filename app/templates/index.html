@@ -572,6 +572,182 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* ─── Intelligence Panel ─── */
+        .intel-card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            margin-bottom: 16px;
+            border-left: 4px solid var(--gray-300);
+            transition: border-color 0.2s;
+        }
+
+        .intel-card.priority-high {
+            border-left-color: #dc2626;
+        }
+
+        .intel-card.priority-medium {
+            border-left-color: #d97706;
+        }
+
+        .intel-card.priority-low {
+            border-left-color: #059669;
+        }
+
+        .intel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .intel-org-name {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+        .intel-npi {
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--gray-400);
+            margin-top: 2px;
+        }
+
+        .intel-badges {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .intel-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 20px;
+            letter-spacing: 0.3px;
+        }
+
+        .intel-badge.billing {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .intel-badge.payor {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .intel-badge.workflow {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .score-bars {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .score-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .score-bar-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .score-bar-track {
+            height: 8px;
+            background: var(--gray-100);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .score-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
+        .score-bar-fill.billing-fill {
+            background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+        }
+
+        .score-bar-fill.payor-fill {
+            background: linear-gradient(90deg, #f59e0b, #d97706);
+        }
+
+        .score-bar-fill.workflow-fill {
+            background: linear-gradient(90deg, #10b981, #059669);
+        }
+
+        .intel-reasons {
+            font-size: 12px;
+            color: var(--gray-600);
+            line-height: 1.6;
+            margin-top: 8px;
+        }
+
+        .intel-reasons li {
+            margin-bottom: 2px;
+        }
+
+        .intel-recommendation {
+            background: var(--gray-50);
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--gray-700);
+            border: 1px solid var(--gray-200);
+        }
+
+        .intel-recommendation strong {
+            color: var(--primary);
+        }
+
+        .intel-meta {
+            display: flex;
+            gap: 16px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .intel-detail-toggle {
+            color: var(--primary);
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 8px;
+            display: inline-block;
+        }
+
+        .intel-details {
+            display: none;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--gray-100);
+        }
+
+        .intel-details.open {
+            display: block;
+        }
     </style>
 </head>
 
@@ -592,6 +768,7 @@
         <div class="tab active" data-tab="search" onclick="switchTab('search')">Search Labs</div>
         <div class="tab" data-tab="bulk" onclick="switchTab('bulk')">Multi-State Search</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
+        <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
     </div>
 
@@ -715,6 +892,51 @@
         </div>
 
         <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
+        <!-- ═══════════════════ CLIENT INTELLIGENCE PANEL ═══════════════════ -->
+        <div class="panel" id="panel-intelligence">
+            <!-- Stats Row -->
+            <div class="stats-grid" id="intelStats"></div>
+
+            <!-- Controls -->
+            <div class="card"
+                style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                    <div class="form-group">
+                        <label>MIN SCORE</label>
+                        <input type="number" id="intelMinScore" value="0" min="0" max="100" style="width:80px;"
+                            onchange="loadIntelligence()">
+                    </div>
+                    <div class="form-group">
+                        <label>SERVICE NEED</label>
+                        <select id="intelServiceFilter" onchange="loadIntelligence()">
+                            <option value="">All Services</option>
+                            <option value="Billing Services">Billing Services</option>
+                            <option value="Payor Contracting">Payor Contracting</option>
+                            <option value="Workflow Support">Workflow Support</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-primary" onclick="enrichAllSaved()">
+                        ⚡ Enrich All Saved Leads
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadIntelligence()">
+                        ↻ Refresh
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div id="intelResults">
+                <div class="card empty-state">
+                    <p style="font-size:18px;margin-bottom:8px;">No enrichment data yet</p>
+                    <p>Save leads first, then click <strong>Enrich All Saved Leads</strong> to pull online intelligence
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
         <div class="panel" id="panel-dashboard">
             <div class="stats-grid" id="dashboardStats"></div>
             <div class="card">
@@ -821,6 +1043,7 @@
 
             if (tab === 'dashboard') loadDashboard();
             if (tab === 'saved') loadSavedLeads();
+            if (tab === 'intelligence') loadIntelligence();
         }
 
         // ──────────────────────────────────────────────────────────────
@@ -934,6 +1157,7 @@
                 <td style="white-space:nowrap;">
                     <button class="btn btn-success btn-sm" onclick="saveSingleLead(${i})">Save</button>
                     <button class="btn btn-secondary btn-sm" onclick="fetchEmails('${safeNpi}','${escHtml(name).replace(/'/g, "\\'")}')">Emails</button>
+                    <button class="btn btn-secondary btn-sm" onclick="enrichFromSearch(${i})" style="color:#d97706;border-color:#d97706;" title="Analyze service needs">⚡Intel</button>
                 </td>
             </tr>`;
             });
@@ -966,7 +1190,7 @@
             try {
                 const resp = await fetch('/api/emails/bulk', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(items),
                 });
                 if (!resp.ok) return;
@@ -1258,6 +1482,225 @@
                 showToast('Lead removed', 'success');
             } catch (err) {
                 showToast('Failed to delete', 'error');
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Client Intelligence
+        // ──────────────────────────────────────────────────────────────
+        async function loadIntelligence() {
+            const minScore = document.getElementById('intelMinScore')?.value || 0;
+            const service = document.getElementById('intelServiceFilter')?.value || '';
+
+            const statsContainer = document.getElementById('intelStats');
+            const resultsContainer = document.getElementById('intelResults');
+
+            // Load stats and enrichments in parallel
+            try {
+                const [statsResp, enrichResp] = await Promise.all([
+                    fetch('/api/enrich/stats'),
+                    fetch(`/api/enrich/all?min_score=${minScore}${service ? '&service=' + encodeURIComponent(service) : ''}`),
+                ]);
+                const stats = await statsResp.json();
+                const data = await enrichResp.json();
+
+                renderIntelStats(stats, statsContainer);
+                renderIntelResults(data.enrichments || [], resultsContainer);
+            } catch (err) {
+                resultsContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
+            }
+        }
+
+        function renderIntelStats(stats, container) {
+            container.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${stats.total_enriched || 0}</div>
+                    <div class="stat-label">Leads Analyzed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:#dc2626;">${stats.high_priority || 0}</div>
+                    <div class="stat-label">High Priority</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:#1e40af;">${stats.need_billing || 0}</div>
+                    <div class="stat-label">Need Billing</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:#d97706;">${stats.need_payor || 0}</div>
+                    <div class="stat-label">Need Payor Contracting</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color:#059669;">${stats.need_workflow || 0}</div>
+                    <div class="stat-label">Need Workflow Support</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${stats.avg_overall || 0}</div>
+                    <div class="stat-label">Avg Service Score</div>
+                </div>
+            `;
+        }
+
+        function renderIntelResults(enrichments, container) {
+            if (!enrichments.length) {
+                container.innerHTML = `
+                    <div class="card empty-state">
+                        <p style="font-size:18px;margin-bottom:8px;">No enrichment data yet</p>
+                        <p>Save leads first, then click <strong>Enrich All Saved Leads</strong> to pull online intelligence about billing needs, payor contracting gaps, and workflow support opportunities.</p>
+                    </div>`;
+                return;
+            }
+
+            let html = `<div class="results-header">
+                <span class="result-count">${enrichments.length} enriched lead${enrichments.length !== 1 ? 's' : ''}</span>
+            </div>`;
+
+            enrichments.forEach((e, idx) => {
+                const priority = e.priority || 'low';
+                const orgName = e.organization_name || 'Unknown';
+                const services = e.services_needed || [];
+                const billingScore = e.billing_score || 0;
+                const payorScore = e.payor_score || 0;
+                const workflowScore = e.workflow_score || 0;
+                const overallScore = e.overall_score || 0;
+                const billingReasons = e.billing_reasons || [];
+                const payorReasons = e.payor_reasons || [];
+                const workflowReasons = e.workflow_reasons || [];
+                const recommendation = e.recommendation || '';
+                const locCount = e.location_count || 0;
+                const multiState = e.multi_state;
+                const states = e.states_present || [];
+                const authOfficial = e.authorized_official || {};
+                const taxCount = e.taxonomy_count || 0;
+
+                html += `
+                <div class="intel-card priority-${priority}">
+                    <div class="intel-header">
+                        <div>
+                            <div class="intel-org-name">${escHtml(orgName)}</div>
+                            <div class="intel-npi">NPI: ${e.npi} &nbsp;|&nbsp; Overall Score: <strong>${overallScore}</strong>/100</div>
+                        </div>
+                        <div class="intel-badges">
+                            ${services.includes('Billing Services') ? '<span class="intel-badge billing">Billing</span>' : ''}
+                            ${services.includes('Payor Contracting') ? '<span class="intel-badge payor">Payor Contracting</span>' : ''}
+                            ${services.includes('Workflow Support') ? '<span class="intel-badge workflow">Workflow</span>' : ''}
+                            <span class="intel-badge" style="background:${priority === 'high' ? '#fee2e2;color:#991b1b' : priority === 'medium' ? '#fef3c7;color:#92400e' : '#d1fae5;color:#065f46'}">
+                                ${priority.toUpperCase()} PRIORITY
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Score Bars -->
+                    <div class="score-bars">
+                        <div class="score-bar">
+                            <div class="score-bar-label"><span>Billing Services</span><span>${billingScore}/100</span></div>
+                            <div class="score-bar-track"><div class="score-bar-fill billing-fill" style="width:${billingScore}%"></div></div>
+                        </div>
+                        <div class="score-bar">
+                            <div class="score-bar-label"><span>Payor Contracting</span><span>${payorScore}/100</span></div>
+                            <div class="score-bar-track"><div class="score-bar-fill payor-fill" style="width:${payorScore}%"></div></div>
+                        </div>
+                        <div class="score-bar">
+                            <div class="score-bar-label"><span>Workflow Support</span><span>${workflowScore}/100</span></div>
+                            <div class="score-bar-track"><div class="score-bar-fill workflow-fill" style="width:${workflowScore}%"></div></div>
+                        </div>
+                    </div>
+
+                    ${recommendation ? `<div class="intel-recommendation"><strong>Recommendation:</strong> ${escHtml(recommendation)}</div>` : ''}
+
+                    <div class="intel-meta">
+                        ${locCount ? `<span>📍 ${locCount} location${locCount > 1 ? 's' : ''}</span>` : ''}
+                        ${multiState ? `<span>🌎 Multi-state: ${states.join(', ')}</span>` : ''}
+                        ${taxCount ? `<span>🏷️ ${taxCount} service line${taxCount > 1 ? 's' : ''}</span>` : ''}
+                        ${authOfficial.first_name ? `<span>👤 ${escHtml(authOfficial.first_name)} ${escHtml(authOfficial.last_name)}${authOfficial.title ? ' — ' + escHtml(authOfficial.title) : ''}</span>` : ''}
+                    </div>
+
+                    <span class="intel-detail-toggle" onclick="toggleIntelDetails(${idx})">▸ Show Details</span>
+                    <div class="intel-details" id="intel-details-${idx}">
+                        ${billingReasons.length ? `
+                            <div style="margin-bottom:10px;">
+                                <strong style="color:#1e40af;font-size:12px;">BILLING ANALYSIS</strong>
+                                <ul class="intel-reasons">${billingReasons.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>
+                            </div>` : ''}
+                        ${payorReasons.length ? `
+                            <div style="margin-bottom:10px;">
+                                <strong style="color:#d97706;font-size:12px;">PAYOR CONTRACTING ANALYSIS</strong>
+                                <ul class="intel-reasons">${payorReasons.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>
+                            </div>` : ''}
+                        ${workflowReasons.length ? `
+                            <div style="margin-bottom:10px;">
+                                <strong style="color:#059669;font-size:12px;">WORKFLOW ANALYSIS</strong>
+                                <ul class="intel-reasons">${workflowReasons.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>
+                            </div>` : ''}
+                        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="reEnrichLead('${e.npi}', '${escHtml(orgName).replace(/'/g, "\\'")}')">
+                            ↻ Re-enrich
+                        </button>
+                    </div>
+                </div>`;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function toggleIntelDetails(idx) {
+            const el = document.getElementById(`intel-details-${idx}`);
+            if (!el) return;
+            const isOpen = el.classList.toggle('open');
+            const toggle = el.previousElementSibling;
+            if (toggle) toggle.textContent = isOpen ? '▾ Hide Details' : '▸ Show Details';
+        }
+
+        async function enrichAllSaved() {
+            showToast('Enriching all saved leads... this may take a moment', 'success');
+            try {
+                const resp = await fetch('/api/enrich/saved', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Enrichment failed');
+                showToast(`${data.enriched} leads enriched (${data.already_cached} cached)`, 'success');
+                loadIntelligence();
+            } catch (err) {
+                showToast(`Enrichment error: ${err.message}`, 'error');
+            }
+        }
+
+        async function reEnrichLead(npi, orgName) {
+            showToast(`Re-enriching ${orgName}...`, 'success');
+            try {
+                const resp = await fetch(`/api/enrich/${npi}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ npi, org_name: orgName }),
+                });
+                if (!resp.ok) throw new Error('Failed');
+                showToast('Re-enriched successfully', 'success');
+                loadIntelligence();
+            } catch (err) {
+                showToast(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        // Also add an "Enrich" button to search results
+        async function enrichFromSearch(index) {
+            const lab = currentSearchResults[index];
+            const orgName = lab.organization_name || `${lab.first_name || ''} ${lab.last_name || ''}`.trim();
+            showToast(`Enriching ${orgName}...`, 'success');
+            try {
+                const resp = await fetch(`/api/enrich/${lab.npi}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        npi: lab.npi,
+                        org_name: orgName,
+                        state: lab.state || '',
+                        city: lab.city || '',
+                    }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed');
+                const sn = data.enrichment?.service_needs || {};
+                const services = sn.services_needed || [];
+                showToast(`Score: ${sn.overall_score || 0} — ${services.join(', ') || 'Low need'}`, 'success');
+            } catch (err) {
+                showToast(`Error: ${err.message}`, 'error');
             }
         }
 

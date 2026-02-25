@@ -11,4 +11,4 @@ from app.client_db import init_client_hub_db
 
 init_db()
 init_client_hub_db()
-print("Database rebuilt. Clients seeded: admin / Luminary (OMT/MHP) / TruPath")
+print("Database rebuilt. Clients seeded: admin / Luminary (OMT/MHP) / TruPath / KinderCare")

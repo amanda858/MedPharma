@@ -34,7 +34,13 @@ from app.client_db import (
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
 )
 
-from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
+from app.notifications import (
+    notify_activity,
+    notify_bulk_activity,
+    flush_and_notify,
+    send_test_notification,
+    get_notification_status,
+)
 
 router = APIRouter(prefix="/hub/api")
 
@@ -2329,6 +2335,21 @@ def alerts_endpoint(client_id: Optional[int] = None,
     auto_flag_sla(scope)
     alert_list = get_alerts(scope)
     return {"alerts": alert_list, "count": len(alert_list)}
+
+
+@router.post("/notifications/test")
+def notifications_test(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: send an immediate test notification (email + SMS if configured)."""
+    user = _require_admin(hub_session)
+    result = send_test_notification(triggered_by=user.get("username", "admin"))
+    return result
+
+
+@router.get("/notifications/status")
+def notifications_status(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: get current notification channel health/config status."""
+    _require_admin(hub_session)
+    return get_notification_status()
 
 
 # ─── Audit Log ────────────────────────────────────────────────────────────────

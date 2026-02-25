@@ -1860,6 +1860,10 @@
           <span></span><span></span><span></span>
         </button>
         <span class="brand">MedPharma</span>
+        <span id="topInstanceBadge"
+          style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;">
+          Instance: --
+        </span>
         <span class="account-chip" id="topAccount" onclick="switchAccount()">&#8629; Switch Account</span>
       </div>
       <!-- Global Search Bar -->
@@ -2865,8 +2869,15 @@
           <div class="page-header">
             <div class="page-title">🔔 Alerts & Notifications</div>
             <div class="page-actions">
+              <button class="btn btn-primary btn-sm" id="btnTestNotice" onclick="sendTestNotice()">📨 Send Test
+                Notice</button>
               <button class="btn btn-secondary btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
             </div>
+          </div>
+          <div id="notificationHealthBanner"
+            style="display:none;margin-bottom:10px;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:600;">
+          </div>
+          <div id="testNoticeStatus" style="font-size:12px;color:var(--gray-500);margin-bottom:10px;display:none;">
           </div>
           <div id="alertsContent">
             <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading alerts...</div>
@@ -3235,6 +3246,8 @@
     // BOOT
     // ═══════════════════════════════════════
     document.addEventListener('DOMContentLoaded', async () => {
+      initInstanceBadge();
+
       // Enter key on login
       document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
       // Escape to close modals
@@ -3315,6 +3328,28 @@
     function showLoginError(msg) {
       const el = document.getElementById('loginError');
       el.textContent = msg; el.style.display = 'block';
+    }
+
+    function initInstanceBadge() {
+      const el = document.getElementById('topInstanceBadge');
+      if (!el) return;
+
+      const host = window.location.host || 'unknown-host';
+      const isLocal = host.includes('localhost') || host.startsWith('127.0.0.1');
+      const env = isLocal ? 'LOCAL' : 'REMOTE';
+      const buildMeta = document.querySelector('meta[name="build"]');
+      const build = buildMeta?.content ? ` · b${String(buildMeta.content).slice(-6)}` : '';
+
+      el.textContent = `${env} · ${host}${build}`;
+      if (isLocal) {
+        el.style.background = '#ecfdf5';
+        el.style.color = '#065f46';
+        el.style.border = '1px solid #a7f3d0';
+      } else {
+        el.style.background = '#fef3c7';
+        el.style.color = '#92400e';
+        el.style.border = '1px solid #fcd34d';
+      }
     }
 
     function togglePw() {
@@ -6412,6 +6447,50 @@
       const params = new URLSearchParams();
       if (activeClientId) params.set('client_id', activeClientId);
       try {
+        const testBtn = document.getElementById('btnTestNotice');
+        const healthBanner = document.getElementById('notificationHealthBanner');
+        if (testBtn) {
+          const isAdmin = currentUser && currentUser.role === 'admin';
+          testBtn.style.display = isAdmin ? '' : 'none';
+        }
+
+        if (healthBanner) healthBanner.style.display = 'none';
+        if (currentUser && currentUser.role === 'admin') {
+          try {
+            const sr = await fetch('/hub/api/notifications/status');
+            if (sr.ok) {
+              const s = await sr.json();
+              const emailOn = !!s.email_configured;
+              const smsOn = !!s.twilio_configured;
+              if (healthBanner) {
+                if (!emailOn || !smsOn) {
+                  const issues = [];
+                  if (!emailOn) issues.push('Email OFF');
+                  if (!smsOn) issues.push('SMS OFF');
+                  const details = [];
+                  if (!emailOn && Array.isArray(s.missing_email_fields) && s.missing_email_fields.length) {
+                    details.push(`Email missing: ${s.missing_email_fields.join(', ')}`);
+                  }
+                  if (!smsOn && Array.isArray(s.missing_twilio_fields) && s.missing_twilio_fields.length) {
+                    details.push(`SMS missing: ${s.missing_twilio_fields.join(', ')}`);
+                  }
+                  healthBanner.style.display = '';
+                  healthBanner.style.background = 'var(--danger-light)';
+                  healthBanner.style.border = '1px solid var(--danger)';
+                  healthBanner.style.color = '#b91c1c';
+                  healthBanner.textContent = `⚠️ Notification Health: ${issues.join(' | ')} — ${details.join(' | ') || 'configure providers in environment variables.'}`;
+                } else {
+                  healthBanner.style.display = '';
+                  healthBanner.style.background = 'var(--success-light)';
+                  healthBanner.style.border = '1px solid var(--success)';
+                  healthBanner.style.color = '#065f46';
+                  healthBanner.textContent = '✅ Notification Health: Email and SMS are configured.';
+                }
+              }
+            }
+          } catch (_) { }
+        }
+
         const r = await fetch('/hub/api/alerts?' + params);
         const d = await r.json();
         const alerts = d.alerts || [];
@@ -6448,6 +6527,51 @@
           </div>
         `).join('');
       } catch (e) { console.error(e); }
+    }
+
+    async function sendTestNotice() {
+      const btn = document.getElementById('btnTestNotice');
+      const statusEl = document.getElementById('testNoticeStatus');
+      const oldText = btn ? btn.innerHTML : '';
+      try {
+        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending...'; }
+        if (statusEl) {
+          statusEl.style.display = '';
+          statusEl.style.color = 'var(--gray-500)';
+          statusEl.textContent = 'Sending test notice...';
+        }
+        const r = await fetch('/hub/api/notifications/test', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Test notification failed');
+
+        const channels = [];
+        if (d.sendgrid_configured || d.smtp_configured) channels.push('email');
+        if (d.twilio_configured) channels.push('sms');
+        const smsReason = (!d.twilio_configured && Array.isArray(d.missing_twilio_fields) && d.missing_twilio_fields.length)
+          ? `SMS missing: ${d.missing_twilio_fields.join(', ')}`
+          : '';
+        const msg = channels.length
+          ? `Test notice queued via ${channels.join(' + ')}`
+          : `Test endpoint worked, but no email/SMS provider is configured${smsReason ? ` (${smsReason})` : ''}`;
+        toast(msg, channels.length ? 'success' : 'warning');
+
+        if (statusEl) {
+          const ts = new Date().toLocaleString();
+          statusEl.style.display = '';
+          statusEl.style.color = channels.length ? 'var(--success)' : 'var(--warning)';
+          statusEl.textContent = `Last test: ${ts} — ${msg}`;
+        }
+      } catch (e) {
+        toast(e.message || 'Failed to send test notice', 'error');
+        if (statusEl) {
+          const ts = new Date().toLocaleString();
+          statusEl.style.display = '';
+          statusEl.style.color = 'var(--danger)';
+          statusEl.textContent = `Last test: ${ts} — ${e.message || 'Failed to send test notice'}`;
+        }
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📨 Send Test Notice'; }
+      }
     }
 
     // Load alerts on dashboard too — update badge count
