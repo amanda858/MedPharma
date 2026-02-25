@@ -1,4 +1,4 @@
-"""Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
+"""Client Hub API — auth, claims queue, payments, notes, credentialing, EDI, providers, dashboard."""
 
 import os
 import json as _json
@@ -25,23 +25,16 @@ from app.client_db import (
     get_payments, create_payment, delete_payment,
     get_notes, add_note,
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
-    get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
-    update_production_log, log_user_event, get_login_log, get_user_time_report,
-    add_production_file, list_production_files, delete_production_file, has_production_data_today,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
-    get_claim_status_history, get_denial_analytics, get_payer_scorecard,
-    get_ar_worklist, get_activity_feed,
-    get_admin_overview,
 )
 
-from app.notifications import (notify_activity, notify_bulk_activity, flush_and_notify,
-                               send_daily_account_summary, send_production_reminders)
+from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
 
 router = APIRouter(prefix="/hub/api")
 
@@ -72,8 +65,8 @@ def _require_admin(hub_session: Optional[str] = Cookie(None)):
 
 
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin/user staff see all data)."""
-    if user.get("role") in ("admin", "user"):
+    """Return client_id filter — None means all (admin sees all data)."""
+    if user.get("role") == "admin":
         return None
     return user["id"]
 
@@ -86,7 +79,7 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-def login(body: LoginIn, response: Response, request: Request = None):
+def login(body: LoginIn, response: Response):
     user, token = authenticate(body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -98,13 +91,6 @@ def login(body: LoginIn, response: Response, request: Request = None):
         path="/",              # Explicit root path — available to ALL routes
         max_age=86400 * 30,
     )
-    # Track login event
-    try:
-        ip = request.client.host if request and request.client else ""
-        ua = (request.headers.get("user-agent", "") if request else "")[:200]
-        log_user_event(body.username, "login", ip, ua)
-    except Exception:
-        pass
     return {"ok": True, "user": user}
 
 
@@ -114,10 +100,6 @@ def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
     user = _get_user(hub_session) if hub_session else None
     if user:
         flush_and_notify(user["username"])
-        try:
-            log_user_event(user["username"], "logout")
-        except Exception:
-            pass
     if hub_session:
         logout_session(hub_session)
     response.delete_cookie("hub_session", path="/")
@@ -137,8 +119,8 @@ def me(hub_session: Optional[str] = Cookie(None)):
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Filter out staff accounts (admin/user) — only real client accounts should appear
-    return [c for c in list_clients() if c.get("role") not in ("admin", "user")]
+    # Filter out admin accounts – only real client accounts should appear
+    return [c for c in list_clients() if c.get("role") != "admin"]
 
 
 # ─── Clients (admin) ──────────────────────────────────────────────────────────
@@ -382,7 +364,7 @@ def get_providers(client_id: Optional[int] = None, sub_profile: Optional[str] = 
 def add_provider(body: ProviderIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] not in ("admin", "user"):
+    if user["role"] != "admin":
         data["client_id"] = user["id"]
     pid = create_provider(data)
     return {"id": pid, "ok": True}
@@ -491,7 +473,7 @@ def get_single_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
 def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] not in ("admin", "user"):
+    if user["role"] != "admin":
         data["client_id"] = user["id"]
     cid = create_claim(data)
     notify_activity(user["username"], "created", "Claims",
@@ -503,7 +485,7 @@ def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
 def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
-    update_claim(claim_id, changes, username=user.get("username", ""))
+    update_claim(claim_id, changes)
     notify_activity(user["username"], "updated", "Claims",
                     f"Claim #{claim_id}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
@@ -634,7 +616,7 @@ def list_cred(status: Optional[str] = None, client_id: Optional[int] = None,
 def add_cred(body: CredIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] not in ("admin", "user"):
+    if user["role"] != "admin":
         data["client_id"] = user["id"]
     rid = create_credentialing(data)
     notify_activity(user["username"], "created", "Credentialing",
@@ -657,77 +639,6 @@ def remove_cred(rid: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     delete_credentialing(rid)
     notify_activity(user["username"], "deleted", "Credentialing", f"Record #{rid}")
-    return {"ok": True}
-
-
-# ─── Enrollment ───────────────────────────────────────────────────────────────
-
-class EnrollIn(BaseModel):
-    client_id: int
-    provider_id: Optional[int] = None
-    ProviderName: Optional[str] = ""
-    Payor: Optional[str] = ""
-    EnrollType: Optional[str] = "Enrollment"
-    Status: Optional[str] = "Not Started"
-    SubmittedDate: Optional[str] = ""
-    FollowUpDate: Optional[str] = ""
-    ApprovedDate: Optional[str] = ""
-    EffectiveDate: Optional[str] = ""
-    Owner: Optional[str] = ""
-    Notes: Optional[str] = ""
-    sub_profile: Optional[str] = ""
-
-
-class EnrollUpdate(BaseModel):
-    ProviderName: Optional[str] = None
-    Payor: Optional[str] = None
-    EnrollType: Optional[str] = None
-    Status: Optional[str] = None
-    SubmittedDate: Optional[str] = None
-    FollowUpDate: Optional[str] = None
-    ApprovedDate: Optional[str] = None
-    EffectiveDate: Optional[str] = None
-    Owner: Optional[str] = None
-    Notes: Optional[str] = None
-    sub_profile: Optional[str] = None
-
-
-@router.get("/enrollment")
-def list_enroll(status: Optional[str] = None, client_id: Optional[int] = None,
-               sub_profile: Optional[str] = None,
-               hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    return get_enrollment(scope, status, sub_profile=sub_profile)
-
-
-@router.post("/enrollment")
-def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    data = body.model_dump()
-    if user["role"] not in ("admin", "user"):
-        data["client_id"] = user["id"]
-    eid = create_enrollment(data)
-    notify_activity(user["username"], "created", "Enrollment",
-                    f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
-    return {"id": eid, "ok": True}
-
-
-@router.put("/enrollment/{rid}")
-def edit_enroll(rid: int, body: EnrollUpdate, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    changes = {k: v for k, v in body.model_dump().items() if v is not None}
-    update_enrollment(rid, changes)
-    notify_activity(user["username"], "updated", "Enrollment",
-                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
-    return {"ok": True}
-
-
-@router.delete("/enrollment/{rid}")
-def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    delete_enrollment(rid)
-    notify_activity(user["username"], "deleted", "Enrollment", f"Record #{rid}")
     return {"ok": True}
 
 
@@ -775,7 +686,7 @@ def list_edi(client_id: Optional[int] = None, sub_profile: Optional[str] = None,
 def add_edi(body: EDIIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] not in ("admin", "user"):
+    if user["role"] != "admin":
         data["client_id"] = user["id"]
     eid = create_edi(data)
     notify_activity(user["username"], "created", "EDI Setup",
@@ -858,7 +769,7 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
     data["username"] = user["username"]
     log_id = add_production_log(data)
     notify_activity(user["username"], "logged production", "Time Tracking",
-                    f"{data.get('time_spent',0)}h — {data.get('category','')}: {data.get('task_description','')[:60]}")
+                    f"{data.get('hours',0)}h — {data.get('task_type','')}: {data.get('description','')[:60]}")
     return {"id": log_id, "ok": True}
 
 
@@ -879,160 +790,6 @@ def production_report(client_id: Optional[int] = None,
     scope = client_id or _client_scope(user)
     report = get_production_report(scope, start_date, end_date)
     return report
-
-
-class ProductionLogUpdate(BaseModel):
-    work_date: Optional[str] = None
-    category: Optional[str] = None
-    task_description: Optional[str] = None
-    quantity: Optional[int] = None
-    time_spent: Optional[float] = None
-    notes: Optional[str] = None
-
-
-@router.put("/production/{log_id}")
-def edit_production_log(log_id: int, body: ProductionLogUpdate, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    data = {k: v for k, v in body.model_dump().items() if v is not None}
-    if not data:
-        raise HTTPException(400, "No fields to update")
-    update_production_log(log_id, data)
-    notify_activity(user["username"], "updated", "Time Tracking", f"Log #{log_id}")
-    return {"ok": True}
-
-
-# ─── Production File Uploads ─────────────────────────────────────────────────
-
-@router.post("/production/files/upload")
-async def upload_production_file(
-    file: UploadFile = FastAPIFile(...),
-    work_date: str = Form(""),
-    category: str = Form("General"),
-    notes: str = Form(""),
-    client_id: Optional[int] = Form(None),
-    hub_session: Optional[str] = Cookie(None),
-):
-    user = _require_user(hub_session)
-    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
-
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".pdf"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf files allowed")
-
-    if not work_date:
-        from datetime import date
-        work_date = date.today().isoformat()
-
-    unique_name = f"prod_{uuid.uuid4().hex}{ext}"
-    dest = os.path.join(UPLOAD_DIR, unique_name)
-    content = await file.read()
-    file_size = len(content)
-
-    if file_size > 50 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum is 50MB")
-
-    with open(dest, "wb") as f:
-        f.write(content)
-
-    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
-    file_id = add_production_file({
-        "client_id": scope,
-        "username": user["username"],
-        "work_date": work_date,
-        "original_name": file.filename,
-        "stored_name": unique_name,
-        "file_type": file_type,
-        "file_size": file_size,
-        "category": category,
-        "notes": notes,
-    })
-    notify_activity(user["username"], "uploaded production file", "Production",
-                    f"{file.filename} ({category})")
-    return {"id": file_id, "ok": True}
-
-
-@router.get("/production/files")
-def get_production_files(client_id: Optional[int] = None,
-                         start_date: Optional[str] = None,
-                         end_date: Optional[str] = None,
-                         hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    files = list_production_files(scope, username=None, start_date=start_date, end_date=end_date)
-    return {"files": files}
-
-
-@router.delete("/production/files/{file_id}")
-def remove_production_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    stored_name = delete_production_file(file_id)
-    if stored_name:
-        path = os.path.join(UPLOAD_DIR, stored_name)
-        if os.path.exists(path):
-            os.remove(path)
-    notify_activity(user["username"], "deleted production file", "Production", f"File #{file_id}")
-    return {"ok": True}
-
-
-@router.get("/production/files/download/{file_id}")
-def download_production_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
-    from fastapi.responses import FileResponse
-    user = _require_user(hub_session)
-    # Find the file record
-    files = list_production_files()
-    target = next((f for f in files if f["id"] == file_id), None)
-    if not target:
-        raise HTTPException(404, "File not found")
-    path = os.path.join(UPLOAD_DIR, target["stored_name"])
-    if not os.path.exists(path):
-        raise HTTPException(404, "File not found on disk")
-    return FileResponse(path, filename=target["original_name"])
-
-
-# ─── User Login Tracking ─────────────────────────────────────────────────────
-
-@router.get("/login-log")
-def get_login_history(username: Optional[str] = None, limit: int = 200,
-                      hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
-    return {"events": get_login_log(username, limit)}
-
-
-@router.get("/user-time-report")
-def user_time_report_endpoint(start_date: Optional[str] = None,
-                               end_date: Optional[str] = None,
-                               hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
-    return {"users": get_user_time_report(start_date, end_date)}
-
-
-# ─── Admin: Test Email Triggers ───────────────────────────────────────────────
-
-@router.post("/admin/test-daily-report")
-def test_daily_report(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: immediately send the 6 PM daily account summary email."""
-    _require_admin(hub_session)
-    import threading
-    threading.Thread(target=send_daily_account_summary, daemon=True).start()
-    return {"ok": True, "message": "Daily report email is being sent now. Check your inbox."}
-
-
-@router.post("/admin/test-reminders")
-def test_production_reminders(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: immediately send 5:30 PM production reminder emails."""
-    _require_admin(hub_session)
-    import threading
-    threading.Thread(target=send_production_reminders, daemon=True).start()
-    return {"ok": True, "message": "Production reminders are being sent now."}
-
-
-# ─── Admin Overview Dashboard ─────────────────────────────────────────────────
-
-@router.get("/admin/overview")
-def admin_overview(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: combined dashboard with all accounts, production, user tracking."""
-    _require_admin(hub_session)
-    return get_admin_overview()
 
 
 # ─── Files ────────────────────────────────────────────────────────────────────
@@ -1112,7 +869,7 @@ async def upload_file(
     imported = 0
     import_errors = []
     import_category = None
-    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
+    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI"):
         import_category = category
         try:
             if category == "Claims":
@@ -1121,8 +878,6 @@ async def upload_file(
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
-            elif category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
             elif category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
@@ -1161,7 +916,7 @@ def download_credentialing_template():
 # ─── Client Report ────────────────────────────────────────────────────────────
 
 def _build_section_data(conn, client_id, sub_profile=None, period=None):
-    """Build claims/cred/enroll/edi/payments data for one filter set."""
+    """Build claims/cred/edi/payments data for one filter set."""
     # Build parameterized filters
     sp_clause = ""
     sp_params = []
@@ -1215,17 +970,6 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
                     "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""), "approved": r.get("ApprovedDate",""),
                     "expires": r.get("ExpirationDate",""), "owner": r.get("Owner","")} for r in cred_rows]
 
-    # Enrollment
-    enr_base = f"SELECT * FROM enrollment WHERE client_id=?{sp_clause}"
-    enr_rows = [dict(r) for r in conn.execute(enr_base, [client_id] + sp_params).fetchall()]
-    enr_summary = {}
-    for r in enr_rows:
-        st = r.get("Status") or "Unknown"
-        enr_summary[st] = enr_summary.get(st, 0) + 1
-    enr_detail = [{"provider": r.get("ProviderName",""), "payor": r.get("Payor",""), "type": r.get("EnrollType",""),
-                   "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""),
-                   "effective": r.get("EffectiveDate",""), "owner": r.get("Owner","")} for r in enr_rows]
-
     # EDI
     edi_base = f"SELECT * FROM edi_setup WHERE client_id=?{sp_clause}"
     edi_rows = [dict(r) for r in conn.execute(edi_base, [client_id] + sp_params).fetchall()]
@@ -1246,7 +990,6 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
                     "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
-        "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
         "payments": payments,
     }
@@ -1302,7 +1045,7 @@ async def import_excel(
     client_id: Optional[int] = Form(None),
     hub_session: Optional[str] = Cookie(None),
 ):
-    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI).
+    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, EDI).
     Also saves a copy of the file in Documents under the appropriate category."""
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
@@ -1347,8 +1090,6 @@ async def import_excel(
             imported, errors = _import_claims_from_excel(content, ext, scope)
         elif category == "Credentialing":
             imported, errors = _import_credentialing_from_excel(content, ext, scope)
-        elif category == "Enrollment":
-            imported, errors = _import_enrollment_from_excel(content, ext, scope)
         elif category == "EDI":
             imported, errors = _import_edi_from_excel(content, ext, scope)
         else:
@@ -1517,8 +1258,6 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         if not raw:
             return "Not Started"
         s = str(raw).strip()
-        if not s:
-            return "Not Started"
         key = s.lower()
         if key in CRED_STATUS_NORMALIZE:
             return CRED_STATUS_NORMALIZE[key]
@@ -1529,9 +1268,6 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         for vs in VALID_CRED_STATUSES:
             if vs.lower() == key:
                 return vs
-        # Preserve the original value as-is if it looks meaningful (not just noise)
-        if len(s) >= 2 and len(s) <= 40:
-            return s
         return "In Progress"  # Safe default for unrecognized statuses
 
     COL_MAP = {
@@ -1639,147 +1375,6 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     if not imported and first_row_keys:
         errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
         errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Expiration")
-    return imported, errors
-
-
-def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
-    from app.client_db import get_db as _get_db
-    from datetime import datetime as _dt_now
-
-    # ── Status normalization — maps Excel values to dropdown filter values ──
-    ENROLL_STATUS_NORMALIZE = {
-        # Not Started
-        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
-        "pending start": "Not Started", "n/a": "Not Started", "to do": "Not Started",
-        "open": "Not Started",
-        # In Progress
-        "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
-        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
-        "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
-        "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
-        "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
-        "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
-        # Submitted
-        "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
-        "application submitted": "Submitted", "app submitted": "Submitted",
-        "mailed": "Submitted", "faxed": "Submitted", "uploaded": "Submitted",
-        "received": "Submitted", "acknowledged": "Submitted",
-        # Approved
-        "approved": "Approved", "completed": "Approved", "credentialed": "Approved",
-        "accepted": "Approved", "effective": "Approved", "live": "Approved",
-        "done": "Approved", "granted": "Approved", "passed": "Approved",
-        # Enrolled
-        "enrolled": "Enrolled", "active - enrolled": "Enrolled", "participating": "Enrolled",
-        "contracted": "Enrolled", "in network": "Enrolled", "in-network": "Enrolled",
-        "par": "Enrolled",
-        # Denied
-        "denied": "Denied", "rejected": "Denied", "declined": "Denied",
-        "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
-        "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
-    }
-
-    VALID_ENROLL_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Enrolled", "Denied"}
-
-    def _normalize_enroll_status(raw):
-        if not raw:
-            return "Not Started"
-        s = str(raw).strip()
-        key = s.lower()
-        if key in ENROLL_STATUS_NORMALIZE:
-            return ENROLL_STATUS_NORMALIZE[key]
-        for map_key, normalized in ENROLL_STATUS_NORMALIZE.items():
-            if len(map_key) >= 4 and map_key in key:
-                return normalized
-        for vs in VALID_ENROLL_STATUSES:
-            if vs.lower() == key:
-                return vs
-        return "In Progress"  # Safe default for unrecognized statuses
-
-    COL_MAP = {
-        # Provider
-        "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
-        "rendering provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
-        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
-        "rendering": "ProviderName", "servicing provider": "ProviderName",
-        "name": "ProviderName",
-        # Payor
-        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
-        "insurance name": "Payor", "insurance company": "Payor", "plan": "Payor",
-        "plan name": "Payor", "payer name": "Payor", "carrier": "Payor",
-        "insurance plan": "Payor", "health plan": "Payor", "ins": "Payor",
-        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
-        # Type
-        "type": "EnrollType", "enrolltype": "EnrollType", "enroll type": "EnrollType",
-        "enrollment type": "EnrollType", "application type": "EnrollType",
-        # Status
-        "status": "Status", "enrollment status": "Status", "enroll status": "Status",
-        "app status": "Status", "application status": "Status", "current status": "Status",
-        # Dates
-        "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
-        "date submitted": "SubmittedDate", "submission date": "SubmittedDate", "submit date": "SubmittedDate",
-        "application submitted": "SubmittedDate", "app submitted": "SubmittedDate",
-        "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
-        "followup": "FollowUpDate", "followup date": "FollowUpDate", "next follow up": "FollowUpDate",
-        "fu date": "FollowUpDate", "f/u date": "FollowUpDate", "f/u": "FollowUpDate",
-        "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
-        "approval date": "ApprovedDate", "date approved": "ApprovedDate",
-        "effective": "EffectiveDate", "effective date": "EffectiveDate", "effectivedate": "EffectiveDate",
-        "eff date": "EffectiveDate", "start date": "EffectiveDate",
-        # Owner / Notes
-        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
-        "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
-        "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
-    }
-    rows = _parse_excel_rows(content, ext)
-    if not rows:
-        return 0, ["No rows found"]
-    first_row_keys = list(rows[0].keys()) if rows else []
-    imported, errors = 0, []
-    conn = _get_db()
-    try:
-        for i, row in enumerate(rows):
-            mapped = {}
-            for raw_key, val in row.items():
-                db_col = _fuzzy_match_column(raw_key, COL_MAP)
-                if db_col and val is not None:
-                    mapped[db_col] = _clean_val(val)
-            if not mapped.get("ProviderName") and not mapped.get("Payor"):
-                continue
-            # Normalize status to match filter dropdown values
-            mapped["Status"] = _normalize_enroll_status(mapped.get("Status", ""))
-            try:
-                existing = conn.execute(
-                    "SELECT id FROM enrollment WHERE client_id=? AND ProviderName=? AND Payor=?",
-                    (client_id, mapped.get("ProviderName", ""), mapped.get("Payor", ""))
-                ).fetchone()
-                if existing:
-                    allowed = ["ProviderName","Payor","EnrollType","Status","SubmittedDate",
-                               "FollowUpDate","ApprovedDate","EffectiveDate","Owner","Notes","sub_profile"]
-                    parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
-                    for f in allowed:
-                        if f in mapped:
-                            parts.append(f"{f}=?")
-                            params.append(mapped[f])
-                    params.append(existing["id"])
-                    conn.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
-                else:
-                    conn.execute("""INSERT INTO enrollment
-                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
-                         mapped.get("EnrollType","Enrollment"), mapped.get("Status","Not Started"),
-                         mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
-                         mapped.get("ApprovedDate",""), mapped.get("EffectiveDate",""),
-                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
-                imported += 1
-            except Exception as e:
-                errors.append(f"Row {i+2}: {e}")
-        conn.commit()
-    finally:
-        conn.close()
-    if not imported and first_row_keys:
-        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
-        errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Effective")
     return imported, errors
 
 
@@ -2286,14 +1881,12 @@ async def replace_file(
     imported = 0
     import_errors = []
     category = rec.get("category", "")
-    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
+    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI"):
         try:
             if category == "Claims":
                 imported, import_errors = _import_claims_from_excel(content, ext, scope)
             elif category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
-            elif category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
             elif category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
@@ -2359,7 +1952,6 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
     # Build concise data summary for GPT
     cl = overall.get("claims", {})
     cred = overall.get("credentialing", {})
-    enr = overall.get("enrollment", {})
     edi = overall.get("edi", {})
     pay = overall.get("payments", {})
 
@@ -2385,9 +1977,6 @@ TOP DENIAL CATEGORIES:
 CREDENTIALING: {len(cred.get('detail', []))} records
 {chr(10).join(f"  - {c.get('provider','?')} / {c.get('payor','?')}: {c.get('status','?')}" for c in cred.get('detail', [])[:10])}
 
-ENROLLMENT: {len(enr.get('detail', []))} records
-{chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: {e.get('status','?')}" for e in enr.get('detail', [])[:10])}
-
 EDI SETUP: {len(edi.get('detail', []))} connections
 {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
 
@@ -2401,7 +1990,7 @@ PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
             data_summary += f"""
 SUB-PROFILE: {sp_name}
   Claims: {sc.get('total', 0)} | Charged: ${sc.get('total_charged', 0):,.2f} | Paid: ${sc.get('total_paid', 0):,.2f} | AR: ${sc.get('total_balance', 0):,.2f}
-  Credentialing: {len(sp_data.get('credentialing', {}).get('detail', []))} | Enrollment: {len(sp_data.get('enrollment', {}).get('detail', []))} | EDI: {len(sp_data.get('edi', {}).get('detail', []))}
+  Credentialing: {len(sp_data.get('credentialing', {}).get('detail', []))} | EDI: {len(sp_data.get('edi', {}).get('detail', []))}
 """
 
     system_prompt = """You are a senior Revenue Cycle Management (RCM) analyst at MedPharma SC, a healthcare credentialing and billing company. 
@@ -2413,11 +2002,10 @@ Your report should include:
 3. CLAIMS ANALYSIS — Break down claim statuses, flag concerns, note denials
 4. DENIAL MANAGEMENT — If denials exist, explain significance and recommend actions
 5. CREDENTIALING STATUS — Summarize progress, flag pending items
-6. ENROLLMENT STATUS — Summarize payor enrollment position
-7. EDI CONNECTIVITY — Note setup status
-8. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
-9. RECOMMENDED ACTIONS — Specific, prioritized action items
-10. OUTLOOK — Brief forward-looking statement
+6. EDI CONNECTIVITY — Note setup status
+7. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
+8. RECOMMENDED ACTIONS — Specific, prioritized action items
+9. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
 Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).
@@ -2489,7 +2077,6 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
 
     cl = overall.get("claims", {})
     cred = overall.get("credentialing", {})
-    enr = overall.get("enrollment", {})
     edi_data = overall.get("edi", {})
     pay = overall.get("payments", {})
 
@@ -2603,26 +2190,6 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                          r.get('status', ''), r.get('submitted', '-'), r.get('approved', '-')])
         cw = [doc.width*0.2, doc.width*0.2, doc.width*0.12, doc.width*0.15, doc.width*0.16, doc.width*0.17]
         t = Table(tdata, colWidths=cw)
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
-            ('BOX', (0, 0), (-1, -1), 1, blue),
-            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 12))
-
-    # ── Enrollment ──
-    enr_detail = enr.get('detail', [])
-    if enr_detail:
-        story.append(Paragraph("Enrollment", styles['SectionHead']))
-        tdata = [['Provider', 'Payor', 'Type', 'Status', 'Submitted', 'Effective']]
-        for r in enr_detail[:20]:
-            tdata.append([r.get('provider', '')[:25], r.get('payor', '')[:25], r.get('type', ''),
-                         r.get('status', ''), r.get('submitted', '-'), r.get('effective', '-')])
-        enr_cw = [doc.width*0.2, doc.width*0.2, doc.width*0.12, doc.width*0.15, doc.width*0.16, doc.width*0.17]
-        t = Table(tdata, colWidths=enr_cw)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
             ('FONTSIZE', (0, 0), (-1, -1), 8),
@@ -2764,68 +2331,13 @@ def audit_log_endpoint(client_id: Optional[int] = None, limit: int = 100,
     return {"entries": entries}
 
 
-# ─── Claim Status History (Timeline) ──────────────────────────────────────────
-
-@router.get("/claims/{claim_id}/history")
-def claim_history(claim_id: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    history = get_claim_status_history(claim_id)
-    return {"history": history}
-
-
-# ─── Denial Analytics ─────────────────────────────────────────────────────────
-
-@router.get("/analytics/denials")
-def denial_analytics(client_id: Optional[int] = None,
-                     sub_profile: Optional[str] = None,
-                     hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    return get_denial_analytics(scope, sub_profile)
-
-
-# ─── Payer Scorecard ──────────────────────────────────────────────────────────
-
-@router.get("/analytics/payers")
-def payer_scorecard(client_id: Optional[int] = None,
-                    sub_profile: Optional[str] = None,
-                    hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    return get_payer_scorecard(scope, sub_profile)
-
-
-# ─── AR Follow-Up Worklist ───────────────────────────────────────────────────
-
-@router.get("/worklist")
-def ar_worklist(client_id: Optional[int] = None,
-                sub_profile: Optional[str] = None,
-                limit: int = 50,
-                hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    claims = get_ar_worklist(scope, sub_profile, limit)
-    return {"claims": claims}
-
-
-# ─── Activity Feed ────────────────────────────────────────────────────────────
-
-@router.get("/activity-feed")
-def activity_feed(client_id: Optional[int] = None, limit: int = 25,
-                  hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    feed = get_activity_feed(scope, limit)
-    return {"feed": feed}
-
-
 # ─── Export to CSV ────────────────────────────────────────────────────────────
 
 @router.get("/export/{section}")
 def export_section(section: str, client_id: Optional[int] = None,
                    sub_profile: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
-    """Export a section (claims, credentialing, enrollment, edi, providers, production) as CSV."""
+    """Export a section (claims, credentialing, edi_setup, providers, production) as CSV."""
     import csv, io
     from fastapi.responses import StreamingResponse
 
@@ -2834,7 +2346,7 @@ def export_section(section: str, client_id: Optional[int] = None,
 
     if section == "claims":
         rows = export_claims(scope, sub_profile)
-    elif section in ("credentialing", "enrollment", "edi_setup", "providers"):
+    elif section in ("credentialing", "edi_setup", "providers"):
         rows = export_table(section, scope)
     elif section == "production":
         logs = list_production_logs(scope)

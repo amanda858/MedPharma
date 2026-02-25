@@ -49,8 +49,6 @@ INDUSTRY_BENCHMARKS = {
                         "note": "Industry avg: 25-35 claims processed/hr (AR follow-up, posting, submissions)"},
     "Credentialing":   {"daily_target": 12,  "unit": "credentialing actions", "per_hour": 1.5,
                         "note": "Industry avg: 3-5 new apps + 8-15 follow-ups/day"},
-    "Enrollment":      {"daily_target": 8,   "unit": "enrollment actions", "per_hour": 1,
-                        "note": "Industry avg: 5-8 payer enrollment submissions/day"},
     "EDI":             {"daily_target": 40,  "unit": "EDI transactions", "per_hour": 5,
                         "note": "Industry avg: 40-60 clearinghouse transactions/day"},
     "Production":      {"daily_target": 10,  "unit": "production log entries", "per_hour": 1.25,
@@ -113,8 +111,7 @@ Section-by-section breakdown:
 {section_summary}
 
 Industry context: Standard RCM workday is 7.5-8 hrs. Medical billing specialists
-should process 25-35 claims/hr, credentialing staff handle 3-5 new apps + 15 follow-ups/day,
-enrollment specialists submit 5-8 payer enrollments/day.
+should process 25-35 claims/hr, credentialing staff handle 3-5 new apps + 15 follow-ups/day.
 
 Write a concise 3-5 sentence "Team Lead Production Assessment" that:
 1. States whether this employee met, exceeded, or fell short of daily expectations
@@ -584,7 +581,6 @@ Key metrics:
 - Avg days to pay: {d['avg_days_to_pay']} | SLA breaches: {d['sla_breaches']}
 - AR Aging: Current ${d['ar_aging']['current']:,.2f} | 31-60 ${d['ar_aging']['31_60']:,.2f} | 61-90 ${d['ar_aging']['61_90']:,.2f} | 90+ ${d['ar_aging']['90_plus']:,.2f}
 - Credentialing: {d['cred_total']} total ({d['cred_approved']} approved, {d['cred_pending']} pending, {d['cred_not_started']} not started)
-- Enrollment: {d['enroll_total']} total ({d['enroll_approved']} approved, {d['enroll_pending']} pending)
 - EDI: {d['edi_total']} total ({d['edi_live']} live)
 - Serving {d['total_clients']} clients | {d['today_actions']} system actions today
 
@@ -704,11 +700,6 @@ def send_daily_account_summary():
     cred_rows_html = ""
     for status, count in sorted(d.get("cred_stats", {}).items(), key=lambda x: -x[1]):
         cred_rows_html += f'<span style="display:inline-block;background:#f1f5f9;border-radius:6px;padding:4px 10px;margin:2px;font-size:12px"><b>{count}</b> {status}</span>'
-
-    # ── Enrollment status rows ──
-    enroll_rows_html = ""
-    for status, count in sorted(d.get("enroll_stats", {}).items(), key=lambda x: -x[1]):
-        enroll_rows_html += f'<span style="display:inline-block;background:#f1f5f9;border-radius:6px;padding:4px 10px;margin:2px;font-size:12px"><b>{count}</b> {status}</span>'
 
     # ── EDI status rows ──
     edi_rows_html = ""
@@ -852,18 +843,14 @@ def send_daily_account_summary():
                     </div>
                 </div>
 
-                <!-- CREDENTIALING / ENROLLMENT / EDI -->
+                <!-- CREDENTIALING / EDI -->
                 <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
-                    🏥 Credentialing, Enrollment & EDI
+                    🏥 Credentialing & EDI
                 </div>
                 <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
                     <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
                         <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Credentialing ({d['cred_total']})</div>
                         <div>{cred_rows_html or '<span style="font-size:12px;color:#94a3b8">No records</span>'}</div>
-                    </div>
-                    <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
-                        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Enrollment ({d['enroll_total']})</div>
-                        <div>{enroll_rows_html or '<span style="font-size:12px;color:#94a3b8">No records</span>'}</div>
                     </div>
                     <div style="flex:1;min-width:140px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
                         <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">EDI/ERA/EFT ({d['edi_total']})</div>
@@ -923,9 +910,8 @@ def send_daily_account_summary():
         f"  61-90:    {_fmt_money(aging.get('61_90',0))}",
         f"  90+:      {_fmt_money(aging.get('90_plus',0))}",
         "",
-        "───── CREDENTIALING/ENROLLMENT/EDI ─────",
+        "───── CREDENTIALING/EDI ─────",
         f"  Credentialing: {d['cred_total']} ({d['cred_approved']} approved, {d['cred_pending']} pending)",
-        f"  Enrollment:    {d['enroll_total']} ({d['enroll_approved']} approved, {d['enroll_pending']} pending)",
         f"  EDI:           {d['edi_total']} ({d['edi_live']} live)",
         "",
         f"  SLA Breaches: {d['sla_breaches']}  |  System Actions Today: {d['today_actions']}",

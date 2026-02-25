@@ -25,7 +25,7 @@ from app.notifications import start_daily_scheduler
 
 app = FastAPI(
     title="MedPharma Hub",
-    description="MedPharma Revenue Cycle Management — Client Portal, Credentialing, Enrollment, EDI, and Claims",
+    description="MedPharma Revenue Cycle Management — Client Portal, Credentialing, EDI, and Claims",
     version="2.0.0",
 )
 

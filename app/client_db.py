@@ -1,5 +1,5 @@
 """Database — MedPharma Client Hub: claims_master, payments, notes_log,
-credentialing, enrollment, edi_setup, providers, clients, sessions."""
+credentialing, edi_setup, providers, clients, sessions."""
 
 import sqlite3
 import os
@@ -54,8 +54,7 @@ def init_client_hub_db():
             notes            TEXT DEFAULT '',
             doc_tab_names    TEXT DEFAULT '',
             practice_type    TEXT DEFAULT '',
-            report_tab_names TEXT DEFAULT '',
-            services         TEXT DEFAULT 'all'
+            report_tab_names TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -101,9 +100,6 @@ def init_client_hub_db():
             DenialReason        TEXT DEFAULT '',
             AppealDate          TEXT DEFAULT '',
             AppealStatus        TEXT DEFAULT '',
-            -- touch tracking
-            TouchCount          INTEGER DEFAULT 0,
-            LastTouchedBy       TEXT DEFAULT '',
             -- sub-profile (e.g. MHP or OMT for Luminary)
             sub_profile         TEXT DEFAULT '',
             -- meta
@@ -135,7 +131,7 @@ def init_client_hub_db():
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id   INTEGER NOT NULL,
             ClaimKey    TEXT DEFAULT '',
-            Module      TEXT DEFAULT 'Claim',  -- Claim, Credentialing, Enrollment, EDI
+            Module      TEXT DEFAULT 'Claim',  -- Claim, Credentialing, EDI
             RefID       INTEGER DEFAULT 0,
             Note        TEXT NOT NULL,
             Author      TEXT DEFAULT '',
@@ -184,28 +180,6 @@ def init_client_hub_db():
             FOREIGN KEY (provider_id) REFERENCES providers(id)
         );
 
-        -- ── enrollment ─────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS enrollment (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id           INTEGER NOT NULL,
-            provider_id         INTEGER,
-            ProviderName        TEXT DEFAULT '',
-            Payor               TEXT DEFAULT '',
-            EnrollType          TEXT DEFAULT 'Enrollment', -- Enrollment, Disenrollment, Revalidation
-            Status              TEXT DEFAULT 'Not Started',
-            SubmittedDate       TEXT DEFAULT '',
-            FollowUpDate        TEXT DEFAULT '',
-            ApprovedDate        TEXT DEFAULT '',
-            EffectiveDate       TEXT DEFAULT '',
-            Owner               TEXT DEFAULT '',
-            Notes               TEXT DEFAULT '',
-            sub_profile         TEXT DEFAULT '',
-            created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_id) REFERENCES clients(id),
-            FOREIGN KEY (provider_id) REFERENCES providers(id)
-        );
-
         -- ── EDI / ERA / EFT setup ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS edi_setup (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,7 +209,6 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_payments_claim  ON payments(ClaimKey);
         CREATE INDEX IF NOT EXISTS idx_notes_claim     ON notes_log(ClaimKey);
         CREATE INDEX IF NOT EXISTS idx_cred_client     ON credentialing(client_id);
-        CREATE INDEX IF NOT EXISTS idx_enroll_client   ON enrollment(client_id);
         CREATE INDEX IF NOT EXISTS idx_edi_client      ON edi_setup(client_id);
         CREATE INDEX IF NOT EXISTS idx_prov_client     ON providers(client_id);
 
@@ -298,24 +271,6 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_tp_client ON team_production(client_id);
         CREATE INDEX IF NOT EXISTS idx_tp_date   ON team_production(work_date);
 
-        -- ── Production file attachments ───────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS production_files (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id     INTEGER NOT NULL,
-            username      TEXT NOT NULL,
-            work_date     TEXT NOT NULL,
-            original_name TEXT NOT NULL,
-            stored_name   TEXT NOT NULL,
-            file_type     TEXT DEFAULT '',
-            file_size     INTEGER DEFAULT 0,
-            category      TEXT DEFAULT 'General',
-            notes         TEXT DEFAULT '',
-            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_id) REFERENCES clients(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_pf_client ON production_files(client_id);
-        CREATE INDEX IF NOT EXISTS idx_pf_user   ON production_files(username);
-
         -- ── Audit trail / activity log ────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS audit_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,34 +298,6 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_rn_client ON report_notes(client_id);
-
-        -- ── Claim status history (tracks every status change) ─────────────
-        CREATE TABLE IF NOT EXISTS claim_status_history (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id   INTEGER NOT NULL,
-            claim_id    INTEGER NOT NULL,
-            ClaimKey    TEXT NOT NULL,
-            old_status  TEXT DEFAULT '',
-            new_status  TEXT NOT NULL,
-            changed_by  TEXT DEFAULT '',
-            changed_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_id) REFERENCES clients(id),
-            FOREIGN KEY (claim_id) REFERENCES claims_master(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_csh_claim ON claim_status_history(claim_id);
-        CREATE INDEX IF NOT EXISTS idx_csh_client ON claim_status_history(client_id);
-
-        -- ── User login/logout tracking ────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS user_login_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            username    TEXT NOT NULL,
-            event       TEXT NOT NULL,            -- 'login' or 'logout'
-            ip_address  TEXT DEFAULT '',
-            user_agent  TEXT DEFAULT '',
-            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_ull_user ON user_login_log(username);
-        CREATE INDEX IF NOT EXISTS idx_ull_time ON user_login_log(created_at);
     """)
     conn.commit()
 
@@ -404,21 +331,12 @@ def init_client_hub_db():
 
     # ── Migrate existing DBs: add sub_profile column to data tables ───────
     sub_profile_tables = ["claims_master", "payments", "providers",
-                          "credentialing", "enrollment", "edi_setup"]
+                          "credentialing", "edi_setup"]
     for tbl in sub_profile_tables:
         cur.execute(f"PRAGMA table_info({tbl})")
         cols = {row[1] for row in cur.fetchall()}
         if "sub_profile" not in cols:
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
-    conn.commit()
-
-    # ── Migrate existing DBs: add TouchCount / LastTouchedBy to claims ────
-    cur.execute("PRAGMA table_info(claims_master)")
-    claims_cols = {row[1] for row in cur.fetchall()}
-    if "TouchCount" not in claims_cols:
-        cur.execute("ALTER TABLE claims_master ADD COLUMN TouchCount INTEGER DEFAULT 0")
-    if "LastTouchedBy" not in claims_cols:
-        cur.execute("ALTER TABLE claims_master ADD COLUMN LastTouchedBy TEXT DEFAULT ''")
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
@@ -429,48 +347,32 @@ def init_client_hub_db():
     else:
         # Auto-migrate: fix client profile data
         cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # eric is now the owner/admin of MedPharma, not a client login for Luminary
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC', contact_name='Eric' WHERE username='eric' AND role='client'")
-        # Ensure eric password works
-        eric_salt = secrets.token_hex(16)
-        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='eric'",
-                    (_hash_pw("eric123", eric_salt), eric_salt))
-        # jessica is a staff user (not admin, not client)
-        cur.execute("UPDATE clients SET role='user', company='MedPharma SC' WHERE username='jessica' AND role IN ('client','admin')")
+        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
+        # Ensure jessica account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
             jsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "user")
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
             )
-        # Ensure jessica password works
-        jsalt2 = secrets.token_hex(16)
-        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='jessica'",
-                    (_hash_pw("jessica123", jsalt2), jsalt2))
-        # rcm is a staff user (not admin, not client)
-        cur.execute("UPDATE clients SET role='user', company='MedPharma SC' WHERE username='rcm' AND role IN ('client','admin')")
+        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
+        # Reset rcm password so login works
         rcm_salt = secrets.token_hex(16)
         cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
                     (_hash_pw("rcm123", rcm_salt), rcm_salt))
+        # Ensure rcm account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
         if cur.fetchone()[0] == 0:
             rcm_salt2 = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "user")
+                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
             )
-        # Ensure Luminary client exists (for data storage)
-        cur.execute("SELECT COUNT(*) FROM clients WHERE company LIKE '%Luminary%' AND role='client'")
-        if cur.fetchone()[0] == 0:
-            ls = secrets.token_hex(16)
-            cur.execute(
-                """INSERT INTO clients (username,password,salt,company,contact_name,email,role,practice_type)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                ("luminary", _hash_pw("luminary123", ls), ls, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client", "MHP+OMT")
-            )
-        # Ensure TruPath client exists
-        cur.execute("SELECT COUNT(*) FROM clients WHERE company LIKE '%TruPath%' AND role='client'")
+        # Ensure TruPath client exists (separate from rcm user)
+        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
         if cur.fetchone()[0] == 0:
             tpsalt = secrets.token_hex(16)
             cur.execute(
@@ -480,52 +382,7 @@ def init_client_hub_db():
         # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
         cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
                        ptan_group='', ptan_individual='', specialty=''
-                       WHERE company LIKE '%Luminary%' AND practice_type='MHP+OMT'""")
-
-        # ── services column migration ─────────────────────────────────────────
-        try:
-            cur.execute("ALTER TABLE clients ADD COLUMN services TEXT DEFAULT 'all'")
-        except Exception:
-            pass  # column already exists
-
-        # ── Ensure Kinder Pediatric Urgent Care client exists (credentialing only) ──
-        cur.execute("SELECT id FROM clients WHERE company LIKE '%Kinder%' AND role='client'")
-        kinder_row = cur.fetchone()
-        if not kinder_row:
-            ksalt = secrets.token_hex(16)
-            cur.execute(
-                """INSERT INTO clients
-                   (username,password,salt,company,contact_name,email,role,services,practice_type)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                ("kindercare", _hash_pw("kinder123", ksalt), ksalt,
-                 "Kinder Pediatric Urgent Care", "Kinder Pediatric",
-                 "", "client", "credentialing", "multi-location")
-            )
-            kinder_id = cur.lastrowid
-        else:
-            kinder_id = kinder_row[0]
-            cur.execute("UPDATE clients SET services='credentialing' WHERE id=?", (kinder_id,))
-
-        # ── 5 location profiles for Kinder Pediatric ──────────────────────────
-        kinder_locations = [
-            ("Metuchen", "65 US Highway 1 South, Metuchen, NJ 08840"),
-            ("Totowa", "465 Route 46 West, Totowa, NJ 07512"),
-            ("Union", "1235 W. Chestnut St, Union, NJ 07083"),
-            ("Piscataway", "1060 Stelton Road, Piscataway, NJ"),
-            ("Jersey City (NEW)", "152 Newark Ave, Jersey City, NJ 07032"),
-        ]
-        for loc_name, loc_addr in kinder_locations:
-            cur.execute("SELECT id FROM practice_profiles WHERE client_id=? AND profile_name=?",
-                        (kinder_id, loc_name))
-            if not cur.fetchone():
-                cur.execute(
-                    """INSERT INTO practice_profiles
-                       (client_id, profile_name, practice_type, specialty, address)
-                       VALUES (?,?,?,?,?)""",
-                    (kinder_id, loc_name, "Pediatric Urgent Care",
-                     "Pediatrics / Urgent Care", loc_addr)
-                )
-
+                       WHERE username='eric' AND practice_type='MHP+OMT'""")
         conn.commit()
 
     conn.close()
@@ -536,32 +393,11 @@ def init_client_hub_db():
 def _seed_data(conn):
     cur = conn.cursor()
 
-    # Admin — system admin
+    # Admin
     asalt = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
-    )
-
-    # Eric — owner of MedPharma (admin)
-    esalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("eric", _hash_pw("eric123", esalt), esalt, "MedPharma SC", "Eric", "", "admin")
-    )
-
-    # Jessica — MedPharma staff user
-    jsalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "user")
-    )
-
-    # RCM — MedPharma staff user
-    rsalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "user")
     )
 
     # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
@@ -571,7 +407,7 @@ def _seed_data(conn):
         """INSERT INTO clients
            (username,password,salt,company,contact_name,email,role,practice_type)
            VALUES (?,?,?,?,?,?,?,?)""",
-        ("luminary", _hash_pw("luminary123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
+        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
          "MHP+OMT")
     )
     luminary_id = cur.lastrowid
@@ -581,6 +417,20 @@ def _seed_data(conn):
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
+    )
+
+    # Jessica — MedPharma staff user (admin), NOT a client
+    jsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
+    )
+
+    # RCM — MedPharma staff user (admin), sees all client accounts
+    rsalt = secrets.token_hex(16)
+    cur.execute(
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
     )
 
     # Sub-profiles for Luminary: MHP and OMT (both Ancillary)
@@ -597,33 +447,6 @@ def _seed_data(conn):
            VALUES (?,?,?,?)""",
         (luminary_id, "OMT", "Ancillary", "Occupational / Manual Therapy")
     )
-
-    # Client 3 — Kinder Pediatric Urgent Care (credentialing only, 5 locations)
-    s3 = secrets.token_hex(16)
-    cur.execute(
-        """INSERT INTO clients
-           (username,password,salt,company,contact_name,email,role,services,practice_type)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        ("kindercare", _hash_pw("kinder123", s3), s3,
-         "Kinder Pediatric Urgent Care", "Kinder Pediatric", "", "client",
-         "credentialing", "multi-location")
-    )
-    kinder_id = cur.lastrowid
-
-    for loc_name, loc_addr in [
-        ("Metuchen", "65 US Highway 1 South, Metuchen, NJ 08840"),
-        ("Totowa", "465 Route 46 West, Totowa, NJ 07512"),
-        ("Union", "1235 W. Chestnut St, Union, NJ 07083"),
-        ("Piscataway", "1060 Stelton Road, Piscataway, NJ"),
-        ("Jersey City (NEW)", "152 Newark Ave, Jersey City, NJ 07032"),
-    ]:
-        cur.execute(
-            """INSERT INTO practice_profiles
-               (client_id, profile_name, practice_type, specialty, address)
-               VALUES (?,?,?,?,?)""",
-            (kinder_id, loc_name, "Pediatric Urgent Care",
-             "Pediatrics / Urgent Care", loc_addr)
-        )
 
     conn.commit()
     # No fake claims, providers, credentialing, or payments seeded.
@@ -690,7 +513,7 @@ def list_clients():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type,services FROM clients ORDER BY company")
+        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type FROM clients ORDER BY company")
         rows = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -1068,19 +891,10 @@ def create_claim(data: dict) -> int:
     return cid
 
 
-def update_claim(claim_id: int, data: dict, username: str = ""):
+def update_claim(claim_id: int, data: dict):
     conn = get_db()
     try:
         cur = conn.cursor()
-
-        # Fetch old status for history tracking
-        cur.execute("SELECT ClaimStatus, client_id, ClaimKey, TouchCount FROM claims_master WHERE id=?", (claim_id,))
-        old_row = cur.fetchone()
-        old_status = old_row[0] if old_row else ""
-        claim_client_id = old_row[1] if old_row else None
-        claim_key = old_row[2] if old_row else ""
-        touch_count = (old_row[3] or 0) if old_row else 0
-
         allowed = ["ClaimKey", "PatientID", "PatientName", "Payor", "ProviderName", "NPI", "DOS",
                    "CPTCode", "Description", "ChargeAmount", "AllowedAmount", "AdjustmentAmount",
                    "PaidAmount", "BalanceRemaining", "ClaimStatus", "StatusStartDate", "BillDate",
@@ -1088,23 +902,13 @@ def update_claim(claim_id: int, data: dict, username: str = ""):
                    "SLABreached", "DenialCategory", "DenialReason", "AppealDate", "AppealStatus",
                    "sub_profile"]
         now = datetime.now().isoformat()
-        parts = ["LastTouchedDate=?", "updated_at=?", "TouchCount=?", "LastTouchedBy=?"]
-        params = [now, now, touch_count + 1, username]
+        parts, params = ["LastTouchedDate=?", "updated_at=?"], [now, now]
         for f in allowed:
             if f in data:
                 parts.append(f"{f}=?")
                 params.append(data[f])
         params.append(claim_id)
         cur.execute(f"UPDATE claims_master SET {','.join(parts)} WHERE id=?", params)
-
-        # Record status change in history
-        new_status = data.get("ClaimStatus")
-        if new_status and new_status != old_status and claim_client_id is not None:
-            cur.execute("""INSERT INTO claim_status_history
-                           (client_id, claim_id, ClaimKey, old_status, new_status, changed_by)
-                           VALUES (?,?,?,?,?,?)""",
-                        (claim_client_id, claim_id, claim_key, old_status, new_status, username))
-
         conn.commit()
     finally:
         conn.close()
@@ -1284,74 +1088,6 @@ def delete_credentialing(rec_id: int):
     conn = get_db()
     try:
         conn.execute("DELETE FROM credentialing WHERE id=?", (rec_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# ─── Enrollment ───────────────────────────────────────────────────────────────
-
-def get_enrollment(client_id: int = None, status: str = None, sub_profile: str = None):
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        q = "SELECT * FROM enrollment WHERE 1=1"
-        params = []
-        if client_id is not None:
-            q += " AND client_id=?"; params.append(client_id)
-        if status:
-            q += " AND Status=?"; params.append(status)
-        if sub_profile:
-            q += " AND sub_profile=?"; params.append(sub_profile)
-        q += " ORDER BY updated_at DESC"
-        cur.execute(q, params)
-        rows = [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-    return rows
-
-
-def create_enrollment(data: dict) -> int:
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""INSERT INTO enrollment
-            (client_id,provider_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (data["client_id"], data.get("provider_id"), data.get("ProviderName", ""),
-             data.get("Payor", ""), data.get("EnrollType", "Enrollment"), data.get("Status", "Not Started"),
-             data.get("SubmittedDate", ""), data.get("FollowUpDate", ""),
-             data.get("ApprovedDate", ""), data.get("EffectiveDate", ""),
-             data.get("Owner", ""), data.get("Notes", ""), data.get("sub_profile", "")))
-        conn.commit()
-        eid = cur.lastrowid
-    finally:
-        conn.close()
-    return eid
-
-
-def update_enrollment(rec_id: int, data: dict):
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        allowed = ["ProviderName", "Payor", "EnrollType", "Status", "SubmittedDate",
-                   "FollowUpDate", "ApprovedDate", "EffectiveDate", "Owner", "Notes", "sub_profile"]
-        parts, params = ["updated_at=?"], [datetime.now().isoformat()]
-        for f in allowed:
-            if f in data:
-                parts.append(f"{f}=?")
-                params.append(data[f])
-        params.append(rec_id)
-        cur.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def delete_enrollment(rec_id: int):
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM enrollment WHERE id=?", (rec_id,))
         conn.commit()
     finally:
         conn.close()
@@ -1554,10 +1290,6 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {base_cond} GROUP BY Status", base_p)
         cred_stats = {r[0]: r[1] for r in cur.fetchall()}
 
-        # Enrollment stats (no DOS column — use base_cond)
-        cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {base_cond} GROUP BY Status", base_p)
-        enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
-
         # Client profile
         profile = {}
         if client_id:
@@ -1594,7 +1326,6 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denial_categories": denial_cats,
             "payment_trend": pay_trend,
             "credentialing_stats": cred_stats,
-            "enrollment_stats": enroll_stats,
             "profile": profile,
         }
     finally:
@@ -1685,13 +1416,6 @@ def get_daily_account_summary():
         cred_pending        = cred_stats.get("Pending", 0) + cred_stats.get("In Progress", 0) + cred_stats.get("Submitted", 0)
         cred_not_started    = cred_stats.get("Not Started", 0)
 
-        # ── Enrollment KPIs ──
-        cur.execute("SELECT Status, COUNT(*) FROM enrollment GROUP BY Status")
-        enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
-        enroll_total     = sum(enroll_stats.values())
-        enroll_approved  = enroll_stats.get("Approved", 0) + enroll_stats.get("Active", 0) + enroll_stats.get("Enrolled", 0)
-        enroll_pending   = enroll_stats.get("Pending", 0) + enroll_stats.get("In Progress", 0) + enroll_stats.get("Submitted", 0)
-
         # ── EDI KPIs ──
         cur.execute("SELECT EDIStatus, COUNT(*) FROM edi_setup GROUP BY EDIStatus")
         edi_stats = {r[0]: r[1] for r in cur.fetchall()}
@@ -1740,11 +1464,6 @@ def get_daily_account_summary():
             "cred_pending": cred_pending,
             "cred_not_started": cred_not_started,
             "cred_stats": cred_stats,
-            # Enrollment
-            "enroll_total": enroll_total,
-            "enroll_approved": enroll_approved,
-            "enroll_pending": enroll_pending,
-            "enroll_stats": enroll_stats,
             # EDI
             "edi_total": edi_total,
             "edi_live": edi_live,
@@ -1752,196 +1471,6 @@ def get_daily_account_summary():
             # General
             "total_clients": total_clients,
             "today_actions": today_actions,
-        }
-    finally:
-        conn.close()
-
-
-# ─── Admin Overview (all-accounts dashboard for admin) ────────────────────
-
-def get_admin_overview():
-    """
-    Build a combined admin dashboard:
-    - Per-client account summaries (claims count, AR, cred status, etc.)
-    - Overall production stats for jessica & rcm
-    - User activity / time tracking summary
-    """
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        today = date.today()
-        today_str = today.isoformat()
-        mtd_start = today.replace(day=1).isoformat()
-        week_start = (today - timedelta(days=today.weekday())).isoformat()
-
-        def q1(sql, params=None):
-            cur.execute(sql, params or [])
-            row = cur.fetchone()
-            return row[0] if row else 0
-
-        # ── Per-client account summaries ──
-        cur.execute("SELECT id, company, contact_name, email, services FROM clients WHERE role='client' AND is_active=1 ORDER BY company")
-        clients = [dict(r) for r in cur.fetchall()]
-
-        account_summaries = []
-        for c in clients:
-            cid = c["id"]
-            claims_total = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=?", [cid])
-            claims_active = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND ClaimStatus NOT IN ('Paid','Closed')", [cid])
-            total_ar = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master WHERE client_id=?", [cid])
-            total_charged = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?", [cid])
-            total_paid = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master WHERE client_id=?", [cid])
-            denied = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND ClaimStatus IN ('Denied','Appeals')", [cid])
-            sla_breaches = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND SLABreached=1", [cid])
-
-            cred_total = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=?", [cid])
-            cred_approved = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=? AND Status IN ('Approved','Active')", [cid])
-            cred_pending = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=? AND Status IN ('Pending','In Progress','Submitted')", [cid])
-
-            enroll_total = q1("SELECT COUNT(*) FROM enrollment WHERE client_id=?", [cid])
-            enroll_approved = q1("SELECT COUNT(*) FROM enrollment WHERE client_id=? AND Status IN ('Approved','Active','Enrolled')", [cid])
-
-            account_summaries.append({
-                "client_id": cid,
-                "company": c["company"],
-                "contact_name": c.get("contact_name", ""),
-                "email": c.get("email", ""),
-                "services": c.get("services", "all"),
-                "claims_total": claims_total,
-                "claims_active": claims_active,
-                "total_ar": round(total_ar, 2),
-                "total_charged": round(total_charged, 2),
-                "total_paid": round(total_paid, 2),
-                "denied": denied,
-                "sla_breaches": sla_breaches,
-                "cred_total": cred_total,
-                "cred_approved": cred_approved,
-                "cred_pending": cred_pending,
-                "enroll_total": enroll_total,
-                "enroll_approved": enroll_approved,
-            })
-
-        # ── Grand totals across all clients ──
-        grand_claims = q1("SELECT COUNT(*) FROM claims_master")
-        grand_active = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed')")
-        grand_ar = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master")
-        grand_charged = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master")
-        grand_paid = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master")
-        grand_denied = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus IN ('Denied','Appeals')")
-        grand_sla = q1("SELECT COUNT(*) FROM claims_master WHERE SLABreached=1")
-        grand_submitted = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate != ''")
-        clean_claims = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid' AND DenialReason=''")
-        clean_rate = round(clean_claims / max(grand_submitted, 1) * 100, 1)
-        denial_rate = round(grand_denied / max(grand_submitted, 1) * 100, 1)
-        net_coll = round(grand_paid / max(grand_charged, 1) * 100, 1)
-        pay_mtd = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [mtd_start])
-
-        grand_cred = q1("SELECT COUNT(*) FROM credentialing")
-        grand_cred_approved = q1("SELECT COUNT(*) FROM credentialing WHERE Status IN ('Approved','Active')")
-        grand_enroll = q1("SELECT COUNT(*) FROM enrollment")
-        grand_enroll_approved = q1("SELECT COUNT(*) FROM enrollment WHERE Status IN ('Approved','Active','Enrolled')")
-
-        # ── Production summary (today + this week + MTD) ──
-        prod_today = []
-        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
-                       ROUND(SUM(time_spent),1) as hours
-                       FROM team_production WHERE work_date=?
-                       GROUP BY username""", [today_str])
-        prod_today = [dict(r) for r in cur.fetchall()]
-
-        prod_week = []
-        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
-                       ROUND(SUM(time_spent),1) as hours, COUNT(DISTINCT work_date) as days
-                       FROM team_production WHERE work_date>=?
-                       GROUP BY username""", [week_start])
-        prod_week = [dict(r) for r in cur.fetchall()]
-
-        prod_mtd = []
-        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
-                       ROUND(SUM(time_spent),1) as hours, COUNT(DISTINCT work_date) as days
-                       FROM team_production WHERE work_date>=?
-                       GROUP BY username""", [mtd_start])
-        prod_mtd = [dict(r) for r in cur.fetchall()]
-
-        # Production files uploaded today
-        prod_files_today = q1("SELECT COUNT(*) FROM production_files WHERE work_date=?", [today_str])
-
-        # ── User activity (last 7 days of logins) ──
-        week_ago = (today - timedelta(days=7)).isoformat()
-        cur.execute("""SELECT username, event, created_at FROM user_login_log
-                       WHERE created_at >= ? ORDER BY created_at DESC LIMIT 50""", [week_ago])
-        recent_activity = [dict(r) for r in cur.fetchall()]
-
-        # Per-user session stats (last 7 days)
-        user_sessions = {}
-        for ev in recent_activity:
-            u = ev["username"]
-            if u not in user_sessions:
-                user_sessions[u] = {"username": u, "logins": 0, "logouts": 0,
-                                    "last_seen": ev["created_at"], "sessions": []}
-            if ev["event"] == "login":
-                user_sessions[u]["logins"] += 1
-                user_sessions[u]["sessions"].append({"login": ev["created_at"], "logout": None})
-            elif ev["event"] == "logout":
-                user_sessions[u]["logouts"] += 1
-                for s in reversed(user_sessions[u]["sessions"]):
-                    if s["logout"] is None:
-                        s["logout"] = ev["created_at"]
-                        break
-
-        from datetime import datetime as _dt
-        user_activity = []
-        for u, stats in user_sessions.items():
-            total_minutes = 0
-            for s in stats["sessions"]:
-                if s["login"] and s["logout"]:
-                    try:
-                        t1 = _dt.fromisoformat(s["login"])
-                        t2 = _dt.fromisoformat(s["logout"])
-                        total_minutes += max(0, (t2 - t1).total_seconds() / 60)
-                    except Exception:
-                        pass
-            stats["active_hours"] = round(total_minutes / 60, 1)
-            del stats["sessions"]
-            user_activity.append(stats)
-        user_activity.sort(key=lambda x: x["username"])
-
-        # ── Recent audit actions (last 20) ──
-        cur.execute("""SELECT al.*, c.company as client_company
-                       FROM audit_log al
-                       LEFT JOIN clients c ON c.id = al.client_id
-                       ORDER BY al.created_at DESC LIMIT 20""")
-        recent_audit = [dict(r) for r in cur.fetchall()]
-
-        return {
-            "accounts": account_summaries,
-            "totals": {
-                "claims": grand_claims,
-                "active_claims": grand_active,
-                "total_ar": round(grand_ar, 2),
-                "total_charged": round(grand_charged, 2),
-                "total_paid": round(grand_paid, 2),
-                "denied": grand_denied,
-                "sla_breaches": grand_sla,
-                "clean_claim_rate": clean_rate,
-                "denial_rate": denial_rate,
-                "net_collection_rate": net_coll,
-                "payments_mtd": round(pay_mtd, 2),
-                "credentialing": grand_cred,
-                "cred_approved": grand_cred_approved,
-                "enrollment": grand_enroll,
-                "enroll_approved": grand_enroll_approved,
-                "total_clients": len(clients),
-            },
-            "production": {
-                "today": prod_today,
-                "week": prod_week,
-                "mtd": prod_mtd,
-                "files_today": prod_files_today,
-            },
-            "user_activity": user_activity,
-            "recent_activity": recent_activity[:20],
-            "recent_audit": recent_audit,
         }
     finally:
         conn.close()
@@ -2048,8 +1577,8 @@ def get_alerts(client_id: int = None):
                                "detail": f"Review and initiate revalidation"})
                 break  # Show most urgent only
 
-        # 3. Overdue follow-ups (credentialing & enrollment)
-        for tbl, label in [("credentialing", "Credentialing"), ("enrollment", "Enrollment")]:
+        # 3. Overdue follow-ups (credentialing)
+        for tbl, label in [("credentialing", "Credentialing")]:
             overdue = cur.execute(
                 f"""SELECT COUNT(*) FROM {tbl} {cond}
                     {'AND' if cond else 'WHERE'} FollowUpDate != '' AND FollowUpDate < date('now')
@@ -2093,7 +1622,7 @@ def get_alerts(client_id: int = None):
 # ─── Global Search ────────────────────────────────────────────────────────
 
 def global_search(query: str, client_id: int = None, limit: int = 30):
-    """Search across claims, providers, credentialing, enrollment, EDI."""
+    """Search across claims, providers, credentialing, EDI."""
     if not query or not query.strip():
         return []
     conn = get_db()
@@ -2129,16 +1658,6 @@ def global_search(query: str, client_id: int = None, limit: int = 30):
                         ProviderName || ' → ' || Payor as title,
                         CredType || ' — ' || Owner as subtitle, Status as status
                         FROM credentialing WHERE (
-                            ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
-                        ) {cond} ORDER BY updated_at DESC LIMIT ?""",
-                    [q]*3 + p_base + [limit])
-        results += [dict(r) for r in cur.fetchall()]
-
-        # Enrollment
-        cur.execute(f"""SELECT id, 'enrollment' as type,
-                        ProviderName || ' → ' || Payor as title,
-                        EnrollType || ' — ' || Owner as subtitle, Status as status
-                        FROM enrollment WHERE (
                             ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
                         ) {cond} ORDER BY updated_at DESC LIMIT ?""",
                     [q]*3 + p_base + [limit])
@@ -2218,8 +1737,8 @@ def export_claims(client_id: int = None, sub_profile: str = None):
 
 
 def export_table(table: str, client_id: int = None):
-    """Generic export for credentialing, enrollment, edi_setup, providers."""
-    allowed_tables = {"credentialing", "enrollment", "edi_setup", "providers"}
+    """Generic export for credentialing, edi_setup, providers."""
+    allowed_tables = {"credentialing", "edi_setup", "providers"}
     if table not in allowed_tables:
         return []
     conn = get_db()
@@ -2362,201 +1881,6 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
     }
 
 
-def update_production_log(log_id: int, data: dict):
-    """Update an existing production log entry."""
-    conn = get_db()
-    try:
-        allowed = ["work_date", "category", "task_description", "quantity", "time_spent", "notes"]
-        parts, params = [], []
-        for k in allowed:
-            if k in data:
-                parts.append(f"{k}=?")
-                params.append(data[k])
-        if not parts:
-            return
-        params.append(log_id)
-        conn.execute(f"UPDATE team_production SET {','.join(parts)} WHERE id=?", params)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# ─── Production File Attachments ─────────────────────────────────────────────
-
-def add_production_file(data: dict) -> int:
-    """Add a production file attachment record."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO production_files (client_id, username, work_date, original_name, stored_name,
-                                          file_type, file_size, category, notes)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (
-            data["client_id"], data["username"], data["work_date"],
-            data["original_name"], data["stored_name"],
-            data.get("file_type", ""), data.get("file_size", 0),
-            data.get("category", "General"), data.get("notes", "")
-        ))
-        conn.commit()
-        return cur.lastrowid
-    finally:
-        conn.close()
-
-
-def list_production_files(client_id: int = None, username: str = None, start_date: str = None, end_date: str = None):
-    """List production file attachments."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        conds, p = [], []
-        if client_id:
-            conds.append("client_id=?")
-            p.append(client_id)
-        if username:
-            conds.append("username=?")
-            p.append(username)
-        if start_date:
-            conds.append("work_date>=?")
-            p.append(start_date)
-        if end_date:
-            conds.append("work_date<=?")
-            p.append(end_date)
-        where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        cur.execute(f"SELECT * FROM production_files {where} ORDER BY created_at DESC", p)
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-
-
-def delete_production_file(file_id: int):
-    """Delete a production file record and return the stored_name for disk cleanup."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT stored_name FROM production_files WHERE id=?", (file_id,))
-        row = cur.fetchone()
-        stored_name = row["stored_name"] if row else None
-        conn.execute("DELETE FROM production_files WHERE id=?", (file_id,))
-        conn.commit()
-        return stored_name
-    finally:
-        conn.close()
-
-
-def has_production_data_today(username: str, work_date: str) -> bool:
-    """Check if user has uploaded any production data (log OR file) for a given date."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) as cnt FROM team_production WHERE username=? AND work_date=?",
-                    (username, work_date))
-        count = cur.fetchone()["cnt"]
-        if count > 0:
-            return True
-        cur.execute("SELECT COUNT(*) as cnt FROM production_files WHERE username=? AND work_date=?",
-                    (username, work_date))
-        count = cur.fetchone()["cnt"]
-        return count > 0
-    finally:
-        conn.close()
-
-
-# ─── User Login Tracking ─────────────────────────────────────────────────────
-
-def log_user_event(username: str, event: str, ip_address: str = "", user_agent: str = ""):
-    """Record a login or logout event."""
-    conn = get_db()
-    try:
-        conn.execute(
-            "INSERT INTO user_login_log (username, event, ip_address, user_agent) VALUES (?,?,?,?)",
-            (username, event, ip_address, user_agent)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_login_log(username: str = None, limit: int = 200):
-    """Get login/logout history, optionally filtered by username."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        if username:
-            cur.execute(
-                "SELECT * FROM user_login_log WHERE username=? ORDER BY created_at DESC LIMIT ?",
-                (username, limit)
-            )
-        else:
-            cur.execute("SELECT * FROM user_login_log ORDER BY created_at DESC LIMIT ?", (limit,))
-        rows = [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-    return rows
-
-
-def get_user_time_report(start_date: str = None, end_date: str = None):
-    """Generate user time report — login durations, session counts."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cond, params = [], []
-        if start_date:
-            cond.append("created_at >= ?")
-            params.append(start_date)
-        if end_date:
-            cond.append("created_at <= ?")
-            params.append(end_date + " 23:59:59")
-        where = ("WHERE " + " AND ".join(cond)) if cond else ""
-
-        # Get all events in the time range
-        cur.execute(f"SELECT * FROM user_login_log {where} ORDER BY username, created_at", params)
-        events = [dict(r) for r in cur.fetchall()]
-
-        # Build per-user stats
-        user_stats = {}
-        for ev in events:
-            u = ev["username"]
-            if u not in user_stats:
-                user_stats[u] = {"username": u, "logins": 0, "logouts": 0,
-                                 "first_seen": ev["created_at"], "last_seen": ev["created_at"],
-                                 "sessions": []}
-            user_stats[u]["last_seen"] = ev["created_at"]
-            if ev["event"] == "login":
-                user_stats[u]["logins"] += 1
-                user_stats[u]["sessions"].append({"login": ev["created_at"], "logout": None})
-            elif ev["event"] == "logout":
-                user_stats[u]["logouts"] += 1
-                # Match to most recent open session
-                for s in reversed(user_stats[u]["sessions"]):
-                    if s["logout"] is None:
-                        s["logout"] = ev["created_at"]
-                        break
-
-        # Calculate total active hours
-        from datetime import datetime as _dt
-        result = []
-        for u, stats in user_stats.items():
-            total_minutes = 0
-            for s in stats["sessions"]:
-                if s["login"] and s["logout"]:
-                    try:
-                        t1 = _dt.fromisoformat(s["login"])
-                        t2 = _dt.fromisoformat(s["logout"])
-                        total_minutes += max(0, (t2 - t1).total_seconds() / 60)
-                    except Exception:
-                        pass
-            stats["total_hours"] = round(total_minutes / 60, 1)
-            stats["total_sessions"] = stats["logins"]
-            del stats["sessions"]  # Don't send raw sessions
-            result.append(stats)
-
-        result.sort(key=lambda x: x["total_hours"], reverse=True)
-    finally:
-        conn.close()
-    return result
-
-
 # ─── File uploads ──────────────────────────────────────────────────────────
 
 def list_files(client_id: int = None):
@@ -2694,247 +2018,5 @@ def rename_report_note(client_id: int, old_name: str, new_name: str):
         conn.execute("UPDATE report_notes SET tab_name=?, updated_at=? WHERE client_id=? AND tab_name=?",
                      [new_name, datetime.now().isoformat(), client_id, old_name])
         conn.commit()
-    finally:
-        conn.close()
-
-
-# ─── Claim Status History ─────────────────────────────────────────────────
-
-def get_claim_status_history(claim_id: int):
-    """Get the full status change history for a claim."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("""SELECT * FROM claim_status_history
-                       WHERE claim_id=? ORDER BY changed_at ASC""", (claim_id,))
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-
-
-# ─── Denial Analytics ─────────────────────────────────────────────────────
-
-def get_denial_analytics(client_id: int = None, sub_profile: str = None):
-    """Denial analytics: rate by payer, top reasons, monthly trend."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cond_parts, p = [], []
-        if client_id is not None:
-            cond_parts.append("client_id=?")
-            p.append(client_id)
-        if sub_profile:
-            cond_parts.append("sub_profile=?")
-            p.append(sub_profile)
-        cond = ("WHERE " + " AND ".join(cond_parts)) if cond_parts else ""
-        and_kw = "AND" if cond else "WHERE"
-
-        # Top denial reasons
-        cur.execute(f"""SELECT DenialReason, COUNT(*) as cnt
-                        FROM claims_master {cond} {and_kw} DenialReason != ''
-                        GROUP BY DenialReason ORDER BY cnt DESC LIMIT 15""", p)
-        top_reasons = [{"reason": r[0], "count": r[1]} for r in cur.fetchall()]
-
-        # Top denial categories
-        cur.execute(f"""SELECT DenialCategory, COUNT(*) as cnt
-                        FROM claims_master {cond} {and_kw} DenialCategory != ''
-                        GROUP BY DenialCategory ORDER BY cnt DESC LIMIT 10""", p)
-        top_categories = [{"category": r[0], "count": r[1]} for r in cur.fetchall()]
-
-        # Denial rate by payer
-        cur.execute(f"""SELECT Payor,
-                        COUNT(*) as total,
-                        SUM(CASE WHEN DeniedDate != '' THEN 1 ELSE 0 END) as denied,
-                        SUM(CASE WHEN DeniedDate != '' THEN BalanceRemaining ELSE 0 END) as denied_amount
-                        FROM claims_master {cond} {and_kw} Payor != '' AND BillDate != ''
-                        GROUP BY Payor ORDER BY denied DESC LIMIT 15""", p)
-        by_payer = []
-        for r in cur.fetchall():
-            total = r[1] or 1
-            by_payer.append({
-                "payor": r[0], "total_claims": r[1], "denied": r[2],
-                "denial_rate": round(r[2] / total * 100, 1),
-                "denied_amount": round(r[3], 2),
-            })
-
-        # Monthly denial trend (last 12 months)
-        cur.execute(f"""SELECT strftime('%Y-%m', DeniedDate) as mo, COUNT(*) as cnt,
-                        COALESCE(SUM(BalanceRemaining), 0) as amt
-                        FROM claims_master {cond} {and_kw} DeniedDate != ''
-                        GROUP BY mo ORDER BY mo DESC LIMIT 12""", p)
-        monthly_trend = [{"month": r[0], "count": r[1], "amount": round(r[2], 2)}
-                         for r in reversed(cur.fetchall())]
-
-        # Overall stats
-        total_submitted = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} BillDate != ''", p
-        ).fetchone()[0]
-        total_denied = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} DeniedDate != ''", p
-        ).fetchone()[0]
-        total_denied_amt = cur.execute(
-            f"SELECT COALESCE(SUM(BalanceRemaining), 0) FROM claims_master {cond} {and_kw} ClaimStatus IN ('Denied','Appeals')", p
-        ).fetchone()[0]
-        appeal_success = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} AppealStatus IN ('Approved','Won','Overturned','Paid')", p
-        ).fetchone()[0]
-        total_appealed = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} AppealDate != ''", p
-        ).fetchone()[0]
-
-        return {
-            "total_submitted": total_submitted,
-            "total_denied": total_denied,
-            "denial_rate": round(total_denied / max(total_submitted, 1) * 100, 1),
-            "total_denied_amount": round(total_denied_amt, 2),
-            "appeal_success_rate": round(appeal_success / max(total_appealed, 1) * 100, 1),
-            "total_appealed": total_appealed,
-            "appeal_success": appeal_success,
-            "top_reasons": top_reasons,
-            "top_categories": top_categories,
-            "by_payer": by_payer,
-            "monthly_trend": monthly_trend,
-        }
-    finally:
-        conn.close()
-
-
-# ─── Payer Scorecard ──────────────────────────────────────────────────────
-
-def get_payer_scorecard(client_id: int = None, sub_profile: str = None):
-    """Rank payers by performance: avg days to pay, denial rate, volume, collection rate."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cond_parts, p = [], []
-        if client_id is not None:
-            cond_parts.append("client_id=?")
-            p.append(client_id)
-        if sub_profile:
-            cond_parts.append("sub_profile=?")
-            p.append(sub_profile)
-        cond = ("WHERE " + " AND ".join(cond_parts)) if cond_parts else ""
-        and_kw = "AND" if cond else "WHERE"
-
-        cur.execute(f"""SELECT Payor,
-            COUNT(*) as total_claims,
-            COALESCE(SUM(ChargeAmount), 0) as total_charged,
-            COALESCE(SUM(PaidAmount), 0) as total_paid,
-            COALESCE(SUM(BalanceRemaining), 0) as total_ar,
-            SUM(CASE WHEN DeniedDate != '' THEN 1 ELSE 0 END) as denied_count,
-            SUM(CASE WHEN ClaimStatus = 'Paid' AND DenialReason = '' THEN 1 ELSE 0 END) as clean_claims,
-            AVG(CASE WHEN PaidDate != '' AND DOS != ''
-                THEN CAST(julianday(PaidDate) - julianday(DOS) AS REAL) END) as avg_days_to_pay
-            FROM claims_master {cond} {and_kw} Payor != '' AND BillDate != ''
-            GROUP BY Payor
-            HAVING total_claims >= 1
-            ORDER BY total_claims DESC""", p)
-
-        scorecards = []
-        for r in cur.fetchall():
-            total = r[1] or 1
-            charged = r[2] or 1
-            scorecards.append({
-                "payor": r[0],
-                "total_claims": r[1],
-                "total_charged": round(r[2], 2),
-                "total_paid": round(r[3], 2),
-                "total_ar": round(r[4], 2),
-                "denied_count": r[5],
-                "denial_rate": round(r[5] / total * 100, 1),
-                "clean_claims": r[6],
-                "clean_claim_rate": round(r[6] / total * 100, 1),
-                "collection_rate": round(r[3] / charged * 100, 1),
-                "avg_days_to_pay": round(r[7] or 0, 1),
-            })
-
-        return {"payers": scorecards}
-    finally:
-        conn.close()
-
-
-# ─── AR Follow-Up Worklist ───────────────────────────────────────────────
-
-def get_ar_worklist(client_id: int = None, sub_profile: str = None, limit: int = 50):
-    """Priority-scored AR follow-up worklist.
-    Score = (BalanceRemaining / 1000) * (age_days / 30) * (2 if SLABreached else 1) * (1.5 if denied).
-    Returns claims sorted by priority score descending."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cond_parts, p = [], []
-        if client_id is not None:
-            cond_parts.append("cm.client_id=?")
-            p.append(client_id)
-        if sub_profile:
-            cond_parts.append("cm.sub_profile=?")
-            p.append(sub_profile)
-        base_cond = (" AND ".join(cond_parts)) if cond_parts else "1=1"
-
-        cur.execute(f"""
-            SELECT cm.*, c.company as client_company,
-                CAST(julianday('now') - julianday(
-                    COALESCE(NULLIF(cm.BillDate,''), NULLIF(cm.DOS,''), cm.updated_at)
-                ) AS INTEGER) as age_days
-            FROM claims_master cm
-            JOIN clients c ON c.id = cm.client_id
-            WHERE {base_cond}
-              AND cm.ClaimStatus NOT IN ('Paid','Closed')
-              AND cm.BalanceRemaining > 0
-            ORDER BY
-              (cm.BalanceRemaining / 1000.0)
-              * (CAST(julianday('now') - julianday(
-                    COALESCE(NULLIF(cm.BillDate,''), NULLIF(cm.DOS,''), cm.updated_at)
-                 ) AS REAL) / 30.0)
-              * (CASE WHEN cm.SLABreached = 1 THEN 2.0 ELSE 1.0 END)
-              * (CASE WHEN cm.ClaimStatus IN ('Denied','Appeals') THEN 1.5 ELSE 1.0 END)
-              DESC
-            LIMIT ?
-        """, p + [limit])
-        rows = []
-        for r in cur.fetchall():
-            d = dict(r)
-            age = d.get("age_days") or 0
-            bal = d.get("BalanceRemaining") or 0
-            sla = d.get("SLABreached") or 0
-            is_denied = d.get("ClaimStatus") in ("Denied", "Appeals")
-            d["priority_score"] = round(
-                (bal / 1000) * (age / 30) * (2 if sla else 1) * (1.5 if is_denied else 1), 2
-            )
-            # Priority label
-            score = d["priority_score"]
-            if score >= 5:
-                d["priority"] = "Critical"
-            elif score >= 2:
-                d["priority"] = "High"
-            elif score >= 0.5:
-                d["priority"] = "Medium"
-            else:
-                d["priority"] = "Low"
-            rows.append(d)
-        return rows
-    finally:
-        conn.close()
-
-
-# ─── Activity Feed ────────────────────────────────────────────────────────
-
-def get_activity_feed(client_id: int = None, limit: int = 25):
-    """Get recent activity for the dashboard feed."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        if client_id is not None:
-            cur.execute("""SELECT al.*, c.company as client_company
-                           FROM audit_log al
-                           LEFT JOIN clients c ON c.id = al.client_id
-                           WHERE al.client_id=?
-                           ORDER BY al.created_at DESC LIMIT ?""", (client_id, limit))
-        else:
-            cur.execute("""SELECT al.*, c.company as client_company
-                           FROM audit_log al
-                           LEFT JOIN clients c ON c.id = al.client_id
-                           ORDER BY al.created_at DESC LIMIT ?""", (limit,))
-        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
