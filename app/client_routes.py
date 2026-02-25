@@ -1222,16 +1222,18 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     # ── Status normalization — maps Excel values to dropdown filter values ──
     CRED_STATUS_NORMALIZE = {
         # Not Started
-        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
-        "pending start": "Not Started", "not begun": "Not Started", "n/a": "Not Started",
-        "to do": "Not Started", "open": "Not Started",
+        "not started": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "not begun": "Not Started",
+        "to do": "Not Started",
         # In Progress
         "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
-        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
+        "processing": "In Progress", "working": "In Progress",
         "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
         "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
         "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
         "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
+        "recredentialing": "In Progress", "re-credentialing": "In Progress",
+        "renewal": "In Progress", "renewal needed": "In Progress",
         # Submitted
         "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
         "application submitted": "Submitted", "app submitted": "Submitted",
@@ -1242,33 +1244,36 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "active - approved": "Approved", "accepted": "Approved", "enrolled": "Approved",
         "effective": "Approved", "live": "Approved", "done": "Approved",
         "granted": "Approved", "passed": "Approved",
+        "active": "Approved", "new": "Approved",
         # Denied
         "denied": "Denied", "rejected": "Denied", "declined": "Denied",
         "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
         "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
         # Expired
-        "expired": "Expired", "lapsed": "Expired", "renewal needed": "Expired",
+        "expired": "Expired", "lapsed": "Expired",
         "expiring": "Expired", "past due": "Expired", "overdue": "Expired",
-        "renewal": "Expired", "recredentialing": "Expired",
     }
 
     VALID_CRED_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Denied", "Expired"}
 
     def _normalize_cred_status(raw):
         if not raw:
-            return "Not Started"
+            return ""  # Preserve empty — let caller decide default
         s = str(raw).strip()
         key = s.lower()
+        # Exact match first
         if key in CRED_STATUS_NORMALIZE:
             return CRED_STATUS_NORMALIZE[key]
-        for map_key, normalized in CRED_STATUS_NORMALIZE.items():
-            if len(map_key) >= 4 and map_key in key:
-                return normalized
-        # If raw already matches a valid status (case-insensitive), use it
+        # Check if raw already matches a valid status (case-insensitive)
         for vs in VALID_CRED_STATUSES:
             if vs.lower() == key:
                 return vs
-        return "In Progress"  # Safe default for unrecognized statuses
+        # Substring match — but only for longer keys to avoid false positives
+        for map_key, normalized in CRED_STATUS_NORMALIZE.items():
+            if len(map_key) >= 6 and map_key in key:
+                return normalized
+        # Preserve the original value as-is if we can't map it
+        return s
 
     COL_MAP = {
         # Provider
@@ -1339,8 +1344,12 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
-            # Normalize status to match filter dropdown values
-            mapped["Status"] = _normalize_cred_status(mapped.get("Status", ""))
+            # Normalize status only if Excel actually provided one
+            if "Status" in mapped and mapped["Status"]:
+                mapped["Status"] = _normalize_cred_status(mapped["Status"])
+            elif "Status" in mapped:
+                # Status column existed but cell was empty — remove so we don't overwrite DB
+                del mapped["Status"]
             try:
                 existing = conn.execute(
                     "SELECT id FROM credentialing WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1351,7 +1360,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                                "FollowUpDate","ApprovedDate","ExpirationDate","Owner","Notes","sub_profile"]
                     parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
                     for f in allowed:
-                        if f in mapped:
+                        if f in mapped and mapped[f]:  # Only update fields that have actual values
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
                     params.append(existing["id"])
@@ -1412,18 +1421,18 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
 
     def _normalize_edi_status(raw):
         if not raw:
-            return "Not Started"
+            return ""  # Preserve empty — let caller decide default
         s = str(raw).strip()
         key = s.lower()
         if key in EDI_STATUS_NORMALIZE:
             return EDI_STATUS_NORMALIZE[key]
-        for map_key, normalized in EDI_STATUS_NORMALIZE.items():
-            if len(map_key) >= 4 and map_key in key:
-                return normalized
         for vs in VALID_EDI_STATUSES:
             if vs.lower() == key:
                 return vs
-        return "In Process"  # Safe default for unrecognized statuses
+        for map_key, normalized in EDI_STATUS_NORMALIZE.items():
+            if len(map_key) >= 6 and map_key in key:
+                return normalized
+        return s  # Preserve original value if unrecognized
 
     COL_MAP = {
         # Provider
@@ -1466,10 +1475,12 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
-            # Normalize all three EDI status fields to match dropdown values
-            mapped["EDIStatus"] = _normalize_edi_status(mapped.get("EDIStatus", ""))
-            mapped["ERAStatus"] = _normalize_edi_status(mapped.get("ERAStatus", ""))
-            mapped["EFTStatus"] = _normalize_edi_status(mapped.get("EFTStatus", ""))
+            # Normalize EDI status fields only if provided in Excel
+            for sf in ("EDIStatus", "ERAStatus", "EFTStatus"):
+                if sf in mapped and mapped[sf]:
+                    mapped[sf] = _normalize_edi_status(mapped[sf])
+                elif sf in mapped:
+                    del mapped[sf]  # Empty — don't overwrite DB value
             try:
                 existing = conn.execute(
                     "SELECT id FROM edi_setup WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1480,7 +1491,7 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                                "SubmittedDate","GoLiveDate","PayerID","Owner","Notes","sub_profile"]
                     parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
                     for f in allowed:
-                        if f in mapped:
+                        if f in mapped and mapped[f]:  # Only update fields that have actual values
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
                     params.append(existing["id"])
