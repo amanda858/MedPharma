@@ -30,6 +30,7 @@ from app.client_db import (
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
+    update_production_log, log_user_event, get_login_log, get_user_time_report,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
@@ -82,7 +83,7 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-def login(body: LoginIn, response: Response):
+def login(body: LoginIn, response: Response, request: Request = None):
     user, token = authenticate(body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -94,6 +95,13 @@ def login(body: LoginIn, response: Response):
         path="/",              # Explicit root path — available to ALL routes
         max_age=86400 * 30,
     )
+    # Track login event
+    try:
+        ip = request.client.host if request and request.client else ""
+        ua = (request.headers.get("user-agent", "") if request else "")[:200]
+        log_user_event(body.username, "login", ip, ua)
+    except Exception:
+        pass
     return {"ok": True, "user": user}
 
 
@@ -103,6 +111,10 @@ def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
     user = _get_user(hub_session) if hub_session else None
     if user:
         flush_and_notify(user["username"])
+        try:
+            log_user_event(user["username"], "logout")
+        except Exception:
+            pass
     if hub_session:
         logout_session(hub_session)
     response.delete_cookie("hub_session", path="/")
@@ -843,7 +855,7 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
     data["username"] = user["username"]
     log_id = add_production_log(data)
     notify_activity(user["username"], "logged production", "Time Tracking",
-                    f"{data.get('hours',0)}h — {data.get('task_type','')}: {data.get('description','')[:60]}")
+                    f"{data.get('time_spent',0)}h — {data.get('category','')}: {data.get('task_description','')[:60]}")
     return {"id": log_id, "ok": True}
 
 
@@ -864,6 +876,43 @@ def production_report(client_id: Optional[int] = None,
     scope = client_id or _client_scope(user)
     report = get_production_report(scope, start_date, end_date)
     return report
+
+
+class ProductionLogUpdate(BaseModel):
+    work_date: Optional[str] = None
+    category: Optional[str] = None
+    task_description: Optional[str] = None
+    quantity: Optional[int] = None
+    time_spent: Optional[float] = None
+    notes: Optional[str] = None
+
+
+@router.put("/production/{log_id}")
+def edit_production_log(log_id: int, body: ProductionLogUpdate, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not data:
+        raise HTTPException(400, "No fields to update")
+    update_production_log(log_id, data)
+    notify_activity(user["username"], "updated", "Time Tracking", f"Log #{log_id}")
+    return {"ok": True}
+
+
+# ─── User Login Tracking ─────────────────────────────────────────────────────
+
+@router.get("/login-log")
+def get_login_history(username: Optional[str] = None, limit: int = 200,
+                      hub_session: Optional[str] = Cookie(None)):
+    _require_admin(hub_session)
+    return {"events": get_login_log(username, limit)}
+
+
+@router.get("/user-time-report")
+def user_time_report_endpoint(start_date: Optional[str] = None,
+                               end_date: Optional[str] = None,
+                               hub_session: Optional[str] = Cookie(None)):
+    _require_admin(hub_session)
+    return {"users": get_user_time_report(start_date, end_date)}
 
 
 # ─── Files ────────────────────────────────────────────────────────────────────
@@ -1348,6 +1397,8 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         if not raw:
             return "Not Started"
         s = str(raw).strip()
+        if not s:
+            return "Not Started"
         key = s.lower()
         if key in CRED_STATUS_NORMALIZE:
             return CRED_STATUS_NORMALIZE[key]
@@ -1358,6 +1409,9 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         for vs in VALID_CRED_STATUSES:
             if vs.lower() == key:
                 return vs
+        # Preserve the original value as-is if it looks meaningful (not just noise)
+        if len(s) >= 2 and len(s) <= 40:
+            return s
         return "In Progress"  # Safe default for unrecognized statuses
 
     COL_MAP = {

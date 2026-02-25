@@ -341,6 +341,18 @@ def init_client_hub_db():
         );
         CREATE INDEX IF NOT EXISTS idx_csh_claim ON claim_status_history(claim_id);
         CREATE INDEX IF NOT EXISTS idx_csh_client ON claim_status_history(client_id);
+
+        -- ── User login/logout tracking ────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS user_login_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT NOT NULL,
+            event       TEXT NOT NULL,            -- 'login' or 'logout'
+            ip_address  TEXT DEFAULT '',
+            user_agent  TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_ull_user ON user_login_log(username);
+        CREATE INDEX IF NOT EXISTS idx_ull_time ON user_login_log(created_at);
     """)
     conn.commit()
 
@@ -2140,6 +2152,120 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "details": details,
         "time_management_flags": flags,
     }
+
+
+def update_production_log(log_id: int, data: dict):
+    """Update an existing production log entry."""
+    conn = get_db()
+    try:
+        allowed = ["work_date", "category", "task_description", "quantity", "time_spent", "notes"]
+        parts, params = [], []
+        for k in allowed:
+            if k in data:
+                parts.append(f"{k}=?")
+                params.append(data[k])
+        if not parts:
+            return
+        params.append(log_id)
+        conn.execute(f"UPDATE team_production SET {','.join(parts)} WHERE id=?", params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── User Login Tracking ─────────────────────────────────────────────────────
+
+def log_user_event(username: str, event: str, ip_address: str = "", user_agent: str = ""):
+    """Record a login or logout event."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO user_login_log (username, event, ip_address, user_agent) VALUES (?,?,?,?)",
+            (username, event, ip_address, user_agent)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_login_log(username: str = None, limit: int = 200):
+    """Get login/logout history, optionally filtered by username."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if username:
+            cur.execute(
+                "SELECT * FROM user_login_log WHERE username=? ORDER BY created_at DESC LIMIT ?",
+                (username, limit)
+            )
+        else:
+            cur.execute("SELECT * FROM user_login_log ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return rows
+
+
+def get_user_time_report(start_date: str = None, end_date: str = None):
+    """Generate user time report — login durations, session counts."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cond, params = [], []
+        if start_date:
+            cond.append("created_at >= ?")
+            params.append(start_date)
+        if end_date:
+            cond.append("created_at <= ?")
+            params.append(end_date + " 23:59:59")
+        where = ("WHERE " + " AND ".join(cond)) if cond else ""
+
+        # Get all events in the time range
+        cur.execute(f"SELECT * FROM user_login_log {where} ORDER BY username, created_at", params)
+        events = [dict(r) for r in cur.fetchall()]
+
+        # Build per-user stats
+        user_stats = {}
+        for ev in events:
+            u = ev["username"]
+            if u not in user_stats:
+                user_stats[u] = {"username": u, "logins": 0, "logouts": 0,
+                                 "first_seen": ev["created_at"], "last_seen": ev["created_at"],
+                                 "sessions": []}
+            user_stats[u]["last_seen"] = ev["created_at"]
+            if ev["event"] == "login":
+                user_stats[u]["logins"] += 1
+                user_stats[u]["sessions"].append({"login": ev["created_at"], "logout": None})
+            elif ev["event"] == "logout":
+                user_stats[u]["logouts"] += 1
+                # Match to most recent open session
+                for s in reversed(user_stats[u]["sessions"]):
+                    if s["logout"] is None:
+                        s["logout"] = ev["created_at"]
+                        break
+
+        # Calculate total active hours
+        from datetime import datetime as _dt
+        result = []
+        for u, stats in user_stats.items():
+            total_minutes = 0
+            for s in stats["sessions"]:
+                if s["login"] and s["logout"]:
+                    try:
+                        t1 = _dt.fromisoformat(s["login"])
+                        t2 = _dt.fromisoformat(s["logout"])
+                        total_minutes += max(0, (t2 - t1).total_seconds() / 60)
+                    except Exception:
+                        pass
+            stats["total_hours"] = round(total_minutes / 60, 1)
+            stats["total_sessions"] = stats["logins"]
+            del stats["sessions"]  # Don't send raw sessions
+            result.append(stats)
+
+        result.sort(key=lambda x: x["total_hours"], reverse=True)
+    finally:
+        conn.close()
+    return result
 
 
 # ─── File uploads ──────────────────────────────────────────────────────────
