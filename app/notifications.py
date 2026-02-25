@@ -8,11 +8,9 @@ Buffers all activity during a user's session and sends ONE consolidated
   • AI-powered productivity analysis (via OpenAI, with rule-based fallback)
 
 Configuration via environment variables:
-  SMTP_HOST      — SMTP server (default: smtp.gmail.com)
-  SMTP_PORT      — SMTP port (default: 587)
-  SMTP_USER      — Email account to send from
-  SMTP_PASS      — App password (Gmail: use App Passwords)
-  NOTIFY_EMAIL   — Destination email for notifications
+  SENDGRID_API_KEY — SendGrid API key for sending email
+  NOTIFY_EMAIL     — Destination email for notifications
+  SENDGRID_FROM    — Sender email address (must be verified in SendGrid)
   TWILIO_SID     — Twilio Account SID
   TWILIO_TOKEN   — Twilio Auth Token
   TWILIO_FROM    — Twilio phone number (E.164 format, e.g. +18001234567)
@@ -23,20 +21,15 @@ Configuration via environment variables:
 import os
 import logging
 import threading
-import smtplib
 import json
 from collections import defaultdict
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 log = logging.getLogger("notifications")
 
 # ── Configuration ──
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_FROM = os.getenv("SENDGRID_FROM", "notifications@medprosc.com")
 NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "eric@medprosc.com")
 
 TWILIO_SID = os.getenv("TWILIO_SID", "")
@@ -508,26 +501,41 @@ def flush_and_notify(username: str):
 # ── Send helpers ──
 
 def _send_email(subject: str, body: str, html_body: str = ""):
-    """Send email notification via SMTP."""
-    if not SMTP_USER or not SMTP_PASS or not NOTIFY_EMAIL:
-        log.debug("Email notification skipped — SMTP_USER/SMTP_PASS/NOTIFY_EMAIL not configured")
+    """Send email notification via SendGrid v3 API."""
+    if not SENDGRID_API_KEY or not NOTIFY_EMAIL:
+        log.debug("Email notification skipped — SENDGRID_API_KEY/NOTIFY_EMAIL not configured")
         return
     try:
-        msg = MIMEMultipart("alternative")
-        msg["From"] = SMTP_USER
-        msg["To"] = NOTIFY_EMAIL
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
+        import httpx
+        content = []
+        if body:
+            content.append({"type": "text/plain", "value": body})
         if html_body:
-            msg.attach(MIMEText(html_body, "html"))
+            content.append({"type": "text/html", "value": html_body})
+        if not content:
+            content.append({"type": "text/plain", "value": "(no content)"})
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, NOTIFY_EMAIL, msg.as_string())
-        log.info(f"Email sent to {NOTIFY_EMAIL}: {subject}")
+        payload = {
+            "personalizations": [{"to": [{"email": NOTIFY_EMAIL}]}],
+            "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+            "subject": subject,
+            "content": content,
+        }
+        resp = httpx.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 202):
+            log.info(f"Email sent via SendGrid to {NOTIFY_EMAIL}: {subject}")
+        else:
+            log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
     except Exception as e:
-        log.error(f"Failed to send email: {e}")
+        log.error(f"Failed to send email via SendGrid: {e}")
 
 
 def _send_sms(message: str):
