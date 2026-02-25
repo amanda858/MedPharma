@@ -54,7 +54,8 @@ def init_client_hub_db():
             notes            TEXT DEFAULT '',
             doc_tab_names    TEXT DEFAULT '',
             practice_type    TEXT DEFAULT '',
-            report_tab_names TEXT DEFAULT ''
+            report_tab_names TEXT DEFAULT '',
+            services         TEXT DEFAULT 'all'
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -100,6 +101,9 @@ def init_client_hub_db():
             DenialReason        TEXT DEFAULT '',
             AppealDate          TEXT DEFAULT '',
             AppealStatus        TEXT DEFAULT '',
+            -- touch tracking
+            TouchCount          INTEGER DEFAULT 0,
+            LastTouchedBy       TEXT DEFAULT '',
             -- sub-profile (e.g. MHP or OMT for Luminary)
             sub_profile         TEXT DEFAULT '',
             -- meta
@@ -321,6 +325,22 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_rn_client ON report_notes(client_id);
+
+        -- ── Claim status history (tracks every status change) ─────────────
+        CREATE TABLE IF NOT EXISTS claim_status_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            claim_id    INTEGER NOT NULL,
+            ClaimKey    TEXT NOT NULL,
+            old_status  TEXT DEFAULT '',
+            new_status  TEXT NOT NULL,
+            changed_by  TEXT DEFAULT '',
+            changed_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id),
+            FOREIGN KEY (claim_id) REFERENCES claims_master(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_csh_claim ON claim_status_history(claim_id);
+        CREATE INDEX IF NOT EXISTS idx_csh_client ON claim_status_history(client_id);
     """)
     conn.commit()
 
@@ -360,6 +380,15 @@ def init_client_hub_db():
         cols = {row[1] for row in cur.fetchall()}
         if "sub_profile" not in cols:
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
+    conn.commit()
+
+    # ── Migrate existing DBs: add TouchCount / LastTouchedBy to claims ────
+    cur.execute("PRAGMA table_info(claims_master)")
+    claims_cols = {row[1] for row in cur.fetchall()}
+    if "TouchCount" not in claims_cols:
+        cur.execute("ALTER TABLE claims_master ADD COLUMN TouchCount INTEGER DEFAULT 0")
+    if "LastTouchedBy" not in claims_cols:
+        cur.execute("ALTER TABLE claims_master ADD COLUMN LastTouchedBy TEXT DEFAULT ''")
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
@@ -422,6 +451,51 @@ def init_client_hub_db():
         cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
                        ptan_group='', ptan_individual='', specialty=''
                        WHERE company LIKE '%Luminary%' AND practice_type='MHP+OMT'""")
+
+        # ── services column migration ─────────────────────────────────────────
+        try:
+            cur.execute("ALTER TABLE clients ADD COLUMN services TEXT DEFAULT 'all'")
+        except Exception:
+            pass  # column already exists
+
+        # ── Ensure Kinder Pediatric Urgent Care client exists (credentialing only) ──
+        cur.execute("SELECT id FROM clients WHERE company LIKE '%Kinder%' AND role='client'")
+        kinder_row = cur.fetchone()
+        if not kinder_row:
+            ksalt = secrets.token_hex(16)
+            cur.execute(
+                """INSERT INTO clients
+                   (username,password,salt,company,contact_name,email,role,services,practice_type)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                ("kindercare", _hash_pw("kinder123", ksalt), ksalt,
+                 "Kinder Pediatric Urgent Care", "Kinder Pediatric",
+                 "", "client", "credentialing", "multi-location")
+            )
+            kinder_id = cur.lastrowid
+        else:
+            kinder_id = kinder_row[0]
+            cur.execute("UPDATE clients SET services='credentialing' WHERE id=?", (kinder_id,))
+
+        # ── 5 location profiles for Kinder Pediatric ──────────────────────────
+        kinder_locations = [
+            ("Metuchen", "65 US Highway 1 South, Metuchen, NJ 08840"),
+            ("Totowa", "465 Route 46 West, Totowa, NJ 07512"),
+            ("Union", "1235 W. Chestnut St, Union, NJ 07083"),
+            ("Piscataway", "1060 Stelton Road, Piscataway, NJ"),
+            ("Jersey City (NEW)", "152 Newark Ave, Jersey City, NJ 07032"),
+        ]
+        for loc_name, loc_addr in kinder_locations:
+            cur.execute("SELECT id FROM practice_profiles WHERE client_id=? AND profile_name=?",
+                        (kinder_id, loc_name))
+            if not cur.fetchone():
+                cur.execute(
+                    """INSERT INTO practice_profiles
+                       (client_id, profile_name, practice_type, specialty, address)
+                       VALUES (?,?,?,?,?)""",
+                    (kinder_id, loc_name, "Pediatric Urgent Care",
+                     "Pediatrics / Urgent Care", loc_addr)
+                )
+
         conn.commit()
 
     conn.close()
@@ -494,6 +568,33 @@ def _seed_data(conn):
         (luminary_id, "OMT", "Ancillary", "Occupational / Manual Therapy")
     )
 
+    # Client 3 — Kinder Pediatric Urgent Care (credentialing only, 5 locations)
+    s3 = secrets.token_hex(16)
+    cur.execute(
+        """INSERT INTO clients
+           (username,password,salt,company,contact_name,email,role,services,practice_type)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("kindercare", _hash_pw("kinder123", s3), s3,
+         "Kinder Pediatric Urgent Care", "Kinder Pediatric", "", "client",
+         "credentialing", "multi-location")
+    )
+    kinder_id = cur.lastrowid
+
+    for loc_name, loc_addr in [
+        ("Metuchen", "65 US Highway 1 South, Metuchen, NJ 08840"),
+        ("Totowa", "465 Route 46 West, Totowa, NJ 07512"),
+        ("Union", "1235 W. Chestnut St, Union, NJ 07083"),
+        ("Piscataway", "1060 Stelton Road, Piscataway, NJ"),
+        ("Jersey City (NEW)", "152 Newark Ave, Jersey City, NJ 07032"),
+    ]:
+        cur.execute(
+            """INSERT INTO practice_profiles
+               (client_id, profile_name, practice_type, specialty, address)
+               VALUES (?,?,?,?,?)""",
+            (kinder_id, loc_name, "Pediatric Urgent Care",
+             "Pediatrics / Urgent Care", loc_addr)
+        )
+
     conn.commit()
     # No fake claims, providers, credentialing, or payments seeded.
     # All data is imported via Excel/CSV file uploads.
@@ -559,7 +660,7 @@ def list_clients():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type FROM clients ORDER BY company")
+        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type,services FROM clients ORDER BY company")
         rows = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -937,10 +1038,19 @@ def create_claim(data: dict) -> int:
     return cid
 
 
-def update_claim(claim_id: int, data: dict):
+def update_claim(claim_id: int, data: dict, username: str = ""):
     conn = get_db()
     try:
         cur = conn.cursor()
+
+        # Fetch old status for history tracking
+        cur.execute("SELECT ClaimStatus, client_id, ClaimKey, TouchCount FROM claims_master WHERE id=?", (claim_id,))
+        old_row = cur.fetchone()
+        old_status = old_row[0] if old_row else ""
+        claim_client_id = old_row[1] if old_row else None
+        claim_key = old_row[2] if old_row else ""
+        touch_count = (old_row[3] or 0) if old_row else 0
+
         allowed = ["ClaimKey", "PatientID", "PatientName", "Payor", "ProviderName", "NPI", "DOS",
                    "CPTCode", "Description", "ChargeAmount", "AllowedAmount", "AdjustmentAmount",
                    "PaidAmount", "BalanceRemaining", "ClaimStatus", "StatusStartDate", "BillDate",
@@ -948,13 +1058,23 @@ def update_claim(claim_id: int, data: dict):
                    "SLABreached", "DenialCategory", "DenialReason", "AppealDate", "AppealStatus",
                    "sub_profile"]
         now = datetime.now().isoformat()
-        parts, params = ["LastTouchedDate=?", "updated_at=?"], [now, now]
+        parts = ["LastTouchedDate=?", "updated_at=?", "TouchCount=?", "LastTouchedBy=?"]
+        params = [now, now, touch_count + 1, username]
         for f in allowed:
             if f in data:
                 parts.append(f"{f}=?")
                 params.append(data[f])
         params.append(claim_id)
         cur.execute(f"UPDATE claims_master SET {','.join(parts)} WHERE id=?", params)
+
+        # Record status change in history
+        new_status = data.get("ClaimStatus")
+        if new_status and new_status != old_status and claim_client_id is not None:
+            cur.execute("""INSERT INTO claim_status_history
+                           (client_id, claim_id, ClaimKey, old_status, new_status, changed_by)
+                           VALUES (?,?,?,?,?,?)""",
+                        (claim_client_id, claim_id, claim_key, old_status, new_status, username))
+
         conn.commit()
     finally:
         conn.close()
@@ -2159,5 +2279,247 @@ def rename_report_note(client_id: int, old_name: str, new_name: str):
         conn.execute("UPDATE report_notes SET tab_name=?, updated_at=? WHERE client_id=? AND tab_name=?",
                      [new_name, datetime.now().isoformat(), client_id, old_name])
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── Claim Status History ─────────────────────────────────────────────────
+
+def get_claim_status_history(claim_id: int):
+    """Get the full status change history for a claim."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT * FROM claim_status_history
+                       WHERE claim_id=? ORDER BY changed_at ASC""", (claim_id,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# ─── Denial Analytics ─────────────────────────────────────────────────────
+
+def get_denial_analytics(client_id: int = None, sub_profile: str = None):
+    """Denial analytics: rate by payer, top reasons, monthly trend."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cond_parts, p = [], []
+        if client_id is not None:
+            cond_parts.append("client_id=?")
+            p.append(client_id)
+        if sub_profile:
+            cond_parts.append("sub_profile=?")
+            p.append(sub_profile)
+        cond = ("WHERE " + " AND ".join(cond_parts)) if cond_parts else ""
+        and_kw = "AND" if cond else "WHERE"
+
+        # Top denial reasons
+        cur.execute(f"""SELECT DenialReason, COUNT(*) as cnt
+                        FROM claims_master {cond} {and_kw} DenialReason != ''
+                        GROUP BY DenialReason ORDER BY cnt DESC LIMIT 15""", p)
+        top_reasons = [{"reason": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        # Top denial categories
+        cur.execute(f"""SELECT DenialCategory, COUNT(*) as cnt
+                        FROM claims_master {cond} {and_kw} DenialCategory != ''
+                        GROUP BY DenialCategory ORDER BY cnt DESC LIMIT 10""", p)
+        top_categories = [{"category": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        # Denial rate by payer
+        cur.execute(f"""SELECT Payor,
+                        COUNT(*) as total,
+                        SUM(CASE WHEN DeniedDate != '' THEN 1 ELSE 0 END) as denied,
+                        SUM(CASE WHEN DeniedDate != '' THEN BalanceRemaining ELSE 0 END) as denied_amount
+                        FROM claims_master {cond} {and_kw} Payor != '' AND BillDate != ''
+                        GROUP BY Payor ORDER BY denied DESC LIMIT 15""", p)
+        by_payer = []
+        for r in cur.fetchall():
+            total = r[1] or 1
+            by_payer.append({
+                "payor": r[0], "total_claims": r[1], "denied": r[2],
+                "denial_rate": round(r[2] / total * 100, 1),
+                "denied_amount": round(r[3], 2),
+            })
+
+        # Monthly denial trend (last 12 months)
+        cur.execute(f"""SELECT strftime('%Y-%m', DeniedDate) as mo, COUNT(*) as cnt,
+                        COALESCE(SUM(BalanceRemaining), 0) as amt
+                        FROM claims_master {cond} {and_kw} DeniedDate != ''
+                        GROUP BY mo ORDER BY mo DESC LIMIT 12""", p)
+        monthly_trend = [{"month": r[0], "count": r[1], "amount": round(r[2], 2)}
+                         for r in reversed(cur.fetchall())]
+
+        # Overall stats
+        total_submitted = cur.execute(
+            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} BillDate != ''", p
+        ).fetchone()[0]
+        total_denied = cur.execute(
+            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} DeniedDate != ''", p
+        ).fetchone()[0]
+        total_denied_amt = cur.execute(
+            f"SELECT COALESCE(SUM(BalanceRemaining), 0) FROM claims_master {cond} {and_kw} ClaimStatus IN ('Denied','Appeals')", p
+        ).fetchone()[0]
+        appeal_success = cur.execute(
+            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} AppealStatus IN ('Approved','Won','Overturned','Paid')", p
+        ).fetchone()[0]
+        total_appealed = cur.execute(
+            f"SELECT COUNT(*) FROM claims_master {cond} {and_kw} AppealDate != ''", p
+        ).fetchone()[0]
+
+        return {
+            "total_submitted": total_submitted,
+            "total_denied": total_denied,
+            "denial_rate": round(total_denied / max(total_submitted, 1) * 100, 1),
+            "total_denied_amount": round(total_denied_amt, 2),
+            "appeal_success_rate": round(appeal_success / max(total_appealed, 1) * 100, 1),
+            "total_appealed": total_appealed,
+            "appeal_success": appeal_success,
+            "top_reasons": top_reasons,
+            "top_categories": top_categories,
+            "by_payer": by_payer,
+            "monthly_trend": monthly_trend,
+        }
+    finally:
+        conn.close()
+
+
+# ─── Payer Scorecard ──────────────────────────────────────────────────────
+
+def get_payer_scorecard(client_id: int = None, sub_profile: str = None):
+    """Rank payers by performance: avg days to pay, denial rate, volume, collection rate."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cond_parts, p = [], []
+        if client_id is not None:
+            cond_parts.append("client_id=?")
+            p.append(client_id)
+        if sub_profile:
+            cond_parts.append("sub_profile=?")
+            p.append(sub_profile)
+        cond = ("WHERE " + " AND ".join(cond_parts)) if cond_parts else ""
+        and_kw = "AND" if cond else "WHERE"
+
+        cur.execute(f"""SELECT Payor,
+            COUNT(*) as total_claims,
+            COALESCE(SUM(ChargeAmount), 0) as total_charged,
+            COALESCE(SUM(PaidAmount), 0) as total_paid,
+            COALESCE(SUM(BalanceRemaining), 0) as total_ar,
+            SUM(CASE WHEN DeniedDate != '' THEN 1 ELSE 0 END) as denied_count,
+            SUM(CASE WHEN ClaimStatus = 'Paid' AND DenialReason = '' THEN 1 ELSE 0 END) as clean_claims,
+            AVG(CASE WHEN PaidDate != '' AND DOS != ''
+                THEN CAST(julianday(PaidDate) - julianday(DOS) AS REAL) END) as avg_days_to_pay
+            FROM claims_master {cond} {and_kw} Payor != '' AND BillDate != ''
+            GROUP BY Payor
+            HAVING total_claims >= 1
+            ORDER BY total_claims DESC""", p)
+
+        scorecards = []
+        for r in cur.fetchall():
+            total = r[1] or 1
+            charged = r[2] or 1
+            scorecards.append({
+                "payor": r[0],
+                "total_claims": r[1],
+                "total_charged": round(r[2], 2),
+                "total_paid": round(r[3], 2),
+                "total_ar": round(r[4], 2),
+                "denied_count": r[5],
+                "denial_rate": round(r[5] / total * 100, 1),
+                "clean_claims": r[6],
+                "clean_claim_rate": round(r[6] / total * 100, 1),
+                "collection_rate": round(r[3] / charged * 100, 1),
+                "avg_days_to_pay": round(r[7] or 0, 1),
+            })
+
+        return {"payers": scorecards}
+    finally:
+        conn.close()
+
+
+# ─── AR Follow-Up Worklist ───────────────────────────────────────────────
+
+def get_ar_worklist(client_id: int = None, sub_profile: str = None, limit: int = 50):
+    """Priority-scored AR follow-up worklist.
+    Score = (BalanceRemaining / 1000) * (age_days / 30) * (2 if SLABreached else 1) * (1.5 if denied).
+    Returns claims sorted by priority score descending."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cond_parts, p = [], []
+        if client_id is not None:
+            cond_parts.append("cm.client_id=?")
+            p.append(client_id)
+        if sub_profile:
+            cond_parts.append("cm.sub_profile=?")
+            p.append(sub_profile)
+        base_cond = (" AND ".join(cond_parts)) if cond_parts else "1=1"
+
+        cur.execute(f"""
+            SELECT cm.*, c.company as client_company,
+                CAST(julianday('now') - julianday(
+                    COALESCE(NULLIF(cm.BillDate,''), NULLIF(cm.DOS,''), cm.updated_at)
+                ) AS INTEGER) as age_days
+            FROM claims_master cm
+            JOIN clients c ON c.id = cm.client_id
+            WHERE {base_cond}
+              AND cm.ClaimStatus NOT IN ('Paid','Closed')
+              AND cm.BalanceRemaining > 0
+            ORDER BY
+              (cm.BalanceRemaining / 1000.0)
+              * (CAST(julianday('now') - julianday(
+                    COALESCE(NULLIF(cm.BillDate,''), NULLIF(cm.DOS,''), cm.updated_at)
+                 ) AS REAL) / 30.0)
+              * (CASE WHEN cm.SLABreached = 1 THEN 2.0 ELSE 1.0 END)
+              * (CASE WHEN cm.ClaimStatus IN ('Denied','Appeals') THEN 1.5 ELSE 1.0 END)
+              DESC
+            LIMIT ?
+        """, p + [limit])
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            age = d.get("age_days") or 0
+            bal = d.get("BalanceRemaining") or 0
+            sla = d.get("SLABreached") or 0
+            is_denied = d.get("ClaimStatus") in ("Denied", "Appeals")
+            d["priority_score"] = round(
+                (bal / 1000) * (age / 30) * (2 if sla else 1) * (1.5 if is_denied else 1), 2
+            )
+            # Priority label
+            score = d["priority_score"]
+            if score >= 5:
+                d["priority"] = "Critical"
+            elif score >= 2:
+                d["priority"] = "High"
+            elif score >= 0.5:
+                d["priority"] = "Medium"
+            else:
+                d["priority"] = "Low"
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
+
+
+# ─── Activity Feed ────────────────────────────────────────────────────────
+
+def get_activity_feed(client_id: int = None, limit: int = 25):
+    """Get recent activity for the dashboard feed."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if client_id is not None:
+            cur.execute("""SELECT al.*, c.company as client_company
+                           FROM audit_log al
+                           LEFT JOIN clients c ON c.id = al.client_id
+                           WHERE al.client_id=?
+                           ORDER BY al.created_at DESC LIMIT ?""", (client_id, limit))
+        else:
+            cur.execute("""SELECT al.*, c.company as client_company
+                           FROM audit_log al
+                           LEFT JOIN clients c ON c.id = al.client_id
+                           ORDER BY al.created_at DESC LIMIT ?""", (limit,))
+        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()

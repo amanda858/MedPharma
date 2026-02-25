@@ -33,6 +33,8 @@ from app.client_db import (
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
+    get_claim_status_history, get_denial_analytics, get_payer_scorecard,
+    get_ar_worklist, get_activity_feed,
 )
 
 from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
@@ -486,7 +488,7 @@ def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
 def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
-    update_claim(claim_id, changes)
+    update_claim(claim_id, changes, username=user.get("username", ""))
     notify_activity(user["username"], "updated", "Claims",
                     f"Claim #{claim_id}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
@@ -2586,6 +2588,61 @@ def audit_log_endpoint(client_id: Optional[int] = None, limit: int = 100,
     scope = client_id or _client_scope(user)
     entries = get_audit_log(scope, limit)
     return {"entries": entries}
+
+
+# ─── Claim Status History (Timeline) ──────────────────────────────────────────
+
+@router.get("/claims/{claim_id}/history")
+def claim_history(claim_id: int, hub_session: Optional[str] = Cookie(None)):
+    _require_user(hub_session)
+    history = get_claim_status_history(claim_id)
+    return {"history": history}
+
+
+# ─── Denial Analytics ─────────────────────────────────────────────────────────
+
+@router.get("/analytics/denials")
+def denial_analytics(client_id: Optional[int] = None,
+                     sub_profile: Optional[str] = None,
+                     hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    return get_denial_analytics(scope, sub_profile)
+
+
+# ─── Payer Scorecard ──────────────────────────────────────────────────────────
+
+@router.get("/analytics/payers")
+def payer_scorecard(client_id: Optional[int] = None,
+                    sub_profile: Optional[str] = None,
+                    hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    return get_payer_scorecard(scope, sub_profile)
+
+
+# ─── AR Follow-Up Worklist ───────────────────────────────────────────────────
+
+@router.get("/worklist")
+def ar_worklist(client_id: Optional[int] = None,
+                sub_profile: Optional[str] = None,
+                limit: int = 50,
+                hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    claims = get_ar_worklist(scope, sub_profile, limit)
+    return {"claims": claims}
+
+
+# ─── Activity Feed ────────────────────────────────────────────────────────────
+
+@router.get("/activity-feed")
+def activity_feed(client_id: Optional[int] = None, limit: int = 25,
+                  hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    feed = get_activity_feed(scope, limit)
+    return {"feed": feed}
 
 
 # ─── Export to CSV ────────────────────────────────────────────────────────────
