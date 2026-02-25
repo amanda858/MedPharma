@@ -9,7 +9,7 @@ Buffers all activity during a user's session and sends ONE consolidated
 
 Configuration via environment variables:
   SENDGRID_API_KEY — SendGrid API key for sending email
-  NOTIFY_EMAIL     — Destination email for notifications
+  NOTIFY_EMAIL     — Comma-separated destination emails for notifications
   SENDGRID_FROM    — Sender email address (must be verified in SendGrid)
   TWILIO_SID     — Twilio Account SID
   TWILIO_TOKEN   — Twilio Auth Token
@@ -30,7 +30,7 @@ log = logging.getLogger("notifications")
 # ── Configuration ──
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM = os.getenv("SENDGRID_FROM", "notifications@medprosc.com")
-NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "eric@medprosc.com")
+NOTIFY_EMAILS = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com,amanda@medprosc.com").split(",") if e.strip()]
 
 TWILIO_SID = os.getenv("TWILIO_SID", "")
 TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
@@ -502,8 +502,8 @@ def flush_and_notify(username: str):
 
 def _send_email(subject: str, body: str, html_body: str = ""):
     """Send email notification via SendGrid v3 API."""
-    if not SENDGRID_API_KEY or not NOTIFY_EMAIL:
-        log.debug("Email notification skipped — SENDGRID_API_KEY/NOTIFY_EMAIL not configured")
+    if not SENDGRID_API_KEY or not NOTIFY_EMAILS:
+        log.debug("Email notification skipped — SENDGRID_API_KEY/NOTIFY_EMAILS not configured")
         return
     try:
         import httpx
@@ -515,8 +515,9 @@ def _send_email(subject: str, body: str, html_body: str = ""):
         if not content:
             content.append({"type": "text/plain", "value": "(no content)"})
 
+        recipients = [{"email": addr} for addr in NOTIFY_EMAILS]
         payload = {
-            "personalizations": [{"to": [{"email": NOTIFY_EMAIL}]}],
+            "personalizations": [{"to": recipients}],
             "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
             "subject": subject,
             "content": content,
@@ -531,7 +532,7 @@ def _send_email(subject: str, body: str, html_body: str = ""):
             timeout=15,
         )
         if resp.status_code in (200, 202):
-            log.info(f"Email sent via SendGrid to {NOTIFY_EMAIL}: {subject}")
+            log.info(f"Email sent via SendGrid to {', '.join(NOTIFY_EMAILS)}: {subject}")
         else:
             log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
     except Exception as e:
