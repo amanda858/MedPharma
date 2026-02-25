@@ -32,6 +32,36 @@ python run.py
 
 Open **<http://localhost:8000>** in your browser.
 
+## Enable Live Hub Notifications (Render)
+
+To send real email/SMS (Eric owner reports from Jessica + RCM activity), set these on the **medpharma-hub** Render service:
+
+- `NOTIFY_EMAIL=eric@medprosc.com`
+- `NOTIFY_PHONE=+18036263500`
+- `NOTIFY_ON_USERS=jessica,rcm`
+- `SENDGRID_FROM=notifications@medprosc.com`
+
+Choose **one email provider**:
+
+- SendGrid: `SENDGRID_API_KEY`
+- OR SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
+
+For SMS (Twilio):
+
+- `TWILIO_SID`
+- `TWILIO_TOKEN`
+- `TWILIO_FROM`
+
+Then redeploy the hub service and verify with:
+
+- `GET /hub/api/notifications/status`
+- `POST /hub/api/notifications/test`
+
+Expected healthy status:
+
+- `email_configured: true`
+- `twilio_configured: true`
+
 ## How Lead Scoring Works
 
 Each lab gets a score from 0-100 based on:
