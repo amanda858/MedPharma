@@ -21,6 +21,7 @@ from app.npi_client import (
 from app.client_db import init_client_hub_db
 from app.client_routes import router as client_hub_router
 from app.email_finder import find_emails_for_lab
+from app.notifications import start_daily_scheduler
 
 app = FastAPI(
     title="MedPharma Hub",
@@ -33,6 +34,7 @@ app = FastAPI(
 async def startup():
     init_db()
     init_client_hub_db()
+    start_daily_scheduler()
 
 
 app.include_router(client_hub_router)
