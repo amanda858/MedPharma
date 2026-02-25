@@ -37,6 +37,7 @@ from app.client_db import (
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
     get_claim_status_history, get_denial_analytics, get_payer_scorecard,
     get_ar_worklist, get_activity_feed,
+    get_admin_overview,
 )
 
 from app.notifications import (notify_activity, notify_bulk_activity, flush_and_notify,
@@ -1023,6 +1024,15 @@ def test_production_reminders(hub_session: Optional[str] = Cookie(None)):
     import threading
     threading.Thread(target=send_production_reminders, daemon=True).start()
     return {"ok": True, "message": "Production reminders are being sent now."}
+
+
+# ─── Admin Overview Dashboard ─────────────────────────────────────────────────
+
+@router.get("/admin/overview")
+def admin_overview(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: combined dashboard with all accounts, production, user tracking."""
+    _require_admin(hub_session)
+    return get_admin_overview()
 
 
 # ─── Files ────────────────────────────────────────────────────────────────────

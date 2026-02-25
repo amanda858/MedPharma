@@ -1757,6 +1757,196 @@ def get_daily_account_summary():
         conn.close()
 
 
+# ─── Admin Overview (all-accounts dashboard for admin) ────────────────────
+
+def get_admin_overview():
+    """
+    Build a combined admin dashboard:
+    - Per-client account summaries (claims count, AR, cred status, etc.)
+    - Overall production stats for jessica & rcm
+    - User activity / time tracking summary
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        today = date.today()
+        today_str = today.isoformat()
+        mtd_start = today.replace(day=1).isoformat()
+        week_start = (today - timedelta(days=today.weekday())).isoformat()
+
+        def q1(sql, params=None):
+            cur.execute(sql, params or [])
+            row = cur.fetchone()
+            return row[0] if row else 0
+
+        # ── Per-client account summaries ──
+        cur.execute("SELECT id, company, contact_name, email, services FROM clients WHERE role='client' AND is_active=1 ORDER BY company")
+        clients = [dict(r) for r in cur.fetchall()]
+
+        account_summaries = []
+        for c in clients:
+            cid = c["id"]
+            claims_total = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=?", [cid])
+            claims_active = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND ClaimStatus NOT IN ('Paid','Closed')", [cid])
+            total_ar = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master WHERE client_id=?", [cid])
+            total_charged = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?", [cid])
+            total_paid = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master WHERE client_id=?", [cid])
+            denied = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND ClaimStatus IN ('Denied','Appeals')", [cid])
+            sla_breaches = q1("SELECT COUNT(*) FROM claims_master WHERE client_id=? AND SLABreached=1", [cid])
+
+            cred_total = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=?", [cid])
+            cred_approved = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=? AND Status IN ('Approved','Active')", [cid])
+            cred_pending = q1("SELECT COUNT(*) FROM credentialing WHERE client_id=? AND Status IN ('Pending','In Progress','Submitted')", [cid])
+
+            enroll_total = q1("SELECT COUNT(*) FROM enrollment WHERE client_id=?", [cid])
+            enroll_approved = q1("SELECT COUNT(*) FROM enrollment WHERE client_id=? AND Status IN ('Approved','Active','Enrolled')", [cid])
+
+            account_summaries.append({
+                "client_id": cid,
+                "company": c["company"],
+                "contact_name": c.get("contact_name", ""),
+                "email": c.get("email", ""),
+                "services": c.get("services", "all"),
+                "claims_total": claims_total,
+                "claims_active": claims_active,
+                "total_ar": round(total_ar, 2),
+                "total_charged": round(total_charged, 2),
+                "total_paid": round(total_paid, 2),
+                "denied": denied,
+                "sla_breaches": sla_breaches,
+                "cred_total": cred_total,
+                "cred_approved": cred_approved,
+                "cred_pending": cred_pending,
+                "enroll_total": enroll_total,
+                "enroll_approved": enroll_approved,
+            })
+
+        # ── Grand totals across all clients ──
+        grand_claims = q1("SELECT COUNT(*) FROM claims_master")
+        grand_active = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed')")
+        grand_ar = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master")
+        grand_charged = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master")
+        grand_paid = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master")
+        grand_denied = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus IN ('Denied','Appeals')")
+        grand_sla = q1("SELECT COUNT(*) FROM claims_master WHERE SLABreached=1")
+        grand_submitted = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate != ''")
+        clean_claims = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid' AND DenialReason=''")
+        clean_rate = round(clean_claims / max(grand_submitted, 1) * 100, 1)
+        denial_rate = round(grand_denied / max(grand_submitted, 1) * 100, 1)
+        net_coll = round(grand_paid / max(grand_charged, 1) * 100, 1)
+        pay_mtd = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [mtd_start])
+
+        grand_cred = q1("SELECT COUNT(*) FROM credentialing")
+        grand_cred_approved = q1("SELECT COUNT(*) FROM credentialing WHERE Status IN ('Approved','Active')")
+        grand_enroll = q1("SELECT COUNT(*) FROM enrollment")
+        grand_enroll_approved = q1("SELECT COUNT(*) FROM enrollment WHERE Status IN ('Approved','Active','Enrolled')")
+
+        # ── Production summary (today + this week + MTD) ──
+        prod_today = []
+        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
+                       ROUND(SUM(time_spent),1) as hours
+                       FROM team_production WHERE work_date=?
+                       GROUP BY username""", [today_str])
+        prod_today = [dict(r) for r in cur.fetchall()]
+
+        prod_week = []
+        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
+                       ROUND(SUM(time_spent),1) as hours, COUNT(DISTINCT work_date) as days
+                       FROM team_production WHERE work_date>=?
+                       GROUP BY username""", [week_start])
+        prod_week = [dict(r) for r in cur.fetchall()]
+
+        prod_mtd = []
+        cur.execute("""SELECT username, COUNT(*) as entries, SUM(quantity) as qty,
+                       ROUND(SUM(time_spent),1) as hours, COUNT(DISTINCT work_date) as days
+                       FROM team_production WHERE work_date>=?
+                       GROUP BY username""", [mtd_start])
+        prod_mtd = [dict(r) for r in cur.fetchall()]
+
+        # Production files uploaded today
+        prod_files_today = q1("SELECT COUNT(*) FROM production_files WHERE work_date=?", [today_str])
+
+        # ── User activity (last 7 days of logins) ──
+        week_ago = (today - timedelta(days=7)).isoformat()
+        cur.execute("""SELECT username, event, created_at FROM user_login_log
+                       WHERE created_at >= ? ORDER BY created_at DESC LIMIT 50""", [week_ago])
+        recent_activity = [dict(r) for r in cur.fetchall()]
+
+        # Per-user session stats (last 7 days)
+        user_sessions = {}
+        for ev in recent_activity:
+            u = ev["username"]
+            if u not in user_sessions:
+                user_sessions[u] = {"username": u, "logins": 0, "logouts": 0,
+                                    "last_seen": ev["created_at"], "sessions": []}
+            if ev["event"] == "login":
+                user_sessions[u]["logins"] += 1
+                user_sessions[u]["sessions"].append({"login": ev["created_at"], "logout": None})
+            elif ev["event"] == "logout":
+                user_sessions[u]["logouts"] += 1
+                for s in reversed(user_sessions[u]["sessions"]):
+                    if s["logout"] is None:
+                        s["logout"] = ev["created_at"]
+                        break
+
+        from datetime import datetime as _dt
+        user_activity = []
+        for u, stats in user_sessions.items():
+            total_minutes = 0
+            for s in stats["sessions"]:
+                if s["login"] and s["logout"]:
+                    try:
+                        t1 = _dt.fromisoformat(s["login"])
+                        t2 = _dt.fromisoformat(s["logout"])
+                        total_minutes += max(0, (t2 - t1).total_seconds() / 60)
+                    except Exception:
+                        pass
+            stats["active_hours"] = round(total_minutes / 60, 1)
+            del stats["sessions"]
+            user_activity.append(stats)
+        user_activity.sort(key=lambda x: x["username"])
+
+        # ── Recent audit actions (last 20) ──
+        cur.execute("""SELECT al.*, c.company as client_company
+                       FROM audit_log al
+                       LEFT JOIN clients c ON c.id = al.client_id
+                       ORDER BY al.created_at DESC LIMIT 20""")
+        recent_audit = [dict(r) for r in cur.fetchall()]
+
+        return {
+            "accounts": account_summaries,
+            "totals": {
+                "claims": grand_claims,
+                "active_claims": grand_active,
+                "total_ar": round(grand_ar, 2),
+                "total_charged": round(grand_charged, 2),
+                "total_paid": round(grand_paid, 2),
+                "denied": grand_denied,
+                "sla_breaches": grand_sla,
+                "clean_claim_rate": clean_rate,
+                "denial_rate": denial_rate,
+                "net_collection_rate": net_coll,
+                "payments_mtd": round(pay_mtd, 2),
+                "credentialing": grand_cred,
+                "cred_approved": grand_cred_approved,
+                "enrollment": grand_enroll,
+                "enroll_approved": grand_enroll_approved,
+                "total_clients": len(clients),
+            },
+            "production": {
+                "today": prod_today,
+                "week": prod_week,
+                "mtd": prod_mtd,
+                "files_today": prod_files_today,
+            },
+            "user_activity": user_activity,
+            "recent_activity": recent_activity[:20],
+            "recent_audit": recent_audit,
+        }
+    finally:
+        conn.close()
+
+
 # ─── Audit Trail ──────────────────────────────────────────────────────────
 
 def log_audit(client_id: int, username: str, action: str,
