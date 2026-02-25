@@ -1222,11 +1222,32 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
     except Exception as e:
         log.error(f"Failed to send email to {to_email} via SMTP: {e}")
 
+
+def send_team_progress_reports():
+    """
+    Send consolidated progress reports for tracked users (e.g., Jessica/RCM)
+    to configured owner recipients at 6:30 PM Eastern.
+    """
+    users = [u for u in NOTIFY_ON_USERS if u and u != "*"]
+    if not users:
+        log.info("Team progress dispatch skipped — no explicit tracked users configured")
+        return
+
+    sent = 0
+    for username in sorted(users):
+        try:
+            flush_and_notify(username)
+            sent += 1
+        except Exception as e:
+            log.error(f"Team progress dispatch failed for {username}: {e}")
+    log.info(f"Team progress dispatch completed for {sent} user(s): {', '.join(sorted(users))}")
+
 def start_daily_scheduler():
     """
     Start APScheduler to fire:
       - send_production_reminders at 5:30 PM EST (for jessica & rcm)
       - send_daily_account_summary at 6:00 PM EST
+            - send_team_progress_reports at 6:30 PM EST
     Safe to call multiple times — only starts once.
     """
     global _scheduler_started
@@ -1260,16 +1281,16 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # Every 15 minutes — flush buffered user notifications automatically
+        # 6:30 PM EST — Team member progress reports to owner recipients
         scheduler.add_job(
-            flush_all_pending_notifications,
-            CronTrigger(minute="*/15", timezone=est),
-            id="auto_flush_user_notifications",
-            name="Auto Flush User Notifications",
+            send_team_progress_reports,
+            CronTrigger(hour=18, minute=30, timezone=est),
+            id="daily_team_progress_reports",
+            name="6:30 PM EST Team Progress Reports",
             replace_existing=True,
         )
         scheduler.start()
-        log.info("Daily scheduler started — reminders, summary, and 15-min auto flush")
+        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary, 6:30 team progress")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -1280,12 +1301,13 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 5:30 PM and 6 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 5:30, 6:00, and 6:30 PM EST."""
     import time as _time
 
     def _check_loop():
         last_reminder_date = None
         last_sent_date = None
+        last_progress_date = None
         while True:
             try:
                 # Get current time in US/Eastern
@@ -1313,13 +1335,15 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # Every 15 minutes — user notification auto flush
-                if now_est.minute % 15 == 0:
-                    flush_all_pending_notifications()
+                # 6:30 PM — Team progress reports
+                if now_est.hour == 18 and 30 <= now_est.minute < 35 and last_progress_date != today:
+                    last_progress_date = today
+                    log.info("Thread scheduler firing team progress reports")
+                    send_team_progress_reports()
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")
             _time.sleep(60)
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 PM reminders + 6:00 PM summary")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 team progress")
