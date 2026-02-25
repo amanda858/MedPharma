@@ -33,7 +33,7 @@ log = logging.getLogger("notifications")
 # ── Configuration ──
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM = os.getenv("SENDGRID_FROM", "notifications@medprosc.com")
-NOTIFY_EMAILS = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com,amanda@medprosc.com").split(",") if e.strip()]
+NOTIFY_EMAILS = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com").split(",") if e.strip()]
 
 TWILIO_SID = os.getenv("TWILIO_SID", "")
 TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
@@ -43,9 +43,9 @@ NOTIFY_PHONE = os.getenv("NOTIFY_PHONE", "+18036263500")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Users whose activity triggers notifications.
-# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="eric,amanda,jessica,rcm"
+# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
 # Use NOTIFY_ON_USERS="*" to enable for all users.
-_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "eric,amanda,jessica,rcm").strip()
+_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "jessica,rcm").strip()
 NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
