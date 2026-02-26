@@ -1119,10 +1119,11 @@ async def import_excel(
     }
 
 
-def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
+def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col_map: Optional[dict] = None):
     """Parse Excel/CSV bytes into list of dict rows with smart header detection.
     If combine_sheets=True and multiple sheets share the same header structure,
-    rows from all matching sheets are combined (useful for multi-tab claim files)."""
+    rows from all matching sheets are combined (useful for multi-tab claim files).
+    If col_map is provided, header groups/sheets are prioritized by mapped-header coverage."""
     import csv, io
     rows = []
     if ext == ".csv":
@@ -1142,15 +1143,26 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                 continue
             # Smart header detection: find the best header row
             header_row_idx = 0
-            best_header_score = 0
-            for idx, row in enumerate(all_sheet_rows[:10]):
+            best_header_score = -1
+            scan_limit = min(len(all_sheet_rows), 50)
+            for idx, row in enumerate(all_sheet_rows[:scan_limit]):
                 if not row:
                     continue
                 non_empty = sum(1 for c in row if c is not None and str(c).strip())
                 text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
-                # Require at least 3 non-empty cells to be a real header row
-                score = text_cells * 2 + non_empty
-                if score > best_header_score and non_empty >= 3:
+                if non_empty < 2:
+                    continue
+
+                mapped_cells = 0
+                if col_map:
+                    mapped_cells = sum(
+                        1 for c in row
+                        if c is not None and _fuzzy_match_column(str(c), col_map)
+                    )
+
+                # Prefer rows whose labels match known import columns.
+                score = (mapped_cells * 100) + (text_cells * 2) + non_empty
+                if score > best_header_score:
                     best_header_score = score
                     header_row_idx = idx
             if header_row_idx < len(all_sheet_rows):
@@ -1169,18 +1181,36 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                     sheet_results.append((hdr_key, sheet_headers, sheet_rows))
 
         if sheet_results:
+            def _mapped_header_count(headers):
+                if not col_map:
+                    return 0
+                return sum(1 for h in headers if _fuzzy_match_column(h, col_map))
+
             if combine_sheets:
                 # Group sheets by header structure and combine sheets with same headers
                 from collections import defaultdict
-                groups = defaultdict(list)
+                groups = defaultdict(lambda: {"headers": [], "rows": []})
                 for hdr_key, hdrs, srows in sheet_results:
-                    groups[hdr_key].extend(srows)
-                # Pick the group with the most total rows
-                best_group = max(groups.values(), key=len)
-                rows = best_group
+                    if not groups[hdr_key]["headers"]:
+                        groups[hdr_key]["headers"] = hdrs
+                    groups[hdr_key]["rows"].extend(srows)
+
+                if col_map:
+                    # Prefer the header group with strongest schema match, then most rows
+                    best_group = max(
+                        groups.values(),
+                        key=lambda g: (_mapped_header_count(g["headers"]), len(g["rows"]))
+                    )
+                else:
+                    # Legacy behavior: largest combined row set
+                    best_group = max(groups.values(), key=lambda g: len(g["rows"]))
+                rows = best_group["rows"]
             else:
-                # Pick single sheet with most rows
-                best = max(sheet_results, key=lambda x: len(x[2]))
+                # Pick the best single sheet by mapped headers first, then row count
+                if col_map:
+                    best = max(sheet_results, key=lambda x: (_mapped_header_count(x[1]), len(x[2])))
+                else:
+                    best = max(sheet_results, key=lambda x: len(x[2]))
                 rows = best[2]
         wb.close()
     return rows
@@ -1333,7 +1363,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
         "lob": "sub_profile", "line of business": "sub_profile",
     }
-    rows = _parse_excel_rows(content, ext)
+    rows = _parse_excel_rows(content, ext, col_map=COL_MAP)
     if not rows:
         return 0, ["No rows found"]
     first_row_keys = list(rows[0].keys()) if rows else []
@@ -1615,7 +1645,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "icn": "ClaimKey", "tcn": "ClaimKey", "dcn": "ClaimKey",
         # ── Patient ──
         "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
+        "pt name": "PatientName", "pt": "PatientName", "member name": "PatientName",
         "patientid": "PatientID", "patient id": "PatientID", "member id": "PatientID",
+        "pt id": "PatientID", "patient #": "PatientID", "mrn": "PatientID",
         "memberid": "PatientID", "member": "PatientName", "subscriber": "PatientName",
         "subscriber name": "PatientName", "insured name": "PatientName",
         "patient last name": "PatientName", "last name": "PatientName", "name": "PatientName",
@@ -1671,6 +1703,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "remaining": "BalanceRemaining", "net balance": "BalanceRemaining",
         # ── Status / dates ──
         "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
+        "claim state": "ClaimStatus", "claim outcome": "ClaimStatus",
         "current status": "ClaimStatus", "ar status": "ClaimStatus",
         "billdate": "BillDate", "bill date": "BillDate", "billed date": "BillDate",
         "date billed": "BillDate", "submission date": "BillDate", "submitted date": "BillDate",
@@ -1687,6 +1720,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "denialcategory": "DenialCategory", "denial category": "DenialCategory",
         "denial type": "DenialCategory",
         "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "worked by": "Owner",
+        "assigned user": "Owner", "assignee": "Owner", "worked": "Owner",
         # ── Sub-profile ──
         "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
         "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
@@ -1719,7 +1753,11 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         return s
 
     # Parse rows using the shared smart parser (handles multi-sheet, smart header detection)
-    rows = _parse_excel_rows(content, ext)
+    rows = _parse_excel_rows(content, ext, col_map=COLUMN_MAP)
+
+    if not rows:
+        # Fallback for exports where a non-data sheet dominated the combined parse.
+        rows = _parse_excel_rows(content, ext, combine_sheets=False, col_map=COLUMN_MAP)
 
     if not rows:
         return 0, ["No rows found in file"]
@@ -1811,6 +1849,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         unmapped = [k for k in first_row_keys if not _fuzzy_match_column(k, COLUMN_MAP)]
         if unmapped:
             errors.append(f"Unmapped Excel columns (ignored): {unmapped[:10]}")
+    if not imported and rows:
+        first_row_keys = list(rows[0].keys())
+        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
+        errors.append("Expected headers like: Claim Key, Patient Name, Payor/Insurance, DOS, Status, Charge, Paid, Balance")
     return imported, errors
 
 
