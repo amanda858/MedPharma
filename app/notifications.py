@@ -1114,20 +1114,57 @@ def send_daily_account_summary():
     """
     Compile and send the Overall Account Summary email + SMS.
     Called by the scheduler at 6 PM EST daily.
+    Includes per-user production breakdown.
     """
     try:
-        from app.client_db import get_daily_account_summary
+        from app.client_db import get_daily_account_summary, get_user_production_snapshot
         d = get_daily_account_summary()
+        prod_snapshot = get_user_production_snapshot()  # today's production
     except Exception as e:
         log.error(f"Failed to fetch daily account summary data: {e}")
         return
 
     now = datetime.now()
-    date_str = now.strftime("%B %d, %Y")
+    date_str = now.strftime("%m/%d/%Y")
+    date_str_long = now.strftime("%B %d, %Y")
     day_of_week = now.strftime("%A")
 
     # AI summary
-    ai_summary = _generate_account_ai_summary(d, date_str)
+    ai_summary = _generate_account_ai_summary(d, date_str_long)
+
+    # ── Per-user production rows for email ──
+    user_prod_rows_html = ""
+    prod_users = prod_snapshot.get("user_stats", [])
+    file_uploads = prod_snapshot.get("file_uploads", {})
+    if prod_users:
+        for u in prod_users:
+            files = file_uploads.get(u["username"], 0)
+            cats = u["categories"].replace(",", ", ") if u["categories"] else "—"
+            user_prod_rows_html += f"""
+            <tr>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-weight:600">{u['username'].title()}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{u['entry_count']}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px;font-weight:700;color:#2563eb">{u['total_hours']}h</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{u['total_qty']}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{files}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b">{cats}</td>
+            </tr>"""
+    else:
+        user_prod_rows_html = """<tr><td colspan="6" style="padding:16px;text-align:center;color:#94a3b8;font-size:13px">
+            ⚠️ No production data logged today. Jessica & RCM should submit daily work entries.
+        </td></tr>"""
+
+    # ── Production detail entries for email ──
+    prod_detail_html = ""
+    for entry in prod_snapshot.get("entries", [])[:20]:
+        prod_detail_html += f"""
+        <tr>
+            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['username'].title()}</td>
+            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['category']}</td>
+            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['task_description'][:50]}</td>
+            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc;text-align:center">{entry['quantity']}</td>
+            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc;text-align:center">{entry['time_spent']}h</td>
+        </tr>"""
 
     # ── Status distribution rows ──
     status_rows_html = ""
@@ -1177,8 +1214,8 @@ def send_daily_account_summary():
 
             <!-- HEADER -->
             <div style="background: linear-gradient(135deg, #1e3a5f, #2563eb); padding: 28px 32px;">
-                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">📋 OVERALL ACCOUNT SUMMARY</h1>
-                <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; font-weight: 500;">{day_of_week}, {date_str} — 6:00 PM EST Daily Report</p>
+                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">📋 MEDPHARMA DAILY REPORT</h1>
+                <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; font-weight: 500;">{day_of_week}, {date_str} — Daily Account Summary</p>
                 <p style="color: rgba(255,255,255,0.65); margin: 4px 0 0; font-size: 12px;">MedPharma Revenue Cycle Management — {d['total_clients']} Active Client{'s' if d['total_clients']!=1 else ''}</p>
             </div>
 
@@ -1331,9 +1368,29 @@ def send_daily_account_summary():
                     </div>
                 </div>
 
+                <!-- USER PRODUCTION SNAPSHOT -->
+                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #7c3aed;margin-bottom:16px;">
+                    👥 User Production — {date_str}
+                </div>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
+                    <thead>
+                        <tr style="background:#f8fafc;">
+                            <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Employee</th>
+                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Entries</th>
+                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Hours</th>
+                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Qty</th>
+                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Files</th>
+                            <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Categories</th>
+                        </tr>
+                    </thead>
+                    <tbody>{user_prod_rows_html}</tbody>
+                </table>
+
+                {'<div style="margin-bottom:24px;"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Work Detail</div><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#f8fafc;"><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">User</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">Category</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">Description</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:center">Qty</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:center">Time</th></tr></thead><tbody>' + prod_detail_html + '</tbody></table></div>' if prod_detail_html else ''}
+
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                 <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
-                    Overall Account Summary — MedPharma Hub — {date_str} 6:00 PM EST
+                    MedPharma Daily Report — {date_str}
                 </p>
             </div>
         </div>
@@ -1341,10 +1398,21 @@ def send_daily_account_summary():
     </html>"""
 
     # ── Plain text version ──
+    # Build per-user production lines
+    prod_text_lines = []
+    if prod_users:
+        for u in prod_users:
+            files = file_uploads.get(u["username"], 0)
+            prod_text_lines.append(
+                f"  {u['username'].title():12s}  {u['entry_count']} entries  |  {u['total_hours']}h  |  {u['total_qty']} qty  |  {files} files  |  {u['categories']}"
+            )
+    else:
+        prod_text_lines.append("  ⚠️ No production data logged today")
+
     body_lines = [
         "═══════════════════════════════════════════",
-        "     OVERALL ACCOUNT SUMMARY",
-        f"     {day_of_week}, {date_str} — 6:00 PM EST",
+        "     MEDPHARMA DAILY REPORT",
+        f"     {day_of_week}, {date_str}",
         "═══════════════════════════════════════════",
         "",
         "AI EXECUTIVE SUMMARY:",
@@ -1375,33 +1443,36 @@ def send_daily_account_summary():
         f"  Credentialing: {d['cred_total']} ({d['cred_approved']} approved, {d['cred_pending']} pending)",
         f"  EDI:           {d['edi_total']} ({d['edi_live']} live)",
         "",
-        "───── USER PRODUCTION ─────",
-        f"  Total submissions today: {d.get('production_submissions_today', 0)}",
-        f"  Manual log entries:      {d.get('production_logs_today', 0)}",
-        f"  Excel/PDF uploads:       {d.get('production_files_today', 0)}",
+        f"───── USER PRODUCTION — {date_str} ─────",
+    ] + prod_text_lines + [
         "",
         f"  SLA Breaches: {d['sla_breaches']}  |  System Actions Today: {d['today_actions']}",
     ]
     body = "\n".join(body_lines)
 
-    subject = f"Overall Account Summary — {date_str} — AR {_fmt_money(d['total_ar'])}"
+    subject = f"MedPharma Daily Report — {date_str} — AR {_fmt_money(d['total_ar'])}"
 
-    # SMS — compact daily summary
-    sms = (f"MedPharma Daily: AR {_fmt_money(d['total_ar'])} | "
-           f"Today: {d['submitted_today']}sub/{d['paid_today']}paid/{d['denied_today']}den | "
-           f"MTD collected {_fmt_money(d['payments_mtd'])} | "
-           f"Collection {d['net_collection_rate']}%")
-    if len(sms) > 155:
-        sms = (f"MedPharma: AR {_fmt_money(d['total_ar'])} | "
-               f"{d['submitted_today']}sub/{d['paid_today']}paid | "
-               f"Collection {d['net_collection_rate']}%")
-        if len(sms) > 155:
-            sms = sms[:152] + "…"
+    # SMS — compact daily summary with production snapshot
+    prod_sms_parts = []
+    for u in prod_users[:3]:
+        prod_sms_parts.append(f"{u['username'].title()}:{u['total_hours']}h/{u['total_qty']}qty")
+    prod_sms = " | ".join(prod_sms_parts) if prod_sms_parts else "No production logged"
+
+    sms = (f"MedPharma Daily Report {date_str}\n"
+           f"AR:{_fmt_money(d['total_ar'])} | Collected MTD:{_fmt_money(d['payments_mtd'])}\n"
+           f"Claims: {d['submitted_today']}sub/{d['paid_today']}paid/{d['denied_today']}den\n"
+           f"Production: {prod_sms}")
+    if len(sms) > 300:
+        sms = (f"MedPharma {date_str}\n"
+               f"AR:{_fmt_money(d['total_ar'])} | {d['net_collection_rate']}% coll\n"
+               f"Prod: {prod_sms}")
+        if len(sms) > 300:
+            sms = sms[:297] + "…"
 
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
     threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
-    log.info(f"Overall Account Summary sent: AR {_fmt_money(d['total_ar'])}, "
-             f"{d['total_claims']} claims, {d['active_claims']} active")
+    log.info(f"MedPharma Daily Report sent: {date_str}, AR {_fmt_money(d['total_ar'])}, "
+             f"{d['total_claims']} claims, {len(prod_users)} users logged production")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1482,12 +1553,16 @@ def send_production_reminders():
 
 
 def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
-    """Send email to a specific recipient via SendGrid v3 API."""
+    """Send email to a specific recipient via SendGrid v3 API.
+    Uses _live_config() to read credentials fresh."""
     if not to_email:
         return
+    cfg = _live_config()
 
     # Primary: SendGrid
-    if SENDGRID_API_KEY:
+    sg_key = cfg["SENDGRID_API_KEY"]
+    sg_from = cfg["SENDGRID_FROM"]
+    if sg_key:
         try:
             import httpx
             content = []
@@ -1500,7 +1575,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
 
             payload = {
                 "personalizations": [{"to": [{"email": to_email}]}],
-                "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+                "from": {"email": sg_from, "name": "MedPharma Hub"},
                 "subject": subject,
                 "content": content,
             }
@@ -1508,7 +1583,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
                 "https://api.sendgrid.com/v3/mail/send",
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                    "Authorization": f"Bearer {sg_key}",
                     "Content-Type": "application/json",
                 },
                 timeout=15,
@@ -1521,23 +1596,27 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
             log.error(f"Failed to send email to {to_email} via SendGrid: {e}")
 
     # Fallback: SMTP
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+    smtp_h = cfg["SMTP_HOST"]
+    smtp_p = cfg["SMTP_PORT"]
+    smtp_u = cfg["SMTP_USER"]
+    smtp_pw = cfg["SMTP_PASS"]
+    if not smtp_h or not smtp_u or not smtp_pw:
         log.error("Email skipped — no working provider configured (SendGrid/SMTP)")
         return
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = SMTP_USER or SENDGRID_FROM
+        msg["From"] = smtp_u or sg_from
         msg["To"] = to_email
         plain = body or "(no content)"
         msg.attach(MIMEText(plain, "plain"))
         if html_body:
             msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
             server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
+            server.login(smtp_u, smtp_pw)
             server.sendmail(msg["From"], [to_email], msg.as_string())
         log.info(f"Email sent via SMTP to {to_email}: {subject}")
     except Exception as e:

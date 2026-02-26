@@ -32,6 +32,7 @@ from app.client_db import (
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
+    get_user_production_snapshot,
 )
 
 from app.notifications import (
@@ -41,6 +42,7 @@ from app.notifications import (
     send_test_notification,
     get_notification_status,
     get_notification_debug,
+    send_daily_account_summary,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -767,7 +769,11 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    # Admin sees ALL production entries across all accounts (not scoped to selected client)
+    if user.get("role") == "admin":
+        scope = None  # no client filter — show all
+    else:
+        scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
     return {"logs": logs}
 
@@ -2504,6 +2510,26 @@ def notifications_debug(hub_session: Optional[str] = Cookie(None)):
     """Admin-only: detailed diagnostic info for debugging notification delivery."""
     _require_admin(hub_session)
     return get_notification_debug()
+
+
+@router.post("/notifications/daily-report")
+def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: immediately send the daily account summary report (email + SMS)."""
+    user = _require_admin(hub_session)
+    try:
+        send_daily_account_summary()
+        return {"ok": True, "message": "Daily report sent to configured recipients"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send daily report: {e}")
+
+
+@router.get("/production/snapshot")
+def production_snapshot(work_date: Optional[str] = None,
+                        hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: get per-user production snapshot for a date (defaults to today)."""
+    _require_admin(hub_session)
+    snapshot = get_user_production_snapshot(work_date)
+    return snapshot
 
 
 # ─── Audit Log ────────────────────────────────────────────────────────────────

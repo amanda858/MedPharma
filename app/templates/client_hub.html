@@ -2888,6 +2888,8 @@
             <div class="page-actions">
               <button class="btn btn-primary btn-sm" id="btnTestNotice" onclick="sendTestNotice()">📨 Send Test
                 Notice</button>
+              <button class="btn btn-success btn-sm" id="btnDailyReport" onclick="sendDailyReport()"
+                style="background:#7c3aed;border-color:#7c3aed;">📋 Send Daily Report Now</button>
               <button class="btn btn-secondary btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
             </div>
           </div>
@@ -6715,6 +6717,35 @@
         }
       } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📨 Send Test Notice'; }
+      }
+    }
+
+    async function sendDailyReport() {
+      const btn = document.getElementById('btnDailyReport');
+      const statusEl = document.getElementById('testNoticeStatus');
+      const oldText = btn ? btn.innerHTML : '';
+      try {
+        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending report...'; }
+        if (statusEl) {
+          statusEl.style.display = '';
+          statusEl.innerHTML = '<div style="font-size:12px;color:var(--gray-500)">📋 Compiling daily report with production data + AI analysis... This may take 30-60 seconds.</div>';
+        }
+        const r = await fetch('/hub/api/notifications/daily-report', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Failed to send daily report');
+        toast('✅ MedPharma Daily Report sent! Check email + SMS.', 'success');
+        if (statusEl) {
+          const ts = new Date().toLocaleString();
+          statusEl.innerHTML = `<div style="font-size:12px;color:var(--success);margin-top:8px">✅ <b>Daily Report sent</b> at ${ts} — check email & SMS for the full report with production snapshot.</div>`;
+        }
+      } catch (e) {
+        toast(e.message || 'Failed to send daily report', 'error');
+        if (statusEl) {
+          statusEl.style.display = '';
+          statusEl.innerHTML = `<div style="font-size:12px;color:var(--danger);margin-top:8px">❌ ${esc(e.message || 'Failed to send daily report')}</div>`;
+        }
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📋 Send Daily Report Now'; }
       }
     }
 

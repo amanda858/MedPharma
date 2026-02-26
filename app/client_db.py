@@ -1517,6 +1517,80 @@ def has_production_data_today(username: str, work_date: str) -> bool:
         conn.close()
 
 
+def get_user_production_snapshot(work_date: str = None) -> dict:
+    """Get per-user production breakdown for a given date (default: today).
+    Returns dict with user summaries and detailed entries."""
+    from datetime import date as _date
+    if not work_date:
+        work_date = _date.today().isoformat()
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        # Per-user aggregated stats
+        cur.execute("""
+            SELECT username,
+                   COUNT(*) as entry_count,
+                   SUM(quantity) as total_qty,
+                   SUM(time_spent) as total_hours,
+                   GROUP_CONCAT(DISTINCT category) as categories
+            FROM team_production
+            WHERE work_date=?
+            GROUP BY lower(username)
+            ORDER BY total_hours DESC
+        """, (work_date,))
+        user_stats = []
+        for row in cur.fetchall():
+            user_stats.append({
+                "username": row[0],
+                "entry_count": int(row[1] or 0),
+                "total_qty": int(row[2] or 0),
+                "total_hours": round(float(row[3] or 0), 1),
+                "categories": row[4] or "",
+            })
+
+        # Detailed entries for the day
+        cur.execute("""
+            SELECT username, category, task_description, quantity, time_spent, notes
+            FROM team_production
+            WHERE work_date=?
+            ORDER BY username, created_at DESC
+        """, (work_date,))
+        entries = []
+        for row in cur.fetchall():
+            entries.append({
+                "username": row[0],
+                "category": row[1] or "",
+                "task_description": row[2] or "",
+                "quantity": int(row[3] or 0),
+                "time_spent": round(float(row[4] or 0), 1),
+                "notes": row[5] or "",
+            })
+
+        # File uploads for the day
+        cur.execute("""
+            SELECT uploaded_by, COUNT(*) as file_count
+            FROM client_files
+            WHERE date(created_at)=? AND lower(category)='production'
+            GROUP BY lower(uploaded_by)
+        """, (work_date,))
+        file_uploads = {}
+        for row in cur.fetchall():
+            file_uploads[row[0]] = int(row[1] or 0)
+
+        return {
+            "work_date": work_date,
+            "user_stats": user_stats,
+            "entries": entries,
+            "file_uploads": file_uploads,
+            "total_entries": len(entries),
+            "total_users": len(user_stats),
+        }
+    finally:
+        conn.close()
+
+
 # ─── Audit Trail ──────────────────────────────────────────────────────────
 
 def log_audit(client_id: int, username: str, action: str,
