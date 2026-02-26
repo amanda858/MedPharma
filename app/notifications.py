@@ -870,6 +870,70 @@ def _send_sms_force(message: str):
             raise RuntimeError(f"Twilio HTTP {he.code}: {resp_body[:300]}")
 
 
+def send_direct_sms(message: str, to_phone: str = "") -> dict:
+    """Send an immediate SMS via Twilio.
+    If to_phone is omitted, uses NOTIFY_PHONE from env."""
+    cfg = _live_config()
+    t_sid = cfg["TWILIO_SID"]
+    t_tok = cfg["TWILIO_TOKEN"]
+    t_from = cfg["TWILIO_FROM"]
+    phone = _normalize_phone(to_phone) if to_phone else cfg["NOTIFY_PHONE"]
+
+    if not t_sid or not t_tok or not t_from:
+        missing = [k for k, v in {"TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from}.items() if not v]
+        raise ValueError(f"Twilio not configured — missing: {', '.join(missing)}")
+    if not phone:
+        raise ValueError("No SMS recipient configured — set NOTIFY_PHONE or pass to_phone")
+
+    text = (message or "").strip()
+    if not text:
+        raise ValueError("SMS message cannot be empty")
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
+    post_data = urllib.parse.urlencode({
+        "To": phone,
+        "From": t_from,
+        "Body": text,
+    }).encode("utf-8")
+    auth_str = base64.b64encode(f"{t_sid}:{t_tok}".encode()).decode()
+
+    req = urllib.request.Request(
+        url,
+        data=post_data,
+        headers={
+            "Authorization": f"Basic {auth_str}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=20)
+        status = resp.getcode()
+        body = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(body) if body else {}
+        if status not in (200, 201):
+            raise RuntimeError(f"Twilio SMS failed ({status}): {body[:300]}")
+        return {
+            "ok": True,
+            "to": phone,
+            "from": t_from,
+            "sid": data.get("sid", ""),
+            "status": data.get("status", "queued"),
+        }
+    except urllib.error.HTTPError as he:
+        resp_body = he.read().decode("utf-8", errors="replace")[:500]
+        try:
+            err_data = json.loads(resp_body)
+            twilio_msg = err_data.get("message", resp_body[:300])
+            twilio_code = err_data.get("code", "")
+            raise RuntimeError(f"Twilio error {he.code} (code {twilio_code}): {twilio_msg}")
+        except (json.JSONDecodeError, RuntimeError) as inner:
+            if isinstance(inner, RuntimeError):
+                raise
+            raise RuntimeError(f"Twilio HTTP {he.code}: {resp_body[:300]}")
+
+
 def send_test_notification(triggered_by: str = "system") -> dict:
     """Send an immediate test notification to configured recipients/channels.
     Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE).

@@ -40,6 +40,7 @@ from app.notifications import (
     notify_bulk_activity,
     flush_and_notify,
     send_test_notification,
+    send_direct_sms,
     get_notification_status,
     get_notification_debug,
     send_daily_account_summary,
@@ -561,6 +562,11 @@ class NoteIn(BaseModel):
     RefID: Optional[int] = 0
     Note: str
     Author: Optional[str] = ""
+
+
+class SmsNowIn(BaseModel):
+    message: str
+    to: Optional[str] = ""
 
 
 @router.get("/notes")
@@ -2509,6 +2515,18 @@ def notifications_test(hub_session: Optional[str] = Cookie(None)):
     user = _require_admin(hub_session)
     result = send_test_notification(triggered_by=user.get("username", "admin"))
     return result
+
+
+@router.post("/notifications/send-sms")
+def notifications_send_sms_now(body: SmsNowIn, hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: send an immediate custom SMS now."""
+    user = _require_admin(hub_session)
+    try:
+        result = send_direct_sms(body.message, body.to or "")
+        result["triggered_by"] = user.get("username", "admin")
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send SMS: {e}")
 
 
 @router.get("/notifications/status")
