@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import os
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
@@ -339,5 +340,5 @@ async def serve_frontend():
 @app.get("/hub", response_class=HTMLResponse)
 async def serve_client_hub():
     """Serve the MedPharma Client Hub."""
-    with open("app/templates/client_hub.html", "r") as f:
+    with open(os.path.join(os.path.dirname(__file__), "templates", "client_hub.html"), "r") as f:
         return f.read()

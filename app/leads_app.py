@@ -2,8 +2,7 @@
 
 import csv
 import io
-import json
-import asyncio
+import jsonimport osimport asyncio
 from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
@@ -472,5 +471,5 @@ async def get_taxonomies():
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_leads_frontend():
-    with open("app/templates/index.html", "r") as f:
+    with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), "r") as f:
         return f.read()
