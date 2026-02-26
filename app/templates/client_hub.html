@@ -6261,6 +6261,7 @@
               <div style="font-size:11px;color:var(--gray-400)">${size} · ${date} · ${esc(f.uploaded_by || '')}</div>
             </div>
             <a href="/hub/api/files/${f.id}/download" style="text-decoration:none;font-size:18px" title="Download">⬇️</a>
+            <button onclick="deleteProductionFile(${f.id})" style="background:var(--danger-light);color:var(--danger);border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px" title="Delete file">🗑️</button>
           </div>`;
         }).join('');
       } catch (e) { console.error(e); }
@@ -6339,6 +6340,17 @@
         if (!r.ok) throw new Error('Failed');
         toast('Entry deleted', 'success');
         loadProduction();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteProductionFile(id) {
+      if (!confirm('Delete this production file? This cannot be undone.')) return;
+      try {
+        const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Failed to delete file');
+        toast('File deleted', 'success');
+        loadProductionFiles();
+        if (typeof loadDocuments === 'function') loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
     }
 

@@ -2070,6 +2070,26 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
         if practice_type == "MHP+OMT":
             for sp_name in ["OMT", "MHP"]:
                 sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
+
+        # Also gather user production data
+        prod_rows = conn.execute(
+            "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
+            "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
+            (client_id,)
+        ).fetchall()
+        production_data = [dict(r) for r in prod_rows]
+
+        # Aggregate production by user
+        prod_by_user = {}
+        for p in production_data:
+            u = p.get("username", "Unknown")
+            if u not in prod_by_user:
+                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set()}
+            prod_by_user[u]["entries"] += 1
+            prod_by_user[u]["total_qty"] += int(p.get("quantity") or 0)
+            prod_by_user[u]["total_hours"] += float(p.get("time_spent") or 0)
+            prod_by_user[u]["dates"].add(p.get("work_date", ""))
+            prod_by_user[u]["categories"].add(p.get("category", ""))
     finally:
         conn.close()
 
@@ -2105,6 +2125,12 @@ EDI SETUP: {len(edi.get('detail', []))} connections
 {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
 
 PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
+
+USER PRODUCTION LOG ({len(production_data)} recent entries):
+{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h" for p in production_data[:20]) or '  No production data logged'}
+
+PRODUCTION SUMMARY BY USER:
+{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h across {len(d['dates'])} day(s), categories: {', '.join(d['categories'])}" for u, d in prod_by_user.items()) or '  No user production data'}
 """
 
     # Sub-profile data
@@ -2129,7 +2155,8 @@ Your report should include:
 6. EDI CONNECTIVITY — Note setup status
 7. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
 8. RECOMMENDED ACTIONS — Specific, prioritized action items
-9. OUTLOOK — Brief forward-looking statement
+9. USER PRODUCTION ANALYSIS — If production log data exists, evaluate each team member's daily output, hours worked, task categories, and flag any concerns about underperformance or time management
+10. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
 Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).
