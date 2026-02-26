@@ -5928,10 +5928,11 @@
           toast(`✅ Imported ${d.imported} rows into ${d.import_category} — file saved as hard copy`, 'success');
           if (d.import_errors && d.import_errors.length) toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
         } else if (d.import_category) {
-          toast(`⚠️ File saved but no rows imported — check column headers match expected format`, 'warning');
+          const firstErr = (d.import_errors && d.import_errors.length) ? ` — ${d.import_errors[0]}` : '';
+          toast(`⚠️ File saved but no rows imported${firstErr}`, 'warning');
           if (d.import_errors && d.import_errors.length) {
             console.warn('Import errors:', d.import_errors);
-            d.import_errors.forEach(e => toast(e, 'warning'));
+            toast(d.import_errors[0], 'warning');
           }
         } else {
           toast(`${file.name} uploaded!`, 'success');
