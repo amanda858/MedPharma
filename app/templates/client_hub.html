@@ -2805,7 +2805,7 @@
                   </div>
                   <div class="form-group">
                     <label>Time Spent (hours)</label>
-                    <input class="form-control" type="number" id="prodHours" value="0" min="0" step="0.25">
+                    <input class="form-control" type="number" id="prodHours" value="0.25" min="0" step="0.25">
                   </div>
                   <div class="form-group" style="grid-column:span 2">
                     <label>Notes</label>
@@ -4640,8 +4640,6 @@
       const file = input.files[0];
       input.value = '';  // reset so same file can be re-selected
       if (!activeClientId) { toast('Select a client account first', 'error'); return; }
-      // Verify session is still valid before uploading
-      if (!(await checkSession())) return;
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category', category);
@@ -4651,6 +4649,7 @@
       try {
         // Use /files/upload which both saves the file AND auto-imports data
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
         const d = await r.json();
         if (!r.ok) { toast(d.detail || 'Import failed', 'error'); return; }
         if (d.imported > 0) {
@@ -4661,7 +4660,8 @@
         }
         if (d.import_errors && d.import_errors.length) {
           console.warn('Import errors:', d.import_errors);
-          toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
+          // Show up to 2 specific errors
+          d.import_errors.slice(0, 2).forEach(err => toast(`⚠️ ${err}`, 'warning'));
         }
         // Refresh the active panel
         if (category === 'Claims') loadClaims();
@@ -4671,8 +4671,8 @@
         loadDashboard();
         loadDocuments();
       } catch (e) {
-        console.error(e);
-        toast('Import failed: ' + e.message, 'error');
+        console.error('Import error:', e);
+        toast('❌ Import failed — check your connection and try again: ' + e.message, 'error');
       }
     }
 
@@ -5909,8 +5909,6 @@
     }
 
     async function uploadFile(file) {
-      // Verify session is still valid before uploading
-      if (!(await checkSession())) return;
       const ext = (file.name || '').split('.').pop().toLowerCase();
       const isExcel = ['xlsx', 'xls', 'csv'].includes(ext);
 
@@ -5938,6 +5936,7 @@
 
       try {
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'Upload failed');
 
@@ -6204,11 +6203,14 @@
 
       try {
         const r = await fetch(url);
+        if (!r.ok) { toast('Failed to load production data', 'error'); return; }
         const d = await r.json();
         const logs = d.logs || [];
         const tbody = document.getElementById('prodTbody');
         if (!logs.length) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">No production entries yet. Log your first task above!</td></tr>';
+          const filterDate = document.getElementById('prodFilterDate')?.value;
+          const msg = filterDate ? `No entries found for ${filterDate}. <a href="#" onclick="document.getElementById('prodFilterDate').value='';loadProduction();return false" style="color:var(--primary)">Show All</a>` : 'No production entries yet. Log your first task above!';
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">${msg}</td></tr>`;
           return;
         }
         tbody.innerHTML = logs.map(l => `<tr>
@@ -6221,7 +6223,7 @@
           <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
           <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
         </tr>`).join('');
-      } catch (e) { console.error(e); }
+      } catch (e) { console.error(e); toast('⚠️ Could not load production data — check your connection', 'error'); }
 
       // Load uploaded production files
       loadProductionFiles();
@@ -6257,6 +6259,7 @@
 
     async function saveProductionLog() {
       if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      if (!(await checkSession())) return;
       const data = {
         client_id: activeClientId,
         work_date: document.getElementById('prodDate').value,
@@ -6268,19 +6271,22 @@
       };
       if (!data.work_date) { toast('Please select a date', 'error'); return; }
       if (!data.task_description) { toast('Please describe the task', 'error'); return; }
-      if (data.time_spent <= 0) { toast('Please enter time spent', 'error'); return; }
+      if (data.time_spent < 0) { toast('Time spent cannot be negative', 'error'); return; }
       try {
         const r = await fetch('/hub/api/production', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
-        toast('Production entry logged!', 'success');
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed to save production entry');
+        toast('✅ Production entry logged!', 'success');
         document.getElementById('prodTask').value = '';
         document.getElementById('prodQty').value = '0';
         document.getElementById('prodHours').value = '0';
         document.getElementById('prodNotes').value = '';
+        // Clear date filter so the new entry is visible
+        const filterEl = document.getElementById('prodFilterDate');
+        if (filterEl) filterEl.value = '';
         loadProduction();
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toast('❌ ' + (e.message || 'Failed to save'), 'error'); }
     }
 
     async function uploadProductionDailyFile(input) {
@@ -6305,6 +6311,7 @@
       try {
         toast(`Uploading ${file.name}…`, 'info');
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'Upload failed');
         toast('✅ Daily production file uploaded', 'success');

@@ -778,9 +778,15 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
     data = body.model_dump()
     data["client_id"] = scope
     data["username"] = user["username"]
-    log_id = add_production_log(data)
-    notify_activity(user["username"], "logged production", "Time Tracking",
-                    f"{data.get('hours',0)}h — {data.get('task_type','')}: {data.get('description','')[:60]}")
+    try:
+        log_id = add_production_log(data)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save production entry: {e}")
+    try:
+        notify_activity(user["username"], "logged production", "Time Tracking",
+                        f"{data.get('time_spent',0)}h — {data.get('category','')}: {data.get('task_description','')[:60]}")
+    except Exception:
+        pass  # notification is non-critical
     return {"id": log_id, "ok": True}
 
 
