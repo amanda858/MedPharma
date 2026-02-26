@@ -6570,29 +6570,33 @@
               const emailOn = !!s.email_configured;
               const smsOn = !!s.twilio_configured;
               if (healthBanner) {
+                let html = '';
                 if (!emailOn || !smsOn) {
                   const issues = [];
-                  if (!emailOn) issues.push('Email OFF');
-                  if (!smsOn) issues.push('SMS OFF');
+                  if (!emailOn) issues.push('📧 Email OFF');
+                  if (!smsOn) issues.push('📱 SMS OFF');
                   const details = [];
                   if (!emailOn && Array.isArray(s.missing_email_fields) && s.missing_email_fields.length) {
-                    details.push(`Email missing: ${s.missing_email_fields.join(', ')}`);
+                    details.push(`Email: set ${s.missing_email_fields.join(', ')}`);
                   }
                   if (!smsOn && Array.isArray(s.missing_twilio_fields) && s.missing_twilio_fields.length) {
-                    details.push(`SMS missing: ${s.missing_twilio_fields.join(', ')}`);
+                    details.push(`SMS: set ${s.missing_twilio_fields.join(', ')}`);
                   }
                   healthBanner.style.display = '';
-                  healthBanner.style.background = 'var(--danger-light)';
-                  healthBanner.style.border = '1px solid var(--danger)';
-                  healthBanner.style.color = '#b91c1c';
-                  healthBanner.textContent = `⚠️ Notification Health: ${issues.join(' | ')} — ${details.join(' | ') || 'configure providers in environment variables.'}`;
+                  healthBanner.style.background = (!emailOn && !smsOn) ? 'var(--danger-light)' : '#fef3c7';
+                  healthBanner.style.border = `1px solid ${(!emailOn && !smsOn) ? 'var(--danger)' : '#f59e0b'}`;
+                  healthBanner.style.color = (!emailOn && !smsOn) ? '#b91c1c' : '#92400e';
+                  html = `<div>⚠️ <b>Notification Status:</b> ${issues.join(' | ')} — ${details.join(' | ') || 'configure providers in Render dashboard environment variables.'}</div>`;
+                  if (s.in_app_only_mode) html += `<div style="margin-top:4px;font-size:11px;color:#6b7280">ℹ️ NOTIFY_IN_APP_ONLY is ON — regular notifications are in-app only. Set to "0" in Render for real delivery.</div>`;
                 } else {
                   healthBanner.style.display = '';
                   healthBanner.style.background = 'var(--success-light)';
                   healthBanner.style.border = '1px solid var(--success)';
                   healthBanner.style.color = '#065f46';
-                  healthBanner.textContent = '✅ Notification Health: Email and SMS are configured.';
+                  html = `<div>✅ <b>Notification Health:</b> 📧 Email (${s.sendgrid_configured ? 'SendGrid' : 'SMTP'}) + 📱 SMS (Twilio) configured</div>`;
+                  html += `<div style="font-size:11px;margin-top:4px;color:#065f46">Recipients: ${(s.email_recipients || []).join(', ')} | SMS: ${s.sms_target} | Tracking: ${(s.notify_on_users || []).join(', ')}${s.in_app_only_mode ? ' | ⚠️ IN_APP_ONLY mode (set to 0 for real delivery)' : ''}</div>`;
                 }
+                healthBanner.innerHTML = html;
               }
             }
           } catch (_) { }
@@ -6645,36 +6649,48 @@
         if (statusEl) {
           statusEl.style.display = '';
           statusEl.style.color = 'var(--gray-500)';
-          statusEl.textContent = 'Sending test notice...';
+          statusEl.textContent = 'Sending test notice (waiting for delivery confirmation)...';
         }
         const r = await fetch('/hub/api/notifications/test', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.detail || 'Test notification failed');
 
+        const emailOk = d.email_sent;
+        const smsOk = d.sms_sent;
+        const emailErr = d.email_error;
+        const smsErr = d.sms_error;
         const channels = [];
-        if (d.sendgrid_configured || d.smtp_configured) channels.push('email');
-        if (d.twilio_configured) channels.push('sms');
-        const smsReason = (!d.twilio_configured && Array.isArray(d.missing_twilio_fields) && d.missing_twilio_fields.length)
-          ? `SMS missing: ${d.missing_twilio_fields.join(', ')}`
-          : '';
-        const msg = channels.length
-          ? `Test notice queued via ${channels.join(' + ')}`
-          : `Test endpoint worked, but no email/SMS provider is configured${smsReason ? ` (${smsReason})` : ''}`;
-        toast(msg, channels.length ? 'success' : 'warning');
+        if (emailOk) channels.push('📧 Email');
+        if (smsOk) channels.push('📱 SMS');
+        const failures = [];
+        if (emailErr) failures.push(`Email: ${emailErr}`);
+        if (smsErr) failures.push(`SMS: ${smsErr}`);
+
+        if (channels.length) {
+          toast(`✅ Test notification delivered via ${channels.join(' + ')}!`, 'success');
+        } else if (failures.length) {
+          toast(`❌ Notification failed — ${failures[0]}`, 'error');
+        } else {
+          toast('⚠️ No email/SMS provider configured. Set TWILIO/SENDGRID credentials in Render dashboard.', 'warning');
+        }
 
         if (statusEl) {
           const ts = new Date().toLocaleString();
           statusEl.style.display = '';
-          statusEl.style.color = channels.length ? 'var(--success)' : 'var(--warning)';
-          statusEl.textContent = `Last test: ${ts} — ${msg}`;
+          let html = `<div style="font-size:12px;margin-top:8px">`;
+          html += `<b>Last test:</b> ${ts}<br>`;
+          html += `<span style="color:${emailOk ? 'var(--success)' : 'var(--danger)'}">${emailOk ? '✅' : '❌'} Email: ${emailOk ? 'Delivered to ' + (d.email_recipients || []).join(', ') : (emailErr || 'Not configured')}</span><br>`;
+          html += `<span style="color:${smsOk ? 'var(--success)' : 'var(--danger)'}">${smsOk ? '✅' : '❌'} SMS: ${smsOk ? 'Delivered to ' + (d.sms_target || '') : (smsErr || 'Not configured')}</span>`;
+          if (d.in_app_only_mode) html += `<br><span style="color:var(--warning)">⚠️ NOTIFY_IN_APP_ONLY=1 — regular notifications are in-app only (test bypasses this)</span>`;
+          html += `</div>`;
+          statusEl.innerHTML = html;
         }
       } catch (e) {
         toast(e.message || 'Failed to send test notice', 'error');
         if (statusEl) {
           const ts = new Date().toLocaleString();
           statusEl.style.display = '';
-          statusEl.style.color = 'var(--danger)';
-          statusEl.textContent = `Last test: ${ts} — ${e.message || 'Failed to send test notice'}`;
+          statusEl.innerHTML = `<div style="font-size:12px;color:var(--danger);margin-top:8px"><b>Last test:</b> ${ts} — ❌ ${esc(e.message || 'Failed')}</div>`;
         }
       } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📨 Send Test Notice'; }

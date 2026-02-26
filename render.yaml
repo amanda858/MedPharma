@@ -30,7 +30,7 @@ services:
       - key: NOTIFY_PHONE
         value: +18036263500
       - key: NOTIFY_ON_USERS
-        value: jessica,rcm
+        value: "*"
       - key: NOTIFY_IN_APP_ONLY
         value: "0"
       - key: TWILIO_SID
