@@ -1,8 +1,8 @@
 """
-Notification system — Team Lead Production Report.
+Notification system — Individual Progress Report.
 
 Buffers all activity during a user's session and sends ONE consolidated
-"Team Lead Production" report when the user logs out, including:
+"Individual Progress" report when the user logs out, including:
   • Activity breakdown by section
   • Industry-standard RCM benchmarks comparison
   • AI-powered productivity analysis (via OpenAI, with rule-based fallback)
@@ -133,7 +133,7 @@ Section-by-section breakdown:
 Industry context: Standard RCM workday is 7.5-8 hrs. Medical billing specialists
 should process 25-35 claims/hr, credentialing staff handle 3-5 new apps + 15 follow-ups/day.
 
-Write a concise 3-5 sentence "Team Lead Production Assessment" that:
+Write a concise 3-5 sentence "Individual Progress Assessment" that:
 1. States whether this employee met, exceeded, or fell short of daily expectations
 2. Highlights their strongest area and any area needing improvement
 3. Assesses whether the employee worked a productive and sufficient day
@@ -283,7 +283,7 @@ def flush_all_pending_notifications():
 
 def flush_and_notify(username: str):
     """
-    Called at logout — builds a full **Team Lead Production** report with:
+    Called at logout — builds a full **Individual Progress** report with:
       • Activity breakdown by section
       • Industry benchmark comparison
       • AI-powered productivity narrative
@@ -355,7 +355,7 @@ def flush_and_notify(username: str):
     # ── Plain text body ──
     lines = [
         "═══════════════════════════════════════════",
-        "       TEAM LEAD PRODUCTION REPORT",
+        "       INDIVIDUAL PROGRESS REPORT",
         "═══════════════════════════════════════════",
         "",
         f"  Employee:  {username}",
@@ -449,7 +449,7 @@ def flush_and_notify(username: str):
 
             <!-- HEADER -->
             <div style="background: linear-gradient(135deg, #0f172a, #1e293b); padding: 24px 28px;">
-                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">📊 TEAM LEAD PRODUCTION</h1>
+                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">📊 INDIVIDUAL PROGRESS REPORT</h1>
                 <div style="margin-top: 12px; display: flex; gap: 20px;">
                     <div>
                         <div style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600;">Employee</div>
@@ -523,22 +523,22 @@ def flush_and_notify(username: str):
 
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                 <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
-                    Team Lead Production Report — MedPharma Hub — {date_str}
+                    Individual Progress Report — MedPharma Hub — {date_str}
                 </p>
             </div>
         </div>
     </body>
     </html>"""
 
-    subject = f"Team Lead Production: {username} — {rating_label} ({overall_pct:.0f}%) — {date_str}"
+    subject = f"Individual Progress: {username} — {rating_label} ({overall_pct:.0f}%) — {date_str}"
 
     # SMS — concise summary with rating
     section_counts = ", ".join(f"{s}: {len(items)}" for s, items in by_section.items())
-    sms = (f"Team Lead Production: {username} | {date_str} | "
+    sms = (f"Progress Report: {username} | {date_str} | "
            f"{rating_label} ({overall_pct:.0f}%) | "
            f"{len(activities)} actions in {session_hrs:.1f}hrs | {section_counts}")
     if len(sms) > 155:
-        sms = (f"Team Lead: {username} | {rating_label} ({overall_pct:.0f}%) | "
+        sms = (f"Progress: {username} | {rating_label} ({overall_pct:.0f}%) | "
                f"{len(activities)} actions in {session_hrs:.1f}hrs")
         if len(sms) > 155:
             sms = sms[:152] + "…"
@@ -546,7 +546,7 @@ def flush_and_notify(username: str):
     # Fire both in background threads
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
     threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
-    log.info(f"Team Lead Production report queued for {username}: {rating_label} "
+    log.info(f"Individual progress report queued for {username}: {rating_label} "
              f"({overall_pct:.0f}%) — {len(activities)} actions across {len(by_section)} sections")
 
 
@@ -1226,7 +1226,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
 def send_team_progress_reports():
     """
     Send consolidated progress reports for tracked users (e.g., Jessica/RCM)
-    to configured owner recipients at 6:30 PM Eastern.
+    to configured owner recipients at 7:00 PM Eastern.
     """
     users = [u for u in NOTIFY_ON_USERS if u and u != "*"]
     if not users:
@@ -1247,7 +1247,7 @@ def start_daily_scheduler():
     Start APScheduler to fire:
       - send_production_reminders at 5:30 PM EST (for jessica & rcm)
       - send_daily_account_summary at 6:00 PM EST
-            - send_team_progress_reports at 6:30 PM EST
+                        - send_team_progress_reports at 7:00 PM EST
     Safe to call multiple times — only starts once.
     """
     global _scheduler_started
@@ -1281,16 +1281,16 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # 6:30 PM EST — Team member progress reports to owner recipients
+        # 7:00 PM EST — Team member progress reports to owner recipients
         scheduler.add_job(
             send_team_progress_reports,
-            CronTrigger(hour=18, minute=30, timezone=est),
+            CronTrigger(hour=19, minute=0, timezone=est),
             id="daily_team_progress_reports",
-            name="6:30 PM EST Team Progress Reports",
+            name="7:00 PM EST Team Progress Reports",
             replace_existing=True,
         )
         scheduler.start()
-        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary, 6:30 team progress")
+        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary, 7:00 team progress")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -1301,7 +1301,7 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 5:30, 6:00, and 6:30 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 5:30, 6:00, and 7:00 PM EST."""
     import time as _time
 
     def _check_loop():
@@ -1335,8 +1335,8 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # 6:30 PM — Team progress reports
-                if now_est.hour == 18 and 30 <= now_est.minute < 35 and last_progress_date != today:
+                # 7:00 PM — Team progress reports
+                if now_est.hour == 19 and now_est.minute < 5 and last_progress_date != today:
                     last_progress_date = today
                     log.info("Thread scheduler firing team progress reports")
                     send_team_progress_reports()
@@ -1346,4 +1346,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 team progress")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 7:00 team progress")
