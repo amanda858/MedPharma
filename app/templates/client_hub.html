@@ -2756,8 +2756,8 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('prodDailyFileInput').click()">📎 Upload Daily File</button>
-              <input type="file" id="prodDailyFileInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none"
-                onchange="uploadProductionDailyFile(this)">
+              <input type="file" id="prodDailyFileInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                style="display:none" onchange="uploadProductionDailyFile(this)">
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
               <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
@@ -6246,8 +6246,8 @@
       input.value = '';
 
       const ext = (file.name || '').split('.').pop().toLowerCase();
-      if (!['xlsx', 'xls', 'csv', 'pdf'].includes(ext)) {
-        toast('Only .xlsx, .xls, .csv, .pdf files are allowed for daily production upload', 'error');
+      if (!['xlsx', 'xls', 'csv', 'pdf', 'doc', 'docx', 'txt', 'png', 'jpg', 'jpeg'].includes(ext)) {
+        toast('Only .xlsx, .xls, .csv, .pdf, .doc, .docx, .txt, .png, .jpg files are allowed', 'error');
         return;
       }
 

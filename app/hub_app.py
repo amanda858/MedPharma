@@ -22,6 +22,7 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup():
+    logging.basicConfig(level=logging.INFO)
     # Keep service available even if secondary startup tasks fail.
     try:
         init_client_hub_db()

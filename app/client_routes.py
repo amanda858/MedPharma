@@ -739,8 +739,13 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
 
 # ─── File Uploads ───────────────────────────────────────────────────────────
 
-UPLOAD_DIR = os.path.join("data", "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Use the same root as DATABASE_PATH so uploads go onto the Render persistent disk.
+_db_dir = os.path.dirname(os.getenv("DB_PATH", os.path.join("data", "leads.db")))
+UPLOAD_DIR = os.path.join(_db_dir, "uploads")
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+except OSError:
+    pass  # will be created on first upload if needed
 
 
 # ─── Team Production ──────────────────────────────────────────────────────────
@@ -821,11 +826,18 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf, .doc, .docx files allowed")
+    ALLOWED_EXTS = {".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(400, f"File type '{ext}' not allowed. Accepted: {', '.join(sorted(ALLOWED_EXTS))}")
 
-    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    if ext in (".xlsx", ".xls", ".csv"):
+        file_type = "excel"
+    elif ext == ".pdf":
+        file_type = "pdf"
+    else:
+        file_type = "document"
     unique_name = f"{uuid.uuid4().hex}{ext}"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)  # ensure dir exists
     dest = os.path.join(UPLOAD_DIR, unique_name)
 
     content = await file.read()
@@ -891,6 +903,23 @@ async def upload_file(
 
     if import_category and imported == 0 and not import_errors:
         import_errors = [f"No rows imported for {import_category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+
+    # ── Auto-log a production entry when category is Production ──
+    if category == "Production":
+        try:
+            from datetime import date as _date
+            add_production_log({
+                "client_id": scope,
+                "work_date": _date.today().isoformat(),
+                "username": user["username"],
+                "category": "File Upload",
+                "task_description": f"Uploaded {file.filename or 'file'} ({ext.lstrip('.')})",
+                "quantity": row_count if row_count else 1,
+                "time_spent": 0,
+                "notes": description or f"Production file upload: {file.filename}",
+            })
+        except Exception:
+            pass  # non-critical
 
     return {
         "id": file_id,
