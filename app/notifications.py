@@ -769,6 +769,7 @@ Key metrics:
 - AR Aging: Current ${d['ar_aging']['current']:,.2f} | 31-60 ${d['ar_aging']['31_60']:,.2f} | 61-90 ${d['ar_aging']['61_90']:,.2f} | 90+ ${d['ar_aging']['90_plus']:,.2f}
 - Credentialing: {d['cred_total']} total ({d['cred_approved']} approved, {d['cred_pending']} pending, {d['cred_not_started']} not started)
 - EDI: {d['edi_total']} total ({d['edi_live']} live)
+- User Production today: {d.get('production_submissions_today', 0)} total ({d.get('production_logs_today', 0)} log entries, {d.get('production_files_today', 0)} file uploads)
 - Serving {d['total_clients']} clients | {d['today_actions']} system actions today
 
 Industry benchmarks for context:
@@ -971,6 +972,7 @@ def send_daily_account_summary():
                         <div><span style="font-weight:800;color:#22c55e;font-size:18px">{d['paid_today']}</span> <span style="font-size:12px;color:#64748b">Paid</span></div>
                         <div><span style="font-weight:800;color:#ef4444;font-size:18px">{d['denied_today']}</span> <span style="font-size:12px;color:#64748b">Denied</span></div>
                         <div><span style="font-weight:800;color:#16a34a;font-size:18px">{_fmt_money(d['payments_today'])}</span> <span style="font-size:12px;color:#64748b">Payments</span></div>
+                        <div><span style="font-weight:800;color:#7c3aed;font-size:18px">{d.get('production_submissions_today', 0)}</span> <span style="font-size:12px;color:#64748b">User Production</span></div>
                     </div>
                 </div>
 
@@ -1100,6 +1102,11 @@ def send_daily_account_summary():
         "───── CREDENTIALING/EDI ─────",
         f"  Credentialing: {d['cred_total']} ({d['cred_approved']} approved, {d['cred_pending']} pending)",
         f"  EDI:           {d['edi_total']} ({d['edi_live']} live)",
+        "",
+        "───── USER PRODUCTION ─────",
+        f"  Total submissions today: {d.get('production_submissions_today', 0)}",
+        f"  Manual log entries:      {d.get('production_logs_today', 0)}",
+        f"  Excel/PDF uploads:       {d.get('production_files_today', 0)}",
         "",
         f"  SLA Breaches: {d['sla_breaches']}  |  System Actions Today: {d['today_actions']}",
     ]

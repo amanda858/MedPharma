@@ -1928,7 +1928,7 @@
         </div>
         <div class="nav-section">Team</div>
         <div class="nav-item" data-panel="production" onclick="navTo('production')">
-          <span class="ni">⏱️</span> Team Production
+          <span class="ni">⏱️</span> User Production
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -2748,12 +2748,16 @@
           </div>
         </div>
 
-        <!-- ═══ TEAM PRODUCTION ═══ -->
+        <!-- ═══ USER PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">⏱️ Team Production</div>
+            <div class="page-title">⏱️ User Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
+              <button class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('prodDailyFileInput').click()">📎 Upload Daily File</button>
+              <input type="file" id="prodDailyFileInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none"
+                onchange="uploadProductionDailyFile(this)">
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
               <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
@@ -6153,7 +6157,7 @@
     }
 
     // ═══════════════════════════════════════
-    // TEAM PRODUCTION
+    // USER PRODUCTION
     // ═══════════════════════════════════════
     let prodViewMode = 'log'; // 'log' or 'report'
 
@@ -6235,6 +6239,38 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    async function uploadProductionDailyFile(input) {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      if (!input.files || !input.files.length) return;
+      const file = input.files[0];
+      input.value = '';
+
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      if (!['xlsx', 'xls', 'csv', 'pdf'].includes(ext)) {
+        toast('Only .xlsx, .xls, .csv, .pdf files are allowed for daily production upload', 'error');
+        return;
+      }
+
+      const workDate = document.getElementById('prodDate')?.value || new Date().toISOString().split('T')[0];
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category', 'Production');
+      fd.append('description', `User Production daily upload — ${workDate}`);
+      fd.append('client_id', activeClientId);
+
+      try {
+        toast(`Uploading ${file.name}…`, 'info');
+        const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Upload failed');
+        toast('✅ Daily production file uploaded', 'success');
+        loadDashboard();
+        if (typeof loadDocuments === 'function') loadDocuments();
+      } catch (e) {
+        toast(e.message || 'Upload failed', 'error');
+      }
+    }
+
     async function deleteProductionLog(id) {
       if (!confirm('Delete this production entry?')) return;
       try {
@@ -6284,7 +6320,7 @@
 
       // Summary by user
       html += `<div class="card" style="margin-bottom:18px">
-        <div class="card-header"><div class="card-title">👥 Team Summary (${esc(start)} to ${esc(end)})</div></div>
+        <div class="card-header"><div class="card-title">👤 User Summary (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
           <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Avg Hrs/Day</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>

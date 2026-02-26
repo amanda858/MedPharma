@@ -1435,6 +1435,13 @@ def get_daily_account_summary():
         # ── Today's audit activity ──
         today_actions = q1("SELECT COUNT(*) FROM audit_log WHERE created_at >= ?", [today_str])
 
+        # ── User production uploads / logs today ──
+        production_logs_today = q1("SELECT COUNT(*) FROM team_production WHERE work_date=?", [today_str])
+        production_files_today = q1(
+            "SELECT COUNT(*) FROM client_files WHERE date(created_at)=? AND lower(category)='production'",
+            [today_str],
+        )
+
         return {
             # Claims
             "total_claims": total_claims,
@@ -1478,7 +1485,34 @@ def get_daily_account_summary():
             # General
             "total_clients": total_clients,
             "today_actions": today_actions,
+            "production_logs_today": production_logs_today,
+            "production_files_today": production_files_today,
+            "production_submissions_today": int(production_logs_today) + int(production_files_today),
         }
+    finally:
+        conn.close()
+
+
+def has_production_data_today(username: str, work_date: str) -> bool:
+    """Return True if user has either logged production or uploaded a Production file for the date."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        uname = (username or "").strip().lower()
+
+        cur.execute(
+            "SELECT COUNT(*) FROM team_production WHERE work_date=? AND lower(username)=?",
+            (work_date, uname),
+        )
+        log_count = int((cur.fetchone() or [0])[0] or 0)
+
+        cur.execute(
+            "SELECT COUNT(*) FROM client_files WHERE date(created_at)=? AND lower(category)='production' AND lower(uploaded_by)=?",
+            (work_date, uname),
+        )
+        file_count = int((cur.fetchone() or [0])[0] or 0)
+
+        return (log_count + file_count) > 0
     finally:
         conn.close()
 
