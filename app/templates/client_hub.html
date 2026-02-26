@@ -2573,8 +2573,8 @@
                 Folders</button>
               <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
                 Upload File</button>
-              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
-                onchange="handleFileSelect(this)" multiple>
+              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                style="display:none" onchange="handleFileSelect(this)" multiple>
             </div>
           </div>
 
@@ -2614,8 +2614,9 @@
             <div style="font-size:32px;margin-bottom:8px">📄</div>
             <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload
             </div>
-            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv
-              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .csv
+              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx &nbsp;•&nbsp; .png &nbsp;•&nbsp; .jpg
+              &nbsp;•&nbsp; .txt</div>
             <div style="margin-top:10px">
               <input id="fileDesc" class="form-control" placeholder="Description (optional)"
                 style="width:240px;display:inline-block">
