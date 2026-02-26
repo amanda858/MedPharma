@@ -2049,7 +2049,8 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    is_admin = user.get("role") == "admin"
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -2071,12 +2072,22 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
             for sp_name in ["OMT", "MHP"]:
                 sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
 
-        # Also gather user production data
-        prod_rows = conn.execute(
-            "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
-            "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
-            (client_id,)
-        ).fetchall()
+        # Gather user production data
+        # Admin sees ALL users' production across ALL accounts (oversight role)
+        # Non-admin sees only production for their client account
+        if is_admin:
+            prod_rows = conn.execute(
+                "SELECT p.username, p.category, p.task_description, p.quantity, p.time_spent, "
+                "p.work_date, p.notes, c.company as account_name "
+                "FROM team_production p LEFT JOIN clients c ON p.client_id = c.id "
+                "ORDER BY p.work_date DESC LIMIT 200"
+            ).fetchall()
+        else:
+            prod_rows = conn.execute(
+                "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
+                "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
+                (client_id,)
+            ).fetchall()
         production_data = [dict(r) for r in prod_rows]
 
         # Aggregate production by user
@@ -2084,12 +2095,14 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
         for p in production_data:
             u = p.get("username", "Unknown")
             if u not in prod_by_user:
-                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set()}
+                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set(), "accounts": set()}
             prod_by_user[u]["entries"] += 1
             prod_by_user[u]["total_qty"] += int(p.get("quantity") or 0)
             prod_by_user[u]["total_hours"] += float(p.get("time_spent") or 0)
             prod_by_user[u]["dates"].add(p.get("work_date", ""))
             prod_by_user[u]["categories"].add(p.get("category", ""))
+            if p.get("account_name"):
+                prod_by_user[u]["accounts"].add(p.get("account_name"))
     finally:
         conn.close()
 
@@ -2126,11 +2139,11 @@ EDI SETUP: {len(edi.get('detail', []))} connections
 
 PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
 
-USER PRODUCTION LOG ({len(production_data)} recent entries):
-{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h" for p in production_data[:20]) or '  No production data logged'}
+USER PRODUCTION LOG ({len(production_data)} recent entries{' — ALL ACCOUNTS (admin view)' if is_admin else ''}):
+{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h{(' | acct: ' + p.get('account_name','')) if p.get('account_name') else ''}" for p in production_data[:30]) or '  No production data logged'}
 
-PRODUCTION SUMMARY BY USER:
-{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h across {len(d['dates'])} day(s), categories: {', '.join(d['categories'])}" for u, d in prod_by_user.items()) or '  No user production data'}
+PRODUCTION SUMMARY BY TEAM MEMBER{' (ALL ACCOUNTS)' if is_admin else ''}:
+{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h total across {len(d['dates'])} day(s), avg {round(d['total_hours']/max(len(d['dates']),1),1)}h/day, categories: {', '.join(d['categories'])}{(', accounts: ' + ', '.join(d['accounts'])) if d.get('accounts') else ''}" for u, d in prod_by_user.items()) or '  No user production data'}
 """
 
     # Sub-profile data
@@ -2155,7 +2168,7 @@ Your report should include:
 6. EDI CONNECTIVITY — Note setup status
 7. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
 8. RECOMMENDED ACTIONS — Specific, prioritized action items
-9. USER PRODUCTION ANALYSIS — If production log data exists, evaluate each team member's daily output, hours worked, task categories, and flag any concerns about underperformance or time management
+9. USER PRODUCTION ANALYSIS — Evaluate each team member's daily output, hours worked, task categories, and average hours per day. Flag any team members averaging under 6 hours/day or showing low output. Compare team members against each other. This section is critical — the report reader is the admin/owner who tracks what employees are doing, not a worker themselves.
 10. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
