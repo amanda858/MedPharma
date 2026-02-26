@@ -6666,11 +6666,11 @@
       const statusEl = document.getElementById('testNoticeStatus');
       const oldText = btn ? btn.innerHTML : '';
       try {
-        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending...'; }
+        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending (may take 15-30s)...'; }
         if (statusEl) {
           statusEl.style.display = '';
           statusEl.style.color = 'var(--gray-500)';
-          statusEl.textContent = 'Sending test notice (waiting for delivery confirmation)...';
+          statusEl.innerHTML = '<div style="font-size:12px">⏳ Sending test notification — calling Twilio &amp; SendGrid directly (no threading)...<br><small>This may take up to 30 seconds. Please wait.</small></div>';
         }
         const r = await fetch('/hub/api/notifications/test', { method: 'POST' });
         const d = await r.json().catch(() => ({}));

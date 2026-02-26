@@ -23,6 +23,10 @@ import logging
 import threading
 import json
 import smtplib
+import urllib.request
+import urllib.parse
+import urllib.error
+import base64
 from collections import defaultdict
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -67,7 +71,7 @@ def _live_config() -> dict:
     emails = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com").split(",") if e.strip()] or NOTIFY_EMAILS
     t_sid = os.getenv("TWILIO_SID", "") or TWILIO_SID
     t_tok = os.getenv("TWILIO_TOKEN", "") or TWILIO_TOKEN
-    t_from = os.getenv("TWILIO_FROM", "") or TWILIO_FROM
+    t_from = _normalize_phone(os.getenv("TWILIO_FROM", "") or TWILIO_FROM)
     phone = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500")) or NOTIFY_PHONE
     smtp_h = os.getenv("SMTP_HOST", "smtp.gmail.com") or SMTP_HOST
     smtp_p = int(os.getenv("SMTP_PORT", "587") or SMTP_PORT)
@@ -592,17 +596,27 @@ def flush_and_notify(username: str):
 # ── Send helpers ──
 
 def _send_email(subject: str, body: str, html_body: str = ""):
-    """Send email notification via SendGrid v3 API."""
-    if IN_APP_ONLY_MODE:
+    """Send email notification via SendGrid v3 API.
+    Uses _live_config() to read credentials fresh (avoids stale cache)."""
+    cfg = _live_config()
+    if cfg["IN_APP_ONLY_MODE"]:
         log.info(f"In-app notification mode active — email send simulated: {subject}")
         return
 
-    if not NOTIFY_EMAILS:
+    emails = cfg["NOTIFY_EMAILS"]
+    sg_key = cfg["SENDGRID_API_KEY"]
+    sg_from = cfg["SENDGRID_FROM"]
+    smtp_h = cfg["SMTP_HOST"]
+    smtp_p = cfg["SMTP_PORT"]
+    smtp_u = cfg["SMTP_USER"]
+    smtp_pw = cfg["SMTP_PASS"]
+
+    if not emails:
         log.debug("Email notification skipped — NOTIFY_EMAILS not configured")
         return
 
     # Primary: SendGrid
-    if SENDGRID_API_KEY:
+    if sg_key:
         try:
             import httpx
             content = []
@@ -613,10 +627,10 @@ def _send_email(subject: str, body: str, html_body: str = ""):
             if not content:
                 content.append({"type": "text/plain", "value": "(no content)"})
 
-            recipients = [{"email": addr} for addr in NOTIFY_EMAILS]
+            recipients = [{"email": addr} for addr in emails]
             payload = {
                 "personalizations": [{"to": recipients}],
-                "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+                "from": {"email": sg_from, "name": "MedPharma Hub"},
                 "subject": subject,
                 "content": content,
             }
@@ -624,59 +638,66 @@ def _send_email(subject: str, body: str, html_body: str = ""):
                 "https://api.sendgrid.com/v3/mail/send",
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                    "Authorization": f"Bearer {sg_key}",
                     "Content-Type": "application/json",
                 },
                 timeout=15,
             )
             if resp.status_code in (200, 202):
-                log.info(f"Email sent via SendGrid to {', '.join(NOTIFY_EMAILS)}: {subject}")
+                log.info(f"Email sent via SendGrid to {', '.join(emails)}: {subject}")
                 return
             log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
         except Exception as e:
             log.error(f"Failed to send email via SendGrid: {e}")
 
     # Fallback: SMTP
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+    if not smtp_h or not smtp_u or not smtp_pw:
         log.error("Email notification skipped — no working provider configured (SendGrid/SMTP)")
         return
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = SMTP_USER or SENDGRID_FROM
-        msg["To"] = ", ".join(NOTIFY_EMAILS)
+        msg["From"] = smtp_u or sg_from
+        msg["To"] = ", ".join(emails)
 
         plain = body or "(no content)"
         msg.attach(MIMEText(plain, "plain"))
         if html_body:
             msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
             server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(msg["From"], NOTIFY_EMAILS, msg.as_string())
-        log.info(f"Email sent via SMTP to {', '.join(NOTIFY_EMAILS)}: {subject}")
+            server.login(smtp_u, smtp_pw)
+            server.sendmail(msg["From"], emails, msg.as_string())
+        log.info(f"Email sent via SMTP to {', '.join(emails)}: {subject}")
     except Exception as e:
         log.error(f"Failed to send email via SMTP: {e}")
 
 
 def _send_sms(message: str):
-    """Send SMS notification via Twilio."""
-    if IN_APP_ONLY_MODE:
+    """Send SMS notification via Twilio.
+    Uses _live_config() to read credentials fresh (avoids stale cache)."""
+    cfg = _live_config()
+    if cfg["IN_APP_ONLY_MODE"]:
         log.info("In-app notification mode active — SMS send simulated")
         return
 
-    if not TWILIO_SID or not TWILIO_TOKEN or not TWILIO_FROM or not NOTIFY_PHONE:
+    t_sid = cfg["TWILIO_SID"]
+    t_tok = cfg["TWILIO_TOKEN"]
+    t_from = cfg["TWILIO_FROM"]
+    phone = cfg["NOTIFY_PHONE"]
+
+    if not t_sid or not t_tok or not t_from or not phone:
         log.debug("SMS notification skipped — Twilio not configured")
         return
     try:
         import httpx
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json"
-        data = {"To": NOTIFY_PHONE, "From": TWILIO_FROM, "Body": message}
-        resp = httpx.post(url, data=data, auth=(TWILIO_SID, TWILIO_TOKEN), timeout=15)
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
+        data = {"To": phone, "From": t_from, "Body": message}
+        resp = httpx.post(url, data=data, auth=(t_sid, t_tok), timeout=15)
         if resp.status_code in (200, 201):
-            log.info(f"SMS sent to {NOTIFY_PHONE}")
+            log.info(f"SMS sent to {phone}")
         else:
             log.error(f"Twilio SMS failed ({resp.status_code}): {resp.text}")
     except Exception as e:
@@ -685,7 +706,8 @@ def _send_sms(message: str):
 
 def _send_email_force(subject: str, body: str, html_body: str = ""):
     """Send email — always attempts delivery (ignores IN_APP_ONLY_MODE).
-    Reads credentials LIVE from env vars to avoid stale cached values."""
+    Uses stdlib urllib.request (no third-party dependency).
+    Tries SendGrid first, then SMTP fallback."""
     cfg = _live_config()
     emails = cfg["NOTIFY_EMAILS"]
     sg_key = cfg["SENDGRID_API_KEY"]
@@ -700,59 +722,84 @@ def _send_email_force(subject: str, body: str, html_body: str = ""):
 
     log.info(f"[TEST] Email attempt — SendGrid={'YES' if sg_key else 'NO'}, SMTP={'YES' if smtp_u else 'NO'}, to={emails}")
 
-    # Primary: SendGrid
-    if sg_key:
-        import httpx
-        content = []
-        if body:
-            content.append({"type": "text/plain", "value": body})
-        if html_body:
-            content.append({"type": "text/html", "value": html_body})
-        if not content:
-            content.append({"type": "text/plain", "value": "(no content)"})
+    sg_error = None
 
-        recipients = [{"email": addr} for addr in emails]
-        payload = {
-            "personalizations": [{"to": recipients}],
-            "from": {"email": sg_from, "name": "MedPharma Hub"},
-            "subject": subject,
-            "content": content,
-        }
-        resp = httpx.post(
-            "https://api.sendgrid.com/v3/mail/send",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {sg_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=20,
-        )
-        if resp.status_code in (200, 202):
-            log.info(f"[TEST] Email sent via SendGrid to {', '.join(emails)}: {subject}")
-            return
-        raise RuntimeError(f"SendGrid failed ({resp.status_code}): {resp.text[:300]}")
+    # Primary: SendGrid (using stdlib urllib)
+    if sg_key:
+        try:
+            content = []
+            if body:
+                content.append({"type": "text/plain", "value": body})
+            if html_body:
+                content.append({"type": "text/html", "value": html_body})
+            if not content:
+                content.append({"type": "text/plain", "value": "(no content)"})
+
+            recipients = [{"email": addr} for addr in emails]
+            payload = json.dumps({
+                "personalizations": [{"to": recipients}],
+                "from": {"email": sg_from, "name": "MedPharma Hub"},
+                "subject": subject,
+                "content": content,
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                "https://api.sendgrid.com/v3/mail/send",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {sg_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=20)
+            status = resp.getcode()
+            if status in (200, 202):
+                log.info(f"[TEST] Email sent via SendGrid to {', '.join(emails)}: {subject}")
+                return
+            resp_body = resp.read().decode("utf-8", errors="replace")[:300]
+            sg_error = f"SendGrid returned {status}: {resp_body}"
+            log.error(f"[TEST] {sg_error}")
+        except urllib.error.HTTPError as he:
+            resp_body = he.read().decode("utf-8", errors="replace")[:300]
+            sg_error = f"SendGrid HTTP {he.code}: {resp_body}"
+            log.error(f"[TEST] {sg_error}")
+        except Exception as e:
+            sg_error = f"SendGrid error: {e}"
+            log.error(f"[TEST] {sg_error}")
 
     # Fallback: SMTP
-    if not smtp_h or not smtp_u or not smtp_pw:
-        raise ValueError("No email provider configured — set SENDGRID_API_KEY or SMTP_USER+SMTP_PASS in Render environment")
+    if smtp_h and smtp_u and smtp_pw:
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = smtp_u or sg_from
+            msg["To"] = ", ".join(emails)
+            msg.attach(MIMEText(body or "(no content)", "plain"))
+            if html_body:
+                msg.attach(MIMEText(html_body, "html"))
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = smtp_u or sg_from
-    msg["To"] = ", ".join(emails)
-    msg.attach(MIMEText(body or "(no content)", "plain"))
-    if html_body:
-        msg.attach(MIMEText(html_body, "html"))
+            with smtplib.SMTP(smtp_h, smtp_p, timeout=25) as server:
+                server.starttls()
+                server.login(smtp_u, smtp_pw)
+                server.sendmail(msg["From"], emails, msg.as_string())
+            log.info(f"[TEST] Email sent via SMTP to {', '.join(emails)}: {subject}")
+            return
+        except Exception as e:
+            smtp_error = f"SMTP error: {e}"
+            log.error(f"[TEST] {smtp_error}")
+            if sg_error:
+                raise RuntimeError(f"{sg_error} | {smtp_error}")
+            raise RuntimeError(smtp_error)
 
-    with smtplib.SMTP(smtp_h, smtp_p, timeout=25) as server:
-        server.starttls()
-        server.login(smtp_u, smtp_pw)
-        server.sendmail(msg["From"], emails, msg.as_string())
-    log.info(f"[TEST] Email sent via SMTP to {', '.join(emails)}: {subject}")
+    if sg_error:
+        raise RuntimeError(sg_error)
+    raise ValueError("No email provider configured — set SENDGRID_API_KEY or SMTP_USER+SMTP_PASS in Render environment")
 
 
 def _send_sms_force(message: str):
     """Send SMS — always attempts delivery (ignores IN_APP_ONLY_MODE).
+    Uses stdlib urllib.request (no third-party dependency).
     Reads credentials LIVE from env vars to avoid stale cached values."""
     cfg = _live_config()
     t_sid = cfg["TWILIO_SID"]
@@ -766,30 +813,70 @@ def _send_sms_force(message: str):
     if not phone:
         raise ValueError("No SMS recipient configured — set NOTIFY_PHONE env var")
 
-    log.info(f"[TEST] SMS attempt — from={t_from}, to={phone}")
+    log.info(f"[TEST] SMS attempt — from={t_from}, to={phone}, sid={t_sid[:8]}...")
 
-    import httpx
     url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
-    data = {"To": phone, "From": t_from, "Body": message}
-    resp = httpx.post(url, data=data, auth=(t_sid, t_tok), timeout=20)
-    if resp.status_code in (200, 201):
-        log.info(f"[TEST] SMS sent to {phone}")
-        return
-    raise RuntimeError(f"Twilio SMS failed ({resp.status_code}): {resp.text[:300]}")
+    post_data = urllib.parse.urlencode({
+        "To": phone,
+        "From": t_from,
+        "Body": message,
+    }).encode("utf-8")
+    auth_str = base64.b64encode(f"{t_sid}:{t_tok}".encode()).decode()
+
+    req = urllib.request.Request(
+        url,
+        data=post_data,
+        headers={
+            "Authorization": f"Basic {auth_str}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=20)
+        status = resp.getcode()
+        resp_body = resp.read().decode("utf-8", errors="replace")
+        if status in (200, 201):
+            log.info(f"[TEST] SMS sent to {phone} (status {status})")
+            # Try to extract Message SID for confirmation
+            try:
+                msg_data = json.loads(resp_body)
+                log.info(f"[TEST] Twilio Message SID: {msg_data.get('sid', 'N/A')}")
+            except Exception:
+                pass
+            return
+        raise RuntimeError(f"Twilio SMS failed ({status}): {resp_body[:300]}")
+    except urllib.error.HTTPError as he:
+        resp_body = he.read().decode("utf-8", errors="replace")[:500]
+        # Parse Twilio error for clearer message
+        try:
+            err_data = json.loads(resp_body)
+            twilio_msg = err_data.get("message", resp_body[:300])
+            twilio_code = err_data.get("code", "")
+            raise RuntimeError(f"Twilio error {he.code} (code {twilio_code}): {twilio_msg}")
+        except (json.JSONDecodeError, RuntimeError) as inner:
+            if isinstance(inner, RuntimeError):
+                raise
+            raise RuntimeError(f"Twilio HTTP {he.code}: {resp_body[:300]}")
 
 
 def send_test_notification(triggered_by: str = "system") -> dict:
     """Send an immediate test notification to configured recipients/channels.
-    Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE)."""
+    Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE).
+    Runs SYNCHRONOUSLY — no threading — to ensure errors are captured clearly."""
+    cfg = _live_config()
     now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
     subject = f"MedPharma Hub Test Notification — {now}"
+    emails = cfg["NOTIFY_EMAILS"]
+    phone = cfg["NOTIFY_PHONE"]
+
     body = (
         f"This is a test notification from MedPharma Hub.\n"
         f"Triggered by: {triggered_by}\n"
         f"Time: {now}\n"
-        f"Recipients: {', '.join(NOTIFY_EMAILS) if NOTIFY_EMAILS else 'none'}\n"
-        f"Mode: {'IN_APP_ONLY (bypassed for test)' if IN_APP_ONLY_MODE else 'External delivery'}\n"
-        f"SMS target: {NOTIFY_PHONE or 'not configured'}"
+        f"Recipients: {', '.join(emails) if emails else 'none'}\n"
+        f"Mode: {'IN_APP_ONLY (bypassed for test)' if cfg['IN_APP_ONLY_MODE'] else 'External delivery'}\n"
+        f"SMS target: {phone or 'not configured'}"
     )
     html_body = f"""
     <html><body style="font-family:Arial,sans-serif;padding:20px">
@@ -800,8 +887,8 @@ def send_test_notification(triggered_by: str = "system") -> dict:
         <div style="padding:20px">
           <p><b>Triggered by:</b> {triggered_by}</p>
           <p><b>Time:</b> {now}</p>
-          <p><b>Email to:</b> {', '.join(NOTIFY_EMAILS)}</p>
-          <p><b>SMS to:</b> {NOTIFY_PHONE or 'not configured'}</p>
+          <p><b>Email to:</b> {', '.join(emails)}</p>
+          <p><b>SMS to:</b> {phone or 'not configured'}</p>
           <p style="color:#22c55e;font-weight:bold;font-size:16px">If you received this, your notification pipeline is working!</p>
         </div>
       </div>
@@ -813,33 +900,21 @@ def send_test_notification(triggered_by: str = "system") -> dict:
 
     results = {"email_sent": False, "sms_sent": False, "email_error": None, "sms_error": None}
 
-    # Force-send email (bypassing IN_APP_ONLY for test)
-    def _test_email():
-        try:
-            _send_email_force(subject, body, html_body)
-            results["email_sent"] = True
-        except Exception as e:
-            results["email_error"] = str(e)
+    # ── EMAIL (synchronous) ──
+    try:
+        _send_email_force(subject, body, html_body)
+        results["email_sent"] = True
+    except Exception as e:
+        results["email_error"] = str(e)
+        log.error(f"[TEST] Email failed: {e}")
 
-    def _test_sms():
-        try:
-            _send_sms_force(sms)
-            results["sms_sent"] = True
-        except Exception as e:
-            results["sms_error"] = str(e)
-
-    t1 = threading.Thread(target=_test_email, daemon=True)
-    t2 = threading.Thread(target=_test_sms, daemon=True)
-    t1.start()
-    t2.start()
-    t1.join(timeout=30)
-    t2.join(timeout=30)
-
-    # Detect thread timeouts (thread still alive = timed out)
-    if t1.is_alive() and not results["email_sent"] and not results["email_error"]:
-        results["email_error"] = "Timed out after 30s — Render may be blocking SMTP or the provider is slow"
-    if t2.is_alive() and not results["sms_sent"] and not results["sms_error"]:
-        results["sms_error"] = "Timed out after 30s — Twilio may be unreachable"
+    # ── SMS (synchronous) ──
+    try:
+        _send_sms_force(sms)
+        results["sms_sent"] = True
+    except Exception as e:
+        results["sms_error"] = str(e)
+        log.error(f"[TEST] SMS failed: {e}")
 
     status = get_notification_status()
     status["ok"] = True
