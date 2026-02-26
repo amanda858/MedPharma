@@ -4,7 +4,16 @@
         {
             "label": "git-commit-push",
             "type": "shell",
-            "command": "git add -A && git commit -m 'fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more' && git push origin main",
+            "command": "cd /workspaces/CVOPro && rm -f send_test.py send_test_notification.py research.py research.ipynb && echo '=== FILES DELETED ===' && git add -A && echo '=== GIT STATUS ===' && git status && echo '=== GIT COMMIT ===' && git commit -m 'fix: prevent data loss — remove destructive startup code, add DB backups and disk mount checks' -m '' -m '- Stop resetting RCM password on every startup (was generating new salt each boot, breaking sessions)' -m '- Stop blanking Luminary/Eric profile fields on every startup (was wiping user data)' -m '- Stop overwriting eric contact info on every startup' -m '- Add persistent disk mount check on production startup' -m '- Add automatic DB backup before every startup (keeps 5 most recent)' -m '- Add fresh-database detection to prevent silent data loss' -m '- Remove test/research files from repo' && echo '=== GIT PUSH ===' && git push origin main && echo '=== ALL DONE ==='",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "investigate",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && HUB_TOKEN=$(grep hub_session /tmp/cookies_admin.txt 2>/dev/null | awk '{print $NF}') && echo '=== claims client_id=2 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=2' && echo '' && echo '=== claims client_id=3 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=3' && echo '' && echo '=== claims client_id=6 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=6' && echo '' && echo '=== credentialing ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/credentialing' && echo '' && echo '=== edi ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/edi' && echo '' && echo '=== payments ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/payments' && echo '' && echo '=== production ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/production' && echo '' && echo '=== files ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/files' && echo ALLDONE2",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

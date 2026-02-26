@@ -1,0 +1,10 @@
+eea1de0 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+0c0e476 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+ad4ad7e fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+fcd749e fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+e89abb4 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+1c979d4 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+a3f3fb0 feat: notification overhaul — force-send test bypass, accurate status reporting, enhanced UI
+6c14483 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+371f574 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more
+6c28d56 fix: comprehensive permanent bug fixes — SQL injection, connection leaks, session security, claims upsert, SLA keys, status normalization, and 20+ more

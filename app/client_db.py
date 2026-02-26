@@ -5,8 +5,12 @@ import sqlite3
 import os
 import hashlib
 import secrets
+import logging
 from datetime import datetime, date, timedelta
 from app.config import DATABASE_PATH
+
+log = logging.getLogger(__name__)
+IS_PROD = bool(os.getenv("PORT"))
 
 
 def get_db():
@@ -339,16 +343,28 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
     conn.commit()
 
+    # ── SAFETY: Detect disk-loss / fresh-database on production ────────────
+    # If the persistent disk didn't mount, Render creates an ephemeral /data
+    # directory and we'd get an empty DB.  Refuse to silently start with that.
+    db_existed_before = os.path.getsize(DATABASE_PATH) > 4096  # real DB is always > 4KB
+    if IS_PROD and not db_existed_before:
+        log.warning("⚠️  DATABASE APPEARS FRESHLY CREATED ON PRODUCTION — possible disk mount failure")
+        # Check if /data is actually a mount point
+        if not os.path.ismount("/data"):
+            log.error("🚨 /data is NOT a mount point — persistent disk not attached!")
+
     cur.execute("SELECT COUNT(*) FROM clients")
     total = cur.fetchone()[0]
 
     if total == 0:
-        _seed_data(conn)
+        if IS_PROD and db_existed_before:
+            # DB file existed but clients table is empty — something is very wrong
+            log.error("🚨 CRITICAL: clients table is empty on production with existing DB file — NOT auto-seeding")
+        else:
+            log.info("Seeding initial client accounts…")
+            _seed_data(conn)
     else:
-        # Auto-migrate: fix client profile data
-        cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
+        # ── Safe migrations: only ADD missing accounts, never overwrite existing data ──
         # Ensure jessica account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
@@ -357,32 +373,35 @@ def init_client_hub_db():
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
                 ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
             )
-        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
-        # Reset rcm password so login works
-        rcm_salt = secrets.token_hex(16)
-        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
-                    (_hash_pw("rcm123", rcm_salt), rcm_salt))
-        # Ensure rcm account exists as admin
+        else:
+            # Only upgrade role if still 'client' — don't touch password or other fields
+            cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
+
+        # Ensure rcm account exists as admin — do NOT reset password on every startup!
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
         if cur.fetchone()[0] == 0:
-            rcm_salt2 = secrets.token_hex(16)
+            rcm_salt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
+                ("rcm", _hash_pw("rcm123", rcm_salt), rcm_salt, "MedPharma SC", "RCM", "", "admin")
             )
-        # Ensure TruPath client exists (separate from rcm user)
-        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
+        else:
+            # Only upgrade role if still 'client' — preserve existing password
+            cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
+
+        # Ensure TruPath client exists
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username='trupath'")
         if cur.fetchone()[0] == 0:
             tpsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
                 ("trupath", _hash_pw("trupath123", tpsalt), tpsalt, "TruPath", "TruPath", "", "client")
             )
-        # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
-        cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
-                       ptan_group='', ptan_individual='', specialty=''
-                       WHERE username='eric' AND practice_type='MHP+OMT'""")
+
+        # NOTE: Removed destructive operations that ran every startup:
+        # - No longer resetting rcm password (was generating new salt each boot, breaking sessions)
+        # - No longer blanking eric/Luminary profile fields (was wiping user-entered data)
+        # - No longer overwriting eric contact_name/email (preserves manual edits)
         conn.commit()
 
     conn.close()

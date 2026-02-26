@@ -1,0 +1,225 @@
+diff --git a/app/client_db.py b/app/client_db.py
+index 48cf077..e10a409 100644
+--- a/app/client_db.py
++++ b/app/client_db.py
+@@ -1517,6 +1517,80 @@ def has_production_data_today(username: str, work_date: str) -> bool:
+         conn.close()
+ 
+ 
++def get_user_production_snapshot(work_date: str = None) -> dict:
++    """Get per-user production breakdown for a given date (default: today).
++    Returns dict with user summaries and detailed entries."""
++    from datetime import date as _date
++    if not work_date:
++        work_date = _date.today().isoformat()
++
++    conn = get_db()
++    try:
++        cur = conn.cursor()
++
++        # Per-user aggregated stats
++        cur.execute("""
++            SELECT username,
++                   COUNT(*) as entry_count,
++                   SUM(quantity) as total_qty,
++                   SUM(time_spent) as total_hours,
++                   GROUP_CONCAT(DISTINCT category) as categories
++            FROM team_production
++            WHERE work_date=?
++            GROUP BY lower(username)
++            ORDER BY total_hours DESC
++        """, (work_date,))
++        user_stats = []
++        for row in cur.fetchall():
++            user_stats.append({
++                "username": row[0],
++                "entry_count": int(row[1] or 0),
++                "total_qty": int(row[2] or 0),
++                "total_hours": round(float(row[3] or 0), 1),
++                "categories": row[4] or "",
++            })
++
++        # Detailed entries for the day
++        cur.execute("""
++            SELECT username, category, task_description, quantity, time_spent, notes
++            FROM team_production
++            WHERE work_date=?
++            ORDER BY username, created_at DESC
++        """, (work_date,))
++        entries = []
++        for row in cur.fetchall():
++            entries.append({
++                "username": row[0],
++                "category": row[1] or "",
++                "task_description": row[2] or "",
++                "quantity": int(row[3] or 0),
++                "time_spent": round(float(row[4] or 0), 1),
++                "notes": row[5] or "",
++            })
++
++        # File uploads for the day
++        cur.execute("""
++            SELECT uploaded_by, COUNT(*) as file_count
++            FROM client_files
++            WHERE date(created_at)=? AND lower(category)='production'
++            GROUP BY lower(uploaded_by)
++        """, (work_date,))
++        file_uploads = {}
++        for row in cur.fetchall():
++            file_uploads[row[0]] = int(row[1] or 0)
++
++        return {
++            "work_date": work_date,
++            "user_stats": user_stats,
++            "entries": entries,
++            "file_uploads": file_uploads,
++            "total_entries": len(entries),
++            "total_users": len(user_stats),
++        }
++    finally:
++        conn.close()
++
++
+ # ─── Audit Trail ──────────────────────────────────────────────────────────
+ 
+ def log_audit(client_id: int, username: str, action: str,
+diff --git a/app/client_routes.py b/app/client_routes.py
+index 5ad2b22..3d0ba92 100644
+--- a/app/client_routes.py
++++ b/app/client_routes.py
+@@ -32,6 +32,7 @@ from app.client_db import (
+     log_audit, get_audit_log, auto_flag_sla, get_alerts,
+     global_search, bulk_update_claims, export_claims, export_table,
+     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
++    get_user_production_snapshot,
+ )
+ 
+ from app.notifications import (
+@@ -40,6 +41,8 @@ from app.notifications import (
+     flush_and_notify,
+     send_test_notification,
+     get_notification_status,
++    get_notification_debug,
++    send_daily_account_summary,
+ )
+ 
+ router = APIRouter(prefix="/hub/api")
+@@ -766,7 +769,11 @@ def get_production(client_id: Optional[int] = None,
+                    end_date: Optional[str] = None,
+                    hub_session: Optional[str] = Cookie(None)):
+     user = _require_user(hub_session)
+-    scope = client_id or _client_scope(user)
++    # Admin sees ALL production entries across all accounts (not scoped to selected client)
++    if user.get("role") == "admin":
++        scope = None  # no client filter — show all
++    else:
++        scope = client_id or _client_scope(user)
+     logs = list_production_logs(scope, start_date, end_date, username=None)
+     return {"logs": logs}
+ 
+@@ -2048,7 +2055,8 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
+ @router.post("/report/{client_id}/ai-narrative")
+ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
+     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
+-    _require_user(hub_session)
++    user = _require_user(hub_session)
++    is_admin = user.get("role") == "admin"
+     from app.config import OPENAI_API_KEY
+     from app.client_db import get_db
+     from datetime import date
+@@ -2069,6 +2077,38 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
+         if practice_type == "MHP+OMT":
+             for sp_name in ["OMT", "MHP"]:
+                 sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
++
++        # Gather user production data
++        # Admin sees ALL users' production across ALL accounts (oversight role)
++        # Non-admin sees only production for their client account
++        if is_admin:
++            prod_rows = conn.execute(
++                "SELECT p.username, p.category, p.task_description, p.quantity, p.time_spent, "
++                "p.work_date, p.notes, c.company as account_name "
++                "FROM team_production p LEFT JOIN clients c ON p.client_id = c.id "
++                "ORDER BY p.work_date DESC LIMIT 200"
++            ).fetchall()
++        else:
++            prod_rows = conn.execute(
++                "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
++                "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
++                (client_id,)
++            ).fetchall()
++        production_data = [dict(r) for r in prod_rows]
++
++        # Aggregate production by user
++        prod_by_user = {}
++        for p in production_data:
++            u = p.get("username", "Unknown")
++            if u not in prod_by_user:
++                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set(), "accounts": set()}
++            prod_by_user[u]["entries"] += 1
++            prod_by_user[u]["total_qty"] += int(p.get("quantity") or 0)
++            prod_by_user[u]["total_hours"] += float(p.get("time_spent") or 0)
++            prod_by_user[u]["dates"].add(p.get("work_date", ""))
++            prod_by_user[u]["categories"].add(p.get("category", ""))
++            if p.get("account_name"):
++                prod_by_user[u]["accounts"].add(p.get("account_name"))
+     finally:
+         conn.close()
+ 
+@@ -2104,6 +2144,12 @@ EDI SETUP: {len(edi.get('detail', []))} connections
+ {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
+ 
+ PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
++
++USER PRODUCTION LOG ({len(production_data)} recent entries{' — ALL ACCOUNTS (admin view)' if is_admin else ''}):
++{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h{(' | acct: ' + p.get('account_name','')) if p.get('account_name') else ''}" for p in production_data[:30]) or '  No production data logged'}
++
++PRODUCTION SUMMARY BY TEAM MEMBER{' (ALL ACCOUNTS)' if is_admin else ''}:
++{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h total across {len(d['dates'])} day(s), avg {round(d['total_hours']/max(len(d['dates']),1),1)}h/day, categories: {', '.join(d['categories'])}{(', accounts: ' + ', '.join(d['accounts'])) if d.get('accounts') else ''}" for u, d in prod_by_user.items()) or '  No user production data'}
+ """
+ 
+     # Sub-profile data
+@@ -2128,7 +2174,8 @@ Your report should include:
+ 6. EDI CONNECTIVITY — Note setup status
+ 7. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
+ 8. RECOMMENDED ACTIONS — Specific, prioritized action items
+-9. OUTLOOK — Brief forward-looking statement
++9. USER PRODUCTION ANALYSIS — Evaluate each team member's daily output, hours worked, task categories, and average hours per day. Flag any team members averaging under 6 hours/day or showing low output. Compare team members against each other. This section is critical — the report reader is the admin/owner who tracks what employees are doing, not a worker themselves.
++10. OUTLOOK — Brief forward-looking statement
+ 
+ Write in a professional medical billing tone. Use specific numbers from the data.
+ Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).
+@@ -2458,6 +2505,33 @@ def notifications_status(hub_session: Optional[str] = Cookie(None)):
+     return get_notification_status()
+ 
+ 
++@router.get("/notifications/debug")
++def notifications_debug(hub_session: Optional[str] = Cookie(None)):
++    """Admin-only: detailed diagnostic info for debugging notification delivery."""
++    _require_admin(hub_session)
++    return get_notification_debug()
++
++
++@router.post("/notifications/daily-report")
++def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
++    """Admin-only: immediately send the daily account summary report (email + SMS)."""
++    user = _require_admin(hub_session)
++    try:
++        send_daily_account_summary()
++        return {"ok": True, "message": "Daily report sent to configured recipients"}
++    except Exception as e:
++        raise HTTPException(500, f"Failed to send daily report: {e}")
++
++
++@router.get("/production/snapshot")
++def production_snapshot(work_date: Optional[str] = None,
++                        hub_session: Optional[str] = Cookie(None)):
++    """Admin-only: get per-user production snapshot for a date (defaults to today)."""
++    _require_admin(hub_session)
++    snapshot = get_user_production_snapshot(work_date)
++    return snapshot
++
++
+ # ─── Audit Log ────────────────────────────────────────────────────────────────
+ 
+ @router.get("/audit-log")
