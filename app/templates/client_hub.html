@@ -2848,6 +2848,18 @@
                 </table>
               </div>
             </div>
+
+            <!-- Uploaded Production Files -->
+            <div class="card" style="margin-top:18px">
+              <div class="card-header">
+                <div class="card-title">📎 Uploaded Production Files</div>
+              </div>
+              <div id="prodFilesGrid"
+                style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+                <p style="color:var(--gray-400);font-size:13px;grid-column:1/-1;text-align:center;padding:16px">No
+                  production files uploaded yet</p>
+              </div>
+            </div>
           </div>
 
           <!-- Weekly Report View -->
@@ -6210,6 +6222,37 @@
           <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
+
+      // Load uploaded production files
+      loadProductionFiles();
+    }
+
+    async function loadProductionFiles() {
+      if (!activeClientId) return;
+      try {
+        const r = await fetch(`/hub/api/files?client_id=${activeClientId}`);
+        const d = await r.json();
+        const files = (d.files || []).filter(f => f.category === 'Production');
+        const grid = document.getElementById('prodFilesGrid');
+        if (!files.length) {
+          grid.innerHTML = '<p style="color:var(--gray-400);font-size:13px;grid-column:1/-1;text-align:center;padding:16px">No production files uploaded yet. Use 📎 Upload Daily File above.</p>';
+          return;
+        }
+        grid.innerHTML = files.map(f => {
+          const ext = (f.original_name || '').split('.').pop().toLowerCase();
+          const icon = ext === 'pdf' ? '📕' : ['png', 'jpg', 'jpeg'].includes(ext) ? '🖼️' : ['xlsx', 'xls', 'csv'].includes(ext) ? '📊' : '📄';
+          const size = f.file_size > 1048576 ? (f.file_size / 1048576).toFixed(1) + ' MB' : (f.file_size / 1024).toFixed(0) + ' KB';
+          const date = (f.created_at || '').substring(0, 10);
+          return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+            <div style="font-size:28px">${icon}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--gray-800);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(f.original_name)}">${esc(f.original_name)}</div>
+              <div style="font-size:11px;color:var(--gray-400)">${size} · ${date} · ${esc(f.uploaded_by || '')}</div>
+            </div>
+            <a href="/hub/api/files/${f.id}/download" style="text-decoration:none;font-size:18px" title="Download">⬇️</a>
+          </div>`;
+        }).join('');
+      } catch (e) { console.error(e); }
     }
 
     async function saveProductionLog() {
@@ -6265,6 +6308,7 @@
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'Upload failed');
         toast('✅ Daily production file uploaded', 'success');
+        loadProduction();  // refresh log table + files grid
         loadDashboard();
         if (typeof loadDocuments === 'function') loadDocuments();
       } catch (e) {
