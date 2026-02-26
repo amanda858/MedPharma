@@ -1127,8 +1127,28 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col
     import csv, io
     rows = []
     if ext == ".csv":
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
+        decoded = content.decode("utf-8-sig", errors="replace")
+        sample = decoded[:8192]
+        delimiter = ","
+        try:
+            sniffed = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            delimiter = sniffed.delimiter or ","
+        except Exception:
+            delimiter = ","
+
+        reader = csv.DictReader(io.StringIO(decoded), delimiter=delimiter)
         rows = list(reader)
+
+        # Fallback: if parser produced only one giant column, retry with common alternates.
+        if rows and len(rows[0].keys()) <= 1:
+            for alt_delim in (";", "\t", "|", ","):
+                if alt_delim == delimiter:
+                    continue
+                alt_reader = csv.DictReader(io.StringIO(decoded), delimiter=alt_delim)
+                alt_rows = list(alt_reader)
+                if alt_rows and len(alt_rows[0].keys()) > 1:
+                    rows = alt_rows
+                    break
     else:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)

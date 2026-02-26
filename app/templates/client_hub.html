@@ -4639,7 +4639,8 @@
         if (d.imported > 0) {
           toast(`✅ Imported ${d.imported} rows into ${category} — file saved as hard copy`, 'success');
         } else {
-          toast(`⚠️ File saved but no rows imported — check column headers`, 'warning');
+          const firstErr = (d.import_errors && d.import_errors.length) ? ` — ${d.import_errors[0]}` : '';
+          toast(`⚠️ File saved but no rows imported${firstErr}`, 'warning');
         }
         if (d.import_errors && d.import_errors.length) {
           console.warn('Import errors:', d.import_errors);
