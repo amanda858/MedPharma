@@ -31,6 +31,8 @@ services:
         value: +18036263500
       - key: NOTIFY_ON_USERS
         value: jessica,rcm
+      - key: NOTIFY_IN_APP_ONLY
+        value: "0"
       - key: TWILIO_SID
         sync: false
       - key: TWILIO_TOKEN

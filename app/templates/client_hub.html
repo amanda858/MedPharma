@@ -4669,19 +4669,35 @@
     // ═══════════════════════════════════════
     // REPORT TABS — Custom tabs for Claims / Credentialing / EDI + user-defined
     // ═══════════════════════════════════════
-    const DEFAULT_REPORT_TABS = ['Claims', 'Credentialing', 'EDI'];
-    const BUILT_IN_REPORT_TABS = ['Overview', 'Claims', 'Credentialing', 'EDI'];
+    const REQUIRED_REPORT_TABS = ['Claims', 'Credentialing', 'EDI', 'AR Legacy'];
+    const DEFAULT_REPORT_TABS = [...REQUIRED_REPORT_TABS];
+    const BUILT_IN_REPORT_TABS = ['Overview', ...REQUIRED_REPORT_TABS];
     let activeReportTab = 'Overview';
     let currentReportTabs = [...DEFAULT_REPORT_TABS];
     let reportNotesCache = {};
     let addReportTabOpen = false;
     let manageReportTabsOpen = false;
 
+    function normalizeReportTabs(tabs) {
+      const incoming = Array.isArray(tabs) ? tabs : [];
+      const out = [];
+
+      for (const t of REQUIRED_REPORT_TABS) {
+        if (!out.some(x => x.toLowerCase() === t.toLowerCase())) out.push(t);
+      }
+      for (const t of incoming) {
+        const name = (t || '').toString().trim();
+        if (!name) continue;
+        if (!out.some(x => x.toLowerCase() === name.toLowerCase())) out.push(name);
+      }
+      return out;
+    }
+
     function renderReportTabBar() {
       const tabs = ['Overview', ...currentReportTabs];
       document.getElementById('reportTabBar').innerHTML = tabs.map(t => {
         const isActive = t === activeReportTab;
-        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'EDI' ? '🔗' : '📄';
+        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'EDI' ? '🔗' : t === 'AR Legacy' ? '📚' : '📄';
         return `<button class="qtab ${isActive ? 'active' : ''}"
           onclick="setReportTab('${t.replace(/'/g, "\\'")}')"
           style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid ${isActive ? 'var(--info)' : 'var(--gray-200)'};background:${isActive ? 'var(--info)' : 'var(--gray-50)'};color:${isActive ? '#fff' : 'var(--gray-600)'};cursor:pointer;transition:all .2s">
@@ -4994,7 +5010,7 @@
         }
       }
       if (newTabs.length === 0) { toast('You must have at least one tab', 'error'); return; }
-      currentReportTabs = newTabs;
+      currentReportTabs = normalizeReportTabs(newTabs);
       await saveReportTabsToServer();
       manageReportTabsOpen = false;
       document.getElementById('manageReportTabsForm').style.display = 'none';
@@ -5007,6 +5023,7 @@
     async function saveReportTabsToServer() {
       try {
         const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
+        currentReportTabs = normalizeReportTabs(currentReportTabs);
         const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report_tabs: currentReportTabs }) });
         if (!r.ok) throw new Error('Failed to save report tabs');
       } catch (e) { toast(e.message, 'error'); }
@@ -5023,7 +5040,7 @@
         const pr = await fetch(profUrl).catch(() => null);
         if (pr && pr.ok) {
           const pd = await pr.json();
-          if (pd.report_tabs && pd.report_tabs.length > 0) currentReportTabs = pd.report_tabs;
+          if (pd.report_tabs && pd.report_tabs.length > 0) currentReportTabs = normalizeReportTabs(pd.report_tabs);
           else currentReportTabs = [...DEFAULT_REPORT_TABS];
         }
       } catch (_) { }
