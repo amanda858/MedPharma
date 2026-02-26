@@ -31,6 +31,17 @@ def _hash_pw(password: str, salt: str) -> str:
 # ─── Schema ───────────────────────────────────────────────────────────────────
 
 def init_client_hub_db():
+    # ── SAFETY: Record whether DB file existed BEFORE we create schema ──
+    # After CREATE TABLE statements, the file is always > 4KB even with no data.
+    # We need to know if it was a pre-existing DB with real data.
+    db_file_existed = os.path.exists(DATABASE_PATH) and os.path.getsize(DATABASE_PATH) > 4096
+
+    if IS_PROD:
+        if not os.path.ismount("/data"):
+            log.error("🚨 PERSISTENT DISK NOT MOUNTED at /data — data will be ephemeral!")
+        if not db_file_existed:
+            log.warning("⚠️  No existing database found — will seed fresh accounts")
+
     conn = get_db()
     cur = conn.cursor()
     cur.executescript("""
@@ -343,26 +354,17 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
     conn.commit()
 
-    # ── SAFETY: Detect disk-loss / fresh-database on production ────────────
-    # If the persistent disk didn't mount, Render creates an ephemeral /data
-    # directory and we'd get an empty DB.  Refuse to silently start with that.
-    db_existed_before = os.path.getsize(DATABASE_PATH) > 4096  # real DB is always > 4KB
-    if IS_PROD and not db_existed_before:
-        log.warning("⚠️  DATABASE APPEARS FRESHLY CREATED ON PRODUCTION — possible disk mount failure")
-        # Check if /data is actually a mount point
-        if not os.path.ismount("/data"):
-            log.error("🚨 /data is NOT a mount point — persistent disk not attached!")
-
-    cur.execute("SELECT COUNT(*) FROM clients")
+    # ── Seed accounts if needed ──────────────────────────────────────────────
+    cur.execute("SELECT Count(*) FROM clients")
     total = cur.fetchone()[0]
 
     if total == 0:
-        if IS_PROD and db_existed_before:
-            # DB file existed but clients table is empty — something is very wrong
-            log.error("🚨 CRITICAL: clients table is empty on production with existing DB file — NOT auto-seeding")
-        else:
-            log.info("Seeding initial client accounts…")
-            _seed_data(conn)
+        # Always seed when clients table is empty — users need to be able to log in.
+        # The disk-mount warning above already alerts us if this is a disk-loss situation.
+        if IS_PROD and db_file_existed:
+            log.error("⚠️  clients table empty but DB file pre-existed — possible corruption. Seeding accounts anyway.")
+        log.info("Seeding initial client accounts…")
+        _seed_data(conn)
     else:
         # ── Safe migrations: only ADD missing accounts, never overwrite existing data ──
         # Ensure jessica account exists as admin

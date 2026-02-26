@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app.client_db import init_client_hub_db, normalize_claim_statuses
 from app.client_routes import router as client_hub_router
-from app.notifications import start_daily_scheduler
+from app.notifications import start_daily_scheduler, get_notification_status
 from app.config import DATABASE_PATH
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
@@ -131,3 +131,28 @@ async def mphub2026(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "service": "hub"}
+
+
+@app.get("/api/admin/integrations/readiness")
+async def integrations_readiness():
+    """Compatibility endpoint for admin integrations readiness checks."""
+    status = get_notification_status()
+    return {
+        "ok": True,
+        "integrations": {
+            "twilio": {
+                "configured": status.get("twilio_configured", False),
+                "sms_target": status.get("sms_target", ""),
+                "missing_fields": status.get("missing_twilio_fields", []),
+            },
+            "email": {
+                "configured": status.get("email_configured", False),
+                "sendgrid_configured": status.get("sendgrid_configured", False),
+                "smtp_configured": status.get("smtp_configured", False),
+                "missing_fields": status.get("missing_email_fields", []),
+                "recipients": status.get("email_recipients", []),
+            },
+            "mode": status.get("delivery_mode", "external"),
+            "in_app_only": status.get("in_app_only_mode", False),
+        },
+    }

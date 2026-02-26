@@ -60,7 +60,7 @@ TWILIO_FROM = os.getenv("TWILIO_FROM", "")
 NOTIFY_PHONE = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-IN_APP_ONLY_MODE = os.getenv("NOTIFY_IN_APP_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
+IN_APP_ONLY_MODE = os.getenv("NOTIFY_IN_APP_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _live_config() -> dict:
@@ -77,7 +77,7 @@ def _live_config() -> dict:
     smtp_p = int(os.getenv("SMTP_PORT", "587") or SMTP_PORT)
     smtp_u = os.getenv("SMTP_USER", "") or SMTP_USER
     smtp_pw = os.getenv("SMTP_PASS", "") or SMTP_PASS
-    in_app = os.getenv("NOTIFY_IN_APP_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
+    in_app = os.getenv("NOTIFY_IN_APP_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
     return {
         "SENDGRID_API_KEY": sg_key, "SENDGRID_FROM": sg_from, "NOTIFY_EMAILS": emails,
         "TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from,
@@ -253,11 +253,13 @@ def _rule_based_summary(username: str, session_hrs: float,
 
 # ── Public API — called from route handlers ──
 
-def notify_activity(username: str, action: str, section: str, detail: str = ""):
-    """Buffer a single activity event (does NOT send immediately)."""
+def notify_activity(username: str, action: str, section: str, detail: str = "", sms_copy: bool = False):
+    """Buffer a single activity event.
+    If sms_copy=True, also send an immediate concise SMS copy."""
     if not _should_notify(username):
         return
     should_flush = False
+    sms_text = ""
     with _buffer_lock:
         now = datetime.now()
         key = username.lower()
@@ -271,9 +273,17 @@ def notify_activity(username: str, action: str, section: str, detail: str = ""):
             "raw_ts": now,
         })
         should_flush = len(_activity_buffer[key]) >= AUTO_FLUSH_ACTION_THRESHOLD
+        if sms_copy:
+            sms_text = f"{username}: {action} {section}"
+            if detail:
+                sms_text += f" | {detail}"
+            if len(sms_text) > 155:
+                sms_text = sms_text[:152] + "…"
 
     if should_flush:
         threading.Thread(target=flush_and_notify, args=(username,), daemon=True).start()
+    if sms_text:
+        threading.Thread(target=_send_sms, args=(sms_text,), daemon=True).start()
 
 
 def notify_bulk_activity(username: str, action: str, section: str, count: int, detail: str = ""):

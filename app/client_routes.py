@@ -381,8 +381,12 @@ def add_provider(body: ProviderIn, hub_session: Optional[str] = Cookie(None)):
 
 @router.put("/providers/{pid}")
 def edit_provider(pid: int, body: ProviderUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
-    update_provider(pid, {k: v for k, v in body.model_dump().items() if v is not None})
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_provider(pid, changes)
+    notify_activity(user["username"], "updated", "Providers",
+                    f"Provider #{pid}, fields: {', '.join(changes.keys())}",
+                    sms_copy=True)
     return {"ok": True}
 
 
@@ -496,7 +500,8 @@ def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Co
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_claim(claim_id, changes)
     notify_activity(user["username"], "updated", "Claims",
-                    f"Claim #{claim_id}, fields: {', '.join(changes.keys())}")
+                    f"Claim #{claim_id}, fields: {', '.join(changes.keys())}",
+                    sms_copy=True)
     return {"ok": True}
 
 
@@ -577,6 +582,12 @@ def post_note(body: NoteIn, hub_session: Optional[str] = Cookie(None)):
     if not data.get("Author"):
         data["Author"] = user.get("username", "")
     nid = add_note(data)
+    note_preview = (data.get("Note", "") or "").strip().replace("\n", " ")
+    if len(note_preview) > 70:
+        note_preview = note_preview[:67] + "..."
+    notify_activity(user["username"], "added", "Notes",
+                    f"{data.get('Module','')} #{data.get('RefID', 0)}: {note_preview}",
+                    sms_copy=True)
     return {"id": nid, "ok": True}
 
 
@@ -639,7 +650,8 @@ def edit_cred(rid: int, body: CredUpdate, hub_session: Optional[str] = Cookie(No
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_credentialing(rid, changes)
     notify_activity(user["username"], "updated", "Credentialing",
-                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}",
+                    sms_copy=True)
     return {"ok": True}
 
 
@@ -709,7 +721,8 @@ def edit_edi(rid: int, body: EDIUpdate, hub_session: Optional[str] = Cookie(None
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_edi(rid, changes)
     notify_activity(user["username"], "updated", "EDI Setup",
-                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}",
+                    sms_copy=True)
     return {"ok": True}
 
 
