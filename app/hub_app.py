@@ -2,6 +2,7 @@
 
 import os
 import time
+import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 
@@ -10,6 +11,7 @@ from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
+log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="MedPharma Client Hub",
@@ -20,21 +22,29 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup():
+    # Keep service available even if secondary startup tasks fail.
     try:
         init_client_hub_db()
+    except Exception:
+        log.exception("Startup failed during DB init")
+
+    try:
         normalize_claim_statuses()
+    except Exception:
+        log.exception("Startup warning: normalize_claim_statuses failed")
+
+    try:
         start_daily_scheduler()
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception("Startup DB init failed")
-        raise
+    except Exception:
+        log.exception("Startup warning: notification scheduler failed")
 
 
 app.include_router(client_hub_router)
 
 
 def _serve_hub():
-    with open("app/templates/client_hub.html", "r") as f:
+    template_path = os.path.join(os.path.dirname(__file__), "templates", "client_hub.html")
+    with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
     build_ts = str(int(time.time()))
     content = content.replace("</head>", f'<meta name="build" content="{build_ts}">\n</head>', 1)
@@ -74,3 +84,8 @@ async def medpharma(request: Request):
 @app.get("/mphub2026", response_class=HTMLResponse)
 async def mphub2026(request: Request):
     return _serve_hub()
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "service": "hub"}

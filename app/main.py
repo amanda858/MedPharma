@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import logging
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
@@ -29,12 +30,25 @@ app = FastAPI(
     version="2.0.0",
 )
 
+log = logging.getLogger(__name__)
+
 
 @app.on_event("startup")
 async def startup():
-    init_db()
-    init_client_hub_db()
-    start_daily_scheduler()
+    try:
+        init_db()
+    except Exception:
+        log.exception("Startup warning: init_db failed")
+
+    try:
+        init_client_hub_db()
+    except Exception:
+        log.exception("Startup warning: init_client_hub_db failed")
+
+    try:
+        start_daily_scheduler()
+    except Exception:
+        log.exception("Startup warning: start_daily_scheduler failed")
 
 
 app.include_router(client_hub_router)
