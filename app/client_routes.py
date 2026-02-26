@@ -889,6 +889,9 @@ async def upload_file(
         except Exception as e:
             import_errors = [str(e)]
 
+    if import_category and imported == 0 and not import_errors:
+        import_errors = [f"No rows imported for {import_category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+
     return {
         "id": file_id,
         "filename": unique_name,
@@ -1105,6 +1108,9 @@ async def import_excel(
     except Exception as e:
         errors = [str(e)]
 
+    if imported == 0 and not errors:
+        errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+
     # Notify admin of team imports
     if imported > 0:
         notify_bulk_activity(user["username"], "imported", category, imported,
@@ -1164,7 +1170,7 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col
             # Smart header detection: find the best header row
             header_row_idx = 0
             best_header_score = -1
-            scan_limit = min(len(all_sheet_rows), 50)
+            scan_limit = min(len(all_sheet_rows), 200)
             for idx, row in enumerate(all_sheet_rows[:scan_limit]):
                 if not row:
                     continue
@@ -1970,6 +1976,9 @@ async def replace_file(
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
+
+    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI") and imported == 0 and not import_errors:
+        import_errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
 
     notify_activity(user["username"], "replaced file", "Documents",
                     f"{rec['original_name']} → {file.filename}")
