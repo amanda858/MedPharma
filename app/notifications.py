@@ -30,6 +30,21 @@ from email.mime.multipart import MIMEMultipart
 
 log = logging.getLogger("notifications")
 
+
+def _normalize_phone(value: str) -> str:
+    """Normalize phone input to E.164 when possible (US-focused fallback)."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    return raw
+
 # ── Configuration ──
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_FROM = os.getenv("SENDGRID_FROM", "notifications@medprosc.com")
@@ -38,9 +53,10 @@ NOTIFY_EMAILS = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com
 TWILIO_SID = os.getenv("TWILIO_SID", "")
 TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
 TWILIO_FROM = os.getenv("TWILIO_FROM", "")
-NOTIFY_PHONE = os.getenv("NOTIFY_PHONE", "+18036263500")
+NOTIFY_PHONE = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+IN_APP_ONLY_MODE = os.getenv("NOTIFY_IN_APP_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 # Users whose activity triggers notifications (team members only).
 # Owner (Eric) should receive reports, not be tracked as a worker by default.
@@ -554,6 +570,10 @@ def flush_and_notify(username: str):
 
 def _send_email(subject: str, body: str, html_body: str = ""):
     """Send email notification via SendGrid v3 API."""
+    if IN_APP_ONLY_MODE:
+        log.info(f"In-app notification mode active — email send simulated: {subject}")
+        return
+
     if not NOTIFY_EMAILS:
         log.debug("Email notification skipped — NOTIFY_EMAILS not configured")
         return
@@ -620,6 +640,10 @@ def _send_email(subject: str, body: str, html_body: str = ""):
 
 def _send_sms(message: str):
     """Send SMS notification via Twilio."""
+    if IN_APP_ONLY_MODE:
+        log.info("In-app notification mode active — SMS send simulated")
+        return
+
     if not TWILIO_SID or not TWILIO_TOKEN or not TWILIO_FROM or not NOTIFY_PHONE:
         log.debug("SMS notification skipped — Twilio not configured")
         return
@@ -663,11 +687,27 @@ def send_test_notification(triggered_by: str = "system") -> dict:
 
     status = get_notification_status()
     status["ok"] = True
+    status["delivery_mode"] = "in_app_only" if IN_APP_ONLY_MODE else "external"
     return status
 
 
 def get_notification_status() -> dict:
     """Return current notification channel configuration status."""
+    if IN_APP_ONLY_MODE:
+        return {
+            "email_recipients": NOTIFY_EMAILS,
+            "sms_target": NOTIFY_PHONE,
+            "sendgrid_configured": False,
+            "smtp_configured": False,
+            "twilio_configured": True,
+            "email_configured": True,
+            "missing_twilio_fields": [],
+            "missing_email_fields": [],
+            "notify_on_users": sorted(list(NOTIFY_ON_USERS)),
+            "in_app_only_mode": True,
+            "delivery_mode": "in_app_only",
+        }
+
     sendgrid_configured = bool(SENDGRID_API_KEY)
     smtp_configured = bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
     twilio_configured = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and NOTIFY_PHONE)
@@ -696,6 +736,8 @@ def get_notification_status() -> dict:
         "missing_twilio_fields": missing_twilio,
         "missing_email_fields": missing_email,
         "notify_on_users": sorted(list(NOTIFY_ON_USERS)),
+        "in_app_only_mode": False,
+        "delivery_mode": "external",
     }
 
 
