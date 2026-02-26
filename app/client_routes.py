@@ -40,6 +40,7 @@ from app.notifications import (
     flush_and_notify,
     send_test_notification,
     get_notification_status,
+    get_notification_debug,
 )
 
 router = APIRouter(prefix="/hub/api")
@@ -2456,6 +2457,13 @@ def notifications_status(hub_session: Optional[str] = Cookie(None)):
     """Admin-only: get current notification channel health/config status."""
     _require_admin(hub_session)
     return get_notification_status()
+
+
+@router.get("/notifications/debug")
+def notifications_debug(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: detailed diagnostic info for debugging notification delivery."""
+    _require_admin(hub_session)
+    return get_notification_debug()
 
 
 # ─── Audit Log ────────────────────────────────────────────────────────────────

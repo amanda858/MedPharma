@@ -58,6 +58,29 @@ NOTIFY_PHONE = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 IN_APP_ONLY_MODE = os.getenv("NOTIFY_IN_APP_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _live_config() -> dict:
+    """Read notification credentials FRESH from env vars every call.
+    This avoids stale module-level caches if env vars were set after import."""
+    sg_key = os.getenv("SENDGRID_API_KEY", "") or SENDGRID_API_KEY
+    sg_from = os.getenv("SENDGRID_FROM", "notifications@medprosc.com") or SENDGRID_FROM
+    emails = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com").split(",") if e.strip()] or NOTIFY_EMAILS
+    t_sid = os.getenv("TWILIO_SID", "") or TWILIO_SID
+    t_tok = os.getenv("TWILIO_TOKEN", "") or TWILIO_TOKEN
+    t_from = os.getenv("TWILIO_FROM", "") or TWILIO_FROM
+    phone = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500")) or NOTIFY_PHONE
+    smtp_h = os.getenv("SMTP_HOST", "smtp.gmail.com") or SMTP_HOST
+    smtp_p = int(os.getenv("SMTP_PORT", "587") or SMTP_PORT)
+    smtp_u = os.getenv("SMTP_USER", "") or SMTP_USER
+    smtp_pw = os.getenv("SMTP_PASS", "") or SMTP_PASS
+    in_app = os.getenv("NOTIFY_IN_APP_ONLY", "1").strip().lower() in {"1", "true", "yes", "on"}
+    return {
+        "SENDGRID_API_KEY": sg_key, "SENDGRID_FROM": sg_from, "NOTIFY_EMAILS": emails,
+        "TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from,
+        "NOTIFY_PHONE": phone, "SMTP_HOST": smtp_h, "SMTP_PORT": smtp_p,
+        "SMTP_USER": smtp_u, "SMTP_PASS": smtp_pw, "IN_APP_ONLY_MODE": in_app,
+    }
+
 # Users whose activity triggers notifications (team members only).
 # Owner (Eric) should receive reports, not be tracked as a worker by default.
 # Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
@@ -661,12 +684,24 @@ def _send_sms(message: str):
 
 
 def _send_email_force(subject: str, body: str, html_body: str = ""):
-    """Send email — always attempts delivery (ignores IN_APP_ONLY_MODE). Used for test notifications."""
-    if not NOTIFY_EMAILS:
+    """Send email — always attempts delivery (ignores IN_APP_ONLY_MODE).
+    Reads credentials LIVE from env vars to avoid stale cached values."""
+    cfg = _live_config()
+    emails = cfg["NOTIFY_EMAILS"]
+    sg_key = cfg["SENDGRID_API_KEY"]
+    sg_from = cfg["SENDGRID_FROM"]
+    smtp_h = cfg["SMTP_HOST"]
+    smtp_p = cfg["SMTP_PORT"]
+    smtp_u = cfg["SMTP_USER"]
+    smtp_pw = cfg["SMTP_PASS"]
+
+    if not emails:
         raise ValueError("No email recipients configured (NOTIFY_EMAIL env var)")
 
+    log.info(f"[TEST] Email attempt — SendGrid={'YES' if sg_key else 'NO'}, SMTP={'YES' if smtp_u else 'NO'}, to={emails}")
+
     # Primary: SendGrid
-    if SENDGRID_API_KEY:
+    if sg_key:
         import httpx
         content = []
         if body:
@@ -676,10 +711,10 @@ def _send_email_force(subject: str, body: str, html_body: str = ""):
         if not content:
             content.append({"type": "text/plain", "value": "(no content)"})
 
-        recipients = [{"email": addr} for addr in NOTIFY_EMAILS]
+        recipients = [{"email": addr} for addr in emails]
         payload = {
             "personalizations": [{"to": recipients}],
-            "from": {"email": SENDGRID_FROM, "name": "MedPharma Hub"},
+            "from": {"email": sg_from, "name": "MedPharma Hub"},
             "subject": subject,
             "content": content,
         }
@@ -687,50 +722,60 @@ def _send_email_force(subject: str, body: str, html_body: str = ""):
             "https://api.sendgrid.com/v3/mail/send",
             json=payload,
             headers={
-                "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                "Authorization": f"Bearer {sg_key}",
                 "Content-Type": "application/json",
             },
-            timeout=15,
+            timeout=20,
         )
         if resp.status_code in (200, 202):
-            log.info(f"[TEST] Email sent via SendGrid to {', '.join(NOTIFY_EMAILS)}: {subject}")
+            log.info(f"[TEST] Email sent via SendGrid to {', '.join(emails)}: {subject}")
             return
-        raise RuntimeError(f"SendGrid failed ({resp.status_code}): {resp.text[:200]}")
+        raise RuntimeError(f"SendGrid failed ({resp.status_code}): {resp.text[:300]}")
 
     # Fallback: SMTP
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
-        raise ValueError("No email provider configured — set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS")
+    if not smtp_h or not smtp_u or not smtp_pw:
+        raise ValueError("No email provider configured — set SENDGRID_API_KEY or SMTP_USER+SMTP_PASS in Render environment")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = SMTP_USER or SENDGRID_FROM
-    msg["To"] = ", ".join(NOTIFY_EMAILS)
+    msg["From"] = smtp_u or sg_from
+    msg["To"] = ", ".join(emails)
     msg.attach(MIMEText(body or "(no content)", "plain"))
     if html_body:
         msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+    with smtplib.SMTP(smtp_h, smtp_p, timeout=25) as server:
         server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(msg["From"], NOTIFY_EMAILS, msg.as_string())
-    log.info(f"[TEST] Email sent via SMTP to {', '.join(NOTIFY_EMAILS)}: {subject}")
+        server.login(smtp_u, smtp_pw)
+        server.sendmail(msg["From"], emails, msg.as_string())
+    log.info(f"[TEST] Email sent via SMTP to {', '.join(emails)}: {subject}")
 
 
 def _send_sms_force(message: str):
-    """Send SMS — always attempts delivery (ignores IN_APP_ONLY_MODE). Used for test notifications."""
-    if not TWILIO_SID or not TWILIO_TOKEN or not TWILIO_FROM:
-        raise ValueError("Twilio not configured — set TWILIO_SID, TWILIO_TOKEN, TWILIO_FROM env vars")
-    if not NOTIFY_PHONE:
+    """Send SMS — always attempts delivery (ignores IN_APP_ONLY_MODE).
+    Reads credentials LIVE from env vars to avoid stale cached values."""
+    cfg = _live_config()
+    t_sid = cfg["TWILIO_SID"]
+    t_tok = cfg["TWILIO_TOKEN"]
+    t_from = cfg["TWILIO_FROM"]
+    phone = cfg["NOTIFY_PHONE"]
+
+    if not t_sid or not t_tok or not t_from:
+        missing = [k for k, v in {"TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from}.items() if not v]
+        raise ValueError(f"Twilio not configured — missing: {', '.join(missing)}")
+    if not phone:
         raise ValueError("No SMS recipient configured — set NOTIFY_PHONE env var")
 
+    log.info(f"[TEST] SMS attempt — from={t_from}, to={phone}")
+
     import httpx
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json"
-    data = {"To": NOTIFY_PHONE, "From": TWILIO_FROM, "Body": message}
-    resp = httpx.post(url, data=data, auth=(TWILIO_SID, TWILIO_TOKEN), timeout=15)
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
+    data = {"To": phone, "From": t_from, "Body": message}
+    resp = httpx.post(url, data=data, auth=(t_sid, t_tok), timeout=20)
     if resp.status_code in (200, 201):
-        log.info(f"[TEST] SMS sent to {NOTIFY_PHONE}")
+        log.info(f"[TEST] SMS sent to {phone}")
         return
-    raise RuntimeError(f"Twilio SMS failed ({resp.status_code}): {resp.text[:200]}")
+    raise RuntimeError(f"Twilio SMS failed ({resp.status_code}): {resp.text[:300]}")
 
 
 def send_test_notification(triggered_by: str = "system") -> dict:
@@ -787,29 +832,39 @@ def send_test_notification(triggered_by: str = "system") -> dict:
     t2 = threading.Thread(target=_test_sms, daemon=True)
     t1.start()
     t2.start()
-    t1.join(timeout=20)
-    t2.join(timeout=20)
+    t1.join(timeout=30)
+    t2.join(timeout=30)
+
+    # Detect thread timeouts (thread still alive = timed out)
+    if t1.is_alive() and not results["email_sent"] and not results["email_error"]:
+        results["email_error"] = "Timed out after 30s — Render may be blocking SMTP or the provider is slow"
+    if t2.is_alive() and not results["sms_sent"] and not results["sms_error"]:
+        results["sms_error"] = "Timed out after 30s — Twilio may be unreachable"
 
     status = get_notification_status()
     status["ok"] = True
     status.update(results)
+    log.info(f"[TEST] Results: email_sent={results['email_sent']}, sms_sent={results['sms_sent']}, "
+             f"email_error={results['email_error']}, sms_error={results['sms_error']}")
     return status
 
 
 def get_notification_status() -> dict:
-    """Return current notification channel configuration status."""
-    sendgrid_configured = bool(SENDGRID_API_KEY)
-    smtp_configured = bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
-    twilio_configured = bool(TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and NOTIFY_PHONE)
+    """Return current notification channel configuration status.
+    Reads env vars LIVE to avoid stale module-level cache."""
+    cfg = _live_config()
+    sendgrid_configured = bool(cfg["SENDGRID_API_KEY"])
+    smtp_configured = bool(cfg["SMTP_HOST"] and cfg["SMTP_USER"] and cfg["SMTP_PASS"])
+    twilio_configured = bool(cfg["TWILIO_SID"] and cfg["TWILIO_TOKEN"] and cfg["TWILIO_FROM"] and cfg["NOTIFY_PHONE"])
 
     missing_twilio = []
-    if not TWILIO_SID:
+    if not cfg["TWILIO_SID"]:
         missing_twilio.append("TWILIO_SID")
-    if not TWILIO_TOKEN:
+    if not cfg["TWILIO_TOKEN"]:
         missing_twilio.append("TWILIO_TOKEN")
-    if not TWILIO_FROM:
+    if not cfg["TWILIO_FROM"]:
         missing_twilio.append("TWILIO_FROM")
-    if not NOTIFY_PHONE:
+    if not cfg["NOTIFY_PHONE"]:
         missing_twilio.append("NOTIFY_PHONE")
 
     missing_email = []
@@ -817,8 +872,8 @@ def get_notification_status() -> dict:
         missing_email.append("SENDGRID_API_KEY or SMTP_USER/SMTP_PASS")
 
     return {
-        "email_recipients": NOTIFY_EMAILS,
-        "sms_target": NOTIFY_PHONE,
+        "email_recipients": cfg["NOTIFY_EMAILS"],
+        "sms_target": cfg["NOTIFY_PHONE"],
         "sendgrid_configured": sendgrid_configured,
         "smtp_configured": smtp_configured,
         "twilio_configured": twilio_configured,
@@ -826,8 +881,60 @@ def get_notification_status() -> dict:
         "missing_twilio_fields": missing_twilio,
         "missing_email_fields": missing_email,
         "notify_on_users": sorted(list(NOTIFY_ON_USERS)),
-        "in_app_only_mode": IN_APP_ONLY_MODE,
-        "delivery_mode": "in_app_only" if IN_APP_ONLY_MODE else "external",
+        "in_app_only_mode": cfg["IN_APP_ONLY_MODE"],
+        "delivery_mode": "in_app_only" if cfg["IN_APP_ONLY_MODE"] else "external",
+    }
+
+
+def get_notification_debug() -> dict:
+    """Return detailed diagnostic info for debugging notification delivery.
+    Credential values are masked (first 4 chars shown)."""
+    cfg = _live_config()
+
+    def mask(val):
+        if not val:
+            return "NOT SET"
+        s = str(val)
+        if len(s) <= 4:
+            return "****"
+        return s[:4] + "*" * min(len(s) - 4, 12)
+
+    return {
+        "env_vars": {
+            "SENDGRID_API_KEY": mask(cfg["SENDGRID_API_KEY"]),
+            "SENDGRID_FROM": cfg["SENDGRID_FROM"],
+            "NOTIFY_EMAIL": ", ".join(cfg["NOTIFY_EMAILS"]),
+            "TWILIO_SID": mask(cfg["TWILIO_SID"]),
+            "TWILIO_TOKEN": mask(cfg["TWILIO_TOKEN"]),
+            "TWILIO_FROM": cfg["TWILIO_FROM"] or "NOT SET",
+            "NOTIFY_PHONE": cfg["NOTIFY_PHONE"] or "NOT SET",
+            "SMTP_HOST": cfg["SMTP_HOST"] or "NOT SET",
+            "SMTP_PORT": str(cfg["SMTP_PORT"]),
+            "SMTP_USER": mask(cfg["SMTP_USER"]),
+            "SMTP_PASS": mask(cfg["SMTP_PASS"]),
+            "NOTIFY_IN_APP_ONLY": os.getenv("NOTIFY_IN_APP_ONLY", "1"),
+            "NOTIFY_ON_USERS": os.getenv("NOTIFY_ON_USERS", "jessica,rcm"),
+        },
+        "effective": {
+            "in_app_only_mode": cfg["IN_APP_ONLY_MODE"],
+            "sendgrid_ready": bool(cfg["SENDGRID_API_KEY"]),
+            "smtp_ready": bool(cfg["SMTP_HOST"] and cfg["SMTP_USER"] and cfg["SMTP_PASS"]),
+            "twilio_ready": bool(cfg["TWILIO_SID"] and cfg["TWILIO_TOKEN"] and cfg["TWILIO_FROM"]),
+            "email_provider": "SendGrid" if cfg["SENDGRID_API_KEY"] else ("SMTP" if (cfg["SMTP_USER"] and cfg["SMTP_PASS"]) else "NONE"),
+            "email_recipients": cfg["NOTIFY_EMAILS"],
+            "sms_recipient": cfg["NOTIFY_PHONE"],
+            "sms_from": cfg["TWILIO_FROM"] or "NOT SET",
+        },
+        "module_cache_vs_live": {
+            "sendgrid_cached": bool(SENDGRID_API_KEY),
+            "sendgrid_live": bool(cfg["SENDGRID_API_KEY"]),
+            "twilio_cached": bool(TWILIO_SID),
+            "twilio_live": bool(cfg["TWILIO_SID"]),
+            "smtp_cached": bool(SMTP_USER),
+            "smtp_live": bool(cfg["SMTP_USER"]),
+            "in_app_cached": IN_APP_ONLY_MODE,
+            "in_app_live": cfg["IN_APP_ONLY_MODE"],
+        },
     }
 
 

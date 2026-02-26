@@ -2896,6 +2896,15 @@
           </div>
           <div id="testNoticeStatus" style="font-size:12px;color:var(--gray-500);margin-bottom:10px;display:none;">
           </div>
+          <!-- Notification Debug Panel -->
+          <div id="notifDebugWrap" style="margin-bottom:10px;">
+            <button class="btn btn-secondary btn-sm" onclick="toggleNotifDebug()" id="btnNotifDebug"
+              style="font-size:11px;">🔧 Show Credential Debug</button>
+            <div id="notifDebugPanel"
+              style="display:none;margin-top:8px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:14px;font-family:monospace;font-size:11px;line-height:1.8;white-space:pre-wrap;max-height:350px;overflow-y:auto;">
+              Loading...
+            </div>
+          </div>
           <div id="alertsContent">
             <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading alerts...</div>
           </div>
@@ -6694,6 +6703,60 @@
         }
       } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📨 Send Test Notice'; }
+      }
+    }
+
+    let notifDebugOpen = false;
+    async function toggleNotifDebug() {
+      const panel = document.getElementById('notifDebugPanel');
+      const btn = document.getElementById('btnNotifDebug');
+      notifDebugOpen = !notifDebugOpen;
+      if (!notifDebugOpen) {
+        panel.style.display = 'none';
+        btn.textContent = '🔧 Show Credential Debug';
+        return;
+      }
+      panel.style.display = '';
+      btn.textContent = '🔧 Hide Credential Debug';
+      panel.textContent = 'Loading diagnostics from server...';
+      try {
+        const r = await fetch('/hub/api/notifications/debug');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        let lines = [];
+        lines.push('━━━ ENVIRONMENT VARIABLES (as seen by server) ━━━');
+        for (const [k, v] of Object.entries(d.env_vars || {})) {
+          const isSet = v && v !== 'NOT SET';
+          const icon = isSet ? '✅' : '❌';
+          lines.push(`${icon} ${k} = ${v}`);
+        }
+        lines.push('');
+        lines.push('━━━ EFFECTIVE CONFIGURATION ━━━');
+        const eff = d.effective || {};
+        lines.push(`Email Provider:  ${eff.email_provider || 'NONE'}`);
+        lines.push(`SendGrid Ready:  ${eff.sendgrid_ready ? '✅ YES' : '❌ NO'}`);
+        lines.push(`SMTP Ready:      ${eff.smtp_ready ? '✅ YES' : '❌ NO'}`);
+        lines.push(`Twilio Ready:    ${eff.twilio_ready ? '✅ YES' : '❌ NO'}`);
+        lines.push(`Email To:        ${(eff.email_recipients || []).join(', ') || 'none'}`);
+        lines.push(`SMS To:          ${eff.sms_recipient || 'none'}`);
+        lines.push(`SMS From:        ${eff.sms_from || 'NOT SET'}`);
+        lines.push(`IN_APP_ONLY:     ${eff.in_app_only_mode ? '⚠️ YES (only test bypasses this)' : '✅ NO (real delivery enabled)'}`);
+        lines.push('');
+        lines.push('━━━ CACHE vs LIVE (stale-cache detection) ━━━');
+        const cv = d.module_cache_vs_live || {};
+        const cacheMismatch = (cv.sendgrid_cached !== cv.sendgrid_live) || (cv.twilio_cached !== cv.twilio_live) || (cv.smtp_cached !== cv.smtp_live);
+        if (cacheMismatch) {
+          lines.push('⚠️ CACHE MISMATCH DETECTED — server may need restart!');
+        } else {
+          lines.push('✅ Cache matches live env vars');
+        }
+        lines.push(`  SendGrid: cached=${cv.sendgrid_cached}, live=${cv.sendgrid_live}`);
+        lines.push(`  Twilio:   cached=${cv.twilio_cached}, live=${cv.twilio_live}`);
+        lines.push(`  SMTP:     cached=${cv.smtp_cached}, live=${cv.smtp_live}`);
+        lines.push(`  InApp:    cached=${cv.in_app_cached}, live=${cv.in_app_live}`);
+        panel.textContent = lines.join('\n');
+      } catch (e) {
+        panel.textContent = `Error loading debug info: ${e.message}`;
       }
     }
 
