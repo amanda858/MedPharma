@@ -858,11 +858,11 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    ALLOWED_EXTS = {".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
+    ALLOWED_EXTS = {".xlsx", ".xls", ".csv", ".json", ".pdf", ".doc", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
     if ext not in ALLOWED_EXTS:
         raise HTTPException(400, f"File type '{ext}' not allowed. Accepted: {', '.join(sorted(ALLOWED_EXTS))}")
 
-    if ext in (".xlsx", ".xls", ".csv"):
+    if ext in (".xlsx", ".xls", ".csv", ".json"):
         file_type = "excel"
     elif ext == ".pdf":
         file_type = "pdf"
@@ -891,6 +891,8 @@ async def upload_file(
             if ext == ".csv":
                 reader = csv.reader(io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
+            elif ext == ".json":
+                row_count = len(_parse_any_rows(content, ext))
             else:
                 try:
                     import openpyxl
@@ -933,8 +935,15 @@ async def upload_file(
         except Exception as e:
             import_errors = [str(e)]
 
-    if import_category and imported == 0 and not import_errors:
-        import_errors = [f"No rows imported for {import_category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+    if import_category and imported == 0:
+        fallback_imported, fallback_errors = _import_production_fallback(content, ext, scope, user["username"], import_category)
+        if fallback_imported > 0:
+            imported = fallback_imported
+            import_errors = [f"No strict {import_category} mapping found. Imported {fallback_imported} row(s) into Production fallback."]
+        elif not import_errors:
+            import_errors = [f"No rows imported for {import_category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+        if fallback_errors:
+            import_errors.extend(fallback_errors[:3])
 
     # ── Auto-log a production entry when category is Production ──
     if category == "Production":
@@ -957,6 +966,8 @@ async def upload_file(
         "id": file_id,
         "filename": unique_name,
         "original_name": file.filename,
+        "acknowledged": True,
+        "saved": True,
         "row_count": row_count,
         "imported": imported,
         "import_category": import_category,
@@ -1121,8 +1132,8 @@ async def import_excel(
     scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv files supported for import")
+    if ext not in (".xlsx", ".xls", ".csv", ".json", ".txt"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .json, .txt files supported for import")
 
     content = await file.read()
 
@@ -1138,6 +1149,8 @@ async def import_excel(
         if ext == ".csv":
             reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
             row_count = max(0, sum(1 for _ in reader) - 1)
+        elif ext in (".json", ".txt"):
+            row_count = len(_parse_any_rows(content, ext))
         else:
             import openpyxl
             wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
@@ -1163,14 +1176,14 @@ async def import_excel(
         elif category == "EDI":
             imported, errors = _import_edi_from_excel(content, ext, scope)
         else:
-            raise HTTPException(400, f"Unknown category: {category}")
+            imported, errors = _import_production_fallback(content, ext, scope, user["username"], category)
     except HTTPException:
         raise
     except Exception as e:
         errors = [str(e)]
 
     if imported == 0 and not errors:
-        errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
+        errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. File was saved and can be deleted from Documents."]
 
     # Notify admin of team imports
     if imported > 0:
@@ -1336,6 +1349,115 @@ def _clean_val(val):
     if len(s) > 10 and s[10:].strip() in ('00:00:00', '0:00:00', '00:00', '0:00'):
         s = s[:10]
     return s
+
+
+def _parse_any_rows(content: bytes, ext: str):
+    """Best-effort parser for uploaded files.
+    Supports csv/xlsx/xls via existing parser, plus json/txt fallbacks."""
+    import csv, io
+
+    if ext in (".xlsx", ".xls", ".csv"):
+        return _parse_excel_rows(content, ext)
+
+    if ext == ".json":
+        try:
+            obj = _json.loads(content.decode("utf-8", errors="replace"))
+            if isinstance(obj, list):
+                return [r for r in obj if isinstance(r, dict)]
+            if isinstance(obj, dict):
+                for key in ("rows", "data", "items", "results"):
+                    val = obj.get(key)
+                    if isinstance(val, list):
+                        return [r for r in val if isinstance(r, dict)]
+                return [obj]
+        except Exception:
+            return []
+
+    if ext == ".txt":
+        try:
+            decoded = content.decode("utf-8", errors="replace")
+            lines = [ln.strip() for ln in decoded.splitlines() if ln.strip()]
+            if not lines:
+                return []
+
+            sample = lines[0]
+            delim = None
+            for d in ("\t", ";", "|", ","):
+                if d in sample:
+                    delim = d
+                    break
+            if delim and len(lines) > 1:
+                reader = csv.DictReader(io.StringIO("\n".join(lines)), delimiter=delim)
+                parsed = list(reader)
+                if parsed:
+                    return parsed
+
+            return [{"line": ln} for ln in lines]
+        except Exception:
+            return []
+
+    return []
+
+
+def _import_production_fallback(content: bytes, ext: str, client_id: int, username: str, source_category: str):
+    """Fallback import when strict claim/cred/EDI mapping fails.
+    Converts arbitrary rows into production log entries so work is still captured."""
+    rows = _parse_any_rows(content, ext)
+    if not rows:
+        return 0, ["No structured rows detected for fallback import"]
+
+    imported = 0
+    errors = []
+
+    def _to_float(v, default=0.0):
+        try:
+            return float(str(v).replace(",", "").replace("$", "").strip())
+        except Exception:
+            return default
+
+    for i, row in enumerate(rows[:3000]):
+        try:
+            if not isinstance(row, dict):
+                continue
+            non_empty = [(str(k).strip(), _clean_val(v)) for k, v in row.items() if _clean_val(v)]
+            if not non_empty:
+                continue
+
+            qty = 1
+            hours = 0.0
+            category = source_category or "Production"
+            desc_parts = []
+
+            for k, v in non_empty:
+                lk = _norm_key(k)
+                if lk in {"qty", "quantity", "count", "units", "total"}:
+                    qty = max(1, int(_to_float(v, 1)))
+                    continue
+                if lk in {"time", "time spent", "hours", "hrs", "duration"}:
+                    hours = max(0.0, _to_float(v, 0.0))
+                    continue
+                if lk in {"category", "section", "module", "type"} and v:
+                    category = v
+                    continue
+                if len(desc_parts) < 4:
+                    desc_parts.append(f"{k}: {v}")
+
+            task_description = " | ".join(desc_parts)[:220] if desc_parts else "Uploaded work item"
+            add_production_log({
+                "client_id": client_id,
+                "work_date": date.today().isoformat(),
+                "username": username,
+                "category": category,
+                "task_description": task_description,
+                "quantity": qty,
+                "time_spent": hours,
+                "notes": f"Auto-import fallback from {source_category}",
+            })
+            imported += 1
+        except Exception as e:
+            errors.append(f"Fallback row {i+1}: {e}")
+
+    return imported, errors
 
 
 def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):

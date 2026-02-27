@@ -62,6 +62,24 @@ Expected healthy status:
 - `email_configured: true`
 - `twilio_configured: true`
 
+## Use medpharmahub.com (No Render URL)
+
+The app is configured for custom domains on the `medpharma-hub` service:
+
+- `medpharmahub.com`
+- `www.medpharmahub.com`
+
+To make it live:
+
+1. Buy/own `medpharmahub.com` at any registrar (Cloudflare/Namecheap/GoDaddy).
+2. In DNS, point:
+ - `@` (apex) → Render target (ALIAS/ANAME or A record per Render dashboard)
+ - `www` → CNAME to your Render hostname (for example `medpharma-hub.onrender.com`)
+3. In Render service settings, confirm both domains are attached and SSL is issued.
+4. Set your primary domain to `https://medpharmahub.com` and enable redirect from `www`.
+
+Note: domain purchase is not free by default, but once owned, connecting it on Render is supported on the app side.
+
 ## How Lead Scoring Works
 
 Each lab gets a score from 0-100 based on:

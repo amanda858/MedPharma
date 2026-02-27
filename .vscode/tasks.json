@@ -2,18 +2,21 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "git-commit-push",
+            "label": "git-commit-push-now",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && rm -f send_test.py send_test_notification.py research.py research.ipynb && echo '=== FILES DELETED ===' && git add -A && echo '=== GIT STATUS ===' && git status && echo '=== GIT COMMIT ===' && git commit -m 'fix: prevent data loss — remove destructive startup code, add DB backups and disk mount checks' -m '' -m '- Stop resetting RCM password on every startup (was generating new salt each boot, breaking sessions)' -m '- Stop blanking Luminary/Eric profile fields on every startup (was wiping user data)' -m '- Stop overwriting eric contact info on every startup' -m '- Add persistent disk mount check on production startup' -m '- Add automatic DB backup before every startup (keeps 5 most recent)' -m '- Add fresh-database detection to prevent silent data loss' -m '- Remove test/research files from repo' && echo '=== GIT PUSH ===' && git push origin main && echo '=== ALL DONE ==='",
+            "command": "cd /workspaces/CVOPro && git add app/client_routes.py app/notifications.py render.yaml README.md .vscode/tasks.json && git commit -m \"feat: resilient uploads, 6pm recap, custom domain wiring\" -m \"- accept json/txt imports and production fallback capture\" -m \"- keep 6pm owner summary flow and jess/jessica alias coverage\" -m \"- configure medpharmahub.com and www in render.yaml\" -m \"- document custom domain setup\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
         },
         {
-            "label": "investigate",
+            "label": "poll-readiness-8min",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && HUB_TOKEN=$(grep hub_session /tmp/cookies_admin.txt 2>/dev/null | awk '{print $NF}') && echo '=== claims client_id=2 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=2' && echo '' && echo '=== claims client_id=3 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=3' && echo '' && echo '=== claims client_id=6 ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/claims?client_id=6' && echo '' && echo '=== credentialing ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/credentialing' && echo '' && echo '=== edi ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/edi' && echo '' && echo '=== payments ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/payments' && echo '' && echo '=== production ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/production' && echo '' && echo '=== files ===' && curl -s -b \"hub_session=$HUB_TOKEN\" 'https://medpharma-hub.onrender.com/hub/api/files' && echo ALLDONE2",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/poll_readiness.py"
+            ],
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

@@ -89,7 +89,7 @@ def _live_config() -> dict:
 # Owner (Eric) should receive reports, not be tracked as a worker by default.
 # Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
 # Use NOTIFY_ON_USERS="*" to enable for all users.
-_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "jessica,rcm").strip()
+_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "jess,jessica,rcm").strip()
 NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
@@ -134,7 +134,17 @@ AUTO_FLUSH_MAX_AGE_MINUTES = int(os.getenv("NOTIFY_AUTO_FLUSH_MAX_AGE_MINUTES", 
 def _should_notify(username: str) -> bool:
     """Return True if this user's activity should trigger notifications."""
     u = (username or "").lower()
-    return "*" in NOTIFY_ON_USERS or u in NOTIFY_ON_USERS
+    if "*" in NOTIFY_ON_USERS:
+        return True
+    alias_map = {
+        "jess": {"jess", "jessica"},
+        "jessica": {"jess", "jessica"},
+        "eric": {"eric", "admin"},
+        "admin": {"eric", "admin"},
+        "rcm": {"rcm"},
+    }
+    aliases = alias_map.get(u, {u})
+    return any(a in NOTIFY_ON_USERS for a in aliases)
 
 
 def _get_benchmark(section: str) -> dict:
@@ -1718,10 +1728,9 @@ def send_team_progress_reports():
 
 def start_daily_scheduler():
     """
-    Start APScheduler to fire:
-      - send_production_reminders at 5:30 PM EST (for jessica & rcm)
-      - send_daily_account_summary at 6:00 PM EST
-                        - send_team_progress_reports at 7:00 PM EST
+        Start APScheduler to fire:
+            - send_production_reminders at 5:30 PM EST (for jessica & rcm)
+            - send_daily_account_summary at 6:00 PM EST
     Safe to call multiple times — only starts once.
     """
     global _scheduler_started
@@ -1755,16 +1764,8 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # 7:00 PM EST — Team member progress reports to owner recipients
-        scheduler.add_job(
-            send_team_progress_reports,
-            CronTrigger(hour=19, minute=0, timezone=est),
-            id="daily_team_progress_reports",
-            name="7:00 PM EST Team Progress Reports",
-            replace_existing=True,
-        )
         scheduler.start()
-        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary, 7:00 team progress")
+        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -1775,13 +1776,12 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 5:30, 6:00, and 7:00 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 5:30 and 6:00 PM EST."""
     import time as _time
 
     def _check_loop():
         last_reminder_date = None
         last_sent_date = None
-        last_progress_date = None
         while True:
             try:
                 # Get current time in US/Eastern
@@ -1809,15 +1809,10 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # 7:00 PM — Team progress reports
-                if now_est.hour == 19 and now_est.minute < 5 and last_progress_date != today:
-                    last_progress_date = today
-                    log.info("Thread scheduler firing team progress reports")
-                    send_team_progress_reports()
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")
             _time.sleep(60)
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 7:00 team progress")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary")
