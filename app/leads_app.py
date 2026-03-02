@@ -52,9 +52,10 @@ NPI_TAXONOMY_HINT = {
     "primary_care": "family medicine",
     "asc": "ambulatory surgery",
 }
-STRICT_MIN_SIGNAL_SCORE = 55
-STRICT_MIN_SERVICE_SCORE = 45
-STRICT_MIN_DOMAIN_SCORE = 40
+STRICT_MIN_SIGNAL_SCORE = 70
+STRICT_MIN_SERVICE_SCORE = 60
+STRICT_MIN_DOMAIN_SCORE = 55
+STRICT_MIN_SERVICES_COUNT = 2
 STRICT_POOL_TAG = "strict_quality_pool"
 REVIEW_MIN_SIGNAL_SCORE = 45
 REVIEW_MIN_SERVICE_SCORE = 20
@@ -107,7 +108,11 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
             return None
         return "review"
 
-    if score >= STRICT_MIN_SIGNAL_SCORE and has_identity_signal:
+    if len(services_needed) < STRICT_MIN_SERVICES_COUNT:
+        return "review"
+
+    strong_identity = has_valid_npi and (has_named_official or overall >= 75)
+    if score >= STRICT_MIN_SIGNAL_SCORE and strong_identity:
         return "strict"
     return "review"
 
