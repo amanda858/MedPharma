@@ -1847,6 +1847,8 @@
       <div style="margin-bottom:16px;text-align:right">
         <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
+        <button id="openLeadsFromSelector" class="btn btn-secondary btn-sm" onclick="openAdminLeads()"
+          style="font-size:13px;padding:8px 18px;display:none;margin-left:8px">🧲 Open Leads</button>
       </div>
       <div class="account-grid" id="accountGrid"></div>
     </div>
@@ -3411,6 +3413,11 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
+      const leadsBtn = document.getElementById('openLeadsFromSelector');
+      if (leadsBtn) {
+        leadsBtn.style.display = (currentUser && currentUser.role === 'admin') ? '' : 'none';
+      }
+
       // All users see all client accounts — with error handling for cold starts
       try {
         const controller = new AbortController();
@@ -3460,7 +3467,7 @@
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = 'block';
+      document.getElementById('adminNav').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');

@@ -42,6 +42,30 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "lead-reality-check-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/reality_check.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "verify-sample-leads-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/verify_samples.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }
