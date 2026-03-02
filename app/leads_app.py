@@ -38,7 +38,7 @@ from app.lead_scraper import run_national_lead_pull
 app = FastAPI(
     title="MedPharma Lab Leads",
     description="Lab Lead Generator — search NPI Registry for clinical lab prospects",
-    version="2.0.0",
+    version="2.0.1",
 )
 
 _scheduler_started = False
