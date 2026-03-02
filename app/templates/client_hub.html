@@ -1935,6 +1935,9 @@
           <div class="nav-item" data-panel="clients" onclick="navTo('clients')">
             <span class="ni">🏢</span> Manage Clients
           </div>
+          <div class="nav-item" onclick="openAdminLeads()">
+            <span class="ni">🧲</span> Leads
+          </div>
           <div class="nav-item" data-panel="audit" onclick="navTo('audit')">
             <span class="ni">📜</span> Audit Log
           </div>
@@ -3576,6 +3579,11 @@
       if (overlay) overlay.classList.remove('show');
       if (btn) btn.classList.remove('open');
       document.body.style.overflow = '';
+    }
+
+    function openAdminLeads() {
+      closeMobileSidebar();
+      window.location.href = '/admin/leads/';
     }
 
     // ═══════════════════════════════════════

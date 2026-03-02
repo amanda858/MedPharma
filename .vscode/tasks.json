@@ -4,7 +4,7 @@
         {
             "label": "git-commit-push-now",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/client_routes.py app/notifications.py render.yaml README.md .vscode/tasks.json && git commit -m \"feat: resilient uploads, 6pm recap, custom domain wiring\" -m \"- accept json/txt imports and production fallback capture\" -m \"- keep 6pm owner summary flow and jess/jessica alias coverage\" -m \"- configure medpharmahub.com and www in render.yaml\" -m \"- document custom domain setup\" && git push origin main",
+            "command": "cd /workspaces/CVOPro && git add app/leads_app.py app/lead_scraper.py && git commit -m \"feat: multi-source healthcare lead tracking incl asc\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -17,6 +17,27 @@
             "args": [
                 "/workspaces/CVOPro/.vscode/poll_readiness.py"
             ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "lead-soft-test-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/lead_soft_test.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "git-commit-push-leads-hub-now",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/hub_app.py app/leads_app.py app/templates/client_hub.html app/templates/index.html .vscode/lead_soft_test.py .vscode/tasks.json && git commit -m \"feat: admin-only unified leads with strict/review quality pipeline\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

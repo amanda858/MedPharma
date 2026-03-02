@@ -898,13 +898,18 @@
                     </div>
                     <div class="form-group">
                         <label>Min Score</label>
-                        <input type="number" id="savedFilterScore" min="0" max="100" placeholder="0"
+                        <input type="number" id="savedFilterScore" min="0" max="100" value="55" placeholder="55"
                             onchange="loadSavedLeads()">
                     </div>
                     <div class="form-group">
                         <label>&nbsp;</label>
                         <button class="btn btn-secondary" onclick="exportCSV('saved')">↓ Export</button>
                     </div>
+                </div>
+                <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" onclick="runDailyPollNow()">⏱ Run Daily 9AM Poll Now</button>
+                    <span style="font-size:12px;color:var(--gray-500);">Auto-runs daily at 9:00 AM ET and updates
+                        urgency ranking.</span>
                 </div>
             </div>
             <div id="savedResults"></div>
@@ -1011,7 +1016,31 @@
         // ──────────────────────────────────────────────────────────────
         let selectedSearchResults = new Set();
         let currentSearchResults = [];
+        let currentRequestedServices = [];
         let bulkSelectedStates = new Set();
+
+        const APP_BASE = window.location.pathname.startsWith('/admin/leads') ? '/admin/leads' : '';
+
+        function withBase(path) {
+            if (!path || !APP_BASE) return path;
+            if (path === APP_BASE || path.startsWith(`${APP_BASE}/`)) return path;
+            if (path.startsWith('/')) return `${APP_BASE}${path}`;
+            return path;
+        }
+
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            if (typeof input === 'string' && input.startsWith('/api/')) {
+                return nativeFetch(withBase(input), init);
+            }
+            return nativeFetch(input, init);
+        };
+
+        const REQUESTED_SERVICE_LABELS = {
+            billing: 'Billing Services',
+            credentialing: 'Credentialing',
+            compliance_workflow: 'Compliance Workflow Support',
+        };
 
         const US_STATES = {};
 
@@ -1094,6 +1123,7 @@
                 if (!resp.ok) throw new Error(data.detail || 'Search failed');
 
                 currentSearchResults = data.results || [];
+                currentRequestedServices = [];
                 selectedSearchResults.clear();
                 renderSearchResults(currentSearchResults, data.result_count, container);
             } catch (err) {
@@ -1129,6 +1159,7 @@
                 if (!resp.ok) throw new Error(data.detail || 'AI lead search failed');
 
                 currentSearchResults = data.leads || [];
+                currentRequestedServices = Array.isArray(data.requested_services) ? data.requested_services : [];
                 selectedSearchResults.clear();
                 renderSearchResults(currentSearchResults, data.count || currentSearchResults.length, container);
 
@@ -1156,7 +1187,12 @@
 
             let html = `
         <div class="results-header">
-            <span class="result-count">${totalCount.toLocaleString()} labs found (showing ${results.length})</span>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+                <span class="result-count">${totalCount.toLocaleString()} labs found (showing ${results.length})</span>
+                ${currentRequestedServices.length
+                    ? `<span style="font-size:12px;color:var(--gray-600);">Services Requested: <strong>${escHtml(currentRequestedServices.join(', '))}</strong></span>`
+                    : ''}
+            </div>
             <div style="display:flex;gap:8px;align-items:center;">
                 <button class="btn btn-secondary btn-sm" onclick="selectAllResults()">Select All</button>
                 <button class="btn btn-success btn-sm" onclick="saveSelected()" id="saveSelectedBtn" disabled>
@@ -1323,6 +1359,7 @@
                 if (!resp.ok) throw new Error(data.detail || 'Bulk search failed');
 
                 currentSearchResults = data.results || [];
+                currentRequestedServices = [];
                 selectedSearchResults.clear();
 
                 if (data.errors?.length) {
@@ -1388,13 +1425,44 @@
             }
         }
 
+        function addRequestedServicesContext(lead) {
+            const payload = { ...lead };
+            if (!Array.isArray(currentRequestedServices) || !currentRequestedServices.length) return payload;
+
+            const requestedToken = `requested_services=${currentRequestedServices.join('|')}`;
+            const existingTags = (payload.tags || '').toString().trim();
+            const hasRequested = existingTags.split(',').some(t => t.trim().toLowerCase().startsWith('requested_services='));
+
+            if (!hasRequested) {
+                payload.tags = existingTags ? `${existingTags},${requestedToken}` : requestedToken;
+            }
+            return payload;
+        }
+
+        function parseRequestedServicesFromTags(tags) {
+            if (!tags) return [];
+            const parts = tags.toString().split(',').map(t => t.trim());
+            const token = parts.find(t => t.toLowerCase().startsWith('requested_services='));
+            if (!token) return [];
+
+            const raw = (token.split('=', 2)[1] || '').trim();
+            if (!raw) return [];
+
+            return raw
+                .split('|')
+                .map(s => s.trim())
+                .filter(Boolean)
+                .map(s => REQUESTED_SERVICE_LABELS[s] || s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+        }
+
         async function saveSingleLead(index) {
             const lead = currentSearchResults[index];
+            const payload = addRequestedServicesContext(lead);
             try {
                 const resp = await fetch('/api/leads', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(lead),
+                    body: JSON.stringify(payload),
                 });
                 if (!resp.ok) throw new Error('Failed to save');
                 showToast('Lead saved!', 'success');
@@ -1404,7 +1472,9 @@
         }
 
         async function saveSelected() {
-            const leads = Array.from(selectedSearchResults).map(i => currentSearchResults[i]);
+            const leads = Array.from(selectedSearchResults)
+                .map(i => currentSearchResults[i])
+                .map(lead => addRequestedServicesContext(lead));
             if (!leads.length) return;
 
             try {
@@ -1447,6 +1517,19 @@
             }
         }
 
+        async function runDailyPollNow() {
+            try {
+                showToast('Running daily lead poll...', 'success');
+                const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
+                showToast(`Poll complete: ${data.saved} leads refreshed, ${data.urgency_updated} urgency updates`, 'success');
+                loadSavedLeads();
+            } catch (err) {
+                showToast(`Poll error: ${err.message}`, 'error');
+            }
+        }
+
         function renderSavedLeads(leads, container) {
             if (!leads.length) {
                 container.innerHTML = `
@@ -1467,7 +1550,9 @@
                     <thead>
                         <tr>
                             <th>Score</th>
+                            <th>Urgency</th>
                             <th>Status</th>
+                            <th>Service Need</th>
                             <th>Organization</th>
                             <th>City</th>
                             <th>State</th>
@@ -1481,11 +1566,16 @@
             leads.forEach(lead => {
                 const scoreClass = lead.lead_score >= 80 ? 'score-high' : lead.lead_score >= 60 ? 'score-mid' : 'score-low';
                 const name = lead.organization_name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Unknown';
-                const statusClass = `status-${lead.lead_status || 'new'}`;
+                const urgency = parseInt(lead.urgency_score || 0, 10);
+                const urgencyClass = urgency >= 78 ? 'score-high' : urgency >= 62 ? 'score-mid' : 'score-low';
+                const urgencyLabel = (lead.urgency_level || 'low').toUpperCase();
+                const services = Array.isArray(lead.services_wanted) ? lead.services_wanted : [];
+                const serviceText = services.length ? services.join(', ') : '—';
 
                 html += `
             <tr>
                 <td><span class="score ${scoreClass}">${lead.lead_score || 0}</span></td>
+                <td><span class="score ${urgencyClass}" title="${escHtml(lead.urgency_reason || '')}">${urgencyLabel} (${urgency})</span></td>
                 <td>
                     <select class="status-select" style="font-size:12px;padding:2px 6px;" onchange="updateLeadStatus(${lead.id}, this.value)">
                         <option value="new" ${lead.lead_status === 'new' ? 'selected' : ''}>New</option>
@@ -1495,6 +1585,7 @@
                         <option value="closed" ${lead.lead_status === 'closed' ? 'selected' : ''}>Closed</option>
                     </select>
                 </td>
+                <td style="font-size:12px;max-width:220px;">${escHtml(serviceText)}</td>
                 <td><strong>${escHtml(name)}</strong></td>
                 <td>${escHtml(lead.city || '')}</td>
                 <td>${escHtml(lead.state || '')}</td>
@@ -1837,6 +1928,7 @@
         function showDetail(index) {
             const lab = currentSearchResults[index];
             const name = lab.organization_name || `${lab.first_name} ${lab.last_name}`.trim() || 'Unknown';
+            const requested = currentRequestedServices.length ? currentRequestedServices.join(', ') : '';
 
             document.getElementById('modalTitle').textContent = name;
 
@@ -1894,6 +1986,11 @@
                 <label>Credential</label>
                 <div class="value">${escHtml(lab.credential)}</div>
             </div>` : ''}
+            ${requested ? `
+            <div class="detail-item">
+                <label>Services Requested</label>
+                <div class="value">${escHtml(requested)}</div>
+            </div>` : ''}
         </div>
         ${lab.all_taxonomies?.length > 1 ? `
         <div style="margin-top:16px;">
@@ -1924,15 +2021,30 @@
             const status = document.getElementById('savedFilterStatus')?.value;
             if (state) params.set('state', state);
             if (status) params.set('status', status);
-            window.open(`/api/export/csv?${params}`, '_blank');
+            window.open(withBase(`/api/export/csv?${params}`), '_blank');
         }
 
         function exportSearchCSV() {
             if (!currentSearchResults.length) return;
 
             // Client-side CSV from current results
-            const headers = ['npi', 'organization_name', 'first_name', 'last_name', 'taxonomy_desc', 'address_line1', 'city', 'state', 'zip_code', 'phone', 'fax', 'lead_score', 'enumeration_date'];
-            const rows = currentSearchResults.map(r => headers.map(h => `"${(r[h] || '').toString().replace(/"/g, '""')}"`).join(','));
+            const headers = [
+                'npi', 'organization_name', 'first_name', 'last_name', 'taxonomy_desc',
+                'address_line1', 'city', 'state', 'zip_code', 'phone', 'fax',
+                'lead_score', 'enumeration_date', 'requested_services',
+                'ai_matched_services', 'ai_match_score', 'ai_qualified'
+            ];
+            const requestedServices = Array.isArray(currentRequestedServices) ? currentRequestedServices.join('; ') : '';
+            const rows = currentSearchResults.map(r => {
+                const rowData = {
+                    ...r,
+                    requested_services: requestedServices,
+                    ai_matched_services: Array.isArray(r.ai_matched_services) ? r.ai_matched_services.join('; ') : '',
+                    ai_match_score: r.ai_match_score ?? '',
+                    ai_qualified: typeof r.ai_qualified === 'boolean' ? (r.ai_qualified ? 'true' : 'false') : '',
+                };
+                return headers.map(h => `"${(rowData[h] || '').toString().replace(/"/g, '""')}"`).join(',');
+            });
             const csv = [headers.join(','), ...rows].join('\n');
 
             const blob = new Blob([csv], { type: 'text/csv' });

@@ -6,11 +6,13 @@ import shutil
 import logging
 from datetime import datetime
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 
-from app.client_db import init_client_hub_db, normalize_claim_statuses
+from app.client_db import init_client_hub_db, normalize_claim_statuses, validate_session
 from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler, get_notification_status
+from app.database import init_db
+from app.leads_app import app as leads_subapp
 from app.config import DATABASE_PATH
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
@@ -66,6 +68,11 @@ async def startup():
 
     # Keep service available even if secondary startup tasks fail.
     try:
+        init_db()
+    except Exception:
+        log.exception("Startup warning: leads DB init failed")
+
+    try:
         init_client_hub_db()
     except Exception:
         log.exception("Startup failed during DB init")
@@ -82,6 +89,24 @@ async def startup():
 
 
 app.include_router(client_hub_router)
+app.mount("/admin/leads", leads_subapp)
+
+
+@app.middleware("http")
+async def admin_only_leads_guard(request: Request, call_next):
+    path = request.url.path or ""
+    if path.startswith("/admin/leads"):
+        token = request.cookies.get("hub_session")
+        user = validate_session(token) if token else None
+        if not user:
+            if "/api/" in path:
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            return RedirectResponse(url="/hub", status_code=307)
+        if user.get("role") != "admin":
+            if "/api/" in path:
+                return JSONResponse(status_code=403, content={"detail": "Admin access required"})
+            return RedirectResponse(url="/hub", status_code=307)
+    return await call_next(request)
 
 
 def _serve_hub():
@@ -126,6 +151,11 @@ async def medpharma(request: Request):
 @app.get("/mphub2026", response_class=HTMLResponse)
 async def mphub2026(request: Request):
     return _serve_hub()
+
+
+@app.get("/admin/leads", include_in_schema=False)
+async def admin_leads_root():
+    return RedirectResponse(url="/admin/leads/", status_code=307)
 
 
 @app.get("/healthz")
