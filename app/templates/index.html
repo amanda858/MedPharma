@@ -1528,7 +1528,7 @@
                 const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST' });
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
-                showToast(`Poll complete: ${data.saved} leads refreshed, ${data.urgency_updated} urgency updates`, 'success');
+                showToast(`Poll complete: ${data.saved} leads refreshed, ${data.urgency_updated} urgency updates, ${data.emails_found || 0} emails found`, 'success');
                 loadSavedLeads();
             } catch (err) {
                 showToast(`Poll error: ${err.message}`, 'error');
@@ -1562,6 +1562,8 @@
                             <th>City</th>
                             <th>State</th>
                             <th>Phone</th>
+                            <th>Email</th>
+                            <th>Need Evidence</th>
                             <th>Notes</th>
                             <th>Actions</th>
                         </tr>
@@ -1576,6 +1578,11 @@
                 const urgencyLabel = (lead.urgency_level || 'low').toUpperCase();
                 const services = Array.isArray(lead.services_wanted) ? lead.services_wanted : [];
                 const serviceText = services.length ? services.join(', ') : '—';
+                const topEmail = (lead.emails || '').split(';')[0]?.trim() || '—';
+                const noteText = lead.notes || '';
+                const needEvidence = noteText.includes('Need Evidence:')
+                    ? noteText.split('|')[0].replace('Need Evidence:', '').trim()
+                    : '—';
 
                 html += `
             <tr>
@@ -1595,6 +1602,8 @@
                 <td>${escHtml(lead.city || '')}</td>
                 <td>${escHtml(lead.state || '')}</td>
                 <td style="white-space:nowrap;">${escHtml(lead.phone || '—')}</td>
+                <td style="font-size:12px;white-space:nowrap;">${escHtml(topEmail)}</td>
+                <td style="font-size:12px;max-width:260px;">${escHtml(needEvidence)}</td>
                 <td>
                     <input type="text" value="${escHtml(lead.notes || '')}" placeholder="Add notes..."
                            style="font-size:12px;width:150px;padding:2px 6px;"

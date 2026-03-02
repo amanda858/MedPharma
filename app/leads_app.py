@@ -5,6 +5,7 @@ import io
 import json
 import os
 import asyncio
+from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
@@ -63,6 +64,16 @@ REVIEW_MIN_DOMAIN_SCORE = 20
 REVIEW_POOL_TAG = "review_quality_pool"
 ALLOW_REVIEW_POOL = str(os.getenv("ALLOW_REVIEW_POOL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 _bootstrap_poll_attempted = False
+NEED_INTENT_TERMS = [
+    "need", "needs", "seeking", "looking for", "help", "support",
+    "outsource", "backlog", "denial", "reimbursement", "credentialing",
+    "contracting", "compliance", "prior auth", "rcm", "revenue cycle",
+]
+NEED_SERVICE_TERMS = [
+    "billing", "claims", "credentialing", "payer", "payor", "contracting",
+    "workflow", "compliance", "coding", "audit", "prior authorization",
+]
+EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "30") or 30))
 
 
 def _quality_tier(row: dict, enrichment: dict) -> str | None:
@@ -128,6 +139,33 @@ def _clear_quality_pools() -> int:
     conn.commit()
     conn.close()
     return int(deleted or 0)
+
+
+def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
+    headline = str(row.get("headline", "") or "").strip()
+    note_text = str(row.get("notes", "") or "").strip()
+    source_text = f"{headline} {note_text}".lower()
+
+    has_intent = any(term in source_text for term in NEED_INTENT_TERMS)
+    has_service = any(term in source_text for term in NEED_SERVICE_TERMS)
+    if has_intent and has_service and headline:
+        return True, headline[:180]
+
+    service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
+    services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
+    overall = int(service_needs.get("overall_score", 0) or 0)
+    if overall >= 85 and len(services_needed) >= 2:
+        return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
+
+    return False, ""
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+        return (parsed.netloc or "").replace("www.", "").strip().lower()
+    except Exception:
+        return ""
 
 
 def _is_valid_npi(value: str) -> bool:
@@ -216,6 +254,8 @@ async def _pull_and_save_segment(
     strict_saved = 0
     review_saved = 0
     urgency_updated = 0
+    emails_found = 0
+    email_lookups = 0
     filtered_out = 0
     for row in discovered:
         enrichment = row.get("enrichment", {}) if isinstance(row.get("enrichment", {}), dict) else {}
@@ -229,6 +269,11 @@ async def _pull_and_save_segment(
             filtered_out += 1
             continue
         if tier == "review" and not ALLOW_REVIEW_POOL:
+            filtered_out += 1
+            continue
+
+        has_need_signal, need_evidence = _extract_need_signal(row, enrichment)
+        if not has_need_signal:
             filtered_out += 1
             continue
 
@@ -247,8 +292,8 @@ async def _pull_and_save_segment(
             "phone": row.get("phone", ""),
             "lead_score": int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0),
             "lead_status": "new",
-            "notes": f"[{row.get('source', 'source')}] {row.get('headline', '')} | {row.get('url', '')}",
-            "tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG if tier == 'strict' else REVIEW_POOL_TAG},quality_tier={tier}",
+            "notes": f"Need Evidence: {need_evidence} | [{row.get('source', 'source')}] {row.get('headline', '')} | {row.get('url', '')}",
+            "tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG if tier == 'strict' else REVIEW_POOL_TAG},quality_tier={tier},need_signal=yes",
         }
 
         save_lead(lead_payload)
@@ -265,6 +310,18 @@ async def _pull_and_save_segment(
             update_enrichment_urgency(npi, urgency_score, urgency_level, urgency_reason)
             urgency_updated += 1
 
+        if email_lookups < EMAIL_LOOKUP_PER_SEGMENT:
+            try:
+                domain_hint = _domain_from_url(row.get("url", ""))
+                email_result = await find_emails_for_lab(row.get("org_name", ""), domain_hint=domain_hint or None)
+                found = email_result.get("emails", []) if isinstance(email_result, dict) else []
+                if found:
+                    save_lead_emails(npi, found)
+                    emails_found += len(found)
+                email_lookups += 1
+            except Exception:
+                pass
+
     return {
         "segment": segment,
         "pulled": len(discovered),
@@ -272,6 +329,7 @@ async def _pull_and_save_segment(
         "strict_saved": strict_saved,
         "review_saved": review_saved,
         "urgency_updated": urgency_updated,
+        "emails_found": emails_found,
         "filtered_out": filtered_out,
     }
 
@@ -332,6 +390,7 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
             totals["strict_saved"] += int(result.get("strict_saved", 0))
             totals["review_saved"] += int(result.get("review_saved", 0))
             totals["urgency_updated"] += int(result["urgency_updated"])
+            totals["emails_found"] += int(result.get("emails_found", 0))
             totals["filtered_out"] += int(result["filtered_out"])
 
         return {
@@ -344,6 +403,7 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
             "strict_saved": totals["strict_saved"],
             "review_saved": totals["review_saved"],
             "urgency_updated": totals["urgency_updated"],
+            "emails_found": totals.get("emails_found", 0),
             "filtered_out": totals["filtered_out"],
             "deleted_previous_pool": deleted_old,
             "polled_at": datetime.now().isoformat(),
@@ -358,6 +418,7 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
         "strict_saved": single.get("strict_saved", 0),
         "review_saved": single.get("review_saved", 0),
         "urgency_updated": single["urgency_updated"],
+        "emails_found": single.get("emails_found", 0),
         "filtered_out": single["filtered_out"],
         "polled_at": datetime.now().isoformat(),
     }
