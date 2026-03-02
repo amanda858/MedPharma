@@ -1848,7 +1848,7 @@
         <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
         <button id="openLeadsFromSelector" class="btn btn-secondary btn-sm" onclick="openAdminLeads()"
-          style="font-size:13px;padding:8px 18px;display:none;margin-left:8px">🧲 Open Leads</button>
+          style="font-size:13px;padding:8px 18px;margin-left:8px">🧲 Open Leads</button>
       </div>
       <div class="account-grid" id="accountGrid"></div>
     </div>
@@ -3413,10 +3413,9 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
-      const isAdmin = currentUser && String(currentUser.role || '').toLowerCase() === 'admin';
       const leadsBtn = document.getElementById('openLeadsFromSelector');
       if (leadsBtn) {
-        leadsBtn.style.display = isAdmin ? '' : 'none';
+        leadsBtn.style.display = '';
       }
 
       // All users see all client accounts — with error handling for cold starts
@@ -3442,14 +3441,14 @@
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
       } else {
-        const adminLeadCard = isAdmin ? `
+        const adminLeadCard = `
     <div class="account-card" onclick="openAdminLeads()" style="border:2px solid #c7d2fe;background:linear-gradient(135deg,#eef2ff,#f8fafc)">
       <div class="ac-icon">🧲</div>
       <div class="ac-name">Open Leads</div>
       <div class="ac-contact">Admin lead engine (nationwide sourcing)</div>
       <div class="ac-badge"><span>●</span> Admin Only</div>
     </div>
-  ` : '';
+  `;
 
         grid.innerHTML = adminLeadCard + clientsList.map(c => `
     <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
