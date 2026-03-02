@@ -183,7 +183,8 @@
         }
 
         input,
-        select {
+        select,
+        textarea {
             padding: 8px 12px;
             border: 1px solid var(--gray-300);
             border-radius: 6px;
@@ -193,7 +194,8 @@
         }
 
         input:focus,
-        select:focus {
+        select:focus,
+        textarea:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px var(--primary-light);
         }
@@ -821,6 +823,23 @@
                         <button class="btn btn-primary" onclick="runSearch()">Search Labs</button>
                     </div>
                 </div>
+                <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--gray-200);">
+                    <div
+                        style="font-size:12px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+                        AI Lead Finder</div>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                        <div class="form-group" style="flex:1;min-width:320px;">
+                            <label>Client Need</label>
+                            <textarea id="aiNeeds" rows="2"
+                                placeholder="e.g., Find labs likely needing revenue cycle services, credentialing, and compliance workflow support"
+                                style="resize:vertical;min-height:62px;">Find leads for clients looking for revenue cycle services, credentialing and compliance workflow support.</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-success" onclick="runAISearch()">🤖 AI Find Leads</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Results -->
@@ -1082,6 +1101,36 @@
             }
         }
 
+        async function runAISearch() {
+            const needs = document.getElementById('aiNeeds')?.value?.trim() ||
+                'Find leads for clients looking for revenue cycle services, credentialing and compliance workflow support.';
+            const state = document.getElementById('searchState').value;
+            const city = document.getElementById('searchCity').value;
+            const limit = parseInt(document.getElementById('searchLimit').value || '50', 10);
+
+            const container = document.getElementById('searchResults');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>AI is finding service-fit lab leads...</p></div>';
+
+            try {
+                const resp = await fetch('/api/leads/ai-find', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ needs, state: state || null, city: city || null, limit }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'AI lead search failed');
+
+                currentSearchResults = data.leads || [];
+                selectedSearchResults.clear();
+                renderSearchResults(currentSearchResults, data.count || currentSearchResults.length, container);
+
+                const services = (data.requested_services || []).join(', ');
+                showToast(`AI lead finder complete: ${currentSearchResults.length} matches (${services})`, 'success');
+            } catch (err) {
+                container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
+            }
+        }
+
         // Track whether "emails only" filter is on
         let emailsOnlyFilter = false;
 
@@ -1141,6 +1190,11 @@
                 const name = lab.organization_name || `${lab.first_name} ${lab.last_name}`.trim() || 'Unknown';
                 const safeNpi = lab.npi;
 
+                const aiServices = (lab.ai_matched_services || []);
+                const aiServiceHtml = aiServices.length
+                    ? `<div style="margin-top:4px;font-size:11px;color:#065f46;background:#d1fae5;border-radius:6px;padding:2px 6px;display:inline-block;">AI: ${escHtml(aiServices.join(', '))}</div>`
+                    : '';
+
                 html += `
             <tr id="row-${safeNpi}" data-has-email="0">
                 <td class="checkbox-col">
@@ -1148,7 +1202,7 @@
                 </td>
                 <td><span class="score ${scoreClass}">${lab.lead_score}</span></td>
                 <td><a href="javascript:void(0)" onclick="showDetail(${i})" style="color:var(--primary);font-weight:500;">${escHtml(name)}</a></td>
-                <td style="font-size:12px;">${escHtml(lab.taxonomy_desc || '—')}</td>
+                <td style="font-size:12px;">${escHtml(lab.taxonomy_desc || '—')} ${aiServiceHtml}</td>
                 <td>${escHtml(lab.city || '')}</td>
                 <td><strong>${escHtml(lab.state || '')}</strong></td>
                 <td style="white-space:nowrap;">${escHtml(lab.phone || '—')}</td>

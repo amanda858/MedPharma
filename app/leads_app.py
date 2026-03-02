@@ -2,13 +2,15 @@
 
 import csv
 import io
-import jsonimport osimport asyncio
+import json
+import os
+import asyncio
 from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app.config import US_STATES, LAB_TAXONOMY_CODES
+from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY
 from app.database import (
     init_db, save_lead, get_saved_leads, update_lead,
     delete_lead, get_lead_stats, log_search,
@@ -72,6 +74,185 @@ async def bulk_search(
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class AILeadFindRequest(BaseModel):
+    needs: str
+    state: Optional[str] = None
+    city: Optional[str] = None
+    limit: int = 50
+
+
+def _fallback_intent_parse(needs: str) -> dict:
+    text = (needs or "").strip().lower()
+    service_map = {
+        "billing": ["revenue cycle", "rcm", "billing", "claims", "ar", "accounts receivable", "denials", "collections"],
+        "credentialing": ["credentialing", "enrollment", "provider enrollment", "payer enrollment", "caqh", "pecos"],
+        "compliance_workflow": ["compliance", "workflow", "operations", "audit", "clia", "regulatory", "turnaround", "backlog"],
+    }
+
+    requested = []
+    for key, terms in service_map.items():
+        if any(t in text for t in terms):
+            requested.append(key)
+
+    if not requested:
+        requested = ["billing", "credentialing", "compliance_workflow"]
+
+    return {
+        "requested_services": requested,
+        "notes": "keyword_fallback",
+    }
+
+
+def _parse_ai_intent(needs: str) -> dict:
+    base = _fallback_intent_parse(needs)
+    if not OPENAI_API_KEY:
+        return base
+
+    try:
+        import openai
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract service intent for healthcare lab lead generation. "
+                        "Return strict JSON with key requested_services as array of values from: "
+                        "billing, credentialing, compliance_workflow."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": needs or "",
+                },
+            ],
+            response_format={"type": "json_object"},
+        )
+        raw = completion.choices[0].message.content or "{}"
+        parsed = json.loads(raw)
+        requested = parsed.get("requested_services") or []
+        allowed = {"billing", "credentialing", "compliance_workflow"}
+        requested = [s for s in requested if s in allowed]
+        if not requested:
+            requested = base["requested_services"]
+        return {"requested_services": requested, "notes": "openai"}
+    except Exception:
+        return base
+
+
+def _service_matches(enrichment: dict, requested_services: list[str]) -> tuple[int, list[str], list[str]]:
+    service_needs = enrichment.get("service_needs", {}) if enrichment else {}
+    needed_labels = set(service_needs.get("services_needed", []))
+    billing_score = int(service_needs.get("billing_score", 0) or 0)
+    payor_score = int(service_needs.get("payor_score", 0) or 0)
+    workflow_score = int(service_needs.get("workflow_score", 0) or 0)
+
+    matched = []
+    reasons = []
+    score = 0
+
+    if "billing" in requested_services:
+        if "Billing Services" in needed_labels or billing_score >= 45:
+            matched.append("Revenue Cycle Services")
+            score += max(0, min(100, billing_score))
+            reasons.append(f"Billing score {billing_score}/100")
+
+    if "credentialing" in requested_services:
+        if "Payor Contracting" in needed_labels or payor_score >= 40:
+            matched.append("Credentialing Support")
+            score += max(0, min(100, payor_score))
+            reasons.append(f"Credentialing/payor score {payor_score}/100")
+
+    if "compliance_workflow" in requested_services:
+        if "Workflow Support" in needed_labels or workflow_score >= 40:
+            matched.append("Compliance Workflow Support")
+            score += max(0, min(100, workflow_score))
+            reasons.append(f"Workflow/compliance score {workflow_score}/100")
+
+    if requested_services:
+        score = int(round(score / len(requested_services)))
+    else:
+        score = 0
+
+    return score, matched, reasons
+
+
+@app.post("/api/leads/ai-find")
+async def ai_find_leads(req: AILeadFindRequest):
+    """
+    AI-guided lead finder for service-specific prospecting.
+    Uses intent parsing + enrichment scoring to return leads likely needing:
+    revenue cycle, credentialing, and compliance workflow support.
+    """
+    limit = max(1, min(int(req.limit or 50), 100))
+    intent = _parse_ai_intent(req.needs)
+    requested_services = intent.get("requested_services", ["billing", "credentialing", "compliance_workflow"])
+
+    try:
+        search = await search_npi(
+            state=(req.state or None),
+            city=(req.city or None),
+            organization_name=None,
+            taxonomy_description="laboratory",
+            postal_code=None,
+            limit=limit,
+            skip=0,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI lead search failed: {e}")
+
+    results = search.get("results", [])
+    if not results:
+        return {
+            "leads": [],
+            "count": 0,
+            "requested_services": requested_services,
+            "intent_source": intent.get("notes", "fallback"),
+            "message": "No labs found for the selected geography.",
+        }
+
+    enrich_items = [
+        {
+            "npi": row.get("npi", ""),
+            "org_name": row.get("organization_name", ""),
+            "state": row.get("state", ""),
+            "city": row.get("city", ""),
+        }
+        for row in results
+        if row.get("npi")
+    ]
+
+    enriched = await enrich_leads_bulk(enrich_items)
+    enrich_map = {e.get("npi"): e for e in enriched if isinstance(e, dict) and e.get("npi")}
+
+    ranked = []
+    for row in results:
+        npi = row.get("npi")
+        enrichment = enrich_map.get(npi, {})
+        match_score, matched_services, match_reasons = _service_matches(enrichment, requested_services)
+        if not matched_services:
+            continue
+
+        merged = dict(row)
+        merged["ai_match_score"] = match_score
+        merged["ai_matched_services"] = matched_services
+        merged["ai_match_reasons"] = match_reasons
+        merged["enrichment"] = enrichment
+        ranked.append(merged)
+
+    ranked.sort(key=lambda x: (x.get("ai_match_score", 0), x.get("lead_score", 0)), reverse=True)
+
+    return {
+        "leads": ranked[:limit],
+        "count": len(ranked[:limit]),
+        "requested_services": requested_services,
+        "intent_source": intent.get("notes", "fallback"),
+        "message": "No strong AI matches found; broaden state/city filters." if not ranked else "OK",
+    }
 
 
 @app.get("/api/search/taxonomy")
