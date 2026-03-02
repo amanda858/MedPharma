@@ -56,9 +56,10 @@ STRICT_MIN_SERVICE_SCORE = 45
 STRICT_MIN_DOMAIN_SCORE = 40
 STRICT_POOL_TAG = "strict_quality_pool"
 REVIEW_MIN_SIGNAL_SCORE = 45
-REVIEW_MIN_SERVICE_SCORE = 35
-REVIEW_MIN_DOMAIN_SCORE = 30
+REVIEW_MIN_SERVICE_SCORE = 20
+REVIEW_MIN_DOMAIN_SCORE = 20
 REVIEW_POOL_TAG = "review_quality_pool"
+_bootstrap_poll_attempted = False
 
 
 def _quality_tier(row: dict, enrichment: dict) -> str | None:
@@ -76,8 +77,7 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
 
     auth = enrichment.get("authorized_official", {}) if isinstance(enrichment.get("authorized_official", {}), dict) else {}
     has_named_official = bool((auth.get("first_name") or "").strip() or (auth.get("last_name") or "").strip())
-    if not (has_valid_npi or has_named_official):
-        return None
+    has_identity_signal = has_valid_npi or has_named_official
 
     phone = (row.get("phone") or "").strip()
     has_phone = bool(phone and phone not in {"—", "N/A", "na"})
@@ -105,7 +105,7 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
             return None
         return "review"
 
-    if score >= STRICT_MIN_SIGNAL_SCORE:
+    if score >= STRICT_MIN_SIGNAL_SCORE and has_identity_signal:
         return "strict"
     return "review"
 
@@ -360,6 +360,20 @@ async def _scheduled_daily_poll_job():
         pass
 
 
+async def _bootstrap_poll_if_empty():
+    global _bootstrap_poll_attempted
+    if _bootstrap_poll_attempted:
+        return
+    _bootstrap_poll_attempted = True
+    try:
+        existing = get_saved_leads()
+        if existing:
+            return
+        await run_daily_lead_poll("all")
+    except Exception:
+        pass
+
+
 def _start_daily_poll_scheduler():
     global _scheduler_started, _leads_scheduler
     if _scheduler_started:
@@ -381,6 +395,7 @@ def _start_daily_poll_scheduler():
 async def startup():
     init_db()
     _start_daily_poll_scheduler()
+    asyncio.create_task(_bootstrap_poll_if_empty())
 
 
 # ─── Search ──────────────────────────────────────────────────────────
