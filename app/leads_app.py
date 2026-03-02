@@ -501,17 +501,34 @@ async def bulk_email_enrichment(items: List[BulkEmailItem]):
 
 @app.get("/api/leads/national")
 @app.post("/api/leads/national")
-async def national_lead_pull():
+async def national_lead_pull(
+    segment: str = Query("all", description="all|laboratory|urgent_care|primary_care|asc"),
+    max_per_query: int = Query(8, ge=3, le=20),
+    include_news: bool = Query(True),
+    include_reddit: bool = Query(True),
+    include_jobs: bool = Query(True),
+):
     """
     AI-powered national lead discovery — scrapes web/news for labs needing help,
     enriches, and returns high-need prospects.
     """
     try:
-        leads = await run_national_lead_pull()
+        leads = await run_national_lead_pull(
+            segment=segment,
+            max_per_query=max_per_query,
+            include_news=include_news,
+            include_reddit=include_reddit,
+            include_jobs=include_jobs,
+        )
         return {
             "leads": leads,
             "count": len(leads),
-            "source": "news+web",
+            "segment": segment,
+            "sources": {
+                "news": include_news,
+                "reddit": include_reddit,
+                "jobs": include_jobs,
+            },
             "message": "No leads found right now" if not leads else "OK",
         }
     except Exception as e:
