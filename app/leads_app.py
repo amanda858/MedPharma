@@ -817,7 +817,13 @@ async def list_leads(
     urgency_level: Optional[str] = Query(None),
     urgent_only: bool = Query(False),
 ):
-    leads = get_saved_leads(status=status, state=state, min_score=min_score)
+    leads = get_all_leads_with_emails()
+    if status:
+        leads = [row for row in leads if str(row.get("lead_status", "")).lower() == status.lower()]
+    if state:
+        leads = [row for row in leads if str(row.get("state", "")).upper() == state.upper()]
+    if min_score is not None:
+        leads = [row for row in leads if int(row.get("lead_score", 0) or 0) >= int(min_score)]
     if urgency_level:
         leads = [row for row in leads if (row.get("urgency_level", "").lower() == urgency_level.lower())]
     if urgent_only:
