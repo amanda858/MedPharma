@@ -891,6 +891,10 @@ async def upload_file(
             if ext == ".csv":
                 reader = csv.reader(io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
+            elif ext == ".xls":
+                import xlrd
+                wb = xlrd.open_workbook(file_contents=content)
+                row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
             elif ext == ".json":
                 row_count = len(_parse_any_rows(content, ext))
             else:
@@ -1149,6 +1153,10 @@ async def import_excel(
         if ext == ".csv":
             reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
             row_count = max(0, sum(1 for _ in reader) - 1)
+        elif ext == ".xls":
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=content)
+            row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
         elif ext in (".json", ".txt"):
             row_count = len(_parse_any_rows(content, ext))
         else:
@@ -1206,6 +1214,85 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col
     If col_map is provided, header groups/sheets are prioritized by mapped-header coverage."""
     import csv, io
     rows = []
+    if ext == ".xls":
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=content)
+        sheet_results = []
+
+        for sheet in wb.sheets():
+            all_sheet_rows = [sheet.row_values(i) for i in range(sheet.nrows)]
+            if not all_sheet_rows:
+                continue
+
+            header_row_idx = 0
+            best_header_score = -1
+            scan_limit = min(len(all_sheet_rows), 200)
+            for idx, row in enumerate(all_sheet_rows[:scan_limit]):
+                if not row:
+                    continue
+                non_empty = sum(1 for c in row if c is not None and str(c).strip())
+                text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
+                if non_empty < 2:
+                    continue
+
+                mapped_cells = 0
+                if col_map:
+                    mapped_cells = sum(
+                        1 for c in row
+                        if c is not None and _fuzzy_match_column(str(c), col_map)
+                    )
+
+                score = (mapped_cells * 100) + (text_cells * 2) + non_empty
+                if score > best_header_score:
+                    best_header_score = score
+                    header_row_idx = idx
+
+            if header_row_idx < len(all_sheet_rows):
+                sheet_headers = [str(c).strip() if c is not None else "" for c in all_sheet_rows[header_row_idx]]
+                valid_cols = [i for i, h in enumerate(sheet_headers) if h]
+                if len(valid_cols) < 2:
+                    continue
+
+                sheet_rows = []
+                for row in all_sheet_rows[header_row_idx + 1:]:
+                    if any(c is not None and str(c).strip() for c in row):
+                        sheet_rows.append(dict(zip(sheet_headers, row)))
+
+                if sheet_rows:
+                    hdr_key = tuple(sorted(h.lower() for h in sheet_headers if h))
+                    sheet_results.append((hdr_key, sheet_headers, sheet_rows))
+
+        if sheet_results:
+            def _mapped_header_count(headers):
+                if not col_map:
+                    return 0
+                return sum(1 for h in headers if _fuzzy_match_column(h, col_map))
+
+            if combine_sheets:
+                from collections import defaultdict
+                groups = defaultdict(lambda: {"headers": [], "rows": []})
+                for hdr_key, hdrs, srows in sheet_results:
+                    if not groups[hdr_key]["headers"]:
+                        groups[hdr_key]["headers"] = hdrs
+                    groups[hdr_key]["rows"].extend(srows)
+
+                if col_map:
+                    best_group = max(
+                        groups.values(),
+                        key=lambda g: (_mapped_header_count(g["headers"]), len(g["rows"]))
+                    )
+                else:
+                    best_group = max(groups.values(), key=lambda g: len(g["rows"]))
+                rows = best_group["rows"]
+            else:
+                if col_map:
+                    best = max(sheet_results, key=lambda x: (_mapped_header_count(x[1]), len(x[2])))
+                else:
+                    best = max(sheet_results, key=lambda x: len(x[2]))
+                rows = best[2]
+
+        return rows
+
     if ext == ".csv":
         decoded = content.decode("utf-8-sig", errors="replace")
         sample = decoded[:8192]
@@ -1340,6 +1427,8 @@ def _clean_val(val):
     """Convert a cell value to a clean string. Strips time from datetime objects."""
     if val is None:
         return ""
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
     if isinstance(val, date):
@@ -2126,6 +2215,10 @@ async def replace_file(
             if ext == ".csv":
                 reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
+            elif ext == ".xls":
+                import xlrd
+                wb = xlrd.open_workbook(file_contents=content)
+                row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
             else:
                 import openpyxl
                 wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
