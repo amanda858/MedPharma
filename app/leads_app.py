@@ -81,6 +81,9 @@ class AILeadFindRequest(BaseModel):
     state: Optional[str] = None
     city: Optional[str] = None
     limit: int = 50
+    strict: bool = True
+    min_ai_match_score: int = 55
+    require_multi_service: bool = True
 
 
 def _fallback_intent_parse(needs: str) -> dict:
@@ -144,12 +147,14 @@ def _parse_ai_intent(needs: str) -> dict:
         return base
 
 
-def _service_matches(enrichment: dict, requested_services: list[str]) -> tuple[int, list[str], list[str]]:
+def _service_matches(enrichment: dict, requested_services: list[str]) -> tuple[int, list[str], list[str], int, str]:
     service_needs = enrichment.get("service_needs", {}) if enrichment else {}
     needed_labels = set(service_needs.get("services_needed", []))
     billing_score = int(service_needs.get("billing_score", 0) or 0)
     payor_score = int(service_needs.get("payor_score", 0) or 0)
     workflow_score = int(service_needs.get("workflow_score", 0) or 0)
+    overall_service_score = int(service_needs.get("overall_score", 0) or 0)
+    priority = (service_needs.get("priority") or "low").lower()
 
     matched = []
     reasons = []
@@ -178,7 +183,7 @@ def _service_matches(enrichment: dict, requested_services: list[str]) -> tuple[i
     else:
         score = 0
 
-    return score, matched, reasons
+    return score, matched, reasons, overall_service_score, priority
 
 
 @app.post("/api/leads/ai-find")
@@ -233,25 +238,62 @@ async def ai_find_leads(req: AILeadFindRequest):
     for row in results:
         npi = row.get("npi")
         enrichment = enrich_map.get(npi, {})
-        match_score, matched_services, match_reasons = _service_matches(enrichment, requested_services)
+        match_score, matched_services, match_reasons, overall_service_score, priority = _service_matches(enrichment, requested_services)
         if not matched_services:
+            continue
+
+        phone = (row.get("phone") or "").strip()
+        has_phone = bool(phone and phone not in {"—", "N/A", "na"})
+        has_reason_evidence = len(match_reasons) >= 2
+        multi_service_match = len(matched_services) >= 2
+
+        is_qualified = (
+            match_score >= max(0, min(100, int(req.min_ai_match_score or 55)))
+            and has_reason_evidence
+            and has_phone
+            and (multi_service_match if req.require_multi_service else True)
+        )
+
+        if req.strict and not is_qualified:
             continue
 
         merged = dict(row)
         merged["ai_match_score"] = match_score
         merged["ai_matched_services"] = matched_services
         merged["ai_match_reasons"] = match_reasons
+        merged["ai_priority"] = priority
+        merged["ai_overall_service_score"] = overall_service_score
+        merged["ai_has_phone"] = has_phone
+        merged["ai_qualified"] = is_qualified
+        merged["ai_pipeline_reason"] = (
+            "Qualified: strong pain signals and outreach-ready contact"
+            if is_qualified else
+            "Not qualified: weak score or insufficient evidence/contactability"
+        )
         merged["enrichment"] = enrichment
         ranked.append(merged)
 
-    ranked.sort(key=lambda x: (x.get("ai_match_score", 0), x.get("lead_score", 0)), reverse=True)
+    ranked.sort(
+        key=lambda x: (
+            1 if x.get("ai_qualified") else 0,
+            x.get("ai_match_score", 0),
+            x.get("ai_overall_service_score", 0),
+            x.get("lead_score", 0),
+        ),
+        reverse=True,
+    )
+
+    total = ranked[:limit]
+    qualified_count = sum(1 for row in total if row.get("ai_qualified"))
 
     return {
-        "leads": ranked[:limit],
-        "count": len(ranked[:limit]),
+        "leads": total,
+        "count": len(total),
+        "qualified_count": qualified_count,
         "requested_services": requested_services,
         "intent_source": intent.get("notes", "fallback"),
-        "message": "No strong AI matches found; broaden state/city filters." if not ranked else "OK",
+        "strict_mode": bool(req.strict),
+        "message": "No qualified buyer-intent leads found; broaden geography or disable strict mode." if not ranked else "OK",
     }
 
 

@@ -1115,7 +1115,15 @@
                 const resp = await fetch('/api/leads/ai-find', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ needs, state: state || null, city: city || null, limit }),
+                    body: JSON.stringify({
+                        needs,
+                        state: state || null,
+                        city: city || null,
+                        limit,
+                        strict: true,
+                        min_ai_match_score: 55,
+                        require_multi_service: true,
+                    }),
                 });
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'AI lead search failed');
@@ -1125,7 +1133,7 @@
                 renderSearchResults(currentSearchResults, data.count || currentSearchResults.length, container);
 
                 const services = (data.requested_services || []).join(', ');
-                showToast(`AI lead finder complete: ${currentSearchResults.length} matches (${services})`, 'success');
+                showToast(`AI lead finder: ${data.qualified_count || 0} qualified / ${currentSearchResults.length} total (${services})`, 'success');
             } catch (err) {
                 container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
             }
@@ -1194,6 +1202,9 @@
                 const aiServiceHtml = aiServices.length
                     ? `<div style="margin-top:4px;font-size:11px;color:#065f46;background:#d1fae5;border-radius:6px;padding:2px 6px;display:inline-block;">AI: ${escHtml(aiServices.join(', '))}</div>`
                     : '';
+                const qualHtml = lab.ai_qualified
+                    ? `<div style="margin-top:4px;font-size:11px;color:#1e3a8a;background:#dbeafe;border-radius:6px;padding:2px 6px;display:inline-block;">Qualified Lead</div>`
+                    : `<div style="margin-top:4px;font-size:11px;color:#92400e;background:#fef3c7;border-radius:6px;padding:2px 6px;display:inline-block;">Needs Review</div>`;
 
                 html += `
             <tr id="row-${safeNpi}" data-has-email="0">
@@ -1202,7 +1213,7 @@
                 </td>
                 <td><span class="score ${scoreClass}">${lab.lead_score}</span></td>
                 <td><a href="javascript:void(0)" onclick="showDetail(${i})" style="color:var(--primary);font-weight:500;">${escHtml(name)}</a></td>
-                <td style="font-size:12px;">${escHtml(lab.taxonomy_desc || '—')} ${aiServiceHtml}</td>
+                <td style="font-size:12px;">${escHtml(lab.taxonomy_desc || '—')} ${aiServiceHtml} ${qualHtml}</td>
                 <td>${escHtml(lab.city || '')}</td>
                 <td><strong>${escHtml(lab.state || '')}</strong></td>
                 <td style="white-space:nowrap;">${escHtml(lab.phone || '—')}</td>
