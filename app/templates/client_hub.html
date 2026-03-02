@@ -1843,10 +1843,14 @@
     </div>
     <div class="account-body">
       <h2>Select an Account</h2>
+      <div id="selectorBuild" style="font-size:11px;color:#64748b;margin:-6px 0 8px 0;"></div>
       <p>Choose a client account to open the dashboard</p>
-      <div style="margin:10px 0 14px 0;padding:10px 12px;border:1px solid #c7d2fe;border-radius:10px;background:linear-gradient(135deg,#eef2ff,#f8fafc);display:flex;align-items:center;justify-content:space-between;gap:10px;">
+      <div
+        style="margin:10px 0 14px 0;padding:10px 12px;border:1px solid #c7d2fe;border-radius:10px;background:linear-gradient(135deg,#eef2ff,#f8fafc);display:flex;align-items:center;justify-content:space-between;gap:10px;">
         <div style="font-size:13px;color:#3730a3;font-weight:700;">🧲 Lead Engine (Admin)</div>
-        <a href="/admin/leads/" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:#4338ca;color:#fff;text-decoration:none;font-size:12px;font-weight:700;">Open Leads</a>
+        <a href="/admin/leads/"
+          style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:#4338ca;color:#fff;text-decoration:none;font-size:12px;font-weight:700;">Open
+          Leads</a>
       </div>
       <div style="margin-bottom:16px;text-align:right">
         <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
@@ -3416,6 +3420,12 @@
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
+
+      const buildMeta = document.querySelector('meta[name="build"]')?.getAttribute('content') || '';
+      const selectorBuild = document.getElementById('selectorBuild');
+      if (selectorBuild) {
+        selectorBuild.textContent = buildMeta ? `Build: ${buildMeta}` : '';
+      }
 
       const leadsBtn = document.getElementById('openLeadsFromSelector');
       if (leadsBtn) {

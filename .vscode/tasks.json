@@ -66,6 +66,18 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "check-live-hub-ui-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/check_live_hub_ui.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }
