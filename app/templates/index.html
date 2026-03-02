@@ -912,8 +912,8 @@
                     </div>
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <button class="btn btn-primary btn-sm" onclick="runDailyPollNow()">⏱ Run Daily 9AM Poll Now</button>
-                    <span style="font-size:12px;color:var(--gray-500);">Auto-runs daily at 9:00 AM ET and updates
+                    <button class="btn btn-primary btn-sm" onclick="runDailyPollNow()">⏱ Run Poll Now</button>
+                    <span style="font-size:12px;color:var(--gray-500);">Auto-runs every 4 hours and updates
                         urgency ranking.</span>
                 </div>
             </div>
@@ -1523,15 +1523,32 @@
         }
 
         async function runDailyPollNow() {
+            const pollBtn = document.querySelector('button[onclick="runDailyPollNow()"]');
             try {
+                if (pollBtn) {
+                    pollBtn.disabled = true;
+                    pollBtn.textContent = '⏱ Running Poll...';
+                }
                 showToast('Running daily lead poll...', 'success');
-                const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST' });
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 45000);
+                const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST', signal: controller.signal });
+                clearTimeout(timeout);
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
                 showToast(`Poll complete: ${data.saved} leads refreshed, ${data.urgency_updated} urgency updates, ${data.emails_found || 0} emails found`, 'success');
                 loadSavedLeads();
             } catch (err) {
-                showToast(`Poll error: ${err.message}`, 'error');
+                if (err.name === 'AbortError') {
+                    showToast('Poll is still processing in the background. Refresh leads in about 60 seconds.', 'success');
+                } else {
+                    showToast(`Poll error: ${err.message}`, 'error');
+                }
+            } finally {
+                if (pollBtn) {
+                    pollBtn.disabled = false;
+                    pollBtn.textContent = '⏱ Run Poll Now';
+                }
             }
         }
 

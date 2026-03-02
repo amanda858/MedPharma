@@ -73,7 +73,7 @@ NEED_SERVICE_TERMS = [
     "billing", "claims", "credentialing", "payer", "payor", "contracting",
     "workflow", "compliance", "coding", "audit", "prior authorization",
 ]
-EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "30") or 30))
+EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "0") or 0))
 
 
 def _quality_tier(row: dict, enrichment: dict) -> str | None:
