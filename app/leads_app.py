@@ -43,6 +43,7 @@ app = FastAPI(
 
 _scheduler_started = False
 _leads_scheduler = None
+POLL_EVERY_HOURS = max(1, int(os.getenv("LEADS_POLL_HOURS", "4") or 4))
 NATIONWIDE_SEGMENTS = ["laboratory", "urgent_care", "primary_care", "asc"]
 NPI_FALLBACK_STATES = ["TX", "CA", "FL", "NY", "PA", "OH", "GA", "NC", "MI", "IL"]
 NPI_TAXONOMY_HINT = {
@@ -383,8 +384,8 @@ def _start_daily_poll_scheduler():
     _leads_scheduler = AsyncIOScheduler(timezone=tz)
     _leads_scheduler.add_job(
         _scheduled_daily_poll_job,
-        trigger=CronTrigger(hour=9, minute=0, timezone=tz),
-        id="daily_lead_poll_9am_et",
+        trigger=CronTrigger(hour=f"*/{POLL_EVERY_HOURS}", minute=0, timezone=tz),
+        id="recurring_lead_poll",
         replace_existing=True,
     )
     _leads_scheduler.start()
