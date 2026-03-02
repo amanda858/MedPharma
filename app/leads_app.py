@@ -20,8 +20,14 @@ from app.database import (
     delete_lead, get_lead_stats, log_search,
     save_lead_emails, get_lead_emails, get_all_leads_with_emails,
     save_enrichment, get_enrichment, get_all_enrichments, get_enrichment_stats,
-    update_enrichment_urgency, get_db,
+    get_db,
 )
+try:
+    from app.database import update_enrichment_urgency
+except ImportError:
+    def update_enrichment_urgency(npi: str, urgency_score: int, urgency_level: str, urgency_reason: str):
+        return None
+
 from app.npi_client import (
     search_npi, search_npi_by_taxonomy, get_npi_detail, bulk_search_labs,
 )
