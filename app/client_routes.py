@@ -963,6 +963,12 @@ async def upload_file(
                 "time_spent": 0,
                 "notes": description or f"Production file upload: {file.filename}",
             })
+            notify_activity(
+                user["username"],
+                "uploaded",
+                "Production",
+                f"{file.filename or 'file'} ({max(1, row_count)} row(s))",
+            )
         except Exception:
             pass  # non-critical
 

@@ -1545,30 +1545,54 @@ def get_user_production_snapshot(work_date: str = None) -> dict:
     if not work_date:
         work_date = _date.today().isoformat()
 
+    def _canonical_username(name: str) -> str:
+        n = (name or "").strip().lower()
+        if n in {"jess", "jessica"}:
+            return "jessica"
+        if n in {"admin", "eric"}:
+            return "eric"
+        return n
+
     conn = get_db()
     try:
         cur = conn.cursor()
 
-        # Per-user aggregated stats
+        # Per-user aggregated stats (alias-normalized)
         cur.execute("""
-            SELECT username,
-                   COUNT(*) as entry_count,
-                   SUM(quantity) as total_qty,
-                   SUM(time_spent) as total_hours,
-                   GROUP_CONCAT(DISTINCT category) as categories
+            SELECT username, category, quantity, time_spent
             FROM team_production
             WHERE work_date=?
-            GROUP BY lower(username)
-            ORDER BY total_hours DESC
+            ORDER BY created_at DESC
         """, (work_date,))
-        user_stats = []
+        agg = {}
         for row in cur.fetchall():
+            raw_username = row[0] or ""
+            user = _canonical_username(raw_username)
+            if not user:
+                continue
+            if user not in agg:
+                agg[user] = {
+                    "username": user,
+                    "entry_count": 0,
+                    "total_qty": 0,
+                    "total_hours": 0.0,
+                    "categories_set": set(),
+                }
+            agg[user]["entry_count"] += 1
+            agg[user]["total_qty"] += int(row[2] or 0)
+            agg[user]["total_hours"] += float(row[3] or 0)
+            if row[1]:
+                agg[user]["categories_set"].add(str(row[1]))
+
+        user_stats = []
+        for user in sorted(agg.keys(), key=lambda u: agg[u]["total_hours"], reverse=True):
+            item = agg[user]
             user_stats.append({
-                "username": row[0],
-                "entry_count": int(row[1] or 0),
-                "total_qty": int(row[2] or 0),
-                "total_hours": round(float(row[3] or 0), 1),
-                "categories": row[4] or "",
+                "username": item["username"],
+                "entry_count": int(item["entry_count"]),
+                "total_qty": int(item["total_qty"]),
+                "total_hours": round(float(item["total_hours"]), 1),
+                "categories": ",".join(sorted(item["categories_set"])),
             })
 
         # Detailed entries for the day
@@ -1581,7 +1605,7 @@ def get_user_production_snapshot(work_date: str = None) -> dict:
         entries = []
         for row in cur.fetchall():
             entries.append({
-                "username": row[0],
+                "username": _canonical_username(row[0]),
                 "category": row[1] or "",
                 "task_description": row[2] or "",
                 "quantity": int(row[3] or 0),
@@ -1598,7 +1622,8 @@ def get_user_production_snapshot(work_date: str = None) -> dict:
         """, (work_date,))
         file_uploads = {}
         for row in cur.fetchall():
-            file_uploads[row[0]] = int(row[1] or 0)
+            key = _canonical_username(row[0])
+            file_uploads[key] = int(file_uploads.get(key, 0)) + int(row[1] or 0)
 
         return {
             "work_date": work_date,
