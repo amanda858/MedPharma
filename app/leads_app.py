@@ -60,6 +60,7 @@ REVIEW_MIN_SIGNAL_SCORE = 45
 REVIEW_MIN_SERVICE_SCORE = 20
 REVIEW_MIN_DOMAIN_SCORE = 20
 REVIEW_POOL_TAG = "review_quality_pool"
+ALLOW_REVIEW_POOL = str(os.getenv("ALLOW_REVIEW_POOL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 _bootstrap_poll_attempted = False
 
 
@@ -220,6 +221,9 @@ async def _pull_and_save_segment(
 
         tier = _quality_tier(row, enrichment)
         if tier is None:
+            filtered_out += 1
+            continue
+        if tier == "review" and not ALLOW_REVIEW_POOL:
             filtered_out += 1
             continue
 
