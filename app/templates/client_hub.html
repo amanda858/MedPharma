@@ -3413,9 +3413,10 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
+      const isAdmin = currentUser && String(currentUser.role || '').toLowerCase() === 'admin';
       const leadsBtn = document.getElementById('openLeadsFromSelector');
       if (leadsBtn) {
-        leadsBtn.style.display = (currentUser && currentUser.role === 'admin') ? '' : 'none';
+        leadsBtn.style.display = isAdmin ? '' : 'none';
       }
 
       // All users see all client accounts — with error handling for cold starts
@@ -3441,7 +3442,16 @@
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
       } else {
-        grid.innerHTML = clientsList.map(c => `
+        const adminLeadCard = isAdmin ? `
+    <div class="account-card" onclick="openAdminLeads()" style="border:2px solid #c7d2fe;background:linear-gradient(135deg,#eef2ff,#f8fafc)">
+      <div class="ac-icon">🧲</div>
+      <div class="ac-name">Open Leads</div>
+      <div class="ac-contact">Admin lead engine (nationwide sourcing)</div>
+      <div class="ac-badge"><span>●</span> Admin Only</div>
+    </div>
+  ` : '';
+
+        grid.innerHTML = adminLeadCard + clientsList.map(c => `
     <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
       <div class="ac-icon">🏥</div>
       <div class="ac-name">${esc(c.company)}</div>
@@ -3461,13 +3471,13 @@
       document.getElementById('topUser').textContent = currentUser.username;
       // Hide the role pill for regular users; only show for admin
       const rolePill = document.getElementById('topRole');
-      if (currentUser.role === 'admin') {
+      if (String(currentUser.role || '').toLowerCase() === 'admin') {
         rolePill.textContent = 'Admin';
         rolePill.style.display = '';
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+      document.getElementById('adminNav').style.display = (String(currentUser.role || '').toLowerCase() === 'admin') ? 'block' : 'none';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
