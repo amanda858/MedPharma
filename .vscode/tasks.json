@@ -2,16 +2,34 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "git-commit-push-now",
+            "label": "release-push-main",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/leads_app.py app/lead_scraper.py && git commit -m \"feat: multi-source healthcare lead tracking incl asc\" && git push origin main",
+            "command": "cd /workspaces/CVOPro && git add app/ run.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
         },
         {
-            "label": "poll-readiness-8min",
+            "label": "deploy-trigger-empty-commit",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git commit --allow-empty -m \"chore: trigger render deploy\" && git push origin main",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "git-status-short",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git status --short --branch",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "poll-readiness-check",
             "type": "shell",
             "command": "python3",
             "args": [
@@ -29,15 +47,6 @@
             "args": [
                 "/workspaces/CVOPro/.vscode/lead_soft_test.py"
             ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "git-commit-push-leads-hub-now",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/hub_app.py app/leads_app.py app/templates/client_hub.html app/templates/index.html .vscode/lead_soft_test.py .vscode/tasks.json && git commit -m \"feat: admin-only unified leads with strict/review quality pipeline\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

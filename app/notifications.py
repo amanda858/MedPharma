@@ -1536,26 +1536,8 @@ def send_daily_account_summary():
 
     subject = f"MedPharma Daily Report — {date_str} — AR {_fmt_money(d['total_ar'])}"
 
-    # SMS — compact daily summary with production snapshot
-    prod_sms_parts = []
-    for u in prod_users[:3]:
-        prod_sms_parts.append(f"{u['username'].title()}:{u['total_hours']}h/{u['total_qty']}qty")
-    prod_sms = " | ".join(prod_sms_parts) if prod_sms_parts else "No production logged"
-
-    sms = (f"MedPharma Daily Report {date_str}\n"
-           f"AR:{_fmt_money(d['total_ar'])} | Collected MTD:{_fmt_money(d['payments_mtd'])}\n"
-           f"Claims: {d['submitted_today']}sub/{d['paid_today']}paid/{d['denied_today']}den\n"
-           f"Production: {prod_sms}")
-    if len(sms) > 300:
-        sms = (f"MedPharma {date_str}\n"
-               f"AR:{_fmt_money(d['total_ar'])} | {d['net_collection_rate']}% coll\n"
-               f"Prod: {prod_sms}")
-        if len(sms) > 300:
-            sms = sms[:297] + "…"
-
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
-    threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
-    log.info(f"MedPharma Daily Report sent: {date_str}, AR {_fmt_money(d['total_ar'])}, "
+    log.info(f"MedPharma Daily Report email queued: {date_str}, AR {_fmt_money(d['total_ar'])}, "
              f"{d['total_claims']} claims, {len(prod_users)} users logged production")
 
 

@@ -124,6 +124,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_enrichment_workflow ON lead_enrichment(workflow_score);
     """)
 
+    # Backward-compatible schema upgrades
+    cursor.execute("PRAGMA table_info(lead_enrichment)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "urgency_score" not in existing_cols:
+        cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_score INTEGER DEFAULT 0")
+    if "urgency_level" not in existing_cols:
+        cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_level TEXT DEFAULT 'low'")
+    if "urgency_reason" not in existing_cols:
+        cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_reason TEXT DEFAULT ''")
+    if "urgency_updated_at" not in existing_cols:
+        cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_updated_at TEXT DEFAULT ''")
+
     conn.commit()
     conn.close()
 
@@ -175,7 +187,20 @@ def get_saved_leads(status=None, state=None, min_score=None):
     conn = get_db()
     cursor = conn.cursor()
 
-    query = "SELECT * FROM saved_leads WHERE 1=1"
+    query = """
+        SELECT sl.*,
+               COALESCE(le.urgency_score, 0) as urgency_score,
+               COALESCE(le.urgency_level, 'low') as urgency_level,
+               COALESCE(le.urgency_reason, '') as urgency_reason,
+               COALESCE(le.urgency_updated_at, '') as urgency_updated_at,
+               COALESCE(le.services_needed, '[]') as services_wanted,
+               GROUP_CONCAT(em.email, '; ') as emails,
+               GROUP_CONCAT(em.position, '; ') as email_positions
+        FROM saved_leads sl
+        LEFT JOIN lead_enrichment le ON sl.npi = le.npi
+        LEFT JOIN lead_emails em ON sl.npi = em.npi
+        WHERE 1=1
+    """
     params = []
 
     if status:
@@ -188,12 +213,21 @@ def get_saved_leads(status=None, state=None, min_score=None):
         query += " AND lead_score >= ?"
         params.append(min_score)
 
-    query += " ORDER BY lead_score DESC, created_at DESC"
+    query += " GROUP BY sl.id ORDER BY urgency_score DESC, lead_score DESC, sl.created_at DESC"
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        item = dict(row)
+        for json_field in ("services_wanted",):
+            try:
+                item[json_field] = json.loads(item.get(json_field, "[]"))
+            except (json.JSONDecodeError, TypeError):
+                item[json_field] = []
+        result.append(item)
+    return result
 
 
 def update_lead(lead_id: int, updates: dict):
@@ -316,17 +350,29 @@ def get_all_leads_with_emails() -> list:
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT sl.*,
+         SELECT sl.*,
+             COALESCE(en.urgency_score, 0) AS urgency_score,
+             COALESCE(en.urgency_level, 'low') AS urgency_level,
+             COALESCE(en.services_needed, '[]') AS services_wanted,
                GROUP_CONCAT(le.email, '; ') AS emails,
                GROUP_CONCAT(le.position, '; ') AS email_positions
         FROM saved_leads sl
+         LEFT JOIN lead_enrichment en ON sl.npi = en.npi
         LEFT JOIN lead_emails le ON sl.npi = le.npi
         GROUP BY sl.id
-        ORDER BY sl.lead_score DESC, sl.created_at DESC
+         ORDER BY urgency_score DESC, sl.lead_score DESC, sl.created_at DESC
     """)
     rows = cursor.fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        item = dict(r)
+        try:
+            item["services_wanted"] = json.loads(item.get("services_wanted", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            item["services_wanted"] = []
+        out.append(item)
+    return out
 
 
 # ─── Lead Enrichment Persistence ────────────────────────────────────
@@ -350,8 +396,9 @@ def save_enrichment(npi: str, enrichment_data: dict) -> int:
                 billing_reasons, payor_reasons, workflow_reasons,
                 clia_data, medicare_data, authorized_official,
                 location_count, multi_state, states_present, taxonomy_count,
+                urgency_score, urgency_level, urgency_reason, urgency_updated_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             npi,
             enrichment_data.get("organization_name", ""),
@@ -373,12 +420,43 @@ def save_enrichment(npi: str, enrichment_data: dict) -> int:
             1 if enrichment_data.get("multi_state") else 0,
             json.dumps(enrichment_data.get("states_present", [])),
             len(enrichment_data.get("data_sources", {}).get("npi", {}).get("taxonomies", [])),
+            0,
+            "low",
+            "",
+            "",
             datetime.now().isoformat(),
         ))
         conn.commit()
         return cursor.lastrowid
     finally:
         conn.close()
+
+
+def update_enrichment_urgency(npi: str, urgency_score: int, urgency_level: str, urgency_reason: str):
+    """Update urgency metadata for an enriched lead."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE lead_enrichment
+        SET urgency_score = ?,
+            urgency_level = ?,
+            urgency_reason = ?,
+            urgency_updated_at = ?,
+            updated_at = ?
+        WHERE npi = ?
+        """,
+        (
+            int(max(0, min(100, urgency_score or 0))),
+            (urgency_level or "low").lower(),
+            urgency_reason or "",
+            datetime.now().isoformat(),
+            datetime.now().isoformat(),
+            npi,
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_enrichment(npi: str) -> dict:
