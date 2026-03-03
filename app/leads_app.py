@@ -39,8 +39,8 @@ from app.enrichment import enrich_lead, enrich_leads_bulk
 from app.lead_scraper import run_national_lead_pull
 
 app = FastAPI(
-    title="MedPharma Lab Leads",
-    description="Lab Lead Generator — search NPI Registry for clinical lab prospects",
+    title="MedPharma Leads",
+    description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
 
