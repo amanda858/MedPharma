@@ -533,7 +533,8 @@ def _start_daily_poll_scheduler():
 @app.on_event("startup")
 async def startup():
     init_db()
-    _start_daily_poll_scheduler()
+    # Temporarily disable scheduler to debug startup issues
+    # _start_daily_poll_scheduler()
     if AUTO_BOOTSTRAP_POLL:
         asyncio.create_task(_bootstrap_poll_if_empty())
 
