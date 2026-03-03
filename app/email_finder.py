@@ -336,7 +336,15 @@ async def find_emails_for_lab(
     }
 
     if not live_domain:
-        result["error"] = "Could not confirm a live website for this organization. Enter the domain manually."
+        result["error"] = "Could not confirm a live website for this organization."
+        # Still try pattern generation if names provided, using first domain candidate
+        if first_name and last_name and candidates:
+            guessed_domain = candidates[0]
+            pattern_emails = generate_pattern_emails(first_name, last_name, guessed_domain)
+            if pattern_emails:
+                result["emails"] = pattern_emails
+                result["error"] = f"Used guessed domain {guessed_domain} for pattern generation"
+                return result
         return result
 
     if not HUNTER_API_KEY:

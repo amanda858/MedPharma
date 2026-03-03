@@ -1400,22 +1400,30 @@ async def enrich_all_emails():
 async def enrich_all_leads():
     """Enrich all leads with NPI data to get authorized officials."""
     from app.enrichment import enrich_lead
+    from app.database import save_enrichment
     import asyncio
     
     db = get_db()
-    leads = db.execute("SELECT npi FROM saved_leads WHERE npi IS NOT NULL AND npi != ''").fetchall()
+    leads = db.execute("SELECT npi, organization_name, city, state FROM saved_leads WHERE npi IS NOT NULL AND npi != ''").fetchall()
     db.close()
     
     enriched = 0
-    for lead in leads:
+    for lead in leads[:5]:  # Limit to first 5 for testing
         npi = lead['npi']
         if npi and not npi.startswith('DISC-'):
             try:
-                enrichment = await enrich_lead(npi)
-                if enrichment:
+                enrichment = await enrich_lead(
+                    npi=npi,
+                    org_name=lead['organization_name'],
+                    state=lead['state'],
+                    city=lead['city']
+                )
+                if enrichment and not enrichment.get('error'):
+                    save_enrichment(npi, enrichment)
                     enriched += 1
+                    print(f"Enriched {npi}")
             except Exception as e:
-                pass  # Continue with others
+                print(f"Error enriching {npi}: {e}")
     
     return {"message": f"Enriched {enriched} leads with NPI data"}
 
