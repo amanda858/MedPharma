@@ -17,22 +17,54 @@ from app.config import HUNTER_API_KEY
 
 async def scrape_emails_from_website(url: str) -> list[str]:
     """Scrape email addresses from a website using regex."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                return []
-            html = resp.text
-    except Exception:
-        return []
-
-    # Regex to find emails
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    emails = re.findall(email_pattern, html)
-    # Remove duplicates and filter common invalid ones
-    unique_emails = list(set(emails))
-    valid_emails = [e for e in unique_emails if not any(x in e.lower() for x in ['example', 'test', 'noreply', 'info@', 'contact@', 'support@', 'admin@'])]
-    return valid_emails[:10]  # Limit to 10
+    emails = set()
+    
+    # Try multiple common pages
+    pages_to_try = [
+        url,
+        url.rstrip('/') + '/contact',
+        url.rstrip('/') + '/contact-us',
+        url.rstrip('/') + '/about',
+        url.rstrip('/') + '/about-us',
+        url.rstrip('/') + '/team',
+        url.rstrip('/') + '/staff',
+        url.rstrip('/') + '/doctors',
+        url.rstrip('/') + '/physicians',
+    ]
+    
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        for page_url in pages_to_try[:3]:  # Limit to first 3 pages to avoid being too aggressive
+            try:
+                resp = await client.get(page_url)
+                if resp.status_code != 200:
+                    continue
+                html = resp.text
+                
+                # Multiple email regex patterns for better coverage
+                email_patterns = [
+                    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                    r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+                    r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
+                ]
+                
+                for pattern in email_patterns:
+                    found = re.findall(pattern, html, re.IGNORECASE)
+                    for email in found:
+                        email = email.strip().lower()
+                        # Basic validation
+                        if '@' in email and '.' in email.split('@')[1]:
+                            emails.add(email)
+                            
+            except Exception:
+                continue
+    
+    # Filter out common invalid emails but be less restrictive
+    valid_emails = []
+    for email in emails:
+        if not any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder']):
+            valid_emails.append(email)
+    
+    return valid_emails[:15]  # Return up to 15 emails
 
 
 def generate_pattern_emails(first_name: str, last_name: str, domain: str) -> list[dict]:
@@ -76,33 +108,64 @@ def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     strip_words = {
         "inc", "llc", "ltd", "corp", "corporation", "co", "company",
         "pllc", "pa", "pc", "dba", "the", "and", "&", "of", "a",
+        "associates", "assoc", "group", "practice", "center", "centers",
+        "clinic", "clinics", "medical", "health", "healthcare", "hospital",
+        "laboratory", "laboratories", "lab", "labs", "diagnostic", "diagnostics",
+        "pathology", "services", "professional", "professionals"
     }
     name = org_name.lower()
     name = re.sub(r"[^a-z0-9\s]", "", name)
-    tokens = [t for t in name.split() if t not in strip_words]
+    tokens = [t for t in name.split() if t not in strip_words and len(t) > 1]
 
     if not tokens:
         return []
 
     abbrev_map = {
-        "laboratory": "lab", "laboratories": "labs",
-        "medical": "med", "diagnostics": "dx", "diagnostic": "dx",
-        "pathology": "path", "services": "svc", "associates": "assoc",
-        "center": "ctr", "reference": "ref", "clinical": "clinical",
-        "health": "health", "healthcare": "healthcare",
+        "laboratory": "lab", "laboratories": "labs", "medical": "med", 
+        "diagnostics": "dx", "diagnostic": "dx", "pathology": "path", 
+        "services": "svc", "associates": "assoc", "center": "ctr", 
+        "centers": "ctrs", "clinic": "cl", "clinics": "cls",
+        "health": "hlth", "healthcare": "hc", "hospital": "hosp",
+        "professional": "pro", "professionals": "pros"
     }
     abbrev_tokens = [abbrev_map.get(t, t) for t in tokens]
 
     candidates = []
+    
+    # Try full name without spaces
     full = "".join(tokens)
     candidates.append(full + ".com")
-
+    
+    # Try abbreviated version
     abbrev = "".join(abbrev_tokens)
     if abbrev != full:
         candidates.append(abbrev + ".com")
+    
+    # Try first token + second token
+    if len(tokens) >= 2:
+        candidates.append(tokens[0] + tokens[1] + ".com")
+        candidates.append(tokens[0] + abbrev_tokens[1] + ".com")
+    
+    # Try with dashes
+    if len(tokens) >= 2:
+        candidates.append(tokens[0] + "-" + tokens[1] + ".com")
+        candidates.append(abbrev_tokens[0] + "-" + abbrev_tokens[1] + ".com")
+    
+    # Try .org and .net
+    for domain in [full + ".com", abbrev + ".com"]:
+        candidates.append(domain.replace(".com", ".org"))
+        candidates.append(domain.replace(".com", ".net"))
+    
+    # Remove duplicates and limit to 10
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        if c not in seen and len(unique_candidates) < 10:
+            seen.add(c)
+            unique_candidates.append(c)
+    
+    return unique_candidates
 
-    if tokens[0] not in ("lab", "labs", "clinical", "medical", "med"):
-        candidates.append(tokens[0] + "labs.com")
         candidates.append(tokens[0] + "lab.com")
         candidates.append(tokens[0] + "med.com")
 
@@ -125,9 +188,9 @@ async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
     for scheme in ("https", "http"):
         try:
             resp = await client.head(
-                f"{scheme}://{domain}", timeout=5.0, follow_redirects=True,
+                f"{scheme}://{domain}", timeout=10.0, follow_redirects=True,
             )
-            if resp.status_code < 500:
+            if resp.status_code < 400:  # Accept more status codes
                 return True
         except Exception:
             pass
@@ -136,7 +199,7 @@ async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
 
 async def _find_live_domain(candidates: list[str]) -> Optional[str]:
     """Check all candidates concurrently, return the first live one."""
-    async with httpx.AsyncClient(timeout=6.0) as client:
+    async with httpx.AsyncClient(timeout=12.0) as client:
         results = await asyncio.gather(
             *[_check_domain_exists(d, client) for d in candidates],
             return_exceptions=True,
@@ -323,7 +386,11 @@ async def find_emails_for_lab(
     if domain_hint:
         candidates.insert(0, domain_hint)
 
+    print(f"DEBUG: Finding emails for {org_name}, candidates: {candidates[:5]}")
+
     live_domain = await _find_live_domain(candidates)
+
+    print(f"DEBUG: Live domain found: {live_domain}")
 
     result: dict = {
         "org_name": org_name,
@@ -344,14 +411,17 @@ async def find_emails_for_lab(
             if pattern_emails:
                 result["emails"] = pattern_emails
                 result["error"] = f"Used guessed domain {guessed_domain} for pattern generation"
+                print(f"DEBUG: Using pattern generation with guessed domain {guessed_domain}")
                 return result
         return result
 
     if not HUNTER_API_KEY:
         # Workaround: scrape website for emails
+        print(f"DEBUG: No Hunter API key, trying to scrape {live_domain}")
         if live_domain:
             try:
                 scraped_emails = await scrape_emails_from_website(f"https://{live_domain}")
+                print(f"DEBUG: Scraped emails: {len(scraped_emails)} found")
                 if scraped_emails:
                     # Create basic email records
                     result["emails"] = [
@@ -372,6 +442,7 @@ async def find_emails_for_lab(
                     result["error"] = None
                     return result
             except Exception as e:
+                print(f"DEBUG: Scraping failed: {e}")
                 pass
         
         # If no scraped emails, try pattern generation if names provided
@@ -380,6 +451,7 @@ async def find_emails_for_lab(
             if pattern_emails:
                 result["emails"] = pattern_emails
                 result["error"] = None
+                print(f"DEBUG: Using pattern generation with live domain {live_domain}")
                 return result
         
         result["error"] = (
