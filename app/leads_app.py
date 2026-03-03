@@ -535,8 +535,9 @@ async def startup():
     init_db()
     # Temporarily disable scheduler to debug startup issues
     # _start_daily_poll_scheduler()
-    if AUTO_BOOTSTRAP_POLL:
-        asyncio.create_task(_bootstrap_poll_if_empty())
+    # Temporarily disable bootstrap poll
+    # if AUTO_BOOTSTRAP_POLL:
+    #     asyncio.create_task(_bootstrap_poll_if_empty())
 
 
 # ─── Search ──────────────────────────────────────────────────────────
