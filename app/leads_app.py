@@ -1396,14 +1396,28 @@ async def enrich_all_emails():
     return {"message": f"Enriched {updated} leads with emails"}
 
 
-@app.post("/api/admin/trigger-daily-pull")
-async def trigger_daily_pull():
-    """Trigger the daily lead pull manually."""
-    try:
-        result = await run_daily_lead_poll("all")
-        return result
-    except Exception as e:
-        return {"error": str(e)}
+@app.post("/api/admin/enrich-leads")
+async def enrich_all_leads():
+    """Enrich all leads with NPI data to get authorized officials."""
+    from app.enrichment import enrich_lead
+    import asyncio
+    
+    db = get_db()
+    leads = db.execute("SELECT npi FROM saved_leads WHERE npi IS NOT NULL AND npi != ''").fetchall()
+    db.close()
+    
+    enriched = 0
+    for lead in leads:
+        npi = lead['npi']
+        if npi and not npi.startswith('DISC-'):
+            try:
+                enrichment = await enrich_lead(npi)
+                if enrichment:
+                    enriched += 1
+            except Exception as e:
+                pass  # Continue with others
+    
+    return {"message": f"Enriched {enriched} leads with NPI data"}
 
 
 @app.get("/api/export/emails/excel")
