@@ -105,6 +105,30 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "run-daily-pull-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/run_daily_pull_now.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "enrich-emails-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/enrich_emails_now.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }

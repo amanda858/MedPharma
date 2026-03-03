@@ -15,6 +15,26 @@ from typing import Optional
 from app.config import HUNTER_API_KEY
 
 
+async def scrape_emails_from_website(url: str) -> list[str]:
+    """Scrape email addresses from a website using regex."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return []
+            html = resp.text
+    except Exception:
+        return []
+
+    # Regex to find emails
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    emails = re.findall(email_pattern, html)
+    # Remove duplicates and filter common invalid ones
+    unique_emails = list(set(emails))
+    valid_emails = [e for e in unique_emails if not any(x in e.lower() for x in ['example', 'test', 'noreply', 'info@', 'contact@', 'support@', 'admin@'])]
+    return valid_emails[:10]  # Limit to 10
+
+
 
 def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     """Derive likely domain candidates from an org name."""
@@ -285,9 +305,35 @@ async def find_emails_for_lab(
         return result
 
     if not HUNTER_API_KEY:
+        # Workaround: scrape website for emails
+        if live_domain:
+            try:
+                scraped_emails = await scrape_emails_from_website(f"https://{live_domain}")
+                if scraped_emails:
+                    # Create basic email records
+                    result["emails"] = [
+                        {
+                            "email": email,
+                            "first_name": "",
+                            "last_name": "",
+                            "full_name": None,
+                            "position": "",
+                            "is_decision_maker": False,
+                            "confidence": 50,  # Low confidence
+                            "verified": False,
+                            "source": "website_scrape",
+                            "domain": live_domain,
+                        }
+                        for email in scraped_emails
+                    ]
+                    result["error"] = None
+                    return result
+            except Exception as e:
+                pass
         result["error"] = (
             f"Live domain found: {live_domain} — "
-            "Add your HUNTER_API_KEY to pull real named emails automatically."
+            "Add your HUNTER_API_KEY to pull real named emails automatically. "
+            "For now, no emails found via scraping."
         )
         return result
 

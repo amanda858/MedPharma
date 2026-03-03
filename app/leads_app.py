@@ -1320,6 +1320,50 @@ async def get_taxonomies():
     return LAB_TAXONOMY_CODES
 
 
+# ─── Admin ─────────────────────────────────────────────────────────
+
+@app.post("/api/admin/enrich-emails")
+async def enrich_all_emails():
+    """Trigger email finding for all leads that don't have emails yet."""
+    db = get_db()
+    leads = db.execute("SELECT npi, organization_name, city, state FROM saved_leads").fetchall()
+    updated = 0
+    for lead in leads:
+        npi = lead['npi']
+        org_name = lead['organization_name']
+        city = lead['city']
+        state = lead['state']
+        # Check if already has emails
+        existing = db.execute("SELECT COUNT(*) FROM lead_emails WHERE npi = ?", (npi,)).fetchone()[0]
+        if existing == 0:
+            try:
+                result = await find_emails_for_lab(org_name, city=city, state=state)
+                emails = result.get('emails', [])
+                if emails:
+                    for email in emails:
+                        db.execute("""
+                            INSERT OR IGNORE INTO lead_emails 
+                            (npi, email, first_name, last_name, position, is_decision_maker, confidence, source, domain)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            npi,
+                            email['email'],
+                            email.get('first_name', ''),
+                            email.get('last_name', ''),
+                            email.get('position', ''),
+                            1 if email.get('is_decision_maker') else 0,
+                            email.get('confidence', 0),
+                            email.get('source', 'admin_trigger'),
+                            email.get('domain', '')
+                        ))
+                    updated += 1
+            except Exception as e:
+                pass  # Continue with others
+    db.commit()
+    db.close()
+    return {"message": f"Enriched {updated} leads with emails"}
+
+
 # ─── Frontend ─────────────────────────────────────────────────────────
 
 @app.get("/contact", response_class=HTMLResponse)
