@@ -1364,6 +1364,16 @@ async def enrich_all_emails():
     return {"message": f"Enriched {updated} leads with emails"}
 
 
+@app.post("/api/admin/trigger-daily-pull")
+async def trigger_daily_pull():
+    """Trigger the daily lead pull manually."""
+    try:
+        result = await run_daily_lead_poll("all")
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ─── Frontend ─────────────────────────────────────────────────────────
 
 @app.get("/contact", response_class=HTMLResponse)
