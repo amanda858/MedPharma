@@ -17,7 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
-from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY
+from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY, HUNTER_API_KEY
 from app.database import (
     init_db, save_lead, get_saved_leads, update_lead,
     delete_lead, get_lead_stats, log_search,
@@ -458,6 +458,14 @@ async def _scheduled_daily_lead_pull():
                             status='New',
                             notes=notes
                         )
+                        # Find emails if API key available
+                        if HUNTER_API_KEY:
+                            try:
+                                emails = await find_emails_for_lab(org_name, city, state)
+                                if emails:
+                                    save_lead_emails(npi, emails)
+                            except Exception as e:
+                                print(f"Email finding failed for {npi}: {e}")
     except Exception as e:
         print(f"Daily lead pull failed: {e}")
 
