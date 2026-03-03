@@ -43,6 +43,7 @@ def init_db():
             lead_status TEXT DEFAULT 'new',
             notes TEXT DEFAULT '',
             tags TEXT DEFAULT '',
+            source TEXT DEFAULT 'scraped',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
@@ -151,8 +152,8 @@ def save_lead(lead_data: dict) -> int:
                 npi, organization_name, first_name, last_name, credential,
                 taxonomy_code, taxonomy_desc, address_line1, address_line2,
                 city, state, zip_code, phone, fax, enumeration_date,
-                last_updated, lead_score, lead_status, notes, tags, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_updated, lead_score, lead_status, notes, tags, source, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             lead_data.get("npi"),
             lead_data.get("organization_name"),
@@ -174,6 +175,7 @@ def save_lead(lead_data: dict) -> int:
             lead_data.get("lead_status", "new"),
             lead_data.get("notes", ""),
             lead_data.get("tags", ""),
+            lead_data.get("source", "scraped"),
             datetime.now().isoformat()
         ))
         conn.commit()

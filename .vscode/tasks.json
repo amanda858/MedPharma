@@ -38,6 +38,15 @@
             "problemMatcher": []
         },
         {
+            "label": "push-hotfix-fast-poll",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/leads_app.py app/templates/index.html && git commit -m \"fix: prevent poll UI pinwheel and speed manual poll\" && git push origin main",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "poll-readiness-check",
             "type": "shell",
             "command": "python3",

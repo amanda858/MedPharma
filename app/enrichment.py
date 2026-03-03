@@ -346,12 +346,11 @@ def score_service_needs(npi_data: dict, clia_data: dict, medicare_data: dict) ->
             except (ValueError, TypeError):
                 pass
 
-    # ── PAYOR CONTRACTING SIGNALS ────────────────────────────────────
-
     # No Medicare enrollment = definitely needs contracting help
     if not medicare_data.get("enrolled"):
         payor_score += 30
         payor_reasons.append("Not enrolled in Medicare — needs payor contracting immediately")
+        payor_reasons.append("Commercial payors often require Medicare enrollment as prerequisite — limits commercial insurance options")
 
     # CLIA cert type affects payor contracting
     if clia_data.get("found"):
@@ -391,6 +390,7 @@ def score_service_needs(npi_data: dict, clia_data: dict, medicare_data: dict) ->
     if npi_data.get("found") and not npi_data.get("has_medicaid_id"):
         payor_score += 15
         payor_reasons.append("No Medicaid identifier found — may need state Medicaid enrollment")
+        payor_reasons.append("Commercial payors may exclude providers without Medicaid participation in certain markets")
 
     # ── WORKFLOW SUPPORT SIGNALS ─────────────────────────────────────
 
@@ -483,6 +483,8 @@ def score_service_needs(npi_data: dict, clia_data: dict, medicare_data: dict) ->
         "services_needed": services_needed,
         "priority": _score_level(overall),
         "recommendation": _generate_recommendation(billing_score, payor_score, workflow_score, services_needed),
+        "revenue_impact": _calculate_revenue_impact(npi_data, clia_data, medicare_data),
+        "claims_issues": _calculate_claims_issues(npi_data, clia_data, medicare_data),
     }
 
 
@@ -494,6 +496,64 @@ def _score_level(score: int) -> str:
     return "low"
 
 
+def _calculate_revenue_impact(npi_data: dict, clia_data: dict, medicare_data: dict) -> list:
+    """Calculate potential revenue impact from service gaps."""
+    impacts = []
+
+    if not medicare_data.get("enrolled"):
+        impacts.append("Missing Medicare enrollment: Medicare represents ~25-35% of US healthcare spending (~$250B annually). Potential revenue loss: $100K-$500K+ annually depending on test volume and market exposure.")
+        impacts.append("Commercial payors often require Medicare enrollment as a baseline — reduced commercial reimbursement rates and fewer in-network opportunities.")
+
+    if npi_data.get("multi_state"):
+        states = npi_data.get("states_present", [])
+        impacts.append(f"Multi-state operations ({len(states)} states) increase administrative costs and may limit market penetration without comprehensive payor networks in each state.")
+
+    if clia_data.get("found"):
+        for lab in clia_data.get("labs", []):
+            complexity = lab.get("test_complexity", "")
+            if "High" in complexity:
+                impacts.append("High-complexity testing: Higher reimbursement rates but requires precise coding — improper billing leads to 20-30% revenue leakage from denials.")
+            elif "Waived" in complexity:
+                impacts.append("Waived testing: Lower reimbursement rates but high volume potential — missing payor contracts limits patient access and revenue.")
+
+    if npi_data.get("found"):
+        enum_date = npi_data.get("enumeration_date", "")
+        if enum_date:
+            try:
+                ed = datetime.strptime(enum_date, "%Y-%m-%d")
+                age_years = (datetime.now() - ed).days / 365
+                if age_years < 2:
+                    impacts.append(f"New lab ({age_years:.1f} years old): Building payor networks takes 6-18 months — significant revenue delay during startup phase.")
+            except (ValueError, TypeError):
+                pass
+
+    return impacts
+
+
+def _calculate_claims_issues(npi_data: dict, clia_data: dict, medicare_data: dict) -> list:
+    """Identify potential claims processing issues."""
+    issues = []
+
+    if not medicare_data.get("enrolled"):
+        issues.append("No Medicare enrollment: Claims submitted without proper provider enrollment are automatically denied, causing immediate revenue loss.")
+        issues.append("Commercial claims may be denied if Medicare enrollment is missing, as many commercial payors use Medicare status as a credentialing proxy.")
+
+    if npi_data.get("multi_state"):
+        issues.append("Multi-state operations: Different state Medicaid programs and commercial networks require separate credentialing — mismatched enrollments lead to denied claims.")
+
+    if npi_data.get("found") and npi_data.get("taxonomy_count", 0) > 1:
+        issues.append(f"Multiple taxonomies ({npi_data['taxonomy_count']}): Incorrect taxonomy coding on claims leads to denials and payment delays.")
+
+    if clia_data.get("found"):
+        for lab in clia_data.get("labs", []):
+            if lab.get("compliance_status") not in ("", "Active"):
+                issues.append("CLIA compliance issues: Non-compliant labs may have claims denied by payors requiring CLIA certification.")
+
+    issues.append("Without proper payor contracting, claims are frequently denied due to 'out-of-network' status, causing cash flow problems and increased administrative burden for appeals.")
+
+    return issues
+
+
 def _generate_recommendation(billing: int, payor: int, workflow: int, services: list) -> str:
     """Generate a human-readable recommendation."""
     if not services:
@@ -501,19 +561,19 @@ def _generate_recommendation(billing: int, payor: int, workflow: int, services: 
 
     parts = []
     if payor >= 70:
-        parts.append("URGENT: This lab has significant payor contracting gaps. Lead with contracting services — help them get credentialed and in-network with major payors to unlock revenue.")
+        parts.append("URGENT: This lab has significant payor contracting gaps. Lead with contracting services — help them get credentialed and in-network with major payors to unlock revenue. Without proper enrollment, claims are denied leading to revenue leakage and cash flow issues.")
     elif payor >= 40:
-        parts.append("This lab could benefit from expanded payor network. Offer a payor contracting audit to identify coverage gaps.")
+        parts.append("This lab could benefit from expanded payor network. Offer a payor contracting audit to identify coverage gaps that result in denied claims.")
 
     if billing >= 70:
-        parts.append("Complex billing environment detected. Position RCM services with emphasis on reducing denials and maximizing reimbursement for their test complexity level.")
+        parts.append("Complex billing environment detected. Position RCM services with emphasis on reducing denials and maximizing reimbursement for their test complexity level. Improper coding leads to 20-30% revenue loss from denied claims.")
     elif billing >= 40:
-        parts.append("Billing needs identified. Offer a revenue cycle assessment to demonstrate potential improvement areas.")
+        parts.append("Billing needs identified. Offer a revenue cycle assessment to demonstrate potential improvement areas and claims denial patterns.")
 
     if workflow >= 70:
-        parts.append("Operational complexity suggests immediate workflow optimization opportunity. Offer process mapping and SOP development.")
+        parts.append("Operational complexity suggests immediate workflow optimization opportunity. Offer process mapping and SOP development to reduce errors that cause claims denials.")
     elif workflow >= 40:
-        parts.append("Workflow improvements could help streamline their operations. Suggest a workflow assessment.")
+        parts.append("Workflow improvements could help streamline their operations. Suggest a workflow assessment to identify bottlenecks causing claims delays.")
 
     return " ".join(parts) if parts else "Moderate service potential. Schedule a discovery call to assess specific needs."
 

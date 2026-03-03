@@ -45,6 +45,27 @@ SEGMENT_QUERIES = {
         "asc payer contracting challenges",
         "site:linkedin.com/jobs ambulatory surgery center billing",
     ],
+    "hospital": [
+        "hospital denied claims",
+        "hospital credentialing issues",
+        "hospital compliance violations",
+        "hospital revenue cycle management",
+        "site:linkedin.com/jobs hospital billing director",
+    ],
+    "clinic": [
+        "medical clinic denied claims",
+        "clinic credentialing delays",
+        "clinic compliance audit",
+        "clinic payer contracting problems",
+        "site:linkedin.com/jobs medical clinic billing manager",
+    ],
+    "diagnostic": [
+        "diagnostic center denied claims",
+        "imaging center credentialing issues",
+        "diagnostic compliance findings",
+        "radiology billing problems",
+        "site:linkedin.com/jobs diagnostic center revenue cycle",
+    ],
 }
 
 HEALTHCARE_KEYWORDS = [
@@ -67,6 +88,13 @@ SERVICE_SIGNALS = {
 
 GOOGLE_NEWS_API = "https://newsapi.org/v2/everything"
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+HEALTHCARE_RSS_FEEDS = [
+    "https://news.google.com/rss/search?q=healthcare+billing+problems",
+    "https://news.google.com/rss/search?q=medical+practice+denied+claims",
+    "https://news.google.com/rss/search?q=laboratory+credentialing+issues",
+    "https://news.google.com/rss/search?q=hospital+revenue+cycle",
+    "https://news.google.com/rss/search?q=clinic+compliance+audit",
+]
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 REDDIT_SEARCH_API = "https://www.reddit.com/search.json"
 ADZUNA_APP_ID = os.getenv("ADZUNA_APP_ID", "")
@@ -109,11 +137,20 @@ async def scrape_news_leads(query: str, max_results: int = 10) -> List[Dict]:
         except Exception:
             pass
 
-    return await scrape_google_news_rss(query, max_results=max_results)
+    # Try multiple RSS feeds
+    for rss_feed in HEALTHCARE_RSS_FEEDS + [GOOGLE_NEWS_RSS]:
+        leads = await scrape_google_news_rss(query, max_results=max_results, rss_url=rss_feed)
+        if leads:
+            return leads
+
+    return []
 
 
-async def scrape_google_news_rss(query: str, max_results: int = 10) -> List[Dict]:
-    """Fallback source that requires no API key."""
+async def scrape_google_news_rss(query: str, max_results: int = 10, rss_url: str = None) -> List[Dict]:
+    """Fallback source that requires no API key. Tries multiple RSS feeds."""
+    if rss_url is None:
+        rss_url = GOOGLE_NEWS_RSS
+    
     params = {
         "q": query,
         "hl": "en-US",
@@ -122,7 +159,7 @@ async def scrape_google_news_rss(query: str, max_results: int = 10) -> List[Dict
     }
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(GOOGLE_NEWS_RSS, params=params)
+            resp = await client.get(rss_url, params=params)
             if resp.status_code != 200:
                 return []
 
@@ -244,24 +281,29 @@ def extract_healthcare_org_info(text: str) -> tuple:
     """
     Simple NLP to extract lab name, city, state from headline.
     """
-    # Example: "Quest Diagnostics opens new lab in Dallas, TX"
-    m = re.search(
-        r"([A-Za-z0-9 .&'-]+?)\s+(?:lab|laboratory|diagnostics|urgent care|primary care|ambulatory surgery center|surgery center|clinic|medical group)\b(?:.*?\bin\s+([A-Za-z .'-]+),\s*([A-Z]{2}))?",
-        text,
-        re.IGNORECASE,
-    )
-    if m:
-        org = (m.group(1) or "").strip()
-        city = (m.group(2) or "").strip() if m.lastindex and m.lastindex >= 2 else ""
-        state = (m.group(3) or "").strip().upper() if m.lastindex and m.lastindex >= 3 else ""
-        return org, city, state
-    m2 = re.search(
-        r"([A-Za-z0-9 .&'-]+?)\s+(Diagnostics|Laboratory|Lab|Urgent Care|Primary Care|Clinic|Medical Group|Ambulatory Surgery Center|Surgery Center|ASC)",
-        text,
-        re.IGNORECASE,
-    )
-    if m2:
-        return m2.group(0).strip(), "", ""
+    text = text.split(' - ')[0]  # Remove source like " - National Today"
+    
+    # Split into words
+    words = text.split()
+    
+    # Find the last occurrence of a healthcare type
+    types = ['lab', 'laboratory', 'diagnostics', 'clinic', 'hospital', 'medical', 'care']
+    type_indices = []
+    for i, word in enumerate(words):
+        if any(t in word.lower() for t in types):
+            type_indices.append(i)
+    
+    if type_indices:
+        idx = type_indices[-1]  # Last type
+        # Take 1-4 words before the type
+        start = max(0, idx - 4)
+        org_words = words[start:idx]
+        org = ' '.join(org_words).strip()
+        # Clean up
+        org = re.sub(r'^(the|a|an)\s+', '', org, flags=re.IGNORECASE).strip()
+        if len(org) > 2 and not org.lower() in ['billing', 'process', 'applications', 'guidance']:
+            return org, "", ""
+    
     return "", "", ""
 
 

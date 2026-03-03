@@ -11,6 +11,8 @@ from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
+from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -45,7 +47,7 @@ app = FastAPI(
 _scheduler_started = False
 _leads_scheduler = None
 POLL_EVERY_HOURS = max(1, int(os.getenv("LEADS_POLL_HOURS", "4") or 4))
-NATIONWIDE_SEGMENTS = ["laboratory", "urgent_care", "primary_care", "asc"]
+NATIONWIDE_SEGMENTS = ["laboratory", "urgent_care", "primary_care", "asc", "hospital", "clinic", "diagnostic"]
 NPI_FALLBACK_STATES = ["TX", "CA", "FL", "NY", "PA", "OH", "GA", "NC", "MI", "IL"]
 NPI_TAXONOMY_HINT = {
     "laboratory": "laboratory",
@@ -432,6 +434,34 @@ async def _scheduled_daily_poll_job():
         pass
 
 
+async def _scheduled_daily_lead_pull():
+    try:
+        leads = await run_national_lead_pull(segment="all", max_per_query=50, include_news=True, include_reddit=True, include_jobs=True)
+        for lead in leads:
+            if lead.get('overall_priority_score', 0) >= 70:  # High quality leads
+                npi = lead.get('npi', '')
+                if npi and not npi.startswith('DISC-'):  # Only real NPIs
+                    org_name = lead.get('org_name', '')
+                    city = lead.get('city', '')
+                    state = lead.get('state', '')
+                    source = f"auto_scraper_{lead.get('source', 'unknown')}"
+                    notes = f"Auto-discovered high-priority lead: {lead.get('signal', '')} | Score: {lead['overall_priority_score']}"
+                    # Check if already exists
+                    existing = get_saved_leads(npi=npi)
+                    if not existing:
+                        save_lead(
+                            npi=npi,
+                            org_name=org_name,
+                            city=city,
+                            state=state,
+                            source=source,
+                            status='New',
+                            notes=notes
+                        )
+    except Exception as e:
+        print(f"Daily lead pull failed: {e}")
+
+
 async def _bootstrap_poll_if_empty():
     global _bootstrap_poll_attempted
     if _bootstrap_poll_attempted:
@@ -457,6 +487,13 @@ def _start_daily_poll_scheduler():
         _scheduled_daily_poll_job,
         trigger=CronTrigger(hour=f"*/{POLL_EVERY_HOURS}", minute=0, timezone=tz),
         id="recurring_lead_poll",
+        replace_existing=True,
+    )
+    # Daily lead pull at 9 AM
+    _leads_scheduler.add_job(
+        _scheduled_daily_lead_pull,
+        trigger=CronTrigger(hour=9, minute=0, timezone=tz),
+        id="daily_lead_pull",
         replace_existing=True,
     )
     _leads_scheduler.start()
@@ -519,6 +556,17 @@ class AILeadFindRequest(BaseModel):
     strict: bool = True
     min_ai_match_score: int = 55
     require_multi_service: bool = True
+
+
+class ContactFormRequest(BaseModel):
+    organization_name: str
+    contact_name: str
+    email: str
+    phone: str
+    state: str
+    city: str
+    services_needed: str
+    message: str
 
 
 def _fallback_intent_parse(needs: str) -> dict:
@@ -1265,6 +1313,38 @@ async def get_taxonomies():
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────
+
+@app.get("/contact", response_class=HTMLResponse)
+async def serve_contact_form():
+    with open(os.path.join(os.path.dirname(__file__), "templates", "contact.html"), "r") as f:
+        return f.read()
+
+
+@app.post("/api/contact/submit")
+async def submit_contact_form(req: ContactFormRequest):
+    # Save as a lead with source="contact_form"
+    lead_data = {
+        "organization_name": req.organization_name,
+        "first_name": req.contact_name.split()[0] if req.contact_name else "",
+        "last_name": " ".join(req.contact_name.split()[1:]) if req.contact_name else "",
+        "address_line1": "",
+        "city": req.city,
+        "state": req.state,
+        "phone": req.phone,
+        "lead_score": 100,  # High score for direct contacts
+        "lead_status": "contact_form",
+        "notes": f"Services Needed: {req.services_needed}\nMessage: {req.message}",
+        "tags": "contact_form,explicit_intent",
+        "source": "contact_form",
+    }
+    lead_id = save_lead(lead_data)
+    
+    # Optionally save email
+    if req.email:
+        save_lead_emails(lead_data.get("npi", f"CONTACT-{lead_id}"), [{"email": req.email, "first_name": req.contact_name.split()[0] if req.contact_name else "", "position": "Contact"}])
+    
+    return {"ok": True, "lead_id": lead_id, "message": "Thank you for your inquiry. We'll be in touch soon!"}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_leads_frontend():
