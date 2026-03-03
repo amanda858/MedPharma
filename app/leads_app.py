@@ -44,6 +44,15 @@ app = FastAPI(
     version="2.0.1",
 )
 
+
+@app.get("/healthz")
+async def health_check():
+    """Health check endpoint for monitoring."""
+    return {"status": "healthy", "version": "2.0.1", "timestamp": datetime.now().isoformat()}
+
+
+_scheduler_started = False
+
 _scheduler_started = False
 _leads_scheduler = None
 POLL_EVERY_HOURS = max(1, int(os.getenv("LEADS_POLL_HOURS", "4") or 4))
