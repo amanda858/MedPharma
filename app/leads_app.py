@@ -48,7 +48,7 @@ app = FastAPI(
 @app.get("/healthz")
 async def health_check():
     """Health check endpoint for monitoring."""
-    return {"status": "healthy", "version": "2.0.1", "timestamp": datetime.now().isoformat()}
+    return {"status": "healthy", "service": "medpharma-leads", "version": "2.0.1"}
 
 
 _scheduler_started = False
