@@ -1399,8 +1399,7 @@ async def trigger_daily_pull():
 @app.get("/api/export/emails/excel")
 async def export_emails_excel():
     """Export all lead emails to Excel file for marketing outreach."""
-    from openpyxl import Workbook
-    from openpyxl.styles import Font
+    import csv
     import io
 
     db = get_db()
@@ -1425,56 +1424,37 @@ async def export_emails_excel():
     """).fetchall()
     db.close()
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Lead Emails"
-
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
     # Headers
-    headers = [
+    writer.writerow([
         "Organization", "Email", "First Name", "Last Name", "Position", 
         "Decision Maker", "Confidence", "Source", "Domain", "City", "State", "Phone"
-    ]
-    for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_num, value=header)
-        cell.font = Font(bold=True)
+    ])
 
     # Data
-    for row_num, email in enumerate(emails, 2):
-        ws.cell(row=row_num, column=1, value=email['organization_name'])
-        ws.cell(row=row_num, column=2, value=email['email'])
-        ws.cell(row=row_num, column=3, value=email['first_name'])
-        ws.cell(row=row_num, column=4, value=email['last_name'])
-        ws.cell(row=row_num, column=5, value=email['position'])
-        ws.cell(row=row_num, column=6, value="Yes" if email['is_decision_maker'] else "No")
-        ws.cell(row=row_num, column=7, value=email['confidence'])
-        ws.cell(row=row_num, column=8, value=email['source'])
-        ws.cell(row=row_num, column=9, value=email['domain'])
-        ws.cell(row=row_num, column=10, value=email['city'])
-        ws.cell(row=row_num, column=11, value=email['state'])
-        ws.cell(row=row_num, column=12, value=email['phone'])
+    for email in emails:
+        writer.writerow([
+            email['organization_name'],
+            email['email'],
+            email['first_name'],
+            email['last_name'],
+            email['position'],
+            "Yes" if email['is_decision_maker'] else "No",
+            email['confidence'],
+            email['source'],
+            email['domain'],
+            email['city'],
+            email['state'],
+            email['phone']
+        ])
 
-    # Auto-adjust column widths
-    for col in ws.columns:
-        max_length = 0
-        column = col[0].column_letter
-        for cell in col:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except:
-                pass
-        adjusted_width = (max_length + 2)
-        ws.column_dimensions[column].width = min(adjusted_width, 50)
-
-    # Save to bytes
-    output = io.BytesIO()
-    wb.save(output)
     output.seek(0)
-
     return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=lead_emails.xlsx"}
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=lead_emails.csv"}
     )
 
 
