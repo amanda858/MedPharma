@@ -17,7 +17,7 @@ services:
       sizeGB: 1
     envVars:
       - key: SERVICE
-        value: hub
+        value: leads
       - key: DB_PATH
         value: /data/leads.db
       - key: HUNTER_API_KEY
