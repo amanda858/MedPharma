@@ -316,7 +316,20 @@ async def _pull_and_save_segment(
         if email_lookups < EMAIL_LOOKUP_PER_SEGMENT:
             try:
                 domain_hint = _domain_from_url(row.get("url", ""))
-                email_result = await find_emails_for_lab(row.get("org_name", ""), domain_hint=domain_hint or None)
+                # Get names from enrichment for pattern generation
+                first_name = ""
+                last_name = ""
+                if enrichment:
+                    auth = enrichment.get("authorized_official", {})
+                    if isinstance(auth, dict):
+                        first_name = auth.get("first_name", "")
+                        last_name = auth.get("last_name", "")
+                email_result = await find_emails_for_lab(
+                    row.get("org_name", ""), 
+                    domain_hint=domain_hint or None,
+                    first_name=first_name,
+                    last_name=last_name
+                )
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
                 if found:
                     save_lead_emails(npi, found)
@@ -461,7 +474,7 @@ async def _scheduled_daily_lead_pull():
                         # Find emails if API key available
                         if HUNTER_API_KEY:
                             try:
-                                emails = await find_emails_for_lab(org_name, city, state)
+                                emails = await find_emails_for_lab(org_name, first_name="", last_name="")
                                 if emails:
                                     save_lead_emails(npi, emails)
                             except Exception as e:
@@ -1336,8 +1349,17 @@ async def enrich_all_emails():
         # Check if already has emails
         existing = db.execute("SELECT COUNT(*) FROM lead_emails WHERE npi = ?", (npi,)).fetchone()[0]
         if existing == 0:
+            # Get names from enrichment
+            first_name = ""
+            last_name = ""
+            enrichment = get_enrichment(npi)
+            if enrichment:
+                auth = enrichment.get("authorized_official", {})
+                if isinstance(auth, dict):
+                    first_name = auth.get("first_name", "")
+                    last_name = auth.get("last_name", "")
             try:
-                result = await find_emails_for_lab(org_name, city=city, state=state)
+                result = await find_emails_for_lab(org_name, first_name=first_name, last_name=last_name)
                 emails = result.get('emails', [])
                 if emails:
                     for email in emails:

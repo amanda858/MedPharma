@@ -35,6 +35,41 @@ async def scrape_emails_from_website(url: str) -> list[str]:
     return valid_emails[:10]  # Limit to 10
 
 
+def generate_pattern_emails(first_name: str, last_name: str, domain: str) -> list[dict]:
+    """Generate common email patterns from name and domain."""
+    if not first_name or not last_name or not domain:
+        return []
+    
+    fn = first_name.lower().replace(' ', '').replace('-', '')
+    ln = last_name.lower().replace(' ', '').replace('-', '')
+    domain = domain.lower()
+    
+    patterns = [
+        f"{fn}.{ln}@{domain}",
+        f"{fn}{ln}@{domain}",
+        f"{fn}@{domain}",
+        f"{ln}@{domain}",
+        f"{fn[0]}{ln}@{domain}",
+        f"{fn}{ln[0]}@{domain}",
+    ]
+    
+    emails = []
+    for email in patterns:
+        emails.append({
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": f"{first_name} {last_name}",
+            "position": "",
+            "is_decision_maker": True,  # Assume officials are decision makers
+            "confidence": 30,  # Low confidence
+            "verified": False,
+            "source": "pattern_generated",
+            "domain": domain,
+        })
+    return emails
+
+
 
 def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     """Derive likely domain candidates from an org name."""
@@ -330,10 +365,19 @@ async def find_emails_for_lab(
                     return result
             except Exception as e:
                 pass
+        
+        # If no scraped emails, try pattern generation if names provided
+        if first_name and last_name and live_domain:
+            pattern_emails = generate_pattern_emails(first_name, last_name, live_domain)
+            if pattern_emails:
+                result["emails"] = pattern_emails
+                result["error"] = None
+                return result
+        
         result["error"] = (
             f"Live domain found: {live_domain} — "
-            "Add your HUNTER_API_KEY to pull real named emails automatically. "
-            "For now, no emails found via scraping."
+            "No emails found via scraping or patterns. "
+            "Provide names for pattern generation."
         )
         return result
 
