@@ -1351,11 +1351,14 @@ async def enrich_all_emails():
     db = get_db()
     leads = db.execute("SELECT npi, organization_name, city, state FROM saved_leads").fetchall()
     updated = 0
+    total_processed = 0
     for lead in leads:
         npi = lead['npi']
         org_name = lead['organization_name']
         city = lead['city']
         state = lead['state']
+        total_processed += 1
+        
         # Check if already has emails
         existing = db.execute("SELECT COUNT(*) FROM lead_emails WHERE npi = ?", (npi,)).fetchone()[0]
         if existing == 0:
@@ -1368,9 +1371,16 @@ async def enrich_all_emails():
                 if isinstance(auth, dict):
                     first_name = auth.get("first_name", "")
                     last_name = auth.get("last_name", "")
+                    print(f"Found names for {org_name}: {first_name} {last_name}")
+                else:
+                    print(f"No auth dict for {org_name}")
+            else:
+                print(f"No enrichment data for {org_name} (NPI: {npi})")
+            
             try:
                 result = await find_emails_for_lab(org_name, first_name=first_name, last_name=last_name)
                 emails = result.get('emails', [])
+                print(f"Generated {len(emails)} emails for {org_name}")
                 if emails:
                     for email in emails:
                         db.execute("""
@@ -1389,11 +1399,16 @@ async def enrich_all_emails():
                             email.get('domain', '')
                         ))
                     updated += 1
+                    print(f"Saved {len(emails)} emails for {org_name}")
             except Exception as e:
-                pass  # Continue with others
+                print(f"Error finding emails for {org_name}: {e}")
+        else:
+            print(f"Already has {existing} emails for {org_name}")
+    
     db.commit()
     db.close()
-    return {"message": f"Enriched {updated} leads with emails"}
+    print(f"Processed {total_processed} leads, updated {updated} with emails")
+    return {"message": f"Processed {total_processed} leads, enriched {updated} with emails"}
 
 
 @app.post("/api/admin/enrich-leads")
@@ -1408,8 +1423,12 @@ async def enrich_all_leads():
     db.close()
     
     enriched = 0
-    for lead in leads[:5]:  # Limit to first 5 for testing
+    total_processed = 0
+    for lead in leads[:10]:  # Limit to first 10 for testing
         npi = lead['npi']
+        org_name = lead['organization_name']
+        total_processed += 1
+        
         if npi and not npi.startswith('DISC-'):
             try:
                 enrichment = await enrich_lead(
@@ -1418,14 +1437,19 @@ async def enrich_all_leads():
                     state=lead['state'],
                     city=lead['city']
                 )
+                
                 if enrichment and not enrichment.get('error'):
+                    auth_official = enrichment.get('authorized_official', {})
+                    print(f"Enriched {org_name}: {auth_official.get('first_name', '')} {auth_official.get('last_name', '')}")
                     save_enrichment(npi, enrichment)
                     enriched += 1
-                    print(f"Enriched {npi}")
+                else:
+                    print(f"No enrichment data for {org_name}: {enrichment}")
             except Exception as e:
-                print(f"Error enriching {npi}: {e}")
+                print(f"Error enriching {org_name}: {e}")
     
-    return {"message": f"Enriched {enriched} leads with NPI data"}
+    print(f"Processed {total_processed} leads, enriched {enriched}")
+    return {"message": f"Enriched {enriched} out of {total_processed} leads with NPI data"}
 
 
 @app.get("/api/export/emails/excel")
@@ -1465,22 +1489,31 @@ async def export_emails_excel():
         "Decision Maker", "Confidence", "Source", "Domain", "City", "State", "Phone"
     ])
 
-    # Data
-    for email in emails:
+    # If no emails, add a helpful message
+    if not emails:
         writer.writerow([
-            email['organization_name'],
-            email['email'],
-            email['first_name'],
-            email['last_name'],
-            email['position'],
-            "Yes" if email['is_decision_maker'] else "No",
-            email['confidence'],
-            email['source'],
-            email['domain'],
-            email['city'],
-            email['state'],
-            email['phone']
+            "NO EMAILS FOUND", "", "", "", "", "", "", "", "", "", "", ""
         ])
+        writer.writerow([
+            "Run POST /api/admin/enrich-leads then POST /api/admin/enrich-emails first", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+    else:
+        # Data
+        for email in emails:
+            writer.writerow([
+                email['organization_name'],
+                email['email'],
+                email['first_name'],
+                email['last_name'],
+                email['position'],
+                "Yes" if email['is_decision_maker'] else "No",
+                email['confidence'],
+                email['source'],
+                email['domain'],
+                email['city'],
+                email['state'],
+                email['phone']
+            ])
 
     output.seek(0)
     return StreamingResponse(
