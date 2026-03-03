@@ -74,6 +74,7 @@ NEED_SERVICE_TERMS = [
     "workflow", "compliance", "coding", "audit", "prior authorization",
 ]
 EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "0") or 0))
+AUTO_BOOTSTRAP_POLL = str(os.getenv("AUTO_BOOTSTRAP_POLL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _quality_tier(row: dict, enrichment: dict) -> str | None:
@@ -466,7 +467,8 @@ def _start_daily_poll_scheduler():
 async def startup():
     init_db()
     _start_daily_poll_scheduler()
-    asyncio.create_task(_bootstrap_poll_if_empty())
+    if AUTO_BOOTSTRAP_POLL:
+        asyncio.create_task(_bootstrap_poll_if_empty())
 
 
 # ─── Search ──────────────────────────────────────────────────────────
