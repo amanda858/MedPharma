@@ -1347,6 +1347,7 @@ async def get_taxonomies():
 # ─── Admin ─────────────────────────────────────────────────────────
 
 @app.post("/api/admin/enrich-emails")
+@app.get("/api/admin/enrich-emails")  # Allow GET for testing
 async def enrich_all_emails():
     """Trigger email finding for all leads that don't have emails yet."""
     db = get_db()
@@ -1413,6 +1414,7 @@ async def enrich_all_emails():
 
 
 @app.post("/api/admin/enrich-leads")
+@app.get("/api/admin/enrich-leads")  # Allow GET for testing
 async def enrich_all_leads():
     """Enrich all leads with NPI data to get authorized officials."""
     from app.enrichment import enrich_lead
