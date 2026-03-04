@@ -1,4 +1,4 @@
-"""Client Hub API — auth, claims queue, payments, notes, credentialing, EDI, providers, dashboard."""
+"""Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
 
 import os
 import json as _json
@@ -25,6 +25,7 @@ from app.client_db import (
     get_payments, create_payment, delete_payment,
     get_notes, add_note,
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
+    get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
@@ -32,19 +33,9 @@ from app.client_db import (
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
-    get_user_production_snapshot,
 )
 
-from app.notifications import (
-    notify_activity,
-    notify_bulk_activity,
-    flush_and_notify,
-    send_test_notification,
-    send_direct_sms,
-    get_notification_status,
-    get_notification_debug,
-    send_daily_account_summary,
-)
+from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
 
 router = APIRouter(prefix="/hub/api")
 
@@ -382,12 +373,8 @@ def add_provider(body: ProviderIn, hub_session: Optional[str] = Cookie(None)):
 
 @router.put("/providers/{pid}")
 def edit_provider(pid: int, body: ProviderUpdate, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    changes = {k: v for k, v in body.model_dump().items() if v is not None}
-    update_provider(pid, changes)
-    notify_activity(user["username"], "updated", "Providers",
-                    f"Provider #{pid}, fields: {', '.join(changes.keys())}",
-                    sms_copy=True)
+    _require_user(hub_session)
+    update_provider(pid, {k: v for k, v in body.model_dump().items() if v is not None})
     return {"ok": True}
 
 
@@ -501,8 +488,7 @@ def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Co
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_claim(claim_id, changes)
     notify_activity(user["username"], "updated", "Claims",
-                    f"Claim #{claim_id}, fields: {', '.join(changes.keys())}",
-                    sms_copy=True)
+                    f"Claim #{claim_id}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
@@ -564,11 +550,6 @@ class NoteIn(BaseModel):
     Author: Optional[str] = ""
 
 
-class SmsNowIn(BaseModel):
-    message: str
-    to: Optional[str] = ""
-
-
 @router.get("/notes")
 def list_notes(claim_key: Optional[str] = None, module: Optional[str] = None,
                ref_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
@@ -588,12 +569,6 @@ def post_note(body: NoteIn, hub_session: Optional[str] = Cookie(None)):
     if not data.get("Author"):
         data["Author"] = user.get("username", "")
     nid = add_note(data)
-    note_preview = (data.get("Note", "") or "").strip().replace("\n", " ")
-    if len(note_preview) > 70:
-        note_preview = note_preview[:67] + "..."
-    notify_activity(user["username"], "added", "Notes",
-                    f"{data.get('Module','')} #{data.get('RefID', 0)}: {note_preview}",
-                    sms_copy=True)
     return {"id": nid, "ok": True}
 
 
@@ -656,8 +631,7 @@ def edit_cred(rid: int, body: CredUpdate, hub_session: Optional[str] = Cookie(No
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_credentialing(rid, changes)
     notify_activity(user["username"], "updated", "Credentialing",
-                    f"Record #{rid}, fields: {', '.join(changes.keys())}",
-                    sms_copy=True)
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
@@ -666,6 +640,77 @@ def remove_cred(rid: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     delete_credentialing(rid)
     notify_activity(user["username"], "deleted", "Credentialing", f"Record #{rid}")
+    return {"ok": True}
+
+
+# ─── Enrollment ───────────────────────────────────────────────────────────────
+
+class EnrollIn(BaseModel):
+    client_id: int
+    provider_id: Optional[int] = None
+    ProviderName: Optional[str] = ""
+    Payor: Optional[str] = ""
+    EnrollType: Optional[str] = "Enrollment"
+    Status: Optional[str] = "Not Started"
+    SubmittedDate: Optional[str] = ""
+    FollowUpDate: Optional[str] = ""
+    ApprovedDate: Optional[str] = ""
+    EffectiveDate: Optional[str] = ""
+    Owner: Optional[str] = ""
+    Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
+
+
+class EnrollUpdate(BaseModel):
+    ProviderName: Optional[str] = None
+    Payor: Optional[str] = None
+    EnrollType: Optional[str] = None
+    Status: Optional[str] = None
+    SubmittedDate: Optional[str] = None
+    FollowUpDate: Optional[str] = None
+    ApprovedDate: Optional[str] = None
+    EffectiveDate: Optional[str] = None
+    Owner: Optional[str] = None
+    Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
+
+
+@router.get("/enrollment")
+def list_enroll(status: Optional[str] = None, client_id: Optional[int] = None,
+               sub_profile: Optional[str] = None,
+               hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    return get_enrollment(scope, status, sub_profile=sub_profile)
+
+
+@router.post("/enrollment")
+def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    data = body.model_dump()
+    if user["role"] != "admin":
+        data["client_id"] = user["id"]
+    eid = create_enrollment(data)
+    notify_activity(user["username"], "created", "Enrollment",
+                    f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
+    return {"id": eid, "ok": True}
+
+
+@router.put("/enrollment/{rid}")
+def edit_enroll(rid: int, body: EnrollUpdate, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_enrollment(rid, changes)
+    notify_activity(user["username"], "updated", "Enrollment",
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
+    return {"ok": True}
+
+
+@router.delete("/enrollment/{rid}")
+def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    delete_enrollment(rid)
+    notify_activity(user["username"], "deleted", "Enrollment", f"Record #{rid}")
     return {"ok": True}
 
 
@@ -727,8 +772,7 @@ def edit_edi(rid: int, body: EDIUpdate, hub_session: Optional[str] = Cookie(None
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     update_edi(rid, changes)
     notify_activity(user["username"], "updated", "EDI Setup",
-                    f"Record #{rid}, fields: {', '.join(changes.keys())}",
-                    sms_copy=True)
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
     return {"ok": True}
 
 
@@ -761,13 +805,8 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
 
 # ─── File Uploads ───────────────────────────────────────────────────────────
 
-# Use the same root as DATABASE_PATH so uploads go onto the Render persistent disk.
-_db_dir = os.path.dirname(os.getenv("DB_PATH", os.path.join("data", "leads.db")))
-UPLOAD_DIR = os.path.join(_db_dir, "uploads")
-try:
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-except OSError:
-    pass  # will be created on first upload if needed
+UPLOAD_DIR = os.path.join("data", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ─── Team Production ──────────────────────────────────────────────────────────
@@ -788,11 +827,7 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Admin sees ALL production entries across all accounts (not scoped to selected client)
-    if user.get("role") == "admin":
-        scope = None  # no client filter — show all
-    else:
-        scope = client_id or _client_scope(user)
+    scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
     return {"logs": logs}
 
@@ -804,15 +839,9 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
     data = body.model_dump()
     data["client_id"] = scope
     data["username"] = user["username"]
-    try:
-        log_id = add_production_log(data)
-    except Exception as e:
-        raise HTTPException(500, f"Failed to save production entry: {e}")
-    try:
-        notify_activity(user["username"], "logged production", "Time Tracking",
-                        f"{data.get('time_spent',0)}h — {data.get('category','')}: {data.get('task_description','')[:60]}")
-    except Exception:
-        pass  # notification is non-critical
+    log_id = add_production_log(data)
+    notify_activity(user["username"], "logged production", "Time Tracking",
+                    f"{data.get('hours',0)}h — {data.get('task_type','')}: {data.get('description','')[:60]}")
     return {"id": log_id, "ok": True}
 
 
@@ -858,18 +887,11 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    ALLOWED_EXTS = {".xlsx", ".xls", ".csv", ".json", ".pdf", ".doc", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
-    if ext not in ALLOWED_EXTS:
-        raise HTTPException(400, f"File type '{ext}' not allowed. Accepted: {', '.join(sorted(ALLOWED_EXTS))}")
+    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf, .doc, .docx files allowed")
 
-    if ext in (".xlsx", ".xls", ".csv", ".json"):
-        file_type = "excel"
-    elif ext == ".pdf":
-        file_type = "pdf"
-    else:
-        file_type = "document"
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
     unique_name = f"{uuid.uuid4().hex}{ext}"
-    os.makedirs(UPLOAD_DIR, exist_ok=True)  # ensure dir exists
     dest = os.path.join(UPLOAD_DIR, unique_name)
 
     content = await file.read()
@@ -891,12 +913,6 @@ async def upload_file(
             if ext == ".csv":
                 reader = csv.reader(io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
-            elif ext == ".xls":
-                import xlrd
-                wb = xlrd.open_workbook(file_contents=content)
-                row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
-            elif ext == ".json":
-                row_count = len(_parse_any_rows(content, ext))
             else:
                 try:
                     import openpyxl
@@ -925,7 +941,7 @@ async def upload_file(
     imported = 0
     import_errors = []
     import_category = None
-    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI"):
+    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
         import_category = category
         try:
             if category == "Claims":
@@ -934,50 +950,17 @@ async def upload_file(
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
+            elif category == "Enrollment":
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
             elif category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
 
-    if import_category and imported == 0:
-        fallback_imported, fallback_errors = _import_production_fallback(content, ext, scope, user["username"], import_category)
-        if fallback_imported > 0:
-            imported = fallback_imported
-            import_errors = [f"No strict {import_category} mapping found. Imported {fallback_imported} row(s) into Production fallback."]
-        elif not import_errors:
-            import_errors = [f"No rows imported for {import_category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
-        if fallback_errors:
-            import_errors.extend(fallback_errors[:3])
-
-    # ── Auto-log a production entry when category is Production ──
-    if category == "Production":
-        try:
-            from datetime import date as _date
-            add_production_log({
-                "client_id": scope,
-                "work_date": _date.today().isoformat(),
-                "username": user["username"],
-                "category": "File Upload",
-                "task_description": f"Uploaded {file.filename or 'file'} ({ext.lstrip('.')})",
-                "quantity": row_count if row_count else 1,
-                "time_spent": 0,
-                "notes": description or f"Production file upload: {file.filename}",
-            })
-            notify_activity(
-                user["username"],
-                "uploaded",
-                "Production",
-                f"{file.filename or 'file'} ({max(1, row_count)} row(s))",
-            )
-        except Exception:
-            pass  # non-critical
-
     return {
         "id": file_id,
         "filename": unique_name,
         "original_name": file.filename,
-        "acknowledged": True,
-        "saved": True,
         "row_count": row_count,
         "imported": imported,
         "import_category": import_category,
@@ -1007,7 +990,7 @@ def download_credentialing_template():
 # ─── Client Report ────────────────────────────────────────────────────────────
 
 def _build_section_data(conn, client_id, sub_profile=None, period=None):
-    """Build claims/cred/edi/payments data for one filter set."""
+    """Build claims/cred/enroll/edi/payments data for one filter set."""
     # Build parameterized filters
     sp_clause = ""
     sp_params = []
@@ -1061,6 +1044,17 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
                     "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""), "approved": r.get("ApprovedDate",""),
                     "expires": r.get("ExpirationDate",""), "owner": r.get("Owner","")} for r in cred_rows]
 
+    # Enrollment
+    enr_base = f"SELECT * FROM enrollment WHERE client_id=?{sp_clause}"
+    enr_rows = [dict(r) for r in conn.execute(enr_base, [client_id] + sp_params).fetchall()]
+    enr_summary = {}
+    for r in enr_rows:
+        st = r.get("Status") or "Unknown"
+        enr_summary[st] = enr_summary.get(st, 0) + 1
+    enr_detail = [{"provider": r.get("ProviderName",""), "payor": r.get("Payor",""), "type": r.get("EnrollType",""),
+                   "status": r.get("Status",""), "submitted": r.get("SubmittedDate",""),
+                   "effective": r.get("EffectiveDate",""), "owner": r.get("Owner","")} for r in enr_rows]
+
     # EDI
     edi_base = f"SELECT * FROM edi_setup WHERE client_id=?{sp_clause}"
     edi_rows = [dict(r) for r in conn.execute(edi_base, [client_id] + sp_params).fetchall()]
@@ -1081,6 +1075,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
                     "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
+        "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
         "payments": payments,
     }
@@ -1136,14 +1131,14 @@ async def import_excel(
     client_id: Optional[int] = Form(None),
     hub_session: Optional[str] = Cookie(None),
 ):
-    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, EDI).
+    """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI).
     Also saves a copy of the file in Documents under the appropriate category."""
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".json", ".txt"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .json, .txt files supported for import")
+    if ext not in (".xlsx", ".xls", ".csv"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv files supported for import")
 
     content = await file.read()
 
@@ -1159,12 +1154,6 @@ async def import_excel(
         if ext == ".csv":
             reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
             row_count = max(0, sum(1 for _ in reader) - 1)
-        elif ext == ".xls":
-            import xlrd
-            wb = xlrd.open_workbook(file_contents=content)
-            row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
-        elif ext in (".json", ".txt"):
-            row_count = len(_parse_any_rows(content, ext))
         else:
             import openpyxl
             wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
@@ -1187,17 +1176,16 @@ async def import_excel(
             imported, errors = _import_claims_from_excel(content, ext, scope)
         elif category == "Credentialing":
             imported, errors = _import_credentialing_from_excel(content, ext, scope)
+        elif category == "Enrollment":
+            imported, errors = _import_enrollment_from_excel(content, ext, scope)
         elif category == "EDI":
             imported, errors = _import_edi_from_excel(content, ext, scope)
         else:
-            imported, errors = _import_production_fallback(content, ext, scope, user["username"], category)
+            raise HTTPException(400, f"Unknown category: {category}")
     except HTTPException:
         raise
     except Exception as e:
         errors = [str(e)]
-
-    if imported == 0 and not errors:
-        errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. File was saved and can be deleted from Documents."]
 
     # Notify admin of team imports
     if imported > 0:
@@ -1213,115 +1201,15 @@ async def import_excel(
     }
 
 
-def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col_map: Optional[dict] = None):
+def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     """Parse Excel/CSV bytes into list of dict rows with smart header detection.
     If combine_sheets=True and multiple sheets share the same header structure,
-    rows from all matching sheets are combined (useful for multi-tab claim files).
-    If col_map is provided, header groups/sheets are prioritized by mapped-header coverage."""
+    rows from all matching sheets are combined (useful for multi-tab claim files)."""
     import csv, io
     rows = []
-    if ext == ".xls":
-        import xlrd
-        wb = xlrd.open_workbook(file_contents=content)
-        sheet_results = []
-
-        for sheet in wb.sheets():
-            all_sheet_rows = [sheet.row_values(i) for i in range(sheet.nrows)]
-            if not all_sheet_rows:
-                continue
-
-            header_row_idx = 0
-            best_header_score = -1
-            scan_limit = min(len(all_sheet_rows), 200)
-            for idx, row in enumerate(all_sheet_rows[:scan_limit]):
-                if not row:
-                    continue
-                non_empty = sum(1 for c in row if c is not None and str(c).strip())
-                text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
-                if non_empty < 2:
-                    continue
-
-                mapped_cells = 0
-                if col_map:
-                    mapped_cells = sum(
-                        1 for c in row
-                        if c is not None and _fuzzy_match_column(str(c), col_map)
-                    )
-
-                score = (mapped_cells * 100) + (text_cells * 2) + non_empty
-                if score > best_header_score:
-                    best_header_score = score
-                    header_row_idx = idx
-
-            if header_row_idx < len(all_sheet_rows):
-                sheet_headers = [str(c).strip() if c is not None else "" for c in all_sheet_rows[header_row_idx]]
-                valid_cols = [i for i, h in enumerate(sheet_headers) if h]
-                if len(valid_cols) < 2:
-                    continue
-
-                sheet_rows = []
-                for row in all_sheet_rows[header_row_idx + 1:]:
-                    if any(c is not None and str(c).strip() for c in row):
-                        sheet_rows.append(dict(zip(sheet_headers, row)))
-
-                if sheet_rows:
-                    hdr_key = tuple(sorted(h.lower() for h in sheet_headers if h))
-                    sheet_results.append((hdr_key, sheet_headers, sheet_rows))
-
-        if sheet_results:
-            def _mapped_header_count(headers):
-                if not col_map:
-                    return 0
-                return sum(1 for h in headers if _fuzzy_match_column(h, col_map))
-
-            if combine_sheets:
-                from collections import defaultdict
-                groups = defaultdict(lambda: {"headers": [], "rows": []})
-                for hdr_key, hdrs, srows in sheet_results:
-                    if not groups[hdr_key]["headers"]:
-                        groups[hdr_key]["headers"] = hdrs
-                    groups[hdr_key]["rows"].extend(srows)
-
-                if col_map:
-                    best_group = max(
-                        groups.values(),
-                        key=lambda g: (_mapped_header_count(g["headers"]), len(g["rows"]))
-                    )
-                else:
-                    best_group = max(groups.values(), key=lambda g: len(g["rows"]))
-                rows = best_group["rows"]
-            else:
-                if col_map:
-                    best = max(sheet_results, key=lambda x: (_mapped_header_count(x[1]), len(x[2])))
-                else:
-                    best = max(sheet_results, key=lambda x: len(x[2]))
-                rows = best[2]
-
-        return rows
-
     if ext == ".csv":
-        decoded = content.decode("utf-8-sig", errors="replace")
-        sample = decoded[:8192]
-        delimiter = ","
-        try:
-            sniffed = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-            delimiter = sniffed.delimiter or ","
-        except Exception:
-            delimiter = ","
-
-        reader = csv.DictReader(io.StringIO(decoded), delimiter=delimiter)
+        reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
         rows = list(reader)
-
-        # Fallback: if parser produced only one giant column, retry with common alternates.
-        if rows and len(rows[0].keys()) <= 1:
-            for alt_delim in (";", "\t", "|", ","):
-                if alt_delim == delimiter:
-                    continue
-                alt_reader = csv.DictReader(io.StringIO(decoded), delimiter=alt_delim)
-                alt_rows = list(alt_reader)
-                if alt_rows and len(alt_rows[0].keys()) > 1:
-                    rows = alt_rows
-                    break
     else:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -1336,26 +1224,15 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col
                 continue
             # Smart header detection: find the best header row
             header_row_idx = 0
-            best_header_score = -1
-            scan_limit = min(len(all_sheet_rows), 200)
-            for idx, row in enumerate(all_sheet_rows[:scan_limit]):
+            best_header_score = 0
+            for idx, row in enumerate(all_sheet_rows[:10]):
                 if not row:
                     continue
                 non_empty = sum(1 for c in row if c is not None and str(c).strip())
                 text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
-                if non_empty < 2:
-                    continue
-
-                mapped_cells = 0
-                if col_map:
-                    mapped_cells = sum(
-                        1 for c in row
-                        if c is not None and _fuzzy_match_column(str(c), col_map)
-                    )
-
-                # Prefer rows whose labels match known import columns.
-                score = (mapped_cells * 100) + (text_cells * 2) + non_empty
-                if score > best_header_score:
+                # Require at least 3 non-empty cells to be a real header row
+                score = text_cells * 2 + non_empty
+                if score > best_header_score and non_empty >= 3:
                     best_header_score = score
                     header_row_idx = idx
             if header_row_idx < len(all_sheet_rows):
@@ -1374,36 +1251,18 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True, col
                     sheet_results.append((hdr_key, sheet_headers, sheet_rows))
 
         if sheet_results:
-            def _mapped_header_count(headers):
-                if not col_map:
-                    return 0
-                return sum(1 for h in headers if _fuzzy_match_column(h, col_map))
-
             if combine_sheets:
                 # Group sheets by header structure and combine sheets with same headers
                 from collections import defaultdict
-                groups = defaultdict(lambda: {"headers": [], "rows": []})
+                groups = defaultdict(list)
                 for hdr_key, hdrs, srows in sheet_results:
-                    if not groups[hdr_key]["headers"]:
-                        groups[hdr_key]["headers"] = hdrs
-                    groups[hdr_key]["rows"].extend(srows)
-
-                if col_map:
-                    # Prefer the header group with strongest schema match, then most rows
-                    best_group = max(
-                        groups.values(),
-                        key=lambda g: (_mapped_header_count(g["headers"]), len(g["rows"]))
-                    )
-                else:
-                    # Legacy behavior: largest combined row set
-                    best_group = max(groups.values(), key=lambda g: len(g["rows"]))
-                rows = best_group["rows"]
+                    groups[hdr_key].extend(srows)
+                # Pick the group with the most total rows
+                best_group = max(groups.values(), key=len)
+                rows = best_group
             else:
-                # Pick the best single sheet by mapped headers first, then row count
-                if col_map:
-                    best = max(sheet_results, key=lambda x: (_mapped_header_count(x[1]), len(x[2])))
-                else:
-                    best = max(sheet_results, key=lambda x: len(x[2]))
+                # Pick single sheet with most rows
+                best = max(sheet_results, key=lambda x: len(x[2]))
                 rows = best[2]
         wb.close()
     return rows
@@ -1433,8 +1292,6 @@ def _clean_val(val):
     """Convert a cell value to a clean string. Strips time from datetime objects."""
     if val is None:
         return ""
-    if isinstance(val, float) and val.is_integer():
-        return str(int(val))
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
     if isinstance(val, date):
@@ -1446,115 +1303,6 @@ def _clean_val(val):
     return s
 
 
-def _parse_any_rows(content: bytes, ext: str):
-    """Best-effort parser for uploaded files.
-    Supports csv/xlsx/xls via existing parser, plus json/txt fallbacks."""
-    import csv, io
-
-    if ext in (".xlsx", ".xls", ".csv"):
-        return _parse_excel_rows(content, ext)
-
-    if ext == ".json":
-        try:
-            obj = _json.loads(content.decode("utf-8", errors="replace"))
-            if isinstance(obj, list):
-                return [r for r in obj if isinstance(r, dict)]
-            if isinstance(obj, dict):
-                for key in ("rows", "data", "items", "results"):
-                    val = obj.get(key)
-                    if isinstance(val, list):
-                        return [r for r in val if isinstance(r, dict)]
-                return [obj]
-        except Exception:
-            return []
-
-    if ext == ".txt":
-        try:
-            decoded = content.decode("utf-8", errors="replace")
-            lines = [ln.strip() for ln in decoded.splitlines() if ln.strip()]
-            if not lines:
-                return []
-
-            sample = lines[0]
-            delim = None
-            for d in ("\t", ";", "|", ","):
-                if d in sample:
-                    delim = d
-                    break
-            if delim and len(lines) > 1:
-                reader = csv.DictReader(io.StringIO("\n".join(lines)), delimiter=delim)
-                parsed = list(reader)
-                if parsed:
-                    return parsed
-
-            return [{"line": ln} for ln in lines]
-        except Exception:
-            return []
-
-    return []
-
-
-def _import_production_fallback(content: bytes, ext: str, client_id: int, username: str, source_category: str):
-    """Fallback import when strict claim/cred/EDI mapping fails.
-    Converts arbitrary rows into production log entries so work is still captured."""
-    rows = _parse_any_rows(content, ext)
-    if not rows:
-        return 0, ["No structured rows detected for fallback import"]
-
-    imported = 0
-    errors = []
-
-    def _to_float(v, default=0.0):
-        try:
-            return float(str(v).replace(",", "").replace("$", "").strip())
-        except Exception:
-            return default
-
-    for i, row in enumerate(rows[:3000]):
-        try:
-            if not isinstance(row, dict):
-                continue
-            non_empty = [(str(k).strip(), _clean_val(v)) for k, v in row.items() if _clean_val(v)]
-            if not non_empty:
-                continue
-
-            qty = 1
-            hours = 0.0
-            category = source_category or "Production"
-            desc_parts = []
-
-            for k, v in non_empty:
-                lk = _norm_key(k)
-                if lk in {"qty", "quantity", "count", "units", "total"}:
-                    qty = max(1, int(_to_float(v, 1)))
-                    continue
-                if lk in {"time", "time spent", "hours", "hrs", "duration"}:
-                    hours = max(0.0, _to_float(v, 0.0))
-                    continue
-                if lk in {"category", "section", "module", "type"} and v:
-                    category = v
-                    continue
-                if len(desc_parts) < 4:
-                    desc_parts.append(f"{k}: {v}")
-
-            task_description = " | ".join(desc_parts)[:220] if desc_parts else "Uploaded work item"
-            add_production_log({
-                "client_id": client_id,
-                "work_date": date.today().isoformat(),
-                "username": username,
-                "category": category,
-                "task_description": task_description,
-                "quantity": qty,
-                "time_spent": hours,
-                "notes": f"Auto-import fallback from {source_category}",
-            })
-            imported += 1
-        except Exception as e:
-            errors.append(f"Fallback row {i+1}: {e}")
-
-    return imported, errors
-
-
 def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
@@ -1562,18 +1310,16 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     # ── Status normalization — maps Excel values to dropdown filter values ──
     CRED_STATUS_NORMALIZE = {
         # Not Started
-        "not started": "Not Started", "none": "Not Started",
-        "pending start": "Not Started", "not begun": "Not Started",
-        "to do": "Not Started",
+        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "not begun": "Not Started", "n/a": "Not Started",
+        "to do": "Not Started", "open": "Not Started",
         # In Progress
         "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
-        "processing": "In Progress", "working": "In Progress",
+        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
         "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
         "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
         "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
         "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
-        "recredentialing": "In Progress", "re-credentialing": "In Progress",
-        "renewal": "In Progress", "renewal needed": "In Progress",
         # Submitted
         "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
         "application submitted": "Submitted", "app submitted": "Submitted",
@@ -1584,36 +1330,33 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "active - approved": "Approved", "accepted": "Approved", "enrolled": "Approved",
         "effective": "Approved", "live": "Approved", "done": "Approved",
         "granted": "Approved", "passed": "Approved",
-        "active": "Approved", "new": "Approved",
         # Denied
         "denied": "Denied", "rejected": "Denied", "declined": "Denied",
         "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
         "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
         # Expired
-        "expired": "Expired", "lapsed": "Expired",
+        "expired": "Expired", "lapsed": "Expired", "renewal needed": "Expired",
         "expiring": "Expired", "past due": "Expired", "overdue": "Expired",
+        "renewal": "Expired", "recredentialing": "Expired",
     }
 
     VALID_CRED_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Denied", "Expired"}
 
     def _normalize_cred_status(raw):
         if not raw:
-            return ""  # Preserve empty — let caller decide default
+            return "Not Started"
         s = str(raw).strip()
         key = s.lower()
-        # Exact match first
         if key in CRED_STATUS_NORMALIZE:
             return CRED_STATUS_NORMALIZE[key]
-        # Check if raw already matches a valid status (case-insensitive)
+        for map_key, normalized in CRED_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
+        # If raw already matches a valid status (case-insensitive), use it
         for vs in VALID_CRED_STATUSES:
             if vs.lower() == key:
                 return vs
-        # Substring match — but only for longer keys to avoid false positives
-        for map_key, normalized in CRED_STATUS_NORMALIZE.items():
-            if len(map_key) >= 6 and map_key in key:
-                return normalized
-        # Preserve the original value as-is if we can't map it
-        return s
+        return "In Progress"  # Safe default for unrecognized statuses
 
     COL_MAP = {
         # Provider
@@ -1667,7 +1410,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
         "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
         "lob": "sub_profile", "line of business": "sub_profile",
     }
-    rows = _parse_excel_rows(content, ext, col_map=COL_MAP)
+    rows = _parse_excel_rows(content, ext)
     if not rows:
         return 0, ["No rows found"]
     first_row_keys = list(rows[0].keys()) if rows else []
@@ -1684,12 +1427,8 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
-            # Normalize status only if Excel actually provided one
-            if "Status" in mapped and mapped["Status"]:
-                mapped["Status"] = _normalize_cred_status(mapped["Status"])
-            elif "Status" in mapped:
-                # Status column existed but cell was empty — remove so we don't overwrite DB
-                del mapped["Status"]
+            # Normalize status to match filter dropdown values
+            mapped["Status"] = _normalize_cred_status(mapped.get("Status", ""))
             try:
                 existing = conn.execute(
                     "SELECT id FROM credentialing WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1700,7 +1439,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                                "FollowUpDate","ApprovedDate","ExpirationDate","Owner","Notes","sub_profile"]
                     parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
                     for f in allowed:
-                        if f in mapped and mapped[f]:  # Only update fields that have actual values
+                        if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
                     params.append(existing["id"])
@@ -1724,6 +1463,147 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     if not imported and first_row_keys:
         errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
         errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Expiration")
+    return imported, errors
+
+
+def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
+    from app.client_db import get_db as _get_db
+    from datetime import datetime as _dt_now
+
+    # ── Status normalization — maps Excel values to dropdown filter values ──
+    ENROLL_STATUS_NORMALIZE = {
+        # Not Started
+        "not started": "Not Started", "new": "Not Started", "none": "Not Started",
+        "pending start": "Not Started", "n/a": "Not Started", "to do": "Not Started",
+        "open": "Not Started",
+        # In Progress
+        "in progress": "In Progress", "in-progress": "In Progress", "pending": "In Progress",
+        "processing": "In Progress", "working": "In Progress", "active": "In Progress",
+        "in process": "In Progress", "in review": "In Progress", "under review": "In Progress",
+        "need action": "In Progress", "needs action": "In Progress", "action needed": "In Progress",
+        "follow up": "In Progress", "follow-up": "In Progress", "followup": "In Progress",
+        "waiting": "In Progress", "awaiting": "In Progress", "in queue": "In Progress",
+        # Submitted
+        "submitted": "Submitted", "sent": "Submitted", "filed": "Submitted",
+        "application submitted": "Submitted", "app submitted": "Submitted",
+        "mailed": "Submitted", "faxed": "Submitted", "uploaded": "Submitted",
+        "received": "Submitted", "acknowledged": "Submitted",
+        # Approved
+        "approved": "Approved", "completed": "Approved", "credentialed": "Approved",
+        "accepted": "Approved", "effective": "Approved", "live": "Approved",
+        "done": "Approved", "granted": "Approved", "passed": "Approved",
+        # Enrolled
+        "enrolled": "Enrolled", "active - enrolled": "Enrolled", "participating": "Enrolled",
+        "contracted": "Enrolled", "in network": "Enrolled", "in-network": "Enrolled",
+        "par": "Enrolled",
+        # Denied
+        "denied": "Denied", "rejected": "Denied", "declined": "Denied",
+        "not approved": "Denied", "failed": "Denied", "terminated": "Denied",
+        "closed": "Denied", "cancelled": "Denied", "canceled": "Denied",
+    }
+
+    VALID_ENROLL_STATUSES = {"Not Started", "In Progress", "Submitted", "Approved", "Enrolled", "Denied"}
+
+    def _normalize_enroll_status(raw):
+        if not raw:
+            return "Not Started"
+        s = str(raw).strip()
+        key = s.lower()
+        if key in ENROLL_STATUS_NORMALIZE:
+            return ENROLL_STATUS_NORMALIZE[key]
+        for map_key, normalized in ENROLL_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
+        for vs in VALID_ENROLL_STATUSES:
+            if vs.lower() == key:
+                return vs
+        return "In Progress"  # Safe default for unrecognized statuses
+
+    COL_MAP = {
+        # Provider
+        "provider": "ProviderName", "providername": "ProviderName", "provider name": "ProviderName",
+        "rendering provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+        "rendering": "ProviderName", "servicing provider": "ProviderName",
+        "name": "ProviderName",
+        # Payor
+        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+        "insurance name": "Payor", "insurance company": "Payor", "plan": "Payor",
+        "plan name": "Payor", "payer name": "Payor", "carrier": "Payor",
+        "insurance plan": "Payor", "health plan": "Payor", "ins": "Payor",
+        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+        # Type
+        "type": "EnrollType", "enrolltype": "EnrollType", "enroll type": "EnrollType",
+        "enrollment type": "EnrollType", "application type": "EnrollType",
+        # Status
+        "status": "Status", "enrollment status": "Status", "enroll status": "Status",
+        "app status": "Status", "application status": "Status", "current status": "Status",
+        # Dates
+        "submitted": "SubmittedDate", "submitted date": "SubmittedDate", "submitteddate": "SubmittedDate",
+        "date submitted": "SubmittedDate", "submission date": "SubmittedDate", "submit date": "SubmittedDate",
+        "application submitted": "SubmittedDate", "app submitted": "SubmittedDate",
+        "follow up": "FollowUpDate", "followupdate": "FollowUpDate", "follow up date": "FollowUpDate",
+        "followup": "FollowUpDate", "followup date": "FollowUpDate", "next follow up": "FollowUpDate",
+        "fu date": "FollowUpDate", "f/u date": "FollowUpDate", "f/u": "FollowUpDate",
+        "approved": "ApprovedDate", "approved date": "ApprovedDate", "approveddate": "ApprovedDate",
+        "approval date": "ApprovedDate", "date approved": "ApprovedDate",
+        "effective": "EffectiveDate", "effective date": "EffectiveDate", "effectivedate": "EffectiveDate",
+        "eff date": "EffectiveDate", "start date": "EffectiveDate",
+        # Owner / Notes
+        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "coordinator": "Owner",
+        "notes": "Notes", "comments": "Notes", "comment": "Notes", "remarks": "Notes",
+        "sub profile": "sub_profile", "subprofile": "sub_profile", "sub_profile": "sub_profile",
+    }
+    rows = _parse_excel_rows(content, ext)
+    if not rows:
+        return 0, ["No rows found"]
+    first_row_keys = list(rows[0].keys()) if rows else []
+    imported, errors = 0, []
+    conn = _get_db()
+    try:
+        for i, row in enumerate(rows):
+            mapped = {}
+            for raw_key, val in row.items():
+                db_col = _fuzzy_match_column(raw_key, COL_MAP)
+                if db_col and val is not None:
+                    mapped[db_col] = _clean_val(val)
+            if not mapped.get("ProviderName") and not mapped.get("Payor"):
+                continue
+            # Normalize status to match filter dropdown values
+            mapped["Status"] = _normalize_enroll_status(mapped.get("Status", ""))
+            try:
+                existing = conn.execute(
+                    "SELECT id FROM enrollment WHERE client_id=? AND ProviderName=? AND Payor=?",
+                    (client_id, mapped.get("ProviderName", ""), mapped.get("Payor", ""))
+                ).fetchone()
+                if existing:
+                    allowed = ["ProviderName","Payor","EnrollType","Status","SubmittedDate",
+                               "FollowUpDate","ApprovedDate","EffectiveDate","Owner","Notes","sub_profile"]
+                    parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
+                    for f in allowed:
+                        if f in mapped:
+                            parts.append(f"{f}=?")
+                            params.append(mapped[f])
+                    params.append(existing["id"])
+                    conn.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
+                else:
+                    conn.execute("""INSERT INTO enrollment
+                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
+                         mapped.get("EnrollType","Enrollment"), mapped.get("Status","Not Started"),
+                         mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
+                         mapped.get("ApprovedDate",""), mapped.get("EffectiveDate",""),
+                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
+                imported += 1
+            except Exception as e:
+                errors.append(f"Row {i+2}: {e}")
+        conn.commit()
+    finally:
+        conn.close()
+    if not imported and first_row_keys:
+        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
+        errors.append("Expected headers like: Provider, Payor/Insurance, Type, Status, Submitted, Follow Up, Approved, Effective")
     return imported, errors
 
 
@@ -1761,18 +1641,18 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
 
     def _normalize_edi_status(raw):
         if not raw:
-            return ""  # Preserve empty — let caller decide default
+            return "Not Started"
         s = str(raw).strip()
         key = s.lower()
         if key in EDI_STATUS_NORMALIZE:
             return EDI_STATUS_NORMALIZE[key]
+        for map_key, normalized in EDI_STATUS_NORMALIZE.items():
+            if len(map_key) >= 4 and map_key in key:
+                return normalized
         for vs in VALID_EDI_STATUSES:
             if vs.lower() == key:
                 return vs
-        for map_key, normalized in EDI_STATUS_NORMALIZE.items():
-            if len(map_key) >= 6 and map_key in key:
-                return normalized
-        return s  # Preserve original value if unrecognized
+        return "In Process"  # Safe default for unrecognized statuses
 
     COL_MAP = {
         # Provider
@@ -1815,12 +1695,10 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                     mapped[db_col] = _clean_val(val)
             if not mapped.get("ProviderName") and not mapped.get("Payor"):
                 continue
-            # Normalize EDI status fields only if provided in Excel
-            for sf in ("EDIStatus", "ERAStatus", "EFTStatus"):
-                if sf in mapped and mapped[sf]:
-                    mapped[sf] = _normalize_edi_status(mapped[sf])
-                elif sf in mapped:
-                    del mapped[sf]  # Empty — don't overwrite DB value
+            # Normalize all three EDI status fields to match dropdown values
+            mapped["EDIStatus"] = _normalize_edi_status(mapped.get("EDIStatus", ""))
+            mapped["ERAStatus"] = _normalize_edi_status(mapped.get("ERAStatus", ""))
+            mapped["EFTStatus"] = _normalize_edi_status(mapped.get("EFTStatus", ""))
             try:
                 existing = conn.execute(
                     "SELECT id FROM edi_setup WHERE client_id=? AND ProviderName=? AND Payor=?",
@@ -1831,7 +1709,7 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                                "SubmittedDate","GoLiveDate","PayerID","Owner","Notes","sub_profile"]
                     parts, params = ["updated_at=?"], [_dt_now.now().isoformat()]
                     for f in allowed:
-                        if f in mapped and mapped[f]:  # Only update fields that have actual values
+                        if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
                     params.append(existing["id"])
@@ -1949,9 +1827,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "icn": "ClaimKey", "tcn": "ClaimKey", "dcn": "ClaimKey",
         # ── Patient ──
         "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
-        "pt name": "PatientName", "pt": "PatientName", "member name": "PatientName",
         "patientid": "PatientID", "patient id": "PatientID", "member id": "PatientID",
-        "pt id": "PatientID", "patient #": "PatientID", "mrn": "PatientID",
         "memberid": "PatientID", "member": "PatientName", "subscriber": "PatientName",
         "subscriber name": "PatientName", "insured name": "PatientName",
         "patient last name": "PatientName", "last name": "PatientName", "name": "PatientName",
@@ -2007,7 +1883,6 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "remaining": "BalanceRemaining", "net balance": "BalanceRemaining",
         # ── Status / dates ──
         "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
-        "claim state": "ClaimStatus", "claim outcome": "ClaimStatus",
         "current status": "ClaimStatus", "ar status": "ClaimStatus",
         "billdate": "BillDate", "bill date": "BillDate", "billed date": "BillDate",
         "date billed": "BillDate", "submission date": "BillDate", "submitted date": "BillDate",
@@ -2024,7 +1899,6 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         "denialcategory": "DenialCategory", "denial category": "DenialCategory",
         "denial type": "DenialCategory",
         "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "worked by": "Owner",
-        "assigned user": "Owner", "assignee": "Owner", "worked": "Owner",
         # ── Sub-profile ──
         "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
         "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
@@ -2057,11 +1931,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         return s
 
     # Parse rows using the shared smart parser (handles multi-sheet, smart header detection)
-    rows = _parse_excel_rows(content, ext, col_map=COLUMN_MAP)
-
-    if not rows:
-        # Fallback for exports where a non-data sheet dominated the combined parse.
-        rows = _parse_excel_rows(content, ext, combine_sheets=False, col_map=COLUMN_MAP)
+    rows = _parse_excel_rows(content, ext)
 
     if not rows:
         return 0, ["No rows found in file"]
@@ -2153,10 +2023,6 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
         unmapped = [k for k in first_row_keys if not _fuzzy_match_column(k, COLUMN_MAP)]
         if unmapped:
             errors.append(f"Unmapped Excel columns (ignored): {unmapped[:10]}")
-    if not imported and rows:
-        first_row_keys = list(rows[0].keys())
-        errors.append(f"No rows matched. Excel headers found: {first_row_keys[:15]}")
-        errors.append("Expected headers like: Claim Key, Patient Name, Payor/Insurance, DOS, Status, Charge, Paid, Balance")
     return imported, errors
 
 
@@ -2221,10 +2087,6 @@ async def replace_file(
             if ext == ".csv":
                 reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
-            elif ext == ".xls":
-                import xlrd
-                wb = xlrd.open_workbook(file_contents=content)
-                row_count = max(0, sum(max(0, sh.nrows - 1) for sh in wb.sheets()))
             else:
                 import openpyxl
                 wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
@@ -2248,19 +2110,18 @@ async def replace_file(
     imported = 0
     import_errors = []
     category = rec.get("category", "")
-    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI"):
+    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
         try:
             if category == "Claims":
                 imported, import_errors = _import_claims_from_excel(content, ext, scope)
             elif category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+            elif category == "Enrollment":
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
             elif category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
-
-    if file_type == "excel" and category in ("Claims", "Credentialing", "EDI") and imported == 0 and not import_errors:
-        import_errors = [f"No rows imported for {category}. Parsed file rows: {row_count}. Check that the data tab has a valid header row."]
 
     notify_activity(user["username"], "replaced file", "Documents",
                     f"{rec['original_name']} → {file.filename}")
@@ -2295,8 +2156,7 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    user = _require_user(hub_session)
-    is_admin = user.get("role") == "admin"
+    _require_user(hub_session)
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -2317,44 +2177,13 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
         if practice_type == "MHP+OMT":
             for sp_name in ["OMT", "MHP"]:
                 sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
-
-        # Gather user production data
-        # Admin sees ALL users' production across ALL accounts (oversight role)
-        # Non-admin sees only production for their client account
-        if is_admin:
-            prod_rows = conn.execute(
-                "SELECT p.username, p.category, p.task_description, p.quantity, p.time_spent, "
-                "p.work_date, p.notes, c.company as account_name "
-                "FROM team_production p LEFT JOIN clients c ON p.client_id = c.id "
-                "ORDER BY p.work_date DESC LIMIT 200"
-            ).fetchall()
-        else:
-            prod_rows = conn.execute(
-                "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
-                "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
-                (client_id,)
-            ).fetchall()
-        production_data = [dict(r) for r in prod_rows]
-
-        # Aggregate production by user
-        prod_by_user = {}
-        for p in production_data:
-            u = p.get("username", "Unknown")
-            if u not in prod_by_user:
-                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set(), "accounts": set()}
-            prod_by_user[u]["entries"] += 1
-            prod_by_user[u]["total_qty"] += int(p.get("quantity") or 0)
-            prod_by_user[u]["total_hours"] += float(p.get("time_spent") or 0)
-            prod_by_user[u]["dates"].add(p.get("work_date", ""))
-            prod_by_user[u]["categories"].add(p.get("category", ""))
-            if p.get("account_name"):
-                prod_by_user[u]["accounts"].add(p.get("account_name"))
     finally:
         conn.close()
 
     # Build concise data summary for GPT
     cl = overall.get("claims", {})
     cred = overall.get("credentialing", {})
+    enr = overall.get("enrollment", {})
     edi = overall.get("edi", {})
     pay = overall.get("payments", {})
 
@@ -2380,16 +2209,13 @@ TOP DENIAL CATEGORIES:
 CREDENTIALING: {len(cred.get('detail', []))} records
 {chr(10).join(f"  - {c.get('provider','?')} / {c.get('payor','?')}: {c.get('status','?')}" for c in cred.get('detail', [])[:10])}
 
+ENROLLMENT: {len(enr.get('detail', []))} records
+{chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: {e.get('status','?')}" for e in enr.get('detail', [])[:10])}
+
 EDI SETUP: {len(edi.get('detail', []))} connections
 {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
 
 PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
-
-USER PRODUCTION LOG ({len(production_data)} recent entries{' — ALL ACCOUNTS (admin view)' if is_admin else ''}):
-{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h{(' | acct: ' + p.get('account_name','')) if p.get('account_name') else ''}" for p in production_data[:30]) or '  No production data logged'}
-
-PRODUCTION SUMMARY BY TEAM MEMBER{' (ALL ACCOUNTS)' if is_admin else ''}:
-{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h total across {len(d['dates'])} day(s), avg {round(d['total_hours']/max(len(d['dates']),1),1)}h/day, categories: {', '.join(d['categories'])}{(', accounts: ' + ', '.join(d['accounts'])) if d.get('accounts') else ''}" for u, d in prod_by_user.items()) or '  No user production data'}
 """
 
     # Sub-profile data
@@ -2399,7 +2225,7 @@ PRODUCTION SUMMARY BY TEAM MEMBER{' (ALL ACCOUNTS)' if is_admin else ''}:
             data_summary += f"""
 SUB-PROFILE: {sp_name}
   Claims: {sc.get('total', 0)} | Charged: ${sc.get('total_charged', 0):,.2f} | Paid: ${sc.get('total_paid', 0):,.2f} | AR: ${sc.get('total_balance', 0):,.2f}
-  Credentialing: {len(sp_data.get('credentialing', {}).get('detail', []))} | EDI: {len(sp_data.get('edi', {}).get('detail', []))}
+  Credentialing: {len(sp_data.get('credentialing', {}).get('detail', []))} | Enrollment: {len(sp_data.get('enrollment', {}).get('detail', []))} | EDI: {len(sp_data.get('edi', {}).get('detail', []))}
 """
 
     system_prompt = """You are a senior Revenue Cycle Management (RCM) analyst at MedPharma SC, a healthcare credentialing and billing company. 
@@ -2411,10 +2237,10 @@ Your report should include:
 3. CLAIMS ANALYSIS — Break down claim statuses, flag concerns, note denials
 4. DENIAL MANAGEMENT — If denials exist, explain significance and recommend actions
 5. CREDENTIALING STATUS — Summarize progress, flag pending items
-6. EDI CONNECTIVITY — Note setup status
-7. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
-8. RECOMMENDED ACTIONS — Specific, prioritized action items
-9. USER PRODUCTION ANALYSIS — Evaluate each team member's daily output, hours worked, task categories, and average hours per day. Flag any team members averaging under 6 hours/day or showing low output. Compare team members against each other. This section is critical — the report reader is the admin/owner who tracks what employees are doing, not a worker themselves.
+6. ENROLLMENT STATUS — Summarize payor enrollment position
+7. EDI CONNECTIVITY — Note setup status
+8. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
+9. RECOMMENDED ACTIONS — Specific, prioritized action items
 10. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
@@ -2487,6 +2313,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
 
     cl = overall.get("claims", {})
     cred = overall.get("credentialing", {})
+    enr = overall.get("enrollment", {})
     edi_data = overall.get("edi", {})
     pay = overall.get("payments", {})
 
@@ -2600,6 +2427,26 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                          r.get('status', ''), r.get('submitted', '-'), r.get('approved', '-')])
         cw = [doc.width*0.2, doc.width*0.2, doc.width*0.12, doc.width*0.15, doc.width*0.16, doc.width*0.17]
         t = Table(tdata, colWidths=cw)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor("#e5e7eb")),
+            ('BOX', (0, 0), (-1, -1), 1, blue),
+            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+    # ── Enrollment ──
+    enr_detail = enr.get('detail', [])
+    if enr_detail:
+        story.append(Paragraph("Enrollment", styles['SectionHead']))
+        tdata = [['Provider', 'Payor', 'Type', 'Status', 'Submitted', 'Effective']]
+        for r in enr_detail[:20]:
+            tdata.append([r.get('provider', '')[:25], r.get('payor', '')[:25], r.get('type', ''),
+                         r.get('status', ''), r.get('submitted', '-'), r.get('effective', '-')])
+        enr_cw = [doc.width*0.2, doc.width*0.2, doc.width*0.12, doc.width*0.15, doc.width*0.16, doc.width*0.17]
+        t = Table(tdata, colWidths=enr_cw)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), blue), ('TEXTCOLOR', (0, 0), (-1, 0), white),
             ('FONTSIZE', (0, 0), (-1, -1), 8),
@@ -2730,60 +2577,6 @@ def alerts_endpoint(client_id: Optional[int] = None,
     return {"alerts": alert_list, "count": len(alert_list)}
 
 
-@router.post("/notifications/test")
-def notifications_test(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: send an immediate test notification (email + SMS if configured)."""
-    user = _require_admin(hub_session)
-    result = send_test_notification(triggered_by=user.get("username", "admin"))
-    return result
-
-
-@router.post("/notifications/send-sms")
-def notifications_send_sms_now(body: SmsNowIn, hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: send an immediate custom SMS now."""
-    user = _require_admin(hub_session)
-    try:
-        result = send_direct_sms(body.message, body.to or "")
-        result["triggered_by"] = user.get("username", "admin")
-        return result
-    except Exception as e:
-        raise HTTPException(500, f"Failed to send SMS: {e}")
-
-
-@router.get("/notifications/status")
-def notifications_status(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: get current notification channel health/config status."""
-    _require_admin(hub_session)
-    return get_notification_status()
-
-
-@router.get("/notifications/debug")
-def notifications_debug(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: detailed diagnostic info for debugging notification delivery."""
-    _require_admin(hub_session)
-    return get_notification_debug()
-
-
-@router.post("/notifications/daily-report")
-def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: immediately send the daily account summary report (email + SMS)."""
-    user = _require_admin(hub_session)
-    try:
-        send_daily_account_summary()
-        return {"ok": True, "message": "Daily report sent to configured recipients"}
-    except Exception as e:
-        raise HTTPException(500, f"Failed to send daily report: {e}")
-
-
-@router.get("/production/snapshot")
-def production_snapshot(work_date: Optional[str] = None,
-                        hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: get per-user production snapshot for a date (defaults to today)."""
-    _require_admin(hub_session)
-    snapshot = get_user_production_snapshot(work_date)
-    return snapshot
-
-
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 
 @router.get("/audit-log")
@@ -2801,7 +2594,7 @@ def audit_log_endpoint(client_id: Optional[int] = None, limit: int = 100,
 def export_section(section: str, client_id: Optional[int] = None,
                    sub_profile: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
-    """Export a section (claims, credentialing, edi_setup, providers, production) as CSV."""
+    """Export a section (claims, credentialing, enrollment, edi, providers, production) as CSV."""
     import csv, io
     from fastapi.responses import StreamingResponse
 
@@ -2810,7 +2603,7 @@ def export_section(section: str, client_id: Optional[int] = None,
 
     if section == "claims":
         rows = export_claims(scope, sub_profile)
-    elif section in ("credentialing", "edi_setup", "providers"):
+    elif section in ("credentialing", "enrollment", "edi_setup", "providers"):
         rows = export_table(section, scope)
     elif section == "production":
         logs = list_production_logs(scope)

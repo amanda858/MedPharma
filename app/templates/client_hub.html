@@ -865,7 +865,8 @@
     .badge-active,
     .badge-approved,
     .badge-completed,
-    .badge-live {
+    .badge-live,
+    .badge-enrolled {
       background: var(--success-light);
       color: #065f46
     }
@@ -916,7 +917,8 @@
     }
 
     .badge-gray,
-    .badge-inactive {
+    .badge-inactive,
+    .badge-not-enrolled {
       background: var(--gray-100);
       color: var(--gray-600)
     }
@@ -1697,6 +1699,11 @@
       color: #5b21b6;
     }
 
+    .search-result-item .sr-type.enrollment {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
     .search-result-item .sr-type.edi {
       background: #fee2e2;
       color: #991b1b;
@@ -1785,7 +1792,7 @@
 
 
           <div class="login-hero-site">
-            🌐 MedPharma Hub Portal
+            🌐 <a href="https://medpharmasc.com" target="blank">medpharmasc.com</a>
           </div>
         </div>
       </div>
@@ -1821,7 +1828,7 @@
                 <div id="loginStatus"
                   style="text-align:center;font-size:13px;color:#94a3b8;margin-top:8px;display:none">
                   Connecting to server…</div>
-                <div class="login-footer">MedPharma © 2026 · Secure Internal Portal · <span
+                <div class="login-footer">MedPharma © 2026 · medpharmasc.com · <span
                     style="color:#FFCC53;font-weight:700">v2.3</span></div>
               </div>
             </div>
@@ -1843,20 +1850,10 @@
     </div>
     <div class="account-body">
       <h2>Select an Account</h2>
-      <div id="selectorBuild" style="font-size:11px;color:#64748b;margin:-6px 0 8px 0;"></div>
       <p>Choose a client account to open the dashboard</p>
-      <div
-        style="margin:10px 0 14px 0;padding:10px 12px;border:1px solid #c7d2fe;border-radius:10px;background:linear-gradient(135deg,#eef2ff,#f8fafc);display:flex;align-items:center;justify-content:space-between;gap:10px;">
-        <div style="font-size:13px;color:#3730a3;font-weight:700;">🧲 Lead Engine (Admin)</div>
-        <a href="/admin/leads/"
-          style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:#4338ca;color:#fff;text-decoration:none;font-size:12px;font-weight:700;">Open
-          Leads</a>
-      </div>
       <div style="margin-bottom:16px;text-align:right">
         <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
-        <button id="openLeadsFromSelector" class="btn btn-secondary btn-sm" onclick="openAdminLeads()"
-          style="font-size:13px;padding:8px 18px;margin-left:8px">🧲 Open Leads</button>
       </div>
       <div class="account-grid" id="accountGrid"></div>
     </div>
@@ -1870,10 +1867,6 @@
           <span></span><span></span><span></span>
         </button>
         <span class="brand">MedPharma</span>
-        <span id="topInstanceBadge"
-          style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;">
-          Instance: --
-        </span>
         <span class="account-chip" id="topAccount" onclick="switchAccount()">&#8629; Switch Account</span>
       </div>
       <!-- Global Search Bar -->
@@ -1919,6 +1912,9 @@
         <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')">
           <span class="ni">🎓</span> <span id="navCredLabel">Credentialing</span>
         </div>
+        <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">
+          <span class="ni">📝</span> Enrollment
+        </div>
         <div class="nav-item" data-panel="edi" onclick="navTo('edi')">
           <span class="ni">🔗</span> EDI Setup
         </div>
@@ -1938,15 +1934,12 @@
         </div>
         <div class="nav-section">Team</div>
         <div class="nav-item" data-panel="production" onclick="navTo('production')">
-          <span class="ni">⏱️</span> User Production
+          <span class="ni">⏱️</span> Team Production
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
           <div class="nav-item" data-panel="clients" onclick="navTo('clients')">
             <span class="ni">🏢</span> Manage Clients
-          </div>
-          <div class="nav-item" onclick="openAdminLeads()">
-            <span class="ni">🧲</span> Leads
           </div>
           <div class="nav-item" data-panel="audit" onclick="navTo('audit')">
             <span class="ni">📜</span> Audit Log
@@ -2061,6 +2054,12 @@
                 <div class="card-title">⚕️ Credentialing Status</div>
               </div>
               <div class="bar-list" id="credChart"></div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">📋 Enrollment Status</div>
+              </div>
+              <div class="bar-list" id="enrollChart"></div>
             </div>
           </div>
         </div>
@@ -2205,6 +2204,54 @@
                   </tr>
                 </thead>
                 <tbody id="credTbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ ENROLLMENT ═══ -->
+        <div class="hub-panel" id="panel-enrollment">
+          <div class="page-header">
+            <div class="page-title">Enrollment</div>
+            <div class="page-actions">
+              <select id="enrollFilter" class="form-control btn-sm" onchange="loadEnroll()" style="width:auto">
+                <option value="">All Statuses</option>
+                <option>Not Started</option>
+                <option>In Progress</option>
+                <option>Submitted</option>
+                <option>Approved</option>
+                <option>Enrolled</option>
+                <option>Denied</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('enrollment')">📤 Export CSV</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('enrollExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="enrollExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+                onchange="importExcel(this,'Enrollment')">
+              <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
+            </div>
+          </div>
+          <!-- Enrollment Status Summary Chart -->
+          <div id="enrollStatusChart" class="section-chart-strip"></div>
+          <div class="card" style="padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Payor</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Submitted</th>
+                    <th>Follow-Up</th>
+                    <th>Approved</th>
+                    <th>Effective</th>
+                    <th>Owner</th>
+                    <th>Notes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="enrollTbody"></tbody>
               </table>
             </div>
           </div>
@@ -2414,6 +2461,12 @@
                 </div>
                 <div id="chartCredStatus" style="padding:16px"></div>
               </div>
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">📊 Enrollment Status</div>
+                </div>
+                <div id="chartEnrollStatus" style="padding:16px"></div>
+              </div>
             </div>
 
             <!-- Sub-Profile Breakdowns (OMT / MHP) -->
@@ -2458,6 +2511,12 @@
                 <div class="card-title">Credentialing Status</div>
               </div>
               <div id="reportCred" style="overflow-x:auto"></div>
+            </div>
+            <div class="card" style="margin-bottom:16px">
+              <div class="card-header">
+                <div class="card-title">Enrollment Status</div>
+              </div>
+              <div id="reportEnroll" style="overflow-x:auto"></div>
             </div>
             <div class="card" style="margin-bottom:16px">
               <div class="card-header">
@@ -2586,8 +2645,8 @@
                 Folders</button>
               <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
                 Upload File</button>
-              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
-                style="display:none" onchange="handleFileSelect(this)" multiple>
+              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
+                onchange="handleFileSelect(this)" multiple>
             </div>
           </div>
 
@@ -2627,9 +2686,8 @@
             <div style="font-size:32px;margin-bottom:8px">📄</div>
             <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload
             </div>
-            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .csv
-              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx &nbsp;•&nbsp; .png &nbsp;•&nbsp; .jpg
-              &nbsp;•&nbsp; .txt</div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv
+              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
             <div style="margin-top:10px">
               <input id="fileDesc" class="form-control" placeholder="Description (optional)"
                 style="width:240px;display:inline-block">
@@ -2762,16 +2820,12 @@
           </div>
         </div>
 
-        <!-- ═══ USER PRODUCTION ═══ -->
+        <!-- ═══ TEAM PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">⏱️ User Production</div>
+            <div class="page-title">⏱️ Team Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
-              <button class="btn btn-secondary btn-sm"
-                onclick="document.getElementById('prodDailyFileInput').click()">📎 Upload Daily File</button>
-              <input type="file" id="prodDailyFileInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
-                style="display:none" onchange="uploadProductionDailyFile(this)">
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
               <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
@@ -2796,6 +2850,7 @@
                     <select class="form-control" id="prodCategory">
                       <option value="Claims Processing">Claims Processing</option>
                       <option value="Credentialing">Credentialing</option>
+                      <option value="Enrollment">Enrollment</option>
                       <option value="EDI Setup">EDI Setup</option>
                       <option value="Denial Management">Denial Management</option>
                       <option value="A/R Follow-up">A/R Follow-up</option>
@@ -2818,7 +2873,7 @@
                   </div>
                   <div class="form-group">
                     <label>Time Spent (hours)</label>
-                    <input class="form-control" type="number" id="prodHours" value="0.25" min="0" step="0.25">
+                    <input class="form-control" type="number" id="prodHours" value="0" min="0" step="0.25">
                   </div>
                   <div class="form-group" style="grid-column:span 2">
                     <label>Notes</label>
@@ -2861,18 +2916,6 @@
                 </table>
               </div>
             </div>
-
-            <!-- Uploaded Production Files -->
-            <div class="card" style="margin-top:18px">
-              <div class="card-header">
-                <div class="card-title">📎 Uploaded Production Files</div>
-              </div>
-              <div id="prodFilesGrid"
-                style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
-                <p style="color:var(--gray-400);font-size:13px;grid-column:1/-1;text-align:center;padding:16px">No
-                  production files uploaded yet</p>
-              </div>
-            </div>
           </div>
 
           <!-- Weekly Report View -->
@@ -2899,25 +2942,7 @@
           <div class="page-header">
             <div class="page-title">🔔 Alerts & Notifications</div>
             <div class="page-actions">
-              <button class="btn btn-primary btn-sm" id="btnTestNotice" onclick="sendTestNotice()">📨 Send Test
-                Notice</button>
-              <button class="btn btn-success btn-sm" id="btnDailyReport" onclick="sendDailyReport()"
-                style="background:#7c3aed;border-color:#7c3aed;">📋 Send Daily Report Now</button>
               <button class="btn btn-secondary btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
-            </div>
-          </div>
-          <div id="notificationHealthBanner"
-            style="display:none;margin-bottom:10px;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:600;">
-          </div>
-          <div id="testNoticeStatus" style="font-size:12px;color:var(--gray-500);margin-bottom:10px;display:none;">
-          </div>
-          <!-- Notification Debug Panel -->
-          <div id="notifDebugWrap" style="margin-bottom:10px;">
-            <button class="btn btn-secondary btn-sm" onclick="toggleNotifDebug()" id="btnNotifDebug"
-              style="font-size:11px;">🔧 Show Credential Debug</button>
-            <div id="notifDebugPanel"
-              style="display:none;margin-top:8px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:14px;font-family:monospace;font-size:11px;line-height:1.8;white-space:pre-wrap;max-height:350px;overflow-y:auto;">
-              Loading...
             </div>
           </div>
           <div id="alertsContent">
@@ -3138,6 +3163,60 @@
     </div>
   </div>
 
+  <!-- Enrollment Modal -->
+  <div class="modal-overlay" id="enrollModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="enrollModalTitle">New Enrollment Item</h2>
+        <button class="modal-close" onclick="closeModal('enrollModal')">&times;</button>
+      </div>
+      <input type="hidden" id="enrollEditId">
+      <div class="form-grid">
+        <div class="form-group"><label>Provider Name</label><input class="form-control" id="fEnrollProvider"></div>
+        <div class="form-group"><label>Payor</label><input class="form-control" id="fEnrollPayor"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Type</label>
+          <select class="form-control" id="fEnrollType">
+            <option>Enrollment</option>
+            <option>Re-enrollment</option>
+            <option>PECOS</option>
+            <option>State Medicaid</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Status</label>
+          <select class="form-control" id="fEnrollStatus">
+            <option>Not Started</option>
+            <option>In Progress</option>
+            <option>Submitted</option>
+            <option>Approved</option>
+            <option>Enrolled</option>
+            <option>Denied</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Submitted</label><input class="form-control" type="date" id="fEnrollSubmitted">
+        </div>
+        <div class="form-group"><label>Follow-Up</label><input class="form-control" type="date" id="fEnrollFollowUp">
+        </div>
+        <div class="form-group"><label>Approved</label><input class="form-control" type="date" id="fEnrollApproved">
+        </div>
+        <div class="form-group"><label>Effective</label><input class="form-control" type="date" id="fEnrollEffective">
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Owner</label><input class="form-control" id="fEnrollOwner"></div>
+        <div class="form-group form-full" id="enrollClientGroup" style="display:none">
+          <label>Client</label><select class="form-control" id="fEnrollClient"></select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control"
+          id="fEnrollNotes"></textarea></div>
+      <button class="btn btn-primary" onclick="saveEnroll()">Save</button>
+    </div>
+  </div>
+
   <!-- EDI Modal -->
   <div class="modal-overlay" id="ediModal">
     <div class="modal modal-sm">
@@ -3287,8 +3366,6 @@
     // BOOT
     // ═══════════════════════════════════════
     document.addEventListener('DOMContentLoaded', async () => {
-      initInstanceBadge();
-
       // Enter key on login
       document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
       // Escape to close modals
@@ -3371,28 +3448,6 @@
       el.textContent = msg; el.style.display = 'block';
     }
 
-    function initInstanceBadge() {
-      const el = document.getElementById('topInstanceBadge');
-      if (!el) return;
-
-      const host = window.location.host || 'unknown-host';
-      const isLocal = host.includes('localhost') || host.startsWith('127.0.0.1');
-      const env = isLocal ? 'LOCAL' : 'REMOTE';
-      const buildMeta = document.querySelector('meta[name="build"]');
-      const build = buildMeta?.content ? ` · b${String(buildMeta.content).slice(-6)}` : '';
-
-      el.textContent = `${env} · ${host}${build}`;
-      if (isLocal) {
-        el.style.background = '#ecfdf5';
-        el.style.color = '#065f46';
-        el.style.border = '1px solid #a7f3d0';
-      } else {
-        el.style.background = '#fef3c7';
-        el.style.color = '#92400e';
-        el.style.border = '1px solid #fcd34d';
-      }
-    }
-
     function togglePw() {
       const inp = document.getElementById('loginPass');
       const btn = document.getElementById('btnShowPw');
@@ -3421,17 +3476,6 @@
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
 
-      const buildMeta = document.querySelector('meta[name="build"]')?.getAttribute('content') || '';
-      const selectorBuild = document.getElementById('selectorBuild');
-      if (selectorBuild) {
-        selectorBuild.textContent = buildMeta ? `Build: ${buildMeta}` : '';
-      }
-
-      const leadsBtn = document.getElementById('openLeadsFromSelector');
-      if (leadsBtn) {
-        leadsBtn.style.display = '';
-      }
-
       // All users see all client accounts — with error handling for cold starts
       try {
         const controller = new AbortController();
@@ -3455,16 +3499,7 @@
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
       } else {
-        const adminLeadCard = `
-    <div class="account-card" onclick="openAdminLeads()" style="border:2px solid #c7d2fe;background:linear-gradient(135deg,#eef2ff,#f8fafc)">
-      <div class="ac-icon">🧲</div>
-      <div class="ac-name">Open Leads</div>
-      <div class="ac-contact">Admin lead engine (nationwide sourcing)</div>
-      <div class="ac-badge"><span>●</span> Admin Only</div>
-    </div>
-  `;
-
-        grid.innerHTML = adminLeadCard + clientsList.map(c => `
+        grid.innerHTML = clientsList.map(c => `
     <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
       <div class="ac-icon">🏥</div>
       <div class="ac-name">${esc(c.company)}</div>
@@ -3484,13 +3519,13 @@
       document.getElementById('topUser').textContent = currentUser.username;
       // Hide the role pill for regular users; only show for admin
       const rolePill = document.getElementById('topRole');
-      if (String(currentUser.role || '').toLowerCase() === 'admin') {
+      if (currentUser.role === 'admin') {
         rolePill.textContent = 'Admin';
         rolePill.style.display = '';
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = (String(currentUser.role || '').toLowerCase() === 'admin') ? 'block' : 'none';
+      document.getElementById('adminNav').style.display = 'block';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
@@ -3536,6 +3571,7 @@
         if (id === 'dashboard') loadDashboard();
         else if (id === 'claims') loadClaims();
         else if (id === 'credentialing') loadCred();
+        else if (id === 'enrollment') loadEnroll();
         else if (id === 'edi') loadEdi();
         else if (id === 'providers') loadProviders();
       }
@@ -3572,6 +3608,7 @@
       if (panel === 'dashboard') loadDashboard();
       if (panel === 'claims') loadClaims();
       if (panel === 'credentialing') loadCred();
+      if (panel === 'enrollment') loadEnroll();
       if (panel === 'edi') loadEdi();
       if (panel === 'providers') loadProviders();
       if (panel === 'clients') loadClients();
@@ -3609,11 +3646,6 @@
       if (overlay) overlay.classList.remove('show');
       if (btn) btn.classList.remove('open');
       document.body.style.overflow = '';
-    }
-
-    function openAdminLeads() {
-      closeMobileSidebar();
-      window.location.href = '/admin/leads/';
     }
 
     // ═══════════════════════════════════════
@@ -3691,9 +3723,11 @@
       // Data Summary Card (shows record counts per section)
       const summaryCard = document.getElementById('dashSummaryCard');
       const cs = d.credentialing_stats || {};
+      const es = d.enrollment_stats || {};
       const claimCount = d.active_claims || 0;
       const credCount = Object.values(cs).reduce((a, b) => a + (b || 0), 0);
-      const hasData = claimCount || credCount;
+      const enrCount = Object.values(es).reduce((a, b) => a + (b || 0), 0);
+      const hasData = claimCount || credCount || enrCount;
       summaryCard.style.display = hasData ? '' : 'none';
       if (hasData) {
         const sbox = (icon, label, val, clr) => `<div style="background:${clr};border-radius:8px;padding:12px;text-align:center">
@@ -3702,6 +3736,7 @@
         document.getElementById('dashSummaryBody').innerHTML =
           sbox('📋', 'Claims', claimCount, 'var(--info-light)') +
           sbox('🎓', 'Credentialing', credCount, 'var(--purple-light)') +
+          sbox('📝', 'Enrollment', enrCount, 'var(--success-light)') +
           sbox('💰', 'Payments MTD', '$' + fmt(d.payments_mtd), 'var(--warning-light)');
       }
 
@@ -3782,6 +3817,23 @@
         </div>
       </div>`).join('')
         : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No credentialing data</p>';
+
+      // Enrollment stats
+      const enrStats = d.enrollment_stats || {};
+      const esMax = Math.max(...Object.values(enrStats).map(Number), 1);
+      const esColors = {
+        Active: 'bf-green', Pending: 'bf-amber', Submitted: 'bf-blue',
+        Approved: 'bf-green', Denied: 'bf-red', Terminated: 'bf-red'
+      };
+      document.getElementById('enrollChart').innerHTML = Object.entries(enrStats).length
+        ? Object.entries(enrStats).map(([s, c]) => `
+      <div class="bar-row">
+        <div class="bar-lbl">${esc(s)}</div>
+        <div class="bar-track">
+          <div class="bar-fill ${esColors[s] || 'bf-indigo'}" style="width:${Math.max(6, (c / esMax) * 100)}%">${c}</div>
+        </div>
+      </div>`).join('')
+        : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No enrollment data</p>';
     }
 
     let profileCollapsed = false;
@@ -4252,6 +4304,121 @@
     }
 
     // ═══════════════════════════════════════
+    // ENROLLMENT
+    // ═══════════════════════════════════════
+    let allEnrollItems = [];
+    let activeEnrollFilter = '';
+    async function loadEnroll() {
+      // Always fetch ALL items for chart, then filter locally
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      const r = await fetch('/hub/api/enrollment?' + params);
+      const d = await r.json();
+      allEnrollItems = d.enrollment || d || [];
+
+      // Render chart strip
+      const ENROLL_STATUSES = ['Not Started', 'In Progress', 'Submitted', 'Approved', 'Enrolled', 'Denied'];
+      renderSectionChart('enrollStatusChart', allEnrollItems, 'Status', ENROLL_STATUSES, (status) => {
+        activeEnrollFilter = status || '';
+        document.getElementById('enrollFilter').value = activeEnrollFilter;
+        renderEnrollTable();
+      });
+
+      // Sync dropdown with pill state
+      activeEnrollFilter = document.getElementById('enrollFilter').value;
+      syncPillHighlight('enrollStatusChart', activeEnrollFilter);
+      renderEnrollTable();
+    }
+
+    function renderEnrollTable() {
+      const items = activeEnrollFilter
+        ? allEnrollItems.filter(i => (i.Status || '').toLowerCase() === activeEnrollFilter.toLowerCase())
+        : allEnrollItems;
+      const tbody = document.getElementById('enrollTbody');
+      if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="11"><div class="empty-state"><div class="es-icon">📝</div><p>No enrollment items</p></div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map(i => `<tr>
+    <td style="font-weight:600">${esc(i.ProviderName || '—')}</td>
+    <td>${esc(i.Payor || '—')}</td>
+    <td><span class="badge badge-blue">${esc(i.EnrollType || '')}</span></td>
+    <td>${statusBadge(i.Status)}</td>
+    <td style="font-size:12px">${i.SubmittedDate || '—'}</td>
+    <td style="font-size:12px;${i.FollowUpDate && new Date(i.FollowUpDate) < new Date() ? 'color:var(--danger);font-weight:600' : ''}">${i.FollowUpDate || '—'}</td>
+    <td style="font-size:12px">${i.ApprovedDate || '—'}</td>
+    <td style="font-size:12px">${i.EffectiveDate || '—'}</td>
+    <td style="font-size:12px">${esc(i.Owner || '—')}</td>
+    <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
+    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editEnrollItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEnrollRow(${i.id})">🗑</button></td>
+  </tr>`).join('');
+    }
+
+    let enrollItems = [];
+    async function editEnrollItem(id) {
+      const r = await fetch('/hub/api/enrollment');
+      const d = await r.json();
+      enrollItems = d.enrollment || d || [];
+      const item = enrollItems.find(x => x.id === id);
+      if (item) openEnrollModal(item);
+    }
+
+    function openEnrollModal(item) {
+      document.getElementById('enrollEditId').value = item?.id || '';
+      document.getElementById('enrollModalTitle').textContent = item ? 'Edit Enrollment' : 'New Enrollment';
+      document.getElementById('fEnrollProvider').value = item?.ProviderName || '';
+      document.getElementById('fEnrollPayor').value = item?.Payor || '';
+      document.getElementById('fEnrollType').value = item?.EnrollType || 'Enrollment';
+      document.getElementById('fEnrollStatus').value = item?.Status || 'Not Started';
+      document.getElementById('fEnrollSubmitted').value = item?.SubmittedDate || '';
+      document.getElementById('fEnrollFollowUp').value = item?.FollowUpDate || '';
+      document.getElementById('fEnrollApproved').value = item?.ApprovedDate || '';
+      document.getElementById('fEnrollEffective').value = item?.EffectiveDate || '';
+      document.getElementById('fEnrollOwner').value = item?.Owner || '';
+      document.getElementById('fEnrollNotes').value = item?.Notes || '';
+      if (currentUser.role === 'admin') {
+        document.getElementById('enrollClientGroup').style.display = '';
+        populateClientDrop('fEnrollClient', item?.client_id);
+      }
+      document.getElementById('enrollModal').classList.add('open');
+    }
+
+    async function saveEnroll() {
+      const editId = document.getElementById('enrollEditId').value;
+      const data = {
+        ProviderName: document.getElementById('fEnrollProvider').value,
+        Payor: document.getElementById('fEnrollPayor').value,
+        EnrollType: document.getElementById('fEnrollType').value,
+        Status: document.getElementById('fEnrollStatus').value,
+        SubmittedDate: document.getElementById('fEnrollSubmitted').value,
+        FollowUpDate: document.getElementById('fEnrollFollowUp').value,
+        ApprovedDate: document.getElementById('fEnrollApproved').value,
+        EffectiveDate: document.getElementById('fEnrollEffective').value,
+        Owner: document.getElementById('fEnrollOwner').value,
+        Notes: document.getElementById('fEnrollNotes').value,
+      };
+      try {
+        if (editId) {
+          await fetch(`/hub/api/enrollment/${editId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+        } else {
+          data.client_id = currentUser.role === 'admin'
+            ? parseInt(document.getElementById('fEnrollClient').value) || activeClientId
+            : activeClientId || currentUser.id;
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
+          await fetch('/hub/api/enrollment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+        }
+        closeModal('enrollModal'); loadEnroll(); toast('Saved', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════
     // EDI
     // ═══════════════════════════════════════
     let allEdiItems = [];
@@ -4533,7 +4700,7 @@
       'Appeals': { bg: '#faf5ff', text: '#7e22ce', bar: '#a855f7' },
       'Paid': { bg: '#ecfdf5', text: '#065f46', bar: '#10b981' },
       'Closed': { bg: '#f3f4f6', text: '#4b5563', bar: '#9ca3af' },
-      // Credentialing / EDI shared
+      // Credentialing / Enrollment / EDI shared
       'Not Started': { bg: '#fffbeb', text: '#92400e', bar: '#f59e0b' },
       'In Progress': { bg: '#fffbeb', text: '#92400e', bar: '#f59e0b' },
       'Submitted': { bg: '#dbeafe', text: '#1e40af', bar: '#3b82f6' },
@@ -4643,6 +4810,14 @@
         toast('Record deleted', 'success'); loadCred();
       } catch (e) { toast(e.message, 'error'); }
     }
+    async function deleteEnrollRow(id) {
+      if (!confirm('Delete this enrollment record?')) return;
+      try {
+        const r = await fetch(`/hub/api/enrollment/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        toast('Record deleted', 'success'); loadEnroll();
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function deleteEdiRow(id) {
       if (!confirm('Delete this EDI record?')) return;
       try {
@@ -4689,6 +4864,8 @@
       const file = input.files[0];
       input.value = '';  // reset so same file can be re-selected
       if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      // Verify session is still valid before uploading
+      if (!(await checkSession())) return;
       const fd = new FormData();
       fd.append('file', file);
       fd.append('category', category);
@@ -4698,30 +4875,28 @@
       try {
         // Use /files/upload which both saves the file AND auto-imports data
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
-        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
         const d = await r.json();
         if (!r.ok) { toast(d.detail || 'Import failed', 'error'); return; }
         if (d.imported > 0) {
           toast(`✅ Imported ${d.imported} rows into ${category} — file saved as hard copy`, 'success');
         } else {
-          const firstErr = (d.import_errors && d.import_errors.length) ? ` — ${d.import_errors[0]}` : '';
-          toast(`⚠️ File saved but no rows imported${firstErr}`, 'warning');
+          toast(`⚠️ File saved but no rows imported — check column headers`, 'warning');
         }
         if (d.import_errors && d.import_errors.length) {
           console.warn('Import errors:', d.import_errors);
-          // Show up to 2 specific errors
-          d.import_errors.slice(0, 2).forEach(err => toast(`⚠️ ${err}`, 'warning'));
+          toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
         }
         // Refresh the active panel
         if (category === 'Claims') loadClaims();
         else if (category === 'Credentialing') loadCred();
+        else if (category === 'Enrollment') loadEnroll();
         else if (category === 'EDI') loadEdi();
         // Also refresh dashboard summary + documents
         loadDashboard();
         loadDocuments();
       } catch (e) {
-        console.error('Import error:', e);
-        toast('❌ Import failed — check your connection and try again: ' + e.message, 'error');
+        console.error(e);
+        toast('Import failed: ' + e.message, 'error');
       }
     }
 
@@ -4736,35 +4911,19 @@
     // ═══════════════════════════════════════
     // REPORT TABS — Custom tabs for Claims / Credentialing / EDI + user-defined
     // ═══════════════════════════════════════
-    const REQUIRED_REPORT_TABS = ['Claims', 'Credentialing', 'EDI', 'AR Legacy'];
-    const DEFAULT_REPORT_TABS = [...REQUIRED_REPORT_TABS];
-    const BUILT_IN_REPORT_TABS = ['Overview', ...REQUIRED_REPORT_TABS];
+    const DEFAULT_REPORT_TABS = ['Claims', 'Credentialing', 'EDI'];
+    const BUILT_IN_REPORT_TABS = ['Overview', 'Claims', 'Credentialing', 'EDI'];
     let activeReportTab = 'Overview';
     let currentReportTabs = [...DEFAULT_REPORT_TABS];
     let reportNotesCache = {};
     let addReportTabOpen = false;
     let manageReportTabsOpen = false;
 
-    function normalizeReportTabs(tabs) {
-      const incoming = Array.isArray(tabs) ? tabs : [];
-      const out = [];
-
-      for (const t of REQUIRED_REPORT_TABS) {
-        if (!out.some(x => x.toLowerCase() === t.toLowerCase())) out.push(t);
-      }
-      for (const t of incoming) {
-        const name = (t || '').toString().trim();
-        if (!name) continue;
-        if (!out.some(x => x.toLowerCase() === name.toLowerCase())) out.push(name);
-      }
-      return out;
-    }
-
     function renderReportTabBar() {
       const tabs = ['Overview', ...currentReportTabs];
       document.getElementById('reportTabBar').innerHTML = tabs.map(t => {
         const isActive = t === activeReportTab;
-        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'EDI' ? '🔗' : t === 'AR Legacy' ? '📚' : '📄';
+        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'EDI' ? '🔗' : '📄';
         return `<button class="qtab ${isActive ? 'active' : ''}"
           onclick="setReportTab('${t.replace(/'/g, "\\'")}')"
           style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid ${isActive ? 'var(--info)' : 'var(--gray-200)'};background:${isActive ? 'var(--info)' : 'var(--gray-50)'};color:${isActive ? '#fff' : 'var(--gray-600)'};cursor:pointer;transition:all .2s">
@@ -5077,7 +5236,7 @@
         }
       }
       if (newTabs.length === 0) { toast('You must have at least one tab', 'error'); return; }
-      currentReportTabs = normalizeReportTabs(newTabs);
+      currentReportTabs = newTabs;
       await saveReportTabsToServer();
       manageReportTabsOpen = false;
       document.getElementById('manageReportTabsForm').style.display = 'none';
@@ -5090,7 +5249,6 @@
     async function saveReportTabsToServer() {
       try {
         const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
-        currentReportTabs = normalizeReportTabs(currentReportTabs);
         const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report_tabs: currentReportTabs }) });
         if (!r.ok) throw new Error('Failed to save report tabs');
       } catch (e) { toast(e.message, 'error'); }
@@ -5107,7 +5265,7 @@
         const pr = await fetch(profUrl).catch(() => null);
         if (pr && pr.ok) {
           const pd = await pr.json();
-          if (pd.report_tabs && pd.report_tabs.length > 0) currentReportTabs = normalizeReportTabs(pd.report_tabs);
+          if (pd.report_tabs && pd.report_tabs.length > 0) currentReportTabs = pd.report_tabs;
           else currentReportTabs = [...DEFAULT_REPORT_TABS];
         }
       } catch (_) { }
@@ -5190,6 +5348,7 @@
       const cl = d.claims || {};
       const pay = d.payments || {};
       const cred = d.credentialing || {};
+      const enr = d.enrollment || {};
       const edi = d.edi || {};
       const subs = d.sub_profiles || {};
 
@@ -5238,6 +5397,16 @@
         narrative.push(`<strong>Credentialing:</strong> ${credTotal} total credentialing records tracked. <strong>${approvedCount}</strong> approved/active, <strong>${pendingCount}</strong> pending.${pendingCount > 0 ? ' Follow-up recommended on pending applications.' : ''}`);
       }
 
+      // Enrollment
+      const enrTotal = (enr.detail || []).length;
+      if (enrTotal) {
+        const enrActive = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('active') || (s.status || '').toLowerCase().includes('enrolled'));
+        const enrPending = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending') || (s.status || '').toLowerCase().includes('submitted'));
+        const activeCount = enrActive.reduce((s, i) => s + i.count, 0);
+        const pendCount = enrPending.reduce((s, i) => s + i.count, 0);
+        narrative.push(`<strong>Enrollment:</strong> ${enrTotal} payor enrollment records. <strong>${activeCount}</strong> active, <strong>${pendCount}</strong> pending.`);
+      }
+
       // EDI
       const ediTotal = (edi.detail || []).length;
       if (ediTotal) {
@@ -5267,8 +5436,10 @@
             narrative.push(`• No claims data recorded.`);
           }
           const spCredTotal = (spData.credentialing?.detail || []).length;
+          const spEnrTotal = (spData.enrollment?.detail || []).length;
           const spEdiTotal = (spData.edi?.detail || []).length;
           if (spCredTotal) narrative.push(`• ${spCredTotal} credentialing record(s)`);
+          if (spEnrTotal) narrative.push(`• ${spEnrTotal} enrollment record(s)`);
           if (spEdiTotal) narrative.push(`• ${spEdiTotal} EDI setup record(s)`);
         }
         narrative.push('');
@@ -5299,6 +5470,8 @@
       if (deniedItems.length) actions.push('Review and appeal denied claims to recover outstanding revenue.');
       const credPendingCount = (cred.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
       if (credPendingCount) actions.push(`Follow up on ${credPendingCount} pending credentialing application(s).`);
+      const enrPendingCount = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
+      if (enrPendingCount) actions.push(`Track ${enrPendingCount} pending enrollment submission(s).`);
       if (cl.total_balance > 0) actions.push(`Work outstanding AR of $${fmt(cl.total_balance)} through systematic follow-up.`);
       if (!actions.length) actions.push('Account is in good standing. Continue monitoring KPIs.');
       actions.forEach(a => narrative.push(`• ${a}`));
@@ -5311,6 +5484,7 @@
       const el = document.getElementById(containerId);
       const cl = spData.claims || {};
       const cred = spData.credentialing || {};
+      const enr = spData.enrollment || {};
       const edi = spData.edi || {};
       const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
       const color = spName === 'OMT' ? '#6366f1' : '#0ea5e9';
@@ -5351,7 +5525,8 @@
       // Summary counts
       html += `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">`;
       html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">📋 ${(cred.detail || []).length} Cred</span>`;
-      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px"> ${(edi.detail || []).length} EDI</span>`;
+      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">📝 ${(enr.detail || []).length} Enroll</span>`;
+      html += `<span style="font-size:11px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:20px;padding:3px 10px">🔗 ${(edi.detail || []).length} EDI</span>`;
       html += `</div>`;
 
       el.innerHTML = html;
@@ -5426,6 +5601,10 @@
       const credSummary = (d.credentialing?.summary || []).map(s => ({ label: s.status, value: s.count }));
       renderDonutChart('chartCredStatus', credSummary, 'value', 'label');
 
+      // Enrollment status donut
+      const enrSummary = (d.enrollment?.summary || []).map(s => ({ label: s.status, value: s.count }));
+      renderDonutChart('chartEnrollStatus', enrSummary, 'value', 'label');
+
       // Sub-profile breakdowns
       const spSection = document.getElementById('reportSubProfiles');
       if (d.sub_profiles && Object.keys(d.sub_profiles).length > 0) {
@@ -5477,6 +5656,28 @@
             <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${r.expires || '-'}</td>
           </tr>`).join('')}</tbody>
         </table>` : '<p style="color:var(--gray-400);font-size:13px">No credentialing data</p>';
+
+      // Enrollment
+      const enrD = d.enrollment?.detail || [];
+      document.getElementById('reportEnroll').innerHTML = enrD.length ? `
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr style="background:var(--gray-50)">
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Provider</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Payor</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Type</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Status</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Submitted</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Effective</th>
+          </tr></thead>
+          <tbody>${enrD.map(r => `<tr>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100);font-weight:600">${esc(r.provider || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${esc(r.payor || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${esc(r.type || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${statusBadge(r.status)}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${r.submitted || '-'}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${r.effective || '-'}</td>
+          </tr>`).join('')}</tbody>
+        </table>` : '<p style="color:var(--gray-400);font-size:13px">No enrollment data</p>';
 
       // EDI
       const ediD = d.edi?.detail || [];
@@ -5535,7 +5736,7 @@
           const sr = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
           lines.push(`${label}`);
           lines.push(`Claims: ${sc.total || 0} | Charged: $${sc.total_charged || 0} | Paid: $${sc.total_paid || 0} | Collection Rate: ${sr}% | AR: $${sc.total_balance || 0}`);
-          lines.push(`Credentialing: ${(spData.credentialing?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}`);
+          lines.push(`Credentialing: ${(spData.credentialing?.detail || []).length} | Enrollment: ${(spData.enrollment?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}`);
           lines.push('');
         }
       }
@@ -5551,6 +5752,12 @@
       lines.push('Provider,Payor,Type,Status,Submitted,Approved,Expires');
       (d.credentialing?.detail || []).forEach(r => {
         lines.push([r.provider, r.payor, r.type, r.status, r.submitted, r.approved, r.expires].map(v => `"${(v || '').replace(/"/g, '""')}"`).join(','));
+      });
+      lines.push('');
+      lines.push('ENROLLMENT');
+      lines.push('Provider,Payor,Type,Status,Submitted,Effective');
+      (d.enrollment?.detail || []).forEach(r => {
+        lines.push([r.provider, r.payor, r.type, r.status, r.submitted, r.effective].map(v => `"${(v || '').replace(/"/g, '""')}"`).join(','));
       });
       lines.push('');
       lines.push('EDI SETUP');
@@ -5645,7 +5852,7 @@
               html += `<div class="bar-row"><div class="bar-label"><span>${s.status}</span><span>${s.count}</span></div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${bdrColor}"></div></div></div>`;
             });
           }
-          html += `<div style="font-size:10px;color:#888;margin-top:8px">Cred: ${(spData.credentialing?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}</div>`;
+          html += `<div style="font-size:10px;color:#888;margin-top:8px">Cred: ${(spData.credentialing?.detail || []).length} | Enroll: ${(spData.enrollment?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}</div>`;
           html += `</div>`;
         }
         html += `</div>`;
@@ -5658,6 +5865,11 @@
       if ((d.credentialing?.detail || []).length) {
         html += `<h2>Credentialing</h2><table><tr><th>Provider</th><th>Payor</th><th>Type</th><th>Status</th><th>Submitted</th><th>Approved</th><th>Expires</th></tr>`;
         d.credentialing.detail.forEach(r => { html += `<tr><td>${r.provider || '-'}</td><td>${r.payor || '-'}</td><td>${r.type || '-'}</td><td>${r.status || '-'}</td><td>${r.submitted || '-'}</td><td>${r.approved || '-'}</td><td>${r.expires || '-'}</td></tr>`; });
+        html += `</table>`;
+      }
+      if ((d.enrollment?.detail || []).length) {
+        html += `<h2>Enrollment</h2><table><tr><th>Provider</th><th>Payor</th><th>Type</th><th>Status</th><th>Submitted</th><th>Effective</th></tr>`;
+        d.enrollment.detail.forEach(r => { html += `<tr><td>${r.provider || '-'}</td><td>${r.payor || '-'}</td><td>${r.type || '-'}</td><td>${r.status || '-'}</td><td>${r.submitted || '-'}</td><td>${r.effective || '-'}</td></tr>`; });
         html += `</table>`;
       }
       if ((d.edi?.detail || []).length) {
@@ -5918,6 +6130,7 @@
         const tracker = document.getElementById('completionTracker');
         const sd = d.status_distribution || {};
         const cs = d.credentialing_stats || {};
+        const es = d.enrollment_stats || {};
 
         const totalClaims = Object.values(sd).reduce((a, b) => a + b, 0);
         const paidClaims = sd['Paid'] || 0;
@@ -5927,9 +6140,14 @@
         const approvedCred = cs['Approved'] || 0;
         const credPct = totalCred ? Math.round(approvedCred / totalCred * 100) : 0;
 
+        const totalEnroll = Object.values(es).reduce((a, b) => a + b, 0);
+        const activeEnroll = es['Active'] || 0;
+        const enrollPct = totalEnroll ? Math.round(activeEnroll / totalEnroll * 100) : 0;
+
         const items = [
           { label: 'Claims Billed', pct: claimPct, color: '#1e88e5', sub: paidClaims + ' of ' + totalClaims + ' paid' },
           { label: 'Credentialing', pct: credPct, color: '#10b981', sub: approvedCred + ' of ' + totalCred + ' approved' },
+          { label: 'Enrollment', pct: enrollPct, color: '#f59e0b', sub: activeEnroll + ' of ' + totalEnroll + ' active' },
           { label: 'Total A/R', pct: null, value: '$' + (d.total_ar || 0).toLocaleString(), color: '#ef4444', sub: d.active_claims + ' active claims' },
         ];
 
@@ -5958,6 +6176,8 @@
     }
 
     async function uploadFile(file) {
+      // Verify session is still valid before uploading
+      if (!(await checkSession())) return;
       const ext = (file.name || '').split('.').pop().toLowerCase();
       const isExcel = ['xlsx', 'xls', 'csv'].includes(ext);
 
@@ -5980,12 +6200,11 @@
       fd.append('description', description);
       fd.append('client_id', activeClientId);
 
-      const isDataImport = isExcel && ['Claims', 'Credentialing', 'EDI'].includes(category);
+      const isDataImport = isExcel && ['Claims', 'Credentialing', 'Enrollment', 'EDI'].includes(category);
       toast(isDataImport ? `Importing ${file.name} into ${category}…` : `Uploading ${file.name}…`, 'info');
 
       try {
         const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
-        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'Upload failed');
 
@@ -5993,11 +6212,10 @@
           toast(`✅ Imported ${d.imported} rows into ${d.import_category} — file saved as hard copy`, 'success');
           if (d.import_errors && d.import_errors.length) toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
         } else if (d.import_category) {
-          const firstErr = (d.import_errors && d.import_errors.length) ? ` — ${d.import_errors[0]}` : '';
-          toast(`⚠️ File saved but no rows imported${firstErr}`, 'warning');
+          toast(`⚠️ File saved but no rows imported — check column headers match expected format`, 'warning');
           if (d.import_errors && d.import_errors.length) {
             console.warn('Import errors:', d.import_errors);
-            toast(d.import_errors[0], 'warning');
+            d.import_errors.forEach(e => toast(e, 'warning'));
           }
         } else {
           toast(`${file.name} uploaded!`, 'success');
@@ -6005,6 +6223,7 @@
         // Always refresh the relevant data section after upload
         if (d.import_category === 'Claims') loadClaims();
         else if (d.import_category === 'Credentialing') loadCred();
+        else if (d.import_category === 'Enrollment') loadEnroll();
         else if (d.import_category === 'EDI') loadEdi();
         loadDashboard();
         loadDocuments();
@@ -6023,6 +6242,7 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
             <button onclick="this.closest('.import-choice').resolve('Claims')" class="btn btn-sm" style="padding:12px;background:var(--info-light);color:var(--info);border:2px solid var(--info);border-radius:10px;font-weight:700;font-size:13px">💰 Claims</button>
             <button onclick="this.closest('.import-choice').resolve('Credentialing')" class="btn btn-sm" style="padding:12px;background:#f0fdf4;color:#059669;border:2px solid #059669;border-radius:10px;font-weight:700;font-size:13px">📋 Credentialing</button>
+            <button onclick="this.closest('.import-choice').resolve('Enrollment')" class="btn btn-sm" style="padding:12px;background:#fffbeb;color:#d97706;border:2px solid #d97706;border-radius:10px;font-weight:700;font-size:13px">🏥 Enrollment</button>
             <button onclick="this.closest('.import-choice').resolve('EDI')" class="btn btn-sm" style="padding:12px;background:#faf5ff;color:#7c3aed;border:2px solid #7c3aed;border-radius:10px;font-weight:700;font-size:13px">🔌 EDI Setup</button>
           </div>
           <div style="display:flex;gap:8px">
@@ -6084,7 +6304,7 @@
           loadDocuments();
           loadDashboard();
           // Refresh relevant section
-          loadClaims(); loadCred(); loadEdi();
+          loadClaims(); loadCred(); loadEnroll(); loadEdi();
         } catch (e) { toast(e.message, 'error'); }
         input.remove();
       };
@@ -6218,7 +6438,7 @@
     }
 
     // ═══════════════════════════════════════
-    // USER PRODUCTION
+    // TEAM PRODUCTION
     // ═══════════════════════════════════════
     let prodViewMode = 'log'; // 'log' or 'report'
 
@@ -6252,14 +6472,11 @@
 
       try {
         const r = await fetch(url);
-        if (!r.ok) { toast('Failed to load production data', 'error'); return; }
         const d = await r.json();
         const logs = d.logs || [];
         const tbody = document.getElementById('prodTbody');
         if (!logs.length) {
-          const filterDate = document.getElementById('prodFilterDate')?.value;
-          const msg = filterDate ? `No entries found for ${filterDate}. <a href="#" onclick="document.getElementById('prodFilterDate').value='';loadProduction();return false" style="color:var(--primary)">Show All</a>` : 'No production entries yet. Log your first task above!';
-          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">${msg}</td></tr>`;
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">No production entries yet. Log your first task above!</td></tr>';
           return;
         }
         tbody.innerHTML = logs.map(l => `<tr>
@@ -6272,44 +6489,11 @@
           <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
           <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
         </tr>`).join('');
-      } catch (e) { console.error(e); toast('⚠️ Could not load production data — check your connection', 'error'); }
-
-      // Load uploaded production files
-      loadProductionFiles();
-    }
-
-    async function loadProductionFiles() {
-      if (!activeClientId) return;
-      try {
-        const r = await fetch(`/hub/api/files?client_id=${activeClientId}`);
-        const d = await r.json();
-        const files = (d.files || []).filter(f => f.category === 'Production');
-        const grid = document.getElementById('prodFilesGrid');
-        if (!files.length) {
-          grid.innerHTML = '<p style="color:var(--gray-400);font-size:13px;grid-column:1/-1;text-align:center;padding:16px">No production files uploaded yet. Use 📎 Upload Daily File above.</p>';
-          return;
-        }
-        grid.innerHTML = files.map(f => {
-          const ext = (f.original_name || '').split('.').pop().toLowerCase();
-          const icon = ext === 'pdf' ? '📕' : ['png', 'jpg', 'jpeg'].includes(ext) ? '🖼️' : ['xlsx', 'xls', 'csv'].includes(ext) ? '📊' : '📄';
-          const size = f.file_size > 1048576 ? (f.file_size / 1048576).toFixed(1) + ' MB' : (f.file_size / 1024).toFixed(0) + ' KB';
-          const date = (f.created_at || '').substring(0, 10);
-          return `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
-            <div style="font-size:28px">${icon}</div>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:600;color:var(--gray-800);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(f.original_name)}">${esc(f.original_name)}</div>
-              <div style="font-size:11px;color:var(--gray-400)">${size} · ${date} · ${esc(f.uploaded_by || '')}</div>
-            </div>
-            <a href="/hub/api/files/${f.id}/download" style="text-decoration:none;font-size:18px" title="Download">⬇️</a>
-            <button onclick="deleteProductionFile(${f.id})" style="background:var(--danger-light);color:var(--danger);border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px" title="Delete file">🗑️</button>
-          </div>`;
-        }).join('');
       } catch (e) { console.error(e); }
     }
 
     async function saveProductionLog() {
       if (!activeClientId) { toast('Select a client account first', 'error'); return; }
-      if (!(await checkSession())) return;
       const data = {
         client_id: activeClientId,
         work_date: document.getElementById('prodDate').value,
@@ -6321,56 +6505,19 @@
       };
       if (!data.work_date) { toast('Please select a date', 'error'); return; }
       if (!data.task_description) { toast('Please describe the task', 'error'); return; }
-      if (data.time_spent < 0) { toast('Time spent cannot be negative', 'error'); return; }
+      if (data.time_spent <= 0) { toast('Please enter time spent', 'error'); return; }
       try {
         const r = await fetch('/hub/api/production', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Failed to save production entry');
-        toast('✅ Production entry logged!', 'success');
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Production entry logged!', 'success');
         document.getElementById('prodTask').value = '';
         document.getElementById('prodQty').value = '0';
         document.getElementById('prodHours').value = '0';
         document.getElementById('prodNotes').value = '';
-        // Clear date filter so the new entry is visible
-        const filterEl = document.getElementById('prodFilterDate');
-        if (filterEl) filterEl.value = '';
         loadProduction();
-      } catch (e) { toast('❌ ' + (e.message || 'Failed to save'), 'error'); }
-    }
-
-    async function uploadProductionDailyFile(input) {
-      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
-      if (!input.files || !input.files.length) return;
-      const file = input.files[0];
-      input.value = '';
-
-      const ext = (file.name || '').split('.').pop().toLowerCase();
-      if (!['xlsx', 'xls', 'csv', 'pdf', 'doc', 'docx', 'txt', 'png', 'jpg', 'jpeg'].includes(ext)) {
-        toast('Only .xlsx, .xls, .csv, .pdf, .doc, .docx, .txt, .png, .jpg files are allowed', 'error');
-        return;
-      }
-
-      const workDate = document.getElementById('prodDate')?.value || new Date().toISOString().split('T')[0];
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('category', 'Production');
-      fd.append('description', `User Production daily upload — ${workDate}`);
-      fd.append('client_id', activeClientId);
-
-      try {
-        toast(`Uploading ${file.name}…`, 'info');
-        const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
-        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return; }
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || 'Upload failed');
-        toast('✅ Daily production file uploaded', 'success');
-        loadProduction();  // refresh log table + files grid
-        loadDashboard();
-        if (typeof loadDocuments === 'function') loadDocuments();
-      } catch (e) {
-        toast(e.message || 'Upload failed', 'error');
-      }
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     async function deleteProductionLog(id) {
@@ -6380,17 +6527,6 @@
         if (!r.ok) throw new Error('Failed');
         toast('Entry deleted', 'success');
         loadProduction();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-
-    async function deleteProductionFile(id) {
-      if (!confirm('Delete this production file? This cannot be undone.')) return;
-      try {
-        const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
-        if (!r.ok) throw new Error('Failed to delete file');
-        toast('File deleted', 'success');
-        loadProductionFiles();
-        if (typeof loadDocuments === 'function') loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -6433,7 +6569,7 @@
 
       // Summary by user
       html += `<div class="card" style="margin-bottom:18px">
-        <div class="card-header"><div class="card-title">👤 User Summary (${esc(start)} to ${esc(end)})</div></div>
+        <div class="card-header"><div class="card-title">👥 Team Summary (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
           <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Avg Hrs/Day</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
@@ -6597,7 +6733,7 @@
     function navigateToSearchResult(type, id) {
       document.getElementById('searchDropdown').style.display = 'none';
       document.getElementById('globalSearchInput').value = '';
-      const panelMap = { claim: 'claims', provider: 'providers', credentialing: 'credentialing', edi: 'edi' };
+      const panelMap = { claim: 'claims', provider: 'providers', credentialing: 'credentialing', enrollment: 'enrollment', edi: 'edi' };
       navTo(panelMap[type] || 'dashboard');
     }
 
@@ -6615,54 +6751,6 @@
       const params = new URLSearchParams();
       if (activeClientId) params.set('client_id', activeClientId);
       try {
-        const testBtn = document.getElementById('btnTestNotice');
-        const healthBanner = document.getElementById('notificationHealthBanner');
-        if (testBtn) {
-          const isAdmin = currentUser && currentUser.role === 'admin';
-          testBtn.style.display = isAdmin ? '' : 'none';
-        }
-
-        if (healthBanner) healthBanner.style.display = 'none';
-        if (currentUser && currentUser.role === 'admin') {
-          try {
-            const sr = await fetch('/hub/api/notifications/status');
-            if (sr.ok) {
-              const s = await sr.json();
-              const emailOn = !!s.email_configured;
-              const smsOn = !!s.twilio_configured;
-              if (healthBanner) {
-                let html = '';
-                if (!emailOn || !smsOn) {
-                  const issues = [];
-                  if (!emailOn) issues.push('📧 Email OFF');
-                  if (!smsOn) issues.push('📱 SMS OFF');
-                  const details = [];
-                  if (!emailOn && Array.isArray(s.missing_email_fields) && s.missing_email_fields.length) {
-                    details.push(`Email: set ${s.missing_email_fields.join(', ')}`);
-                  }
-                  if (!smsOn && Array.isArray(s.missing_twilio_fields) && s.missing_twilio_fields.length) {
-                    details.push(`SMS: set ${s.missing_twilio_fields.join(', ')}`);
-                  }
-                  healthBanner.style.display = '';
-                  healthBanner.style.background = (!emailOn && !smsOn) ? 'var(--danger-light)' : '#fef3c7';
-                  healthBanner.style.border = `1px solid ${(!emailOn && !smsOn) ? 'var(--danger)' : '#f59e0b'}`;
-                  healthBanner.style.color = (!emailOn && !smsOn) ? '#b91c1c' : '#92400e';
-                  html = `<div>⚠️ <b>Notification Status:</b> ${issues.join(' | ')} — ${details.join(' | ') || 'configure providers in Render dashboard environment variables.'}</div>`;
-                  if (s.in_app_only_mode) html += `<div style="margin-top:4px;font-size:11px;color:#6b7280">ℹ️ NOTIFY_IN_APP_ONLY is ON — regular notifications are in-app only. Set to "0" in Render for real delivery.</div>`;
-                } else {
-                  healthBanner.style.display = '';
-                  healthBanner.style.background = 'var(--success-light)';
-                  healthBanner.style.border = '1px solid var(--success)';
-                  healthBanner.style.color = '#065f46';
-                  html = `<div>✅ <b>Notification Health:</b> 📧 Email (${s.sendgrid_configured ? 'SendGrid' : 'SMTP'}) + 📱 SMS (Twilio) configured</div>`;
-                  html += `<div style="font-size:11px;margin-top:4px;color:#065f46">Recipients: ${(s.email_recipients || []).join(', ')} | SMS: ${s.sms_target} | Tracking: ${(s.notify_on_users || []).join(', ')}${s.in_app_only_mode ? ' | ⚠️ IN_APP_ONLY mode (set to 0 for real delivery)' : ''}</div>`;
-                }
-                healthBanner.innerHTML = html;
-              }
-            }
-          } catch (_) { }
-        }
-
         const r = await fetch('/hub/api/alerts?' + params);
         const d = await r.json();
         const alerts = d.alerts || [];
@@ -6699,146 +6787,6 @@
           </div>
         `).join('');
       } catch (e) { console.error(e); }
-    }
-
-    async function sendTestNotice() {
-      const btn = document.getElementById('btnTestNotice');
-      const statusEl = document.getElementById('testNoticeStatus');
-      const oldText = btn ? btn.innerHTML : '';
-      try {
-        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending (may take 15-30s)...'; }
-        if (statusEl) {
-          statusEl.style.display = '';
-          statusEl.style.color = 'var(--gray-500)';
-          statusEl.innerHTML = '<div style="font-size:12px">⏳ Sending test notification — calling Twilio &amp; SendGrid directly (no threading)...<br><small>This may take up to 30 seconds. Please wait.</small></div>';
-        }
-        const r = await fetch('/hub/api/notifications/test', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.detail || 'Test notification failed');
-
-        const emailOk = d.email_sent;
-        const smsOk = d.sms_sent;
-        const emailErr = d.email_error;
-        const smsErr = d.sms_error;
-        const channels = [];
-        if (emailOk) channels.push('📧 Email');
-        if (smsOk) channels.push('📱 SMS');
-        const failures = [];
-        if (emailErr) failures.push(`Email: ${emailErr}`);
-        if (smsErr) failures.push(`SMS: ${smsErr}`);
-
-        if (channels.length) {
-          toast(`✅ Test notification delivered via ${channels.join(' + ')}!`, 'success');
-        } else if (failures.length) {
-          toast(`❌ Notification failed — ${failures[0]}`, 'error');
-        } else {
-          toast('⚠️ No email/SMS provider configured. Set TWILIO/SENDGRID credentials in Render dashboard.', 'warning');
-        }
-
-        if (statusEl) {
-          const ts = new Date().toLocaleString();
-          statusEl.style.display = '';
-          let html = `<div style="font-size:12px;margin-top:8px">`;
-          html += `<b>Last test:</b> ${ts}<br>`;
-          html += `<span style="color:${emailOk ? 'var(--success)' : 'var(--danger)'}">${emailOk ? '✅' : '❌'} Email: ${emailOk ? 'Delivered to ' + (d.email_recipients || []).join(', ') : (emailErr || 'Not configured')}</span><br>`;
-          html += `<span style="color:${smsOk ? 'var(--success)' : 'var(--danger)'}">${smsOk ? '✅' : '❌'} SMS: ${smsOk ? 'Delivered to ' + (d.sms_target || '') : (smsErr || 'Not configured')}</span>`;
-          if (d.in_app_only_mode) html += `<br><span style="color:var(--warning)">⚠️ NOTIFY_IN_APP_ONLY=1 — regular notifications are in-app only (test bypasses this)</span>`;
-          html += `</div>`;
-          statusEl.innerHTML = html;
-        }
-      } catch (e) {
-        toast(e.message || 'Failed to send test notice', 'error');
-        if (statusEl) {
-          const ts = new Date().toLocaleString();
-          statusEl.style.display = '';
-          statusEl.innerHTML = `<div style="font-size:12px;color:var(--danger);margin-top:8px"><b>Last test:</b> ${ts} — ❌ ${esc(e.message || 'Failed')}</div>`;
-        }
-      } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📨 Send Test Notice'; }
-      }
-    }
-
-    async function sendDailyReport() {
-      const btn = document.getElementById('btnDailyReport');
-      const statusEl = document.getElementById('testNoticeStatus');
-      const oldText = btn ? btn.innerHTML : '';
-      try {
-        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Sending report...'; }
-        if (statusEl) {
-          statusEl.style.display = '';
-          statusEl.innerHTML = '<div style="font-size:12px;color:var(--gray-500)">📋 Compiling daily report with production data + AI analysis... This may take 30-60 seconds.</div>';
-        }
-        const r = await fetch('/hub/api/notifications/daily-report', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.detail || 'Failed to send daily report');
-        toast('✅ MedPharma Daily Report sent! Check email + SMS.', 'success');
-        if (statusEl) {
-          const ts = new Date().toLocaleString();
-          statusEl.innerHTML = `<div style="font-size:12px;color:var(--success);margin-top:8px">✅ <b>Daily Report sent</b> at ${ts} — check email & SMS for the full report with production snapshot.</div>`;
-        }
-      } catch (e) {
-        toast(e.message || 'Failed to send daily report', 'error');
-        if (statusEl) {
-          statusEl.style.display = '';
-          statusEl.innerHTML = `<div style="font-size:12px;color:var(--danger);margin-top:8px">❌ ${esc(e.message || 'Failed to send daily report')}</div>`;
-        }
-      } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = oldText || '📋 Send Daily Report Now'; }
-      }
-    }
-
-    let notifDebugOpen = false;
-    async function toggleNotifDebug() {
-      const panel = document.getElementById('notifDebugPanel');
-      const btn = document.getElementById('btnNotifDebug');
-      notifDebugOpen = !notifDebugOpen;
-      if (!notifDebugOpen) {
-        panel.style.display = 'none';
-        btn.textContent = '🔧 Show Credential Debug';
-        return;
-      }
-      panel.style.display = '';
-      btn.textContent = '🔧 Hide Credential Debug';
-      panel.textContent = 'Loading diagnostics from server...';
-      try {
-        const r = await fetch('/hub/api/notifications/debug');
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const d = await r.json();
-        let lines = [];
-        lines.push('━━━ ENVIRONMENT VARIABLES (as seen by server) ━━━');
-        for (const [k, v] of Object.entries(d.env_vars || {})) {
-          const isSet = v && v !== 'NOT SET';
-          const icon = isSet ? '✅' : '❌';
-          lines.push(`${icon} ${k} = ${v}`);
-        }
-        lines.push('');
-        lines.push('━━━ EFFECTIVE CONFIGURATION ━━━');
-        const eff = d.effective || {};
-        lines.push(`Email Provider:  ${eff.email_provider || 'NONE'}`);
-        lines.push(`SendGrid Ready:  ${eff.sendgrid_ready ? '✅ YES' : '❌ NO'}`);
-        lines.push(`SMTP Ready:      ${eff.smtp_ready ? '✅ YES' : '❌ NO'}`);
-        lines.push(`Twilio Ready:    ${eff.twilio_ready ? '✅ YES' : '❌ NO'}`);
-        lines.push(`Email To:        ${(eff.email_recipients || []).join(', ') || 'none'}`);
-        lines.push(`SMS To:          ${eff.sms_recipient || 'none'}`);
-        lines.push(`SMS From:        ${eff.sms_from || 'NOT SET'}`);
-        lines.push(`IN_APP_ONLY:     ${eff.in_app_only_mode ? '⚠️ YES (only test bypasses this)' : '✅ NO (real delivery enabled)'}`);
-        lines.push('');
-        lines.push('━━━ CACHE vs LIVE (stale-cache detection) ━━━');
-        const cv = d.module_cache_vs_live || {};
-        const cacheMismatch = (cv.sendgrid_cached !== cv.sendgrid_live) || (cv.twilio_cached !== cv.twilio_live) || (cv.smtp_cached !== cv.smtp_live);
-        if (cacheMismatch) {
-          lines.push('⚠️ CACHE MISMATCH DETECTED — server may need restart!');
-        } else {
-          lines.push('✅ Cache matches live env vars');
-        }
-        lines.push(`  SendGrid: cached=${cv.sendgrid_cached}, live=${cv.sendgrid_live}`);
-        lines.push(`  Twilio:   cached=${cv.twilio_cached}, live=${cv.twilio_live}`);
-        lines.push(`  SMTP:     cached=${cv.smtp_cached}, live=${cv.smtp_live}`);
-        lines.push(`  InApp:    cached=${cv.in_app_cached}, live=${cv.in_app_live}`);
-        panel.textContent = lines.join('\n');
-      } catch (e) {
-        panel.textContent = `Error loading debug info: ${e.message}`;
-      }
     }
 
     // Load alerts on dashboard too — update badge count

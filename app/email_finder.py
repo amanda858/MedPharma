@@ -429,11 +429,13 @@ async def find_emails_for_lab(
                         # Skip obvious non-professional emails
                         if any(skip in email.lower() for skip in [
                             'info@', 'contact@', 'support@', 'admin@', 'noreply', 
-                            'sales@', 'marketing@', 'hello@', 'test', 'example'
+                            'sales@', 'marketing@', 'hello@', 'test', 'example',
+                            'privacy@', 'legal@', 'hr@', 'jobs@', 'careers@'
                         ]):
                             continue
-                        # Prefer emails that look like they belong to people
-                        if '.' in email.split('@')[0] and len(email.split('@')[0].split('.')) >= 2:
+                        # Accept emails that look professional (not just generic ones)
+                        username = email.split('@')[0].lower()
+                        if len(username) >= 2 and not username.startswith(('www', 'mail', 'web')):
                             quality_emails.append(email)
                     
                     if quality_emails:
@@ -446,12 +448,12 @@ async def find_emails_for_lab(
                                 "full_name": None,
                                 "position": "",
                                 "is_decision_maker": False,
-                                "confidence": 70,  # Higher confidence for scraped emails
+                                "confidence": 65,  # Good confidence for scraped emails
                                 "verified": False,
                                 "source": "website_scrape",
                                 "domain": live_domain,
                             }
-                            for email in quality_emails[:5]  # Limit to 5 quality emails
+                            for email in quality_emails[:3]  # Limit to 3 quality emails
                         ]
                         result["error"] = None
                         return result

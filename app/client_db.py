@@ -1,16 +1,12 @@
 """Database — MedPharma Client Hub: claims_master, payments, notes_log,
-credentialing, edi_setup, providers, clients, sessions."""
+credentialing, enrollment, edi_setup, providers, clients, sessions."""
 
 import sqlite3
 import os
 import hashlib
 import secrets
-import logging
 from datetime import datetime, date, timedelta
 from app.config import DATABASE_PATH
-
-log = logging.getLogger(__name__)
-IS_PROD = bool(os.getenv("PORT"))
 
 
 def get_db():
@@ -31,17 +27,6 @@ def _hash_pw(password: str, salt: str) -> str:
 # ─── Schema ───────────────────────────────────────────────────────────────────
 
 def init_client_hub_db():
-    # ── SAFETY: Record whether DB file existed BEFORE we create schema ──
-    # After CREATE TABLE statements, the file is always > 4KB even with no data.
-    # We need to know if it was a pre-existing DB with real data.
-    db_file_existed = os.path.exists(DATABASE_PATH) and os.path.getsize(DATABASE_PATH) > 4096
-
-    if IS_PROD:
-        if not os.path.ismount("/data"):
-            log.error("🚨 PERSISTENT DISK NOT MOUNTED at /data — data will be ephemeral!")
-        if not db_file_existed:
-            log.warning("⚠️  No existing database found — will seed fresh accounts")
-
     conn = get_db()
     cur = conn.cursor()
     cur.executescript("""
@@ -146,7 +131,7 @@ def init_client_hub_db():
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id   INTEGER NOT NULL,
             ClaimKey    TEXT DEFAULT '',
-            Module      TEXT DEFAULT 'Claim',  -- Claim, Credentialing, EDI
+            Module      TEXT DEFAULT 'Claim',  -- Claim, Credentialing, Enrollment, EDI
             RefID       INTEGER DEFAULT 0,
             Note        TEXT NOT NULL,
             Author      TEXT DEFAULT '',
@@ -195,6 +180,28 @@ def init_client_hub_db():
             FOREIGN KEY (provider_id) REFERENCES providers(id)
         );
 
+        -- ── enrollment ─────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS enrollment (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id           INTEGER NOT NULL,
+            provider_id         INTEGER,
+            ProviderName        TEXT DEFAULT '',
+            Payor               TEXT DEFAULT '',
+            EnrollType          TEXT DEFAULT 'Enrollment', -- Enrollment, Disenrollment, Revalidation
+            Status              TEXT DEFAULT 'Not Started',
+            SubmittedDate       TEXT DEFAULT '',
+            FollowUpDate        TEXT DEFAULT '',
+            ApprovedDate        TEXT DEFAULT '',
+            EffectiveDate       TEXT DEFAULT '',
+            Owner               TEXT DEFAULT '',
+            Notes               TEXT DEFAULT '',
+            sub_profile         TEXT DEFAULT '',
+            created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id),
+            FOREIGN KEY (provider_id) REFERENCES providers(id)
+        );
+
         -- ── EDI / ERA / EFT setup ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS edi_setup (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +231,7 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_payments_claim  ON payments(ClaimKey);
         CREATE INDEX IF NOT EXISTS idx_notes_claim     ON notes_log(ClaimKey);
         CREATE INDEX IF NOT EXISTS idx_cred_client     ON credentialing(client_id);
+        CREATE INDEX IF NOT EXISTS idx_enroll_client   ON enrollment(client_id);
         CREATE INDEX IF NOT EXISTS idx_edi_client      ON edi_setup(client_id);
         CREATE INDEX IF NOT EXISTS idx_prov_client     ON providers(client_id);
 
@@ -346,7 +354,7 @@ def init_client_hub_db():
 
     # ── Migrate existing DBs: add sub_profile column to data tables ───────
     sub_profile_tables = ["claims_master", "payments", "providers",
-                          "credentialing", "edi_setup"]
+                          "credentialing", "enrollment", "edi_setup"]
     for tbl in sub_profile_tables:
         cur.execute(f"PRAGMA table_info({tbl})")
         cols = {row[1] for row in cur.fetchall()}
@@ -354,19 +362,16 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
     conn.commit()
 
-    # ── Seed accounts if needed ──────────────────────────────────────────────
-    cur.execute("SELECT Count(*) FROM clients")
+    cur.execute("SELECT COUNT(*) FROM clients")
     total = cur.fetchone()[0]
 
     if total == 0:
-        # Always seed when clients table is empty — users need to be able to log in.
-        # The disk-mount warning above already alerts us if this is a disk-loss situation.
-        if IS_PROD and db_file_existed:
-            log.error("⚠️  clients table empty but DB file pre-existed — possible corruption. Seeding accounts anyway.")
-        log.info("Seeding initial client accounts…")
         _seed_data(conn)
     else:
-        # ── Safe migrations: only ADD missing accounts, never overwrite existing data ──
+        # Auto-migrate: fix client profile data
+        cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
+        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
         # Ensure jessica account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
@@ -375,35 +380,32 @@ def init_client_hub_db():
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
                 ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
             )
-        else:
-            # Only upgrade role if still 'client' — don't touch password or other fields
-            cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
-
-        # Ensure rcm account exists as admin — do NOT reset password on every startup!
+        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
+        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
+        # Reset rcm password so login works
+        rcm_salt = secrets.token_hex(16)
+        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
+                    (_hash_pw("rcm123", rcm_salt), rcm_salt))
+        # Ensure rcm account exists as admin
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
         if cur.fetchone()[0] == 0:
-            rcm_salt = secrets.token_hex(16)
+            rcm_salt2 = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt), rcm_salt, "MedPharma SC", "RCM", "", "admin")
+                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
             )
-        else:
-            # Only upgrade role if still 'client' — preserve existing password
-            cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
-
-        # Ensure TruPath client exists
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username='trupath'")
+        # Ensure TruPath client exists (separate from rcm user)
+        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
         if cur.fetchone()[0] == 0:
             tpsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
                 ("trupath", _hash_pw("trupath123", tpsalt), tpsalt, "TruPath", "TruPath", "", "client")
             )
-
-        # NOTE: Removed destructive operations that ran every startup:
-        # - No longer resetting rcm password (was generating new salt each boot, breaking sessions)
-        # - No longer blanking eric/Luminary profile fields (was wiping user-entered data)
-        # - No longer overwriting eric contact_name/email (preserves manual edits)
+        # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
+        cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
+                       ptan_group='', ptan_individual='', specialty=''
+                       WHERE username='eric' AND practice_type='MHP+OMT'""")
         conn.commit()
 
     conn.close()
@@ -438,13 +440,6 @@ def _seed_data(conn):
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
-    )
-
-    # Client 3 — KinderCare
-    s3 = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("kindercare", _hash_pw("KinderCare123!", s3), s3, "KinderCare", "KinderCare Admin", "", "client")
     )
 
     # Jessica — MedPharma staff user (admin), NOT a client
@@ -1121,6 +1116,74 @@ def delete_credentialing(rec_id: int):
         conn.close()
 
 
+# ─── Enrollment ───────────────────────────────────────────────────────────────
+
+def get_enrollment(client_id: int = None, status: str = None, sub_profile: str = None):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        q = "SELECT * FROM enrollment WHERE 1=1"
+        params = []
+        if client_id is not None:
+            q += " AND client_id=?"; params.append(client_id)
+        if status:
+            q += " AND Status=?"; params.append(status)
+        if sub_profile:
+            q += " AND sub_profile=?"; params.append(sub_profile)
+        q += " ORDER BY updated_at DESC"
+        cur.execute(q, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return rows
+
+
+def create_enrollment(data: dict) -> int:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO enrollment
+            (client_id,provider_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (data["client_id"], data.get("provider_id"), data.get("ProviderName", ""),
+             data.get("Payor", ""), data.get("EnrollType", "Enrollment"), data.get("Status", "Not Started"),
+             data.get("SubmittedDate", ""), data.get("FollowUpDate", ""),
+             data.get("ApprovedDate", ""), data.get("EffectiveDate", ""),
+             data.get("Owner", ""), data.get("Notes", ""), data.get("sub_profile", "")))
+        conn.commit()
+        eid = cur.lastrowid
+    finally:
+        conn.close()
+    return eid
+
+
+def update_enrollment(rec_id: int, data: dict):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        allowed = ["ProviderName", "Payor", "EnrollType", "Status", "SubmittedDate",
+                   "FollowUpDate", "ApprovedDate", "EffectiveDate", "Owner", "Notes", "sub_profile"]
+        parts, params = ["updated_at=?"], [datetime.now().isoformat()]
+        for f in allowed:
+            if f in data:
+                parts.append(f"{f}=?")
+                params.append(data[f])
+        params.append(rec_id)
+        cur.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_enrollment(rec_id: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM enrollment WHERE id=?", (rec_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ─── EDI Setup ────────────────────────────────────────────────────────────────
 
 def get_edi(client_id: int = None, sub_profile: str = None):
@@ -1318,6 +1381,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {base_cond} GROUP BY Status", base_p)
         cred_stats = {r[0]: r[1] for r in cur.fetchall()}
 
+        # Enrollment stats (no DOS column — use base_cond)
+        cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {base_cond} GROUP BY Status", base_p)
+        enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
+
         # Client profile
         profile = {}
         if client_id:
@@ -1354,6 +1421,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denial_categories": denial_cats,
             "payment_trend": pay_trend,
             "credentialing_stats": cred_stats,
+            "enrollment_stats": enroll_stats,
             "profile": profile,
         }
     finally:
@@ -1444,6 +1512,13 @@ def get_daily_account_summary():
         cred_pending        = cred_stats.get("Pending", 0) + cred_stats.get("In Progress", 0) + cred_stats.get("Submitted", 0)
         cred_not_started    = cred_stats.get("Not Started", 0)
 
+        # ── Enrollment KPIs ──
+        cur.execute("SELECT Status, COUNT(*) FROM enrollment GROUP BY Status")
+        enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
+        enroll_total     = sum(enroll_stats.values())
+        enroll_approved  = enroll_stats.get("Approved", 0) + enroll_stats.get("Active", 0) + enroll_stats.get("Enrolled", 0)
+        enroll_pending   = enroll_stats.get("Pending", 0) + enroll_stats.get("In Progress", 0) + enroll_stats.get("Submitted", 0)
+
         # ── EDI KPIs ──
         cur.execute("SELECT EDIStatus, COUNT(*) FROM edi_setup GROUP BY EDIStatus")
         edi_stats = {r[0]: r[1] for r in cur.fetchall()}
@@ -1455,13 +1530,6 @@ def get_daily_account_summary():
 
         # ── Today's audit activity ──
         today_actions = q1("SELECT COUNT(*) FROM audit_log WHERE created_at >= ?", [today_str])
-
-        # ── User production uploads / logs today ──
-        production_logs_today = q1("SELECT COUNT(*) FROM team_production WHERE work_date=?", [today_str])
-        production_files_today = q1(
-            "SELECT COUNT(*) FROM client_files WHERE date(created_at)=? AND lower(category)='production'",
-            [today_str],
-        )
 
         return {
             # Claims
@@ -1499,6 +1567,11 @@ def get_daily_account_summary():
             "cred_pending": cred_pending,
             "cred_not_started": cred_not_started,
             "cred_stats": cred_stats,
+            # Enrollment
+            "enroll_total": enroll_total,
+            "enroll_approved": enroll_approved,
+            "enroll_pending": enroll_pending,
+            "enroll_stats": enroll_stats,
             # EDI
             "edi_total": edi_total,
             "edi_live": edi_live,
@@ -1506,132 +1579,6 @@ def get_daily_account_summary():
             # General
             "total_clients": total_clients,
             "today_actions": today_actions,
-            "production_logs_today": production_logs_today,
-            "production_files_today": production_files_today,
-            "production_submissions_today": int(production_logs_today) + int(production_files_today),
-        }
-    finally:
-        conn.close()
-
-
-def has_production_data_today(username: str, work_date: str) -> bool:
-    """Return True if user has either logged production or uploaded a Production file for the date."""
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        uname = (username or "").strip().lower()
-
-        cur.execute(
-            "SELECT COUNT(*) FROM team_production WHERE work_date=? AND lower(username)=?",
-            (work_date, uname),
-        )
-        log_count = int((cur.fetchone() or [0])[0] or 0)
-
-        cur.execute(
-            "SELECT COUNT(*) FROM client_files WHERE date(created_at)=? AND lower(category)='production' AND lower(uploaded_by)=?",
-            (work_date, uname),
-        )
-        file_count = int((cur.fetchone() or [0])[0] or 0)
-
-        return (log_count + file_count) > 0
-    finally:
-        conn.close()
-
-
-def get_user_production_snapshot(work_date: str = None) -> dict:
-    """Get per-user production breakdown for a given date (default: today).
-    Returns dict with user summaries and detailed entries."""
-    from datetime import date as _date
-    if not work_date:
-        work_date = _date.today().isoformat()
-
-    def _canonical_username(name: str) -> str:
-        n = (name or "").strip().lower()
-        if n in {"jess", "jessica"}:
-            return "jessica"
-        if n in {"admin", "eric"}:
-            return "eric"
-        return n
-
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-
-        # Per-user aggregated stats (alias-normalized)
-        cur.execute("""
-            SELECT username, category, quantity, time_spent
-            FROM team_production
-            WHERE work_date=?
-            ORDER BY created_at DESC
-        """, (work_date,))
-        agg = {}
-        for row in cur.fetchall():
-            raw_username = row[0] or ""
-            user = _canonical_username(raw_username)
-            if not user:
-                continue
-            if user not in agg:
-                agg[user] = {
-                    "username": user,
-                    "entry_count": 0,
-                    "total_qty": 0,
-                    "total_hours": 0.0,
-                    "categories_set": set(),
-                }
-            agg[user]["entry_count"] += 1
-            agg[user]["total_qty"] += int(row[2] or 0)
-            agg[user]["total_hours"] += float(row[3] or 0)
-            if row[1]:
-                agg[user]["categories_set"].add(str(row[1]))
-
-        user_stats = []
-        for user in sorted(agg.keys(), key=lambda u: agg[u]["total_hours"], reverse=True):
-            item = agg[user]
-            user_stats.append({
-                "username": item["username"],
-                "entry_count": int(item["entry_count"]),
-                "total_qty": int(item["total_qty"]),
-                "total_hours": round(float(item["total_hours"]), 1),
-                "categories": ",".join(sorted(item["categories_set"])),
-            })
-
-        # Detailed entries for the day
-        cur.execute("""
-            SELECT username, category, task_description, quantity, time_spent, notes
-            FROM team_production
-            WHERE work_date=?
-            ORDER BY username, created_at DESC
-        """, (work_date,))
-        entries = []
-        for row in cur.fetchall():
-            entries.append({
-                "username": _canonical_username(row[0]),
-                "category": row[1] or "",
-                "task_description": row[2] or "",
-                "quantity": int(row[3] or 0),
-                "time_spent": round(float(row[4] or 0), 1),
-                "notes": row[5] or "",
-            })
-
-        # File uploads for the day
-        cur.execute("""
-            SELECT uploaded_by, COUNT(*) as file_count
-            FROM client_files
-            WHERE date(created_at)=? AND lower(category)='production'
-            GROUP BY lower(uploaded_by)
-        """, (work_date,))
-        file_uploads = {}
-        for row in cur.fetchall():
-            key = _canonical_username(row[0])
-            file_uploads[key] = int(file_uploads.get(key, 0)) + int(row[1] or 0)
-
-        return {
-            "work_date": work_date,
-            "user_stats": user_stats,
-            "entries": entries,
-            "file_uploads": file_uploads,
-            "total_entries": len(entries),
-            "total_users": len(user_stats),
         }
     finally:
         conn.close()
@@ -1738,8 +1685,8 @@ def get_alerts(client_id: int = None):
                                "detail": f"Review and initiate revalidation"})
                 break  # Show most urgent only
 
-        # 3. Overdue follow-ups (credentialing)
-        for tbl, label in [("credentialing", "Credentialing")]:
+        # 3. Overdue follow-ups (credentialing & enrollment)
+        for tbl, label in [("credentialing", "Credentialing"), ("enrollment", "Enrollment")]:
             overdue = cur.execute(
                 f"""SELECT COUNT(*) FROM {tbl} {cond}
                     {'AND' if cond else 'WHERE'} FollowUpDate != '' AND FollowUpDate < date('now')
@@ -1783,7 +1730,7 @@ def get_alerts(client_id: int = None):
 # ─── Global Search ────────────────────────────────────────────────────────
 
 def global_search(query: str, client_id: int = None, limit: int = 30):
-    """Search across claims, providers, credentialing, EDI."""
+    """Search across claims, providers, credentialing, enrollment, EDI."""
     if not query or not query.strip():
         return []
     conn = get_db()
@@ -1819,6 +1766,16 @@ def global_search(query: str, client_id: int = None, limit: int = 30):
                         ProviderName || ' → ' || Payor as title,
                         CredType || ' — ' || Owner as subtitle, Status as status
                         FROM credentialing WHERE (
+                            ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
+                        ) {cond} ORDER BY updated_at DESC LIMIT ?""",
+                    [q]*3 + p_base + [limit])
+        results += [dict(r) for r in cur.fetchall()]
+
+        # Enrollment
+        cur.execute(f"""SELECT id, 'enrollment' as type,
+                        ProviderName || ' → ' || Payor as title,
+                        EnrollType || ' — ' || Owner as subtitle, Status as status
+                        FROM enrollment WHERE (
                             ProviderName LIKE ? OR Payor LIKE ? OR Owner LIKE ?
                         ) {cond} ORDER BY updated_at DESC LIMIT ?""",
                     [q]*3 + p_base + [limit])
@@ -1898,8 +1855,8 @@ def export_claims(client_id: int = None, sub_profile: str = None):
 
 
 def export_table(table: str, client_id: int = None):
-    """Generic export for credentialing, edi_setup, providers."""
-    allowed_tables = {"credentialing", "edi_setup", "providers"}
+    """Generic export for credentialing, enrollment, edi_setup, providers."""
+    allowed_tables = {"credentialing", "enrollment", "edi_setup", "providers"}
     if table not in allowed_tables:
         return []
     conn = get_db()

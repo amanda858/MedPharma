@@ -1510,7 +1510,7 @@ async def export_emails_csv():
             l.phone
         FROM lead_emails e
         JOIN saved_leads l ON e.npi = l.npi
-        WHERE e.confidence >= 60  -- Only export quality emails
+        WHERE e.confidence >= 50  -- Include good quality emails
         ORDER BY l.organization_name, e.is_decision_maker DESC, e.confidence DESC
     """).fetchall()
     db.close()
