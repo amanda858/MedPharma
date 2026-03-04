@@ -27,26 +27,35 @@ app = FastAPI(
 
 def _backup_db():
     """Create a timestamped backup of the SQLite database before any startup modifications."""
-    if not os.path.exists(DATABASE_PATH):
-        return
-    size = os.path.getsize(DATABASE_PATH)
-    if size < 4096:  # empty/fresh DB, nothing worth backing up
-        return
-    backup_dir = os.path.join(os.path.dirname(DATABASE_PATH), "backups")
-    os.makedirs(backup_dir, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(backup_dir, f"leads_{ts}.db")
-    shutil.copy2(DATABASE_PATH, dest)
-    log.info(f"DB backup created: {dest} ({size:,} bytes)")
-    # Keep only the 5 most recent backups
-    backups = sorted(
-        [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")],
-        key=os.path.getmtime,
-        reverse=True
-    )
-    for old in backups[5:]:
-        os.remove(old)
-        log.info(f"Removed old backup: {old}")
+    try:
+        if not os.path.exists(DATABASE_PATH):
+            log.info("No database file found - skipping backup")
+            return
+        size = os.path.getsize(DATABASE_PATH)
+        if size < 4096:  # empty/fresh DB, nothing worth backing up
+            log.info(f"Database too small ({size} bytes) - skipping backup")
+            return
+        backup_dir = os.path.join(os.path.dirname(DATABASE_PATH), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(backup_dir, f"leads_{ts}.db")
+        log.info(f"Creating DB backup: {size:,} bytes")
+        shutil.copy2(DATABASE_PATH, dest)
+        log.info(f"DB backup created: {dest}")
+        
+        # Keep only the 5 most recent backups
+        backups = sorted(
+            [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")],
+            key=os.path.getmtime,
+            reverse=True
+        )
+        for old in backups[5:]:
+            os.remove(old)
+            log.info(f"Removed old backup: {old}")
+    except Exception as e:
+        log.error(f"DB backup failed: {e}")
+        # Don't fail startup for backup issues
+        pass
 
 
 @app.on_event("startup")
@@ -55,37 +64,46 @@ async def startup():
 
     # ── Safety: check persistent disk on production ──
     if IS_PROD:
-        if not os.path.ismount("/data"):
-            log.error("🚨 PERSISTENT DISK NOT MOUNTED at /data — data may be ephemeral!")
-        else:
-            log.info("✅ Persistent disk mounted at /data")
+        try:
+            if not os.path.ismount("/data"):
+                log.error("🚨 PERSISTENT DISK NOT MOUNTED at /data — data may be ephemeral!")
+            else:
+                log.info("✅ Persistent disk mounted at /data")
+        except Exception as e:
+            log.error(f"Error checking disk mount: {e}")
 
     # ── Backup existing DB before any schema migrations ──
     try:
         _backup_db()
-    except Exception:
-        log.exception("Startup warning: DB backup failed")
+    except Exception as e:
+        log.error(f"Startup error: DB backup failed: {e}")
 
     # Keep service available even if secondary startup tasks fail.
     try:
         init_db()
-    except Exception:
-        log.exception("Startup warning: leads DB init failed")
+        log.info("✅ Leads database initialized")
+    except Exception as e:
+        log.error(f"Startup error: leads DB init failed: {e}")
 
     try:
         init_client_hub_db()
-    except Exception:
-        log.exception("Startup failed during DB init")
+        log.info("✅ Client hub database initialized")
+    except Exception as e:
+        log.error(f"Startup error: client DB init failed: {e}")
 
     try:
         normalize_claim_statuses()
-    except Exception:
-        log.exception("Startup warning: normalize_claim_statuses failed")
+        log.info("✅ Claim statuses normalized")
+    except Exception as e:
+        log.error(f"Startup error: normalize_claim_statuses failed: {e}")
 
     try:
         start_daily_scheduler()
-    except Exception:
-        log.exception("Startup warning: notification scheduler failed")
+        log.info("✅ Daily scheduler started")
+    except Exception as e:
+        log.error(f"Startup error: notification scheduler failed: {e}")
+
+    log.info("🚀 Hub service startup complete")
 
 
 app.include_router(client_hub_router)
