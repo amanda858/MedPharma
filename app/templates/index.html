@@ -950,6 +950,9 @@
                     <button class="btn btn-primary" onclick="enrichAllSaved()">
                         ⚡ Enrich All Saved Leads
                     </button>
+                    <button class="btn btn-success" onclick="exportEmailsCSV()">
+                        📊 Export Quality Emails (CSV)
+                    </button>
                     <button class="btn btn-secondary" onclick="loadIntelligence()">
                         ↻ Refresh
                     </button>
@@ -2047,13 +2050,8 @@
         // ──────────────────────────────────────────────────────────────
         // Export
         // ──────────────────────────────────────────────────────────────
-        function exportCSV(source) {
-            const params = new URLSearchParams({ source });
-            const state = document.getElementById('savedFilterState')?.value;
-            const status = document.getElementById('savedFilterStatus')?.value;
-            if (state) params.set('state', state);
-            if (status) params.set('status', status);
-            window.open(withBase(`/api/export/csv?${params}`), '_blank');
+        function exportEmailsCSV() {
+            window.open(withBase('/admin/leads/api/export/emails/csv'), '_blank');
         }
 
         function exportSearchCSV() {

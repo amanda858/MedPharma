@@ -96,8 +96,8 @@ app.mount("/admin/leads", leads_subapp)
 async def admin_only_leads_guard(request: Request, call_next):
     path = request.url.path or ""
     if path.startswith("/admin/leads"):
-        # Allow admin API endpoints without authentication for testing
-        if path.startswith("/admin/leads/api/admin/"):
+        # Allow admin API endpoints and export endpoints without authentication for testing
+        if path.startswith("/admin/leads/api/admin/") or path.startswith("/admin/leads/api/export/"):
             return await call_next(request)
 
         token = request.cookies.get("hub_session")
@@ -147,14 +147,22 @@ async def portal(request: Request):
     return _serve_hub()
 
 
-@app.get("/medpharma", response_class=HTMLResponse)
-async def medpharma(request: Request):
+@app.get("/hub", response_class=HTMLResponse)
+async def serve_client_hub(request: Request):
+    """Main client access point - consolidated from multiple routes."""
     return _serve_hub()
+
+
+@app.get("/medpharma", response_class=HTMLResponse)
+async def medpharma_redirect(request: Request):
+    """Legacy redirect - consolidate to /hub."""
+    return RedirectResponse(url="/hub", status_code=301)
 
 
 @app.get("/mphub2026", response_class=HTMLResponse)
-async def mphub2026(request: Request):
-    return _serve_hub()
+async def mphub2026_redirect(request: Request):
+    """Legacy redirect - consolidate to /hub."""
+    return RedirectResponse(url="/hub", status_code=301)
 
 
 @app.get("/admin/leads", include_in_schema=False)

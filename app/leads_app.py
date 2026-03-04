@@ -11,8 +11,6 @@ from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
-from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -1212,11 +1210,44 @@ async def enrich_multiple_leads(items: List[BulkEnrichItem]):
 
 @app.get("/api/enrich/all")
 async def list_enrichments(
-    min_score: int = Query(0, ge=0, le=100),
+    min_score: int = Query(70, ge=0, le=100),  # Increased default to 70 for quality
     service: Optional[str] = Query(None, description="Filter: Billing Services, Payor Contracting, Workflow Support"),
+    quality_only: bool = Query(True, description="Only show high-quality leads"),
 ):
     """List all enriched leads with optional filters."""
     enrichments = get_all_enrichments(min_overall=min_score, service_filter=service)
+    
+    if quality_only:
+        # Filter for quality leads only
+        quality_enrichments = []
+        for e in enrichments:
+            # Must have valid NPI
+            if not e.get("npi") or not str(e.get("npi", "")).isdigit() or len(str(e.get("npi"))) != 10:
+                continue
+                
+            # Must have organization name
+            if not e.get("organization_name") or e.get("organization_name", "").strip() == "":
+                continue
+                
+            # Must have at least one service need
+            services_needed = e.get("services_needed", [])
+            if not services_needed or len(services_needed) == 0:
+                continue
+                
+            # Must have overall score >= 60
+            overall_score = e.get("overall_score", 0)
+            if overall_score < 60:
+                continue
+                
+            # Must have authorized official
+            auth_official = e.get("authorized_official", {})
+            if not auth_official.get("first_name") or not auth_official.get("last_name"):
+                continue
+                
+            quality_enrichments.append(e)
+        
+        enrichments = quality_enrichments
+    
     return {"enrichments": enrichments, "count": len(enrichments)}
 
 
@@ -1455,9 +1486,9 @@ async def enrich_all_leads():
     return {"message": f"Enriched {enriched} out of {total_processed} leads with NPI data"}
 
 
-@app.get("/api/export/emails/excel")
-async def export_emails_excel():
-    """Export all lead emails to Excel file for marketing outreach."""
+@app.get("/api/export/emails/csv")
+async def export_emails_csv():
+    """Export all lead emails to CSV file for marketing outreach."""
     import csv
     import io
 
@@ -1479,6 +1510,7 @@ async def export_emails_excel():
             l.phone
         FROM lead_emails e
         JOIN saved_leads l ON e.npi = l.npi
+        WHERE e.confidence >= 60  -- Only export quality emails
         ORDER BY l.organization_name, e.is_decision_maker DESC, e.confidence DESC
     """).fetchall()
     db.close()
@@ -1495,10 +1527,10 @@ async def export_emails_excel():
     # If no emails, add a helpful message
     if not emails:
         writer.writerow([
-            "NO EMAILS FOUND", "", "", "", "", "", "", "", "", "", "", ""
+            "NO QUALITY EMAILS FOUND", "", "", "", "", "", "", "", "", "", "", ""
         ])
         writer.writerow([
-            "Run POST /api/admin/enrich-leads then POST /api/admin/enrich-emails first", "", "", "", "", "", "", "", "", "", "", ""
+            "Run enrichment and email finding first. Only emails with 60%+ confidence are exported.", "", "", "", "", "", "", "", "", "", "", ""
         ])
     else:
         # Data

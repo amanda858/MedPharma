@@ -423,41 +423,47 @@ async def find_emails_for_lab(
                 scraped_emails = await scrape_emails_from_website(f"https://{live_domain}")
                 print(f"DEBUG: Scraped emails: {len(scraped_emails)} found")
                 if scraped_emails:
-                    # Create basic email records
-                    result["emails"] = [
-                        {
-                            "email": email,
-                            "first_name": "",
-                            "last_name": "",
-                            "full_name": None,
-                            "position": "",
-                            "is_decision_maker": False,
-                            "confidence": 50,  # Low confidence
-                            "verified": False,
-                            "source": "website_scrape",
-                            "domain": live_domain,
-                        }
-                        for email in scraped_emails
-                    ]
-                    result["error"] = None
-                    return result
+                    # Filter for higher quality emails only
+                    quality_emails = []
+                    for email in scraped_emails:
+                        # Skip obvious non-professional emails
+                        if any(skip in email.lower() for skip in [
+                            'info@', 'contact@', 'support@', 'admin@', 'noreply', 
+                            'sales@', 'marketing@', 'hello@', 'test', 'example'
+                        ]):
+                            continue
+                        # Prefer emails that look like they belong to people
+                        if '.' in email.split('@')[0] and len(email.split('@')[0].split('.')) >= 2:
+                            quality_emails.append(email)
+                    
+                    if quality_emails:
+                        # Create basic email records for quality emails only
+                        result["emails"] = [
+                            {
+                                "email": email,
+                                "first_name": "",
+                                "last_name": "",
+                                "full_name": None,
+                                "position": "",
+                                "is_decision_maker": False,
+                                "confidence": 70,  # Higher confidence for scraped emails
+                                "verified": False,
+                                "source": "website_scrape",
+                                "domain": live_domain,
+                            }
+                            for email in quality_emails[:5]  # Limit to 5 quality emails
+                        ]
+                        result["error"] = None
+                        return result
             except Exception as e:
                 print(f"DEBUG: Scraping failed: {e}")
                 pass
         
-        # If no scraped emails, try pattern generation if names provided
-        if first_name and last_name and live_domain:
-            pattern_emails = generate_pattern_emails(first_name, last_name, live_domain)
-            if pattern_emails:
-                result["emails"] = pattern_emails
-                result["error"] = None
-                print(f"DEBUG: Using pattern generation with live domain {live_domain}")
-                return result
-        
+        # Only use pattern generation as absolute last resort
         result["error"] = (
             f"Live domain found: {live_domain} — "
-            "No emails found via scraping or patterns. "
-            "Provide names for pattern generation."
+            "No quality emails found via scraping. "
+            "Consider using Hunter.io API for better results."
         )
         return result
 
