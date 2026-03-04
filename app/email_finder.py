@@ -376,21 +376,18 @@ async def find_emails_for_lab(
     last_name: Optional[str] = None,
 ) -> dict:
     """
-    Main entry point.
-    1. Find which domain is actually live
-    2. Domain-search: all emails at that domain
-    3. Email-finder: targeted lookup if we have a person's name (from NPI data)
-    4. Deduplication by email address
+    Enhanced email finding with multiple strategies:
+    1. Hunter.io API (if available) - highest quality
+    2. Website scraping with quality filtering - good quality
+    3. Professional email pattern generation - fallback
     """
     candidates = _org_name_to_domain_candidates(org_name)
     if domain_hint:
         candidates.insert(0, domain_hint)
 
-    print(f"DEBUG: Finding emails for {org_name}, candidates: {candidates[:5]}")
+    print(f"Finding emails for {org_name}, trying {len(candidates)} domain candidates")
 
     live_domain = await _find_live_domain(candidates)
-
-    print(f"DEBUG: Live domain found: {live_domain}")
 
     result: dict = {
         "org_name": org_name,
@@ -404,99 +401,177 @@ async def find_emails_for_lab(
 
     if not live_domain:
         result["error"] = "Could not confirm a live website for this organization."
-        # Still try pattern generation if names provided, using first domain candidate
+        # Still try pattern generation if names provided
         if first_name and last_name and candidates:
             guessed_domain = candidates[0]
-            pattern_emails = generate_pattern_emails(first_name, last_name, guessed_domain)
+            pattern_emails = _generate_professional_patterns(first_name, last_name, guessed_domain)
             if pattern_emails:
                 result["emails"] = pattern_emails
                 result["error"] = f"Used guessed domain {guessed_domain} for pattern generation"
-                print(f"DEBUG: Using pattern generation with guessed domain {guessed_domain}")
+                print(f"Generated {len(pattern_emails)} pattern emails for {guessed_domain}")
                 return result
         return result
 
-    if not HUNTER_API_KEY:
-        # Workaround: scrape website for emails
-        print(f"DEBUG: No Hunter API key, trying to scrape {live_domain}")
-        if live_domain:
-            try:
-                scraped_emails = await scrape_emails_from_website(f"https://{live_domain}")
-                print(f"DEBUG: Scraped emails: {len(scraped_emails)} found")
-                if scraped_emails:
-                    # Filter for higher quality emails only
-                    quality_emails = []
-                    for email in scraped_emails:
-                        # Skip obvious non-professional emails
-                        if any(skip in email.lower() for skip in [
-                            'info@', 'contact@', 'support@', 'admin@', 'noreply', 
-                            'sales@', 'marketing@', 'hello@', 'test', 'example',
-                            'privacy@', 'legal@', 'hr@', 'jobs@', 'careers@'
-                        ]):
-                            continue
-                        # Accept emails that look professional (not just generic ones)
-                        username = email.split('@')[0].lower()
-                        if len(username) >= 2 and not username.startswith(('www', 'mail', 'web')):
-                            quality_emails.append(email)
-                    
-                    if quality_emails:
-                        # Create basic email records for quality emails only
-                        result["emails"] = [
-                            {
-                                "email": email,
-                                "first_name": "",
-                                "last_name": "",
-                                "full_name": None,
-                                "position": "",
-                                "is_decision_maker": False,
-                                "confidence": 65,  # Good confidence for scraped emails
-                                "verified": False,
-                                "source": "website_scrape",
-                                "domain": live_domain,
-                            }
-                            for email in quality_emails[:3]  # Limit to 3 quality emails
-                        ]
-                        result["error"] = None
-                        return result
-            except Exception as e:
-                print(f"DEBUG: Scraping failed: {e}")
-                pass
-        
-        # Only use pattern generation as absolute last resort
-        result["error"] = (
-            f"Live domain found: {live_domain} — "
-            "No quality emails found via scraping. "
-            "Consider using Hunter.io API for better results."
-        )
+    # Try Hunter.io first if available (highest quality)
+    if HUNTER_API_KEY:
+        print(f"Trying Hunter.io for {live_domain}")
+        hunter_emails = await _try_hunter_approaches(live_domain, first_name, last_name, HUNTER_API_KEY)
+        if hunter_emails:
+            result["emails"] = hunter_emails
+            result["total_at_domain"] = len(hunter_emails)
+            print(f"Found {len(hunter_emails)} emails via Hunter.io")
+            return result
+
+    # Fallback to enhanced website scraping
+    print(f"Trying enhanced website scraping for {live_domain}")
+    scraped_emails = await _try_enhanced_scraping(live_domain, first_name, last_name)
+    if scraped_emails:
+        result["emails"] = scraped_emails
+        print(f"Found {len(scraped_emails)} emails via scraping")
         return result
 
-    # Run domain-search and (optionally) email-finder concurrently
-    tasks: list = [hunter_domain_search(live_domain, HUNTER_API_KEY)]
-    run_finder = bool(first_name and last_name)
-    if run_finder:
-        tasks.append(hunter_email_finder(live_domain, first_name, last_name, HUNTER_API_KEY))
+    # Final fallback: professional patterns
+    if first_name and last_name:
+        pattern_emails = _generate_professional_patterns(first_name, last_name, live_domain)
+        if pattern_emails:
+            result["emails"] = pattern_emails
+            result["error"] = f"Generated professional email patterns for {live_domain}"
+            print(f"Generated {len(pattern_emails)} pattern emails as final fallback")
+            return result
 
-    task_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    domain_emails, total = (task_results[0] if not isinstance(task_results[0], Exception) else ([], 0))
-    finder_email = (task_results[1] if run_finder and not isinstance(task_results[1], Exception) else None)
-
-    # Merge, deduplicating by email address; keep finder result first (it's name-specific)
-    seen: set = set()
-    merged: list = []
-    if finder_email and finder_email.get("email"):
-        seen.add(finder_email["email"])
-        merged.append(finder_email)
-    for rec in domain_emails:
-        if rec["email"] not in seen:
-            seen.add(rec["email"])
-            merged.append(rec)
-
-    result["emails"] = merged
-    result["total_at_domain"] = total
-
-    if not merged:
-        result["error"] = (
-            f"Domain {live_domain} is live but Hunter.io found no emails yet. "
-            "Try searching it directly at hunter.io."
-        )
+    result["error"] = f"Live domain found: {live_domain} — No emails found via any method"
     return result
+
+
+async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, api_key: str) -> list:
+    """Try multiple Hunter.io approaches to find emails."""
+    emails = []
+
+    # Try domain search first
+    try:
+        domain_emails, total = await hunter_domain_search(domain, api_key)
+        if domain_emails:
+            emails.extend(domain_emails[:5])  # Take top 5
+    except Exception as e:
+        print(f"Hunter domain search failed: {e}")
+
+    # Try specific email finder if we have names
+    if first_name and last_name:
+        try:
+            specific_email = await hunter_email_finder(domain, first_name, last_name, api_key)
+            if specific_email and specific_email not in [e.get("email") for e in emails]:
+                emails.insert(0, specific_email)  # Add to front as highest priority
+        except Exception as e:
+            print(f"Hunter email finder failed: {e}")
+
+    return emails
+
+
+async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
+    """Try enhanced website scraping with quality filtering."""
+    try:
+        scraped_emails = await scrape_emails_from_website(f"https://{domain}")
+        print(f"Scraped {len(scraped_emails)} emails from {domain}")
+
+        if not scraped_emails:
+            return []
+
+        # Comprehensive quality filtering
+        quality_emails = []
+        for email in scraped_emails:
+            if _is_quality_email(email):
+                quality_emails.append({
+                    "email": email,
+                    "first_name": "",
+                    "last_name": "",
+                    "full_name": None,
+                    "position": "",
+                    "is_decision_maker": False,
+                    "confidence": 75,
+                    "verified": False,
+                    "source": "website_scrape_quality",
+                    "domain": domain,
+                })
+
+        return quality_emails[:5]  # Limit to 5
+
+    except Exception as e:
+        print(f"Enhanced scraping failed: {e}")
+        return []
+
+
+def _is_quality_email(email: str) -> bool:
+    """Check if an email passes quality filters."""
+    email_lower = email.lower()
+    username = email.split('@')[0].lower()
+
+    # Skip obvious spam/non-professional emails
+    skip_patterns = [
+        'noreply@', 'no-reply@', 'donotreply@', 'notifications@',
+        'alerts@', 'news@', 'newsletter@', 'updates@', 'mail@',
+        'webmaster@', 'postmaster@', 'root@', 'admin@', 'administrator@',
+        'test@', 'demo@', 'example@', 'sample@', 'fake@', 'spam@',
+        'abuse@', 'security@', 'support@', 'help@', 'info@', 'contact@',
+        'sales@', 'marketing@', 'hello@', 'hi@', 'welcome@',
+        'feedback@', 'comments@', 'inquiry@', 'questions@',
+        'privacy@', 'legal@', 'terms@', 'copyright@', 'hr@', 'jobs@',
+        'careers@', 'recruiting@', 'employment@', 'press@', 'media@',
+        'events@', 'conference@', 'webinar@', 'signup@', 'register@',
+        'unsubscribe@', 'bounce@', 'complaints@', 'report@'
+    ]
+
+    if any(skip in email_lower for skip in skip_patterns):
+        return False
+
+    # Skip suspicious patterns
+    if any(char in username for char in ['.', '-', '_']) and len(username.split('.')) > 3:
+        return False
+
+    # Skip very short/long usernames
+    if len(username) < 2 or len(username) > 30:
+        return False
+
+    # Skip usernames that look like IDs
+    if username.isdigit() or re.match(r'^[a-z]+\d{4,}$', username):
+        return False
+
+    return True
+
+
+def _generate_professional_patterns(first_name: str, last_name: str, domain: str) -> list:
+    """Generate professional email patterns."""
+    fn = first_name.lower()[:1]
+    ln = last_name.lower()
+    fn_full = first_name.lower()
+    ln_full = last_name.lower()
+
+    patterns = [
+        f"{fn}{ln}@{domain}",
+        f"{fn}.{ln}@{domain}",
+        f"{fn_full}@{domain}",
+        f"{ln}@{domain}",
+        f"{fn_full}.{ln}@{domain}",
+        f"{fn}{ln_full}@{domain}",
+        f"dr.{ln}@{domain}",
+        f"{ln}@md.{domain}",
+        f"admin@{domain}",
+        f"office@{domain}",
+        f"lab@{domain}",
+        f"director@{domain}",
+    ]
+
+    return [
+        {
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": f"{first_name} {last_name}",
+            "position": "Director/Owner",
+            "is_decision_maker": True,
+            "confidence": 45,
+            "verified": False,
+            "source": "pattern_generated",
+            "domain": domain,
+        }
+        for email in patterns[:3]
+    ]
