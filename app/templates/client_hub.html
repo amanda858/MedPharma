@@ -3365,6 +3365,13 @@
     // ═══════════════════════════════════════
     // BOOT
     // ═══════════════════════════════════════
+    function getNextDestination() {
+      const next = new URLSearchParams(window.location.search).get('next') || '';
+      // Only allow internal leads destination to avoid open redirects.
+      if (!next.startsWith('/admin/leads')) return '';
+      return next;
+    }
+
     document.addEventListener('DOMContentLoaded', async () => {
       // Enter key on login
       document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
@@ -3381,7 +3388,16 @@
 
       try {
         const r = await fetch('/hub/api/me');
-        if (r.ok) { const u = await r.json(); currentUser = u; await showAccountSelector(); }
+        if (r.ok) {
+          const u = await r.json();
+          currentUser = u;
+          const next = getNextDestination();
+          if (next && currentUser?.role === 'admin') {
+            window.location.href = next;
+            return;
+          }
+          await showAccountSelector();
+        }
       } catch (_) { }
     });
 
@@ -3425,6 +3441,11 @@
           const d = await r.json();
           currentUser = d.user;
           statusEl.style.display = 'none';
+          const next = getNextDestination();
+          if (next && currentUser?.role === 'admin') {
+            window.location.href = next;
+            return;
+          }
           await showAccountSelector();
           return;
         } catch (e) {

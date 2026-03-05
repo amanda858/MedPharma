@@ -128,7 +128,7 @@ async def admin_only_leads_guard(request: Request, call_next):
         if not user:
             if "/api/" in path:
                 return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-            return RedirectResponse(url="/hub", status_code=307)
+            return RedirectResponse(url="/hub?next=/admin/leads/", status_code=307)
         if user.get("role") != "admin":
             if "/api/" in path:
                 return JSONResponse(status_code=403, content={"detail": "Admin access required"})
@@ -157,7 +157,8 @@ def _serve_hub():
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    return _serve_hub()
+    # Canonical single-link entry point: always route to leads.
+    return RedirectResponse(url="/admin/leads/", status_code=307)
 
 
 @app.get("/hub", response_class=HTMLResponse)
@@ -190,6 +191,12 @@ async def mphub2026_redirect(request: Request):
 
 @app.get("/admin/leads", include_in_schema=False)
 async def admin_leads_root():
+    return RedirectResponse(url="/admin/leads/", status_code=307)
+
+
+@app.get("/leads", include_in_schema=False)
+async def leads_shortcut():
+    # Human-friendly single link users can bookmark/share.
     return RedirectResponse(url="/admin/leads/", status_code=307)
 
 
