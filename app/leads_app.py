@@ -466,16 +466,30 @@ async def _pull_and_save_segment(
             service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
             services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
 
-        tier = _quality_tier(row, enrichment)
-        if tier is None:
-            filtered_out += 1
-            continue
-        if tier == "review" and not ALLOW_REVIEW_POOL:
+        has_need_signal, need_evidence = _extract_need_signal(row, enrichment, segment=segment)
+        if not has_need_signal:
             filtered_out += 1
             continue
 
-        has_need_signal, need_evidence = _extract_need_signal(row, enrichment, segment=segment)
-        if not has_need_signal:
+        tier = _quality_tier(row, enrichment)
+        if tier is None:
+            score = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
+            auth = enrichment.get("authorized_official", {}) if isinstance(enrichment.get("authorized_official", {}), dict) else {}
+            has_named_official = bool((auth.get("first_name") or "").strip() or (auth.get("last_name") or "").strip())
+            npi_text = str(enrichment.get("npi") or row.get("npi") or "").strip()
+            has_valid_npi = npi_text.isdigit() and len(npi_text) == 10
+            phone_text = (row.get("phone") or "").strip()
+            has_phone = bool(phone_text and phone_text not in {"—", "N/A", "na"})
+            overall = int(service_needs.get("overall_score", 0) or 0)
+
+            # Recovery lane: keep only clearly actionable rows when strict gate misses.
+            if score >= 60 and len(services_needed) >= 1 and overall >= 30 and (has_phone or has_named_official or has_valid_npi):
+                tier = "review"
+            else:
+                filtered_out += 1
+                continue
+
+        if tier == "review" and not ALLOW_REVIEW_POOL:
             filtered_out += 1
             continue
 
