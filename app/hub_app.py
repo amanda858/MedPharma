@@ -17,7 +17,7 @@ from app.config import DATABASE_PATH
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
 log = logging.getLogger(__name__)
-BUILD_MARKER = "build-2026-03-05-incident-fix-01"
+BUILD_MARKER = "build-2026-03-05-incident-fix-02"
 
 app = FastAPI(
     title="MedPharma Client Hub",

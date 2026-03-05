@@ -41,7 +41,7 @@ app = FastAPI(
     description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
-BUILD_MARKER = "build-2026-03-05-incident-fix-01"
+BUILD_MARKER = "build-2026-03-05-incident-fix-02"
 
 
 @app.on_event("startup")
@@ -80,16 +80,16 @@ NPI_TAXONOMY_HINT = {
     "primary_care": "family medicine",
     "asc": "ambulatory surgery",
 }
-STRICT_MIN_SIGNAL_SCORE = 70
-STRICT_MIN_SERVICE_SCORE = 60
-STRICT_MIN_DOMAIN_SCORE = 55
-STRICT_MIN_SERVICES_COUNT = 2
+STRICT_MIN_SIGNAL_SCORE = 62
+STRICT_MIN_SERVICE_SCORE = 45
+STRICT_MIN_DOMAIN_SCORE = 40
+STRICT_MIN_SERVICES_COUNT = 1
 STRICT_POOL_TAG = "strict_quality_pool"
-REVIEW_MIN_SIGNAL_SCORE = 45
-REVIEW_MIN_SERVICE_SCORE = 20
-REVIEW_MIN_DOMAIN_SCORE = 20
+REVIEW_MIN_SIGNAL_SCORE = 40
+REVIEW_MIN_SERVICE_SCORE = 12
+REVIEW_MIN_DOMAIN_SCORE = 15
 REVIEW_POOL_TAG = "review_quality_pool"
-ALLOW_REVIEW_POOL = str(os.getenv("ALLOW_REVIEW_POOL", "0")).strip().lower() in {"1", "true", "yes", "on"}
+ALLOW_REVIEW_POOL = str(os.getenv("ALLOW_REVIEW_POOL", "1")).strip().lower() in {"1", "true", "yes", "on"}
 _bootstrap_poll_attempted = False
 _poll_status = {
     "running": False,
@@ -107,7 +107,7 @@ NEED_SERVICE_TERMS = [
     "billing", "claims", "credentialing", "payer", "payor", "contracting",
     "workflow", "compliance", "coding", "audit", "prior authorization",
 ]
-EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "6") or 6))
+EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "20") or 20))
 AUTO_BOOTSTRAP_POLL = str(os.getenv("AUTO_BOOTSTRAP_POLL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -191,7 +191,7 @@ def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     overall = int(service_needs.get("overall_score", 0) or 0)
     # Lower threshold so strong-but-not-perfect enrichment still qualifies.
-    if overall >= 70 and len(services_needed) >= 1:
+    if overall >= 55 and len(services_needed) >= 1:
         return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
 
     return False, ""
@@ -203,6 +203,27 @@ def _domain_from_url(url: str) -> str:
         return (parsed.netloc or "").replace("www.", "").strip().lower()
     except Exception:
         return ""
+
+
+def _fallback_contact_emails(domain_hint: str) -> list[str]:
+    domain = str(domain_hint or "").strip().lower()
+    blocked = {
+        "npiregistry.cms.hhs.gov",
+        "cms.hhs.gov",
+        "reddit.com",
+        "www.reddit.com",
+        "linkedin.com",
+        "www.linkedin.com",
+        "indeed.com",
+        "www.indeed.com",
+    }
+    if not domain or "." not in domain or domain in blocked:
+        return []
+    return [
+        f"contact@{domain}",
+        f"info@{domain}",
+        f"billing@{domain}",
+    ]
 
 
 def _is_valid_npi(value: str) -> bool:
@@ -365,6 +386,8 @@ async def _pull_and_save_segment(
                     last_name=last_name
                 )
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
+                if not found:
+                    found = _fallback_contact_emails(domain_hint)
                 if found:
                     save_lead_emails(npi, found)
                     emails_found += len(found)
