@@ -196,8 +196,13 @@ def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     overall = int(service_needs.get("overall_score", 0) or 0)
     # Lower threshold so strong-but-not-perfect enrichment still qualifies.
-    if overall >= 38 and len(services_needed) >= 1:
+    if overall >= 30 and len(services_needed) >= 1:
         return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
+
+    # Conservative fallback for sparse enrichment: if service needs exist at all,
+    # keep the row as actionable/review candidate instead of dropping to zero.
+    if enrichment and not enrichment.get("error") and len(services_needed) >= 1:
+        return True, f"Enrichment-detected services ({', '.join(str(s) for s in services_needed[:2])})"
 
     return False, ""
 
@@ -450,7 +455,7 @@ async def _pull_and_save_segment(
             update_enrichment_urgency(npi, urgency_score, urgency_level, urgency_reason)
             urgency_updated += 1
 
-        email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 6) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
+        email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 3) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
         if email_lookups < email_lookup_cap:
             domain_hint = _domain_from_url(row.get("url", ""))
             try:
@@ -469,7 +474,7 @@ async def _pull_and_save_segment(
                         first_name=first_name,
                         last_name=last_name,
                     ),
-                    timeout=8 if fast_mode else 20,
+                    timeout=12 if fast_mode else 20,
                 )
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
                 if not found:
