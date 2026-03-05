@@ -100,7 +100,7 @@ NEED_SERVICE_TERMS = [
     "billing", "claims", "credentialing", "payer", "payor", "contracting",
     "workflow", "compliance", "coding", "audit", "prior authorization",
 ]
-EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "0") or 0))
+EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "6") or 6))
 AUTO_BOOTSTRAP_POLL = str(os.getenv("AUTO_BOOTSTRAP_POLL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -914,6 +914,9 @@ async def list_leads(
     min_score: Optional[int] = Query(None),
     urgency_level: Optional[str] = Query(None),
     urgent_only: bool = Query(False),
+    quality_only: bool = Query(False),
+    need_signal_only: bool = Query(False),
+    require_email: bool = Query(False),
 ):
     leads = get_all_leads_with_emails()
     if status:
@@ -926,6 +929,30 @@ async def list_leads(
         leads = [row for row in leads if (row.get("urgency_level", "").lower() == urgency_level.lower())]
     if urgent_only:
         leads = [row for row in leads if int(row.get("urgency_score", 0) or 0) >= 62]
+    if quality_only:
+        leads = [
+            row for row in leads
+            if int(row.get("lead_score", 0) or 0) >= 60
+            and int(row.get("urgency_score", 0) or 0) >= 45
+            and isinstance(row.get("services_wanted", []), list)
+            and len(row.get("services_wanted", [])) > 0
+        ]
+    if need_signal_only:
+        leads = [
+            row for row in leads
+            if "Need Evidence:" in str(row.get("notes", "") or "")
+            or "need_signal=yes" in str(row.get("tags", "") or "")
+        ]
+    if require_email:
+        leads = [row for row in leads if (str(row.get("emails", "") or "").strip())]
+
+    leads.sort(
+        key=lambda row: (
+            int(row.get("urgency_score", 0) or 0),
+            int(row.get("lead_score", 0) or 0),
+        ),
+        reverse=True,
+    )
     return {"leads": leads, "count": len(leads)}
 
 

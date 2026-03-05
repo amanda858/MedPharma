@@ -1027,6 +1027,7 @@
         let currentSearchResults = [];
         let currentRequestedServices = [];
         let bulkSelectedStates = new Set();
+        let autoPollAttempted = false;
 
         const APP_BASE = window.location.pathname.startsWith('/admin/leads') ? '/admin/leads' : '';
 
@@ -1085,7 +1086,8 @@
                 bulkContainer.appendChild(chip);
             });
 
-            // Load saved leads count
+            // Start on quality leads view, not raw NPI search.
+            switchTab('saved');
             loadSavedLeads();
         });
 
@@ -1513,6 +1515,10 @@
             if (status) params.set('status', status);
             if (state) params.set('state', state);
             if (score) params.set('min_score', score);
+            // Always prioritize actionable, need-based leads with contacts.
+            params.set('quality_only', 'true');
+            params.set('need_signal_only', 'true');
+            params.set('require_email', 'true');
 
             const container = document.getElementById('savedResults');
             if (!container) return;
@@ -1521,6 +1527,15 @@
                 const resp = await fetch(`/api/leads?${params}`);
                 const data = await resp.json();
                 renderSavedLeads(data.leads || [], container);
+
+                if (!autoPollAttempted && (!data.leads || data.leads.length === 0)) {
+                    autoPollAttempted = true;
+                    showToast('No quality leads with emails yet. Running poll now...', 'success');
+                    await runDailyPollNow();
+                    const retryResp = await fetch(`/api/leads?${params}`);
+                    const retryData = await retryResp.json();
+                    renderSavedLeads(retryData.leads || [], container);
+                }
             } catch (err) {
                 container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading leads</div>`;
             }
@@ -1560,8 +1575,8 @@
             if (!leads.length) {
                 container.innerHTML = `
             <div class="card empty-state">
-                <p style="font-size:18px;margin-bottom:8px;">No saved leads yet</p>
-                <p>Search for labs and save them to build your prospect list</p>
+                <p style="font-size:18px;margin-bottom:8px;">No quality leads with emails yet</p>
+                <p>Run Poll Now to pull healthcare orgs actively signaling billing/credentialing/workflow pain.</p>
             </div>`;
                 return;
             }
