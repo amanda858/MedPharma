@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -1603,8 +1603,19 @@ async def audit_email_quality():
 
 @app.get("/contact", response_class=HTMLResponse)
 async def serve_contact_form():
-    with open(os.path.join(os.path.dirname(__file__), "templates", "contact.html"), "r") as f:
-        return f.read()
+    with open(os.path.join(os.path.dirname(__file__), "templates", "contact.html"), "r", encoding="utf-8") as f:
+        content = f.read()
+    return Response(
+        content=content,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Surrogate-Control": "no-store",
+            "CDN-Cache-Control": "no-store",
+        },
+    )
 
 
 @app.post("/api/contact/submit")
@@ -1635,5 +1646,20 @@ async def submit_contact_form(req: ContactFormRequest):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_leads_frontend():
-    with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), "r") as f:
-        return f.read()
+    with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), "r", encoding="utf-8") as f:
+        content = f.read()
+
+    build_ts = str(int(datetime.now().timestamp()))
+    content = content.replace("</head>", f'<meta name="build" content="{build_ts}">\n</head>', 1)
+
+    return Response(
+        content=content,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Surrogate-Control": "no-store",
+            "CDN-Cache-Control": "no-store",
+        },
+    )
