@@ -183,13 +183,15 @@ def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
 
     has_intent = any(term in source_text for term in NEED_INTENT_TERMS)
     has_service = any(term in source_text for term in NEED_SERVICE_TERMS)
-    if has_intent and has_service and headline:
+    # Accept explicit service + headline even if intent verb is implicit.
+    if (has_intent and has_service and headline) or (has_service and headline):
         return True, headline[:180]
 
     service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     overall = int(service_needs.get("overall_score", 0) or 0)
-    if overall >= 85 and len(services_needed) >= 2:
+    # Lower threshold so strong-but-not-perfect enrichment still qualifies.
+    if overall >= 70 and len(services_needed) >= 1:
         return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
 
     return False, ""
@@ -551,16 +553,6 @@ def _start_daily_poll_scheduler():
     )
     _leads_scheduler.start()
     _scheduler_started = True
-
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-    # Temporarily disable scheduler to debug startup issues
-    # _start_daily_poll_scheduler()
-    # Temporarily disable bootstrap poll
-    # if AUTO_BOOTSTRAP_POLL:
-    #     asyncio.create_task(_bootstrap_poll_if_empty())
 
 
 # ─── Search ──────────────────────────────────────────────────────────
@@ -939,8 +931,8 @@ async def list_leads(
     if quality_only:
         leads = [
             row for row in leads
-            if int(row.get("lead_score", 0) or 0) >= 60
-            and int(row.get("urgency_score", 0) or 0) >= 45
+            if int(row.get("lead_score", 0) or 0) >= 50
+            and int(row.get("urgency_score", 0) or 0) >= 35
             and isinstance(row.get("services_wanted", []), list)
             and len(row.get("services_wanted", [])) > 0
         ]

@@ -914,9 +914,15 @@
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <button class="btn btn-primary btn-sm" onclick="runDailyPollNow()">⏱ Run Poll Now</button>
+                    <label
+                        style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-600);cursor:pointer;">
+                        <input type="checkbox" id="showExploratoryLeads" onchange="loadSavedLeads()">
+                        Show exploratory leads (relax strict filters)
+                    </label>
                     <span style="font-size:12px;color:var(--gray-500);">Auto-runs every 4 hours and updates
                         urgency ranking.</span>
                 </div>
+                <div id="savedFilterSummary" style="margin-top:8px;font-size:12px;color:var(--gray-500);"></div>
             </div>
             <div id="savedResults"></div>
         </div>
@@ -1511,14 +1517,18 @@
             const status = document.getElementById('savedFilterStatus')?.value;
             const state = document.getElementById('savedFilterState')?.value;
             const score = document.getElementById('savedFilterScore')?.value;
+            const exploratory = document.getElementById('showExploratoryLeads')?.checked;
 
             if (status) params.set('status', status);
             if (state) params.set('state', state);
             if (score) params.set('min_score', score);
-            // Always prioritize actionable, need-based leads with contacts.
-            params.set('quality_only', 'true');
-            params.set('need_signal_only', 'true');
-            params.set('require_email', 'true');
+
+            // Default strict mode: actionable + need signal + contactable.
+            if (!exploratory) {
+                params.set('quality_only', 'true');
+                params.set('need_signal_only', 'true');
+                params.set('require_email', 'true');
+            }
 
             const container = document.getElementById('savedResults');
             if (!container) return;
@@ -1527,6 +1537,13 @@
                 const resp = await fetch(`/api/leads?${params}`);
                 const data = await resp.json();
                 renderSavedLeads(data.leads || [], container);
+
+                const summary = document.getElementById('savedFilterSummary');
+                if (summary) {
+                    summary.textContent = exploratory
+                        ? 'Exploratory mode: showing broader leads (may include missing email or weaker signal).'
+                        : 'Strict mode: showing actionable leads with need evidence and at least one email.';
+                }
 
                 if (!autoPollAttempted && (!data.leads || data.leads.length === 0)) {
                     autoPollAttempted = true;
@@ -1581,10 +1598,11 @@
 
         function renderSavedLeads(leads, container) {
             if (!leads.length) {
+                const exploratory = document.getElementById('showExploratoryLeads')?.checked;
                 container.innerHTML = `
             <div class="card empty-state">
-                <p style="font-size:18px;margin-bottom:8px;">No quality leads with emails yet</p>
-                <p>Run Poll Now to pull healthcare orgs actively signaling billing/credentialing/workflow pain.</p>
+                <p style="font-size:18px;margin-bottom:8px;">${exploratory ? 'No leads found for current filters' : 'No strict quality leads with emails yet'}</p>
+                <p>${exploratory ? 'Try lowering score filter or clearing status/state filters.' : 'Run Poll Now to pull healthcare orgs actively signaling billing/credentialing/workflow pain.'}</p>
             </div>`;
                 return;
             }
