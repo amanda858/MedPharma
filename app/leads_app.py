@@ -41,7 +41,7 @@ app = FastAPI(
     description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
-BUILD_MARKER = "build-2026-03-05-incident-fix-02"
+BUILD_MARKER = "build-2026-03-05-incident-fix-03"
 
 
 @app.on_event("startup")
