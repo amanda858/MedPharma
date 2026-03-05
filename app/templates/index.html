@@ -1550,16 +1550,24 @@
                 }
                 showToast('Running daily lead poll...', 'success');
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 45000);
+                const timeout = setTimeout(() => controller.abort(), 15000);
                 const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST', signal: controller.signal });
                 clearTimeout(timeout);
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
-                showToast(`Poll complete: ${data.saved} leads refreshed, ${data.urgency_updated} urgency updates, ${data.emails_found || 0} emails found`, 'success');
+
+                if (data.running && data.started) {
+                    showToast('Poll started in background. Refreshing quality leads shortly...', 'success');
+                    setTimeout(() => loadSavedLeads(), 25000);
+                    return;
+                }
+
+                showToast(`Poll complete: ${data.saved || 0} leads refreshed, ${data.urgency_updated || 0} urgency updates, ${data.emails_found || 0} emails found`, 'success');
                 loadSavedLeads();
             } catch (err) {
                 if (err.name === 'AbortError') {
-                    showToast('Poll is still processing in the background. Refresh leads in about 60 seconds.', 'success');
+                    showToast('Poll started. Refreshing quality leads soon...', 'success');
+                    setTimeout(() => loadSavedLeads(), 25000);
                 } else {
                     showToast(`Poll error: ${err.message}`, 'error');
                 }

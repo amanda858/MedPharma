@@ -91,6 +91,13 @@ REVIEW_MIN_DOMAIN_SCORE = 20
 REVIEW_POOL_TAG = "review_quality_pool"
 ALLOW_REVIEW_POOL = str(os.getenv("ALLOW_REVIEW_POOL", "0")).strip().lower() in {"1", "true", "yes", "on"}
 _bootstrap_poll_attempted = False
+_poll_status = {
+    "running": False,
+    "started_at": "",
+    "finished_at": "",
+    "last_result": None,
+    "last_error": "",
+}
 NEED_INTENT_TERMS = [
     "need", "needs", "seeking", "looking for", "help", "support",
     "outsource", "backlog", "denial", "reimbursement", "credentialing",
@@ -957,12 +964,55 @@ async def list_leads(
 
 
 @app.post("/api/leads/poll-daily")
-async def poll_leads_now(segment: str = Query("all", description="all|laboratory|urgent_care|primary_care|asc")):
+async def poll_leads_now(
+    segment: str = Query("all", description="all|laboratory|urgent_care|primary_care|asc"),
+    wait: bool = Query(False, description="If true, wait for poll completion; otherwise run in background"),
+):
     """Manual trigger for daily polling and urgency updates (same logic as 9 AM scheduler)."""
+    async def _run_poll(seg: str):
+        _poll_status["running"] = True
+        _poll_status["started_at"] = datetime.now().isoformat()
+        _poll_status["finished_at"] = ""
+        _poll_status["last_error"] = ""
+        try:
+            result = await run_daily_lead_poll(segment=seg)
+            _poll_status["last_result"] = result
+            return result
+        except Exception as e:
+            _poll_status["last_error"] = str(e)
+            raise
+        finally:
+            _poll_status["running"] = False
+            _poll_status["finished_at"] = datetime.now().isoformat()
+
+    if _poll_status.get("running"):
+        return {
+            "ok": True,
+            "running": True,
+            "message": "A lead poll is already running",
+            "status": _poll_status,
+        }
+
     try:
-        return await run_daily_lead_poll(segment=segment)
+        if wait:
+            return await _run_poll(segment)
+
+        asyncio.create_task(_run_poll(segment))
+        return {
+            "ok": True,
+            "running": True,
+            "started": True,
+            "segment": segment,
+            "message": "Lead poll started in background",
+            "status": _poll_status,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Daily poll failed: {e}")
+
+
+@app.get("/api/leads/poll-status")
+async def poll_status():
+    return {"ok": True, "status": _poll_status}
 
 
 @app.put("/api/leads/{lead_id}")
