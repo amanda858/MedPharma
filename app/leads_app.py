@@ -430,7 +430,15 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
         segments = list(NATIONWIDE_SEGMENTS)
         deleted_old = _clear_quality_pools()
         per_segment = []
-        totals = {"pulled": 0, "saved": 0, "strict_saved": 0, "review_saved": 0, "urgency_updated": 0, "filtered_out": 0}
+        totals = {
+            "pulled": 0,
+            "saved": 0,
+            "strict_saved": 0,
+            "review_saved": 0,
+            "urgency_updated": 0,
+            "emails_found": 0,
+            "filtered_out": 0,
+        }
 
         for seg in segments:
             result = await _pull_and_save_segment(seg, max_per_query=12)
