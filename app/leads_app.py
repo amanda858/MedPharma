@@ -422,6 +422,20 @@ async def _pull_and_save_segment(
             filtered_out += 1
             continue
 
+        # If strict pool is starved, promote only high-confidence review rows
+        # that are clearly actionable and contactable.
+        if tier == "review":
+            score = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
+            auth = enrichment.get("authorized_official", {}) if isinstance(enrichment.get("authorized_official", {}), dict) else {}
+            has_named_official = bool((auth.get("first_name") or "").strip() or (auth.get("last_name") or "").strip())
+            npi_text = str(enrichment.get("npi") or row.get("npi") or "").strip()
+            has_valid_npi = npi_text.isdigit() and len(npi_text) == 10
+            phone_text = (row.get("phone") or "").strip()
+            has_phone = bool(phone_text and phone_text not in {"—", "N/A", "na"})
+            overall = int(service_needs.get("overall_score", 0) or 0)
+            if score >= 55 and len(services_needed) >= 1 and overall >= 35 and (has_phone or has_named_official or has_valid_npi):
+                tier = "strict"
+
         npi = (
             enrichment.get("npi")
             or row.get("npi")
