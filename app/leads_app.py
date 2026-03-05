@@ -302,11 +302,6 @@ def _infer_service_needs_from_text(row: dict, segment: str) -> dict:
         workflow_score = 44
         services_needed.append("Workflow Support")
 
-    if not services_needed and segment in {"urgent_care", "primary_care", "clinic", "hospital"}:
-        # Conservative default for medically operational segments.
-        workflow_score = 36
-        services_needed = ["Workflow Support"]
-
     if not services_needed:
         return {}
 
