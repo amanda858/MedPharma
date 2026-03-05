@@ -135,7 +135,10 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
 
     service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
+    # Keep strict quality tight, but allow strong identity + signal rows into review.
     if not services_needed:
+        if score >= STRICT_MIN_SIGNAL_SCORE and has_identity_signal:
+            return "review"
         return None
 
     overall = int(service_needs.get("overall_score", 0) or 0)
@@ -191,7 +194,7 @@ def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     overall = int(service_needs.get("overall_score", 0) or 0)
     # Lower threshold so strong-but-not-perfect enrichment still qualifies.
-    if overall >= 55 and len(services_needed) >= 1:
+    if overall >= 38 and len(services_needed) >= 1:
         return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
 
     return False, ""
