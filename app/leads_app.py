@@ -504,7 +504,7 @@ async def _pull_and_save_segment(
             phone_text = (row.get("phone") or "").strip()
             has_phone = bool(phone_text and phone_text not in {"—", "N/A", "na"})
             overall = int(service_needs.get("overall_score", 0) or 0)
-            if score >= 55 and len(services_needed) >= 1 and overall >= 35 and (has_phone or has_named_official or has_valid_npi):
+            if score >= 50 and len(services_needed) >= 1 and overall >= 30 and (has_phone or has_named_official or has_valid_npi):
                 tier = "strict"
 
         npi = (
