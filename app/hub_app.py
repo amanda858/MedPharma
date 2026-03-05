@@ -82,6 +82,10 @@ async def startup():
     try:
         init_db()
         log.info("✅ Leads database initialized")
+        # Seed demo leads if database is empty
+        from app.database import seed_demo_leads
+        seed_demo_leads()
+        log.info("✅ Demo leads seeded")
     except Exception as e:
         log.error(f"Startup error: leads DB init failed: {e}")
 

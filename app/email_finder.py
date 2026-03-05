@@ -16,10 +16,10 @@ from app.config import HUNTER_API_KEY
 
 
 async def scrape_emails_from_website(url: str) -> list[str]:
-    """Scrape email addresses from a website using regex."""
+    """Scrape email addresses from a website using enhanced targeting and patterns."""
     emails = set()
-    
-    # Try multiple common pages
+
+    # Expanded list of professional pages to try
     pages_to_try = [
         url,
         url.rstrip('/') + '/contact',
@@ -30,41 +30,103 @@ async def scrape_emails_from_website(url: str) -> list[str]:
         url.rstrip('/') + '/staff',
         url.rstrip('/') + '/doctors',
         url.rstrip('/') + '/physicians',
+        url.rstrip('/') + '/providers',
+        url.rstrip('/') + '/practitioners',
+        url.rstrip('/') + '/leadership',
+        url.rstrip('/') + '/management',
+        url.rstrip('/') + '/administration',
+        url.rstrip('/') + '/directory',
+        url.rstrip('/') + '/people',
+        url.rstrip('/') + '/our-team',
+        url.rstrip('/') + '/meet-the-team',
+        url.rstrip('/') + '/leadership-team',
+        url.rstrip('/') + '/medical-staff',
     ]
-    
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        for page_url in pages_to_try[:3]:  # Limit to first 3 pages to avoid being too aggressive
+
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+    ) as client:
+        for page_url in pages_to_try[:8]:  # Try more pages but limit to 8
             try:
                 resp = await client.get(page_url)
                 if resp.status_code != 200:
                     continue
                 html = resp.text
-                
-                # Multiple email regex patterns for better coverage
+
+                # Enhanced email regex patterns
                 email_patterns = [
+                    # Standard email pattern
                     r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                    # Mailto links
                     r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+                    # Emails with spaces around @
                     r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
+                    # Emails in quotes or brackets
+                    r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
+                    # Emails after "Email:" or similar labels
+                    r'(?:email|contact|e-mail)[\s:]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
                 ]
-                
+
                 for pattern in email_patterns:
                     found = re.findall(pattern, html, re.IGNORECASE)
                     for email in found:
-                        email = email.strip().lower()
-                        # Basic validation
-                        if '@' in email and '.' in email.split('@')[1]:
+                        email = email.strip().lower().strip('"\'')
+                        # Enhanced validation
+                        if _is_basic_email_format(email):
                             emails.add(email)
-                            
+
+                # Small delay to be respectful
+                await asyncio.sleep(0.5)
+
             except Exception:
                 continue
-    
-    # Filter out common invalid emails but be less restrictive
-    valid_emails = []
+
+    # Enhanced filtering - more restrictive than before
+    professional_emails = []
     for email in emails:
-        if not any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder']):
-            valid_emails.append(email)
-    
-    return valid_emails[:15]  # Return up to 15 emails
+        # Skip obvious non-professional emails
+        if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
+                                   'yourcompany.com', 'company.com', 'website.com']):
+            continue
+
+        # Skip emails that look like templates
+        username = email.split('@')[0]
+        if any(template in username for template in ['yourname', 'firstname', 'lastname',
+                                                    'email', 'contact', 'info']):
+            continue
+
+        professional_emails.append(email)
+
+    return professional_emails[:10]  # Return up to 10 high-quality emails
+
+
+def _is_basic_email_format(email: str) -> bool:
+    """Basic email format validation."""
+    if '@' not in email:
+        return False
+
+    parts = email.split('@')
+    if len(parts) != 2:
+        return False
+
+    username, domain = parts
+    if not username or not domain:
+        return False
+
+    if '.' not in domain:
+        return False
+
+    # Basic length checks
+    if len(username) < 1 or len(username) > 64:
+        return False
+    if len(domain) < 4 or len(domain) > 253:
+        return False
+
+    return True
 
 
 def generate_pattern_emails(first_name: str, last_name: str, domain: str) -> list[dict]:
@@ -166,35 +228,229 @@ def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     
     return unique_candidates
 
-        candidates.append(tokens[0] + "lab.com")
-        candidates.append(tokens[0] + "med.com")
 
-    if len(tokens) >= 2:
-        candidates.append("".join(tokens[:2]) + ".com")
+def generate_pattern_emails(first_name: str, last_name: str, domain: str) -> list[dict]:
+    """Generate common email patterns from name and domain."""
+    if not first_name or not last_name or not domain:
+        return []
+    
+    fn = first_name.lower().replace(' ', '').replace('-', '')
+    ln = last_name.lower().replace(' ', '').replace('-', '')
+    domain = domain.lower()
+    
+    patterns = [
+        f"{fn}.{ln}@{domain}",
+        f"{fn}{ln}@{domain}",
+        f"{fn}@{domain}",
+        f"{ln}@{domain}",
+        f"{fn[0]}{ln}@{domain}",
+        f"{fn}{ln[0]}@{domain}",
+    ]
+    
+    emails = []
 
-    candidates.append(tokens[0] + ".com")
 
-    seen = set()
-    unique = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            unique.append(c)
-    return unique
+async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
+    """Enhanced website scraping for lab organizations."""
+    emails = set()
+
+    # Professional pages for labs
+    pages_to_try = [
+        f"https://{domain}",
+        f"https://{domain}/contact",
+        f"https://{domain}/contact-us",
+        f"https://{domain}/about",
+        f"https://{domain}/about-us",
+        f"https://{domain}/team",
+        f"https://{domain}/staff",
+        f"https://{domain}/doctors",
+        f"https://{domain}/physicians",
+        f"https://{domain}/providers",
+        f"https://{domain}/practitioners",
+        f"https://{domain}/leadership",
+        f"https://{domain}/management",
+        f"https://{domain}/administration",
+        f"https://{domain}/directory",
+        f"https://{domain}/people",
+        f"https://{domain}/our-team",
+        f"https://{domain}/meet-the-team",
+        f"https://{domain}/leadership-team",
+        f"https://{domain}/medical-staff",
+    ]
+
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'        }
+    ) as client:
+        for page_url in pages_to_try[:8]:  # Try more pages but limit to 8
+            try:
+                resp = await client.get(page_url)
+                if resp.status_code != 200:
+                    continue
+                html = resp.text
+
+                # Enhanced email regex patterns
+                email_patterns = [
+                    # Standard email pattern
+                    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                    # Mailto links
+                    r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+                    # Emails with spaces around @
+                    r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
+                    # Emails in quotes or brackets
+                    r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
+                    # Emails after "Email:" or similar labels
+                    r'(?:email|contact|e-mail)[\s:]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+                ]
+
+                for pattern in email_patterns:
+                    found = re.findall(pattern, html, re.IGNORECASE)
+                    for email in found:
+                        email = email.strip().lower().strip('"\'')
+                        # Enhanced validation
+                        if _is_basic_email_format(email):
+                            emails.add(email)
+
+                # Small delay to be respectful
+                await asyncio.sleep(0.5)
+
+            except Exception:
+                continue
+
+    # Enhanced filtering - more restrictive than before
+    professional_emails = []
+    for email in emails:
+        # Skip obvious non-professional emails
+        if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
+                                   'yourcompany.com', 'company.com', 'website.com']):
+            continue
+
+        # Skip emails that look like templates
+        username = email.split('@')[0]
+        if any(template in username for template in ['yourname', 'firstname', 'lastname',
+                                                    'email', 'contact', 'info']):
+            continue
+
+        professional_emails.append(email)
+
+    return professional_emails[:10]  # Return up to 10 high-quality emails
+
+
+async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, api_key: str) -> list:
+    """Try multiple Hunter.io approaches to find emails with verification."""
+    emails = []
+
+    # Try domain search first
+    try:
+        domain_emails, total = await hunter_domain_search(domain, api_key)
+        if domain_emails:
+            # Apply quality filtering and verification
+            verified_emails = []
+            for email_record in domain_emails:
+                email = email_record['email']
+
+                # Skip if doesn't pass quality check
+                if not _is_quality_email(email):
+                    continue
+
+                # Verify the email
+                try:
+                    verification = await hunter_verify_email(email, api_key)
+                    if verification.get('is_valid') and verification.get('score', 0) >= 70:
+                        # Boost confidence based on verification
+                        email_record['confidence'] = min(95, email_record['confidence'] + 20)
+                        email_record['verified'] = True
+                        verified_emails.append(email_record)
+                    elif verification.get('status') in ('valid', 'accept_all'):
+                        # Accept but lower confidence
+                        email_record['confidence'] = max(50, email_record['confidence'] - 10)
+                        email_record['verified'] = True
+                        verified_emails.append(email_record)
+                except Exception:
+                    # If verification fails, still include but mark unverified
+                    email_record['verified'] = False
+                    verified_emails.append(email_record)
+
+            emails.extend(verified_emails[:5])  # Take top 5 verified emails
+    except Exception as e:
+        print(f"Hunter domain search failed: {e}")
+
+    # Try specific email finder if we have names
+    if first_name and last_name:
+        try:
+            specific_email = await hunter_email_finder(domain, first_name, last_name, api_key)
+            if specific_email and _is_quality_email(specific_email['email']):
+                # Verify specific email
+                try:
+                    verification = await hunter_verify_email(specific_email['email'], api_key)
+                    if verification.get('is_valid'):
+                        specific_email['confidence'] = min(95, specific_email['confidence'] + 25)
+                        specific_email['verified'] = True
+                    else:
+                        specific_email['confidence'] = max(45, specific_email['confidence'] - 15)
+                        specific_email['verified'] = False
+                except Exception:
+                    specific_email['verified'] = False
+
+                # Add to front if not already in list
+                if specific_email not in [e for e in emails if e.get("email") == specific_email['email']]:
+                    emails.insert(0, specific_email)  # Add to front as highest priority
+        except Exception as e:
+            print(f"Hunter email finder failed: {e}")
+
+    return emails
 
 
 async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
-    """Return True if the domain resolves to a live website."""
+    """Return True if the domain resolves to a live, legitimate business website."""
+    # Skip obviously invalid domains
+    if not _is_business_domain(domain):
+        return False
+
     for scheme in ("https", "http"):
         try:
             resp = await client.head(
-                f"{scheme}://{domain}", timeout=10.0, follow_redirects=True,
+                f"{scheme}://{domain}", timeout=15.0, follow_redirects=True,
             )
             if resp.status_code < 400:  # Accept more status codes
-                return True
+                # Additional check: ensure it's not redirecting to a generic page
+                final_url = str(resp.url)
+                if not any(generic in final_url for generic in ['godaddy.com', 'squarespace.com',
+                                                              'wix.com', 'wordpress.com', 'weebly.com']):
+                    return True
         except Exception:
             pass
     return False
+
+
+def _is_business_domain(domain: str) -> bool:
+    """Check if domain looks like a legitimate business domain."""
+    domain = domain.lower().strip()
+
+    # Skip free email domains
+    free_providers = [
+        'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
+        'icloud.com', 'protonmail.com', 'zoho.com', 'yandex.com', 'mail.com'
+    ]
+    if domain in free_providers:
+        return False
+
+    # Skip generic TLDs that aren't business-appropriate
+    generic_tlds = ['.xyz', '.top', '.club', '.online', '.site', '.space', '.website']
+    if any(domain.endswith(tld) for tld in generic_tlds):
+        return False
+
+    # Skip domains that look like personal sites
+    if re.match(r'^\d+\..*$', domain):  # Starts with numbers
+        return False
+
+    # Skip extremely short domains
+    if len(domain.split('.')[0]) < 3:
+        return False
+
+    return True
 
 
 async def _find_live_domain(candidates: list[str]) -> Optional[str]:
@@ -335,6 +591,50 @@ async def hunter_verify_email(email: str, api_key: str) -> dict:
     }
 
 
+async def verify_email_smtp(email: str) -> dict:
+    """
+    Basic SMTP verification for an email address.
+    Returns dict with verification results.
+    """
+    import smtplib
+    import dns.resolver
+
+    try:
+        # Extract domain
+        domain = email.split('@')[1]
+
+        # Check MX records
+        try:
+            mx_records = dns.resolver.resolve(domain, 'MX')
+            if not mx_records:
+                return {"valid": False, "reason": "no_mx_records"}
+        except Exception:
+            return {"valid": False, "reason": "mx_lookup_failed"}
+
+        # Try SMTP verification (be very gentle)
+        mx_host = str(mx_records[0].exchange).rstrip('.')
+        try:
+            server = smtplib.SMTP(mx_host, timeout=10)
+            server.helo()
+            server.mail('test@example.com')  # Use a safe sender
+            code, message = server.rcpt(email)
+            server.quit()
+
+            # 250 = success, 550 = doesn't exist, others = unknown
+            if code == 250:
+                return {"valid": True, "confidence": 80}
+            elif code == 550:
+                return {"valid": False, "reason": "user_unknown"}
+            else:
+                return {"valid": True, "confidence": 60}  # Accept on unknown response
+
+        except Exception:
+            return {"valid": False, "reason": "smtp_error"}
+
+    except Exception:
+        return {"valid": False, "reason": "general_error"}
+
+
 async def hunter_combined_enrichment(email: str, api_key: str) -> dict:
     """
     GET /v2/combined/find — full person + company enrichment from an email.
@@ -444,14 +744,41 @@ async def find_emails_for_lab(
 
 
 async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, api_key: str) -> list:
-    """Try multiple Hunter.io approaches to find emails."""
+    """Try multiple Hunter.io approaches to find emails with verification."""
     emails = []
 
     # Try domain search first
     try:
         domain_emails, total = await hunter_domain_search(domain, api_key)
         if domain_emails:
-            emails.extend(domain_emails[:5])  # Take top 5
+            # Apply quality filtering and verification
+            verified_emails = []
+            for email_record in domain_emails:
+                email = email_record['email']
+
+                # Skip if doesn't pass quality check
+                if not _is_quality_email(email):
+                    continue
+
+                # Verify the email
+                try:
+                    verification = await hunter_verify_email(email, api_key)
+                    if verification.get('is_valid') and verification.get('score', 0) >= 70:
+                        # Boost confidence based on verification
+                        email_record['confidence'] = min(95, email_record['confidence'] + 20)
+                        email_record['verified'] = True
+                        verified_emails.append(email_record)
+                    elif verification.get('status') in ('valid', 'accept_all'):
+                        # Accept but lower confidence
+                        email_record['confidence'] = max(50, email_record['confidence'] - 10)
+                        email_record['verified'] = True
+                        verified_emails.append(email_record)
+                except Exception:
+                    # If verification fails, still include but mark unverified
+                    email_record['verified'] = False
+                    verified_emails.append(email_record)
+
+            emails.extend(verified_emails[:5])  # Take top 5 verified emails
     except Exception as e:
         print(f"Hunter domain search failed: {e}")
 
@@ -459,8 +786,22 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
     if first_name and last_name:
         try:
             specific_email = await hunter_email_finder(domain, first_name, last_name, api_key)
-            if specific_email and specific_email not in [e.get("email") for e in emails]:
-                emails.insert(0, specific_email)  # Add to front as highest priority
+            if specific_email and _is_quality_email(specific_email['email']):
+                # Verify specific email
+                try:
+                    verification = await hunter_verify_email(specific_email['email'], api_key)
+                    if verification.get('is_valid'):
+                        specific_email['confidence'] = min(95, specific_email['confidence'] + 25)
+                        specific_email['verified'] = True
+                    else:
+                        specific_email['confidence'] = max(45, specific_email['confidence'] - 15)
+                        specific_email['verified'] = False
+                except Exception:
+                    specific_email['verified'] = False
+
+                # Add to front if not already in list
+                if specific_email not in [e for e in emails if e.get("email") == specific_email['email']]:
+                    emails.insert(0, specific_email)  # Add to front as highest priority
         except Exception as e:
             print(f"Hunter email finder failed: {e}")
 
@@ -468,7 +809,7 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
 
 
 async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
-    """Try enhanced website scraping with quality filtering."""
+    """Try enhanced website scraping with quality filtering and verification."""
     try:
         scraped_emails = await scrape_emails_from_website(f"https://{domain}")
         print(f"Scraped {len(scraped_emails)} emails from {domain}")
@@ -476,24 +817,38 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
         if not scraped_emails:
             return []
 
-        # Comprehensive quality filtering
-        quality_emails = []
+        # Comprehensive quality filtering and verification
+        verified_emails = []
         for email in scraped_emails:
-            if _is_quality_email(email):
-                quality_emails.append({
-                    "email": email,
-                    "first_name": "",
-                    "last_name": "",
-                    "full_name": None,
-                    "position": "",
-                    "is_decision_maker": False,
-                    "confidence": 75,
-                    "verified": False,
-                    "source": "website_scrape_quality",
-                    "domain": domain,
-                })
+            if not _is_quality_email(email):
+                continue
 
-        return quality_emails[:5]  # Limit to 5
+            # Attempt SMTP verification
+            try:
+                smtp_result = await verify_email_smtp(email)
+                if smtp_result.get("valid"):
+                    confidence = smtp_result.get("confidence", 75)
+                else:
+                    confidence = 60  # Still accept but lower confidence
+            except Exception:
+                confidence = 70  # Default if verification fails
+
+            verified_emails.append({
+                "email": email,
+                "first_name": "",
+                "last_name": "",
+                "full_name": None,
+                "position": "",
+                "is_decision_maker": False,
+                "confidence": confidence,
+                "verified": smtp_result.get("valid", False) if 'smtp_result' in locals() else False,
+                "source": "website_scrape_verified",
+                "domain": domain,
+            })
+
+        # Sort by confidence and return top results
+        verified_emails.sort(key=lambda x: x["confidence"], reverse=True)
+        return verified_emails[:5]  # Limit to 5
 
     except Exception as e:
         print(f"Enhanced scraping failed: {e}")
@@ -504,6 +859,7 @@ def _is_quality_email(email: str) -> bool:
     """Check if an email passes quality filters."""
     email_lower = email.lower()
     username = email.split('@')[0].lower()
+    domain = email.split('@')[1].lower() if '@' in email else ''
 
     # Skip obvious spam/non-professional emails
     skip_patterns = [
@@ -520,7 +876,18 @@ def _is_quality_email(email: str) -> bool:
         'unsubscribe@', 'bounce@', 'complaints@', 'report@'
     ]
 
+    # Skip error tracking and analytics domains
+    error_domains = [
+        'sentry.', 'bugsnag.', 'rollbar.', 'airbrake.', 'raygun.',
+        'logrocket.', 'fullstory.', 'mixpanel.', 'segment.', 'amplitude.',
+        'hotjar.', 'google-analytics.', 'googletagmanager.', 'gtm.',
+        'wixpress.', 'wix.'
+    ]
+
     if any(skip in email_lower for skip in skip_patterns):
+        return False
+
+    if any(error_domain in domain for error_domain in error_domains):
         return False
 
     # Skip suspicious patterns
@@ -531,8 +898,16 @@ def _is_quality_email(email: str) -> bool:
     if len(username) < 2 or len(username) > 30:
         return False
 
-    # Skip usernames that look like IDs
+    # Skip usernames that look like IDs, UUIDs, or hashes
     if username.isdigit() or re.match(r'^[a-z]+\d{4,}$', username):
+        return False
+
+    # Skip UUID-like patterns (32-36 chars with dashes)
+    if re.match(r'^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$', username):
+        return False
+
+    # Skip long alphanumeric strings that look like hashes
+    if re.match(r'^[a-z0-9]{20,}$', username):
         return False
 
     return True
@@ -560,6 +935,9 @@ def _generate_professional_patterns(first_name: str, last_name: str, domain: str
         f"director@{domain}",
     ]
 
+    # Filter patterns through quality check
+    quality_patterns = [email for email in patterns[:3] if _is_quality_email(email)]
+
     return [
         {
             "email": email,
@@ -573,5 +951,5 @@ def _generate_professional_patterns(first_name: str, last_name: str, domain: str
             "source": "pattern_generated",
             "domain": domain,
         }
-        for email in patterns[:3]
+        for email in quality_patterns
     ]

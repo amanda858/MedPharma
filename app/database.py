@@ -5,6 +5,7 @@ import sqlite3
 import os
 from datetime import datetime
 from app.config import DATABASE_PATH
+from app.email_finder import _is_quality_email
 
 
 def get_db():
@@ -137,6 +138,144 @@ def init_db():
     if "urgency_updated_at" not in existing_cols:
         cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_updated_at TEXT DEFAULT ''")
 
+    conn.commit()
+    conn.close()
+
+
+def seed_demo_leads():
+    """Seed some demo leads for testing when database is empty."""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Check if we already have leads
+    cursor.execute("SELECT COUNT(*) FROM saved_leads")
+    count = cursor.fetchone()[0]
+    if count > 0:
+        conn.close()
+        return  # Already have data
+    
+    demo_leads = [
+        {
+            "npi": "1234567890",
+            "organization_name": "Advanced Lab Services",
+            "first_name": "Dr. Sarah",
+            "last_name": "Johnson",
+            "credential": "MD",
+            "taxonomy_code": "207ZP0102X",
+            "taxonomy_desc": "Anatomic Pathology & Clinical Pathology",
+            "address_line1": "123 Medical Center Dr",
+            "city": "Houston",
+            "state": "TX",
+            "zip_code": "77030",
+            "phone": "(713) 555-0123",
+            "fax": "(713) 555-0124",
+            "enumeration_date": "2020-01-15",
+            "last_updated": "2024-01-15",
+            "lead_score": 85,
+            "lead_status": "qualified",
+            "notes": "High-volume lab with billing issues",
+            "tags": "laboratory,billing",
+            "source": "demo"
+        },
+        {
+            "npi": "1234567891",
+            "organization_name": "City Urgent Care Center",
+            "first_name": "Dr. Michael",
+            "last_name": "Chen",
+            "credential": "DO",
+            "taxonomy_code": "207Q00000X",
+            "taxonomy_desc": "Family Medicine",
+            "address_line1": "456 Health Blvd",
+            "city": "Austin",
+            "state": "TX",
+            "zip_code": "78701",
+            "phone": "(512) 555-0456",
+            "fax": "(512) 555-0457",
+            "enumeration_date": "2019-06-20",
+            "last_updated": "2024-01-15",
+            "lead_score": 78,
+            "lead_status": "contacted",
+            "notes": "Urgent care with payor contracting needs",
+            "tags": "urgent_care,payor",
+            "source": "demo"
+        },
+        {
+            "npi": "1234567892",
+            "organization_name": "Primary Care Associates",
+            "first_name": "Dr. Emily",
+            "last_name": "Rodriguez",
+            "credential": "MD",
+            "taxonomy_code": "207Q00000X",
+            "taxonomy_desc": "Family Medicine",
+            "address_line1": "789 Wellness Way",
+            "city": "Dallas",
+            "state": "TX",
+            "zip_code": "75201",
+            "phone": "(214) 555-0789",
+            "fax": "(214) 555-0790",
+            "enumeration_date": "2018-03-10",
+            "last_updated": "2024-01-15",
+            "lead_score": 92,
+            "lead_status": "qualified",
+            "notes": "Primary care practice needing workflow support",
+            "tags": "primary_care,workflow",
+            "source": "demo"
+        }
+    ]
+    
+    for lead in demo_leads:
+        cursor.execute("""
+            INSERT OR IGNORE INTO saved_leads (
+                npi, organization_name, first_name, last_name, credential,
+                taxonomy_code, taxonomy_desc, address_line1, city, state, zip_code,
+                phone, fax, enumeration_date, last_updated, lead_score, lead_status,
+                notes, tags, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            lead["npi"], lead["organization_name"], lead["first_name"], lead["last_name"], lead["credential"],
+            lead["taxonomy_code"], lead["taxonomy_desc"], lead["address_line1"], lead["city"], lead["state"], lead["zip_code"],
+            lead["phone"], lead["fax"], lead["enumeration_date"], lead["last_updated"], lead["lead_score"], lead["lead_status"],
+            lead["notes"], lead["tags"], lead["source"]
+        ))
+        
+        # Add demo emails
+        cursor.execute("""
+            INSERT OR IGNORE INTO lead_emails (npi, email, first_name, last_name, position, confidence, email_type, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            lead["npi"],
+            f"contact@{lead['organization_name'].lower().replace(' ', '')}.com",
+            lead["first_name"],
+            lead["last_name"],
+            "Practice Manager",
+            90,
+            "verified",
+            "demo"
+        ))
+        
+        # Add enrichment data
+        cursor.execute("""
+            INSERT OR IGNORE INTO lead_enrichment (
+                npi, organization_name, overall_score, billing_score, payor_score, workflow_score,
+                priority, services_needed, authorized_official
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            lead["npi"],
+            lead["organization_name"],
+            80,
+            85 if "billing" in lead["tags"] else 70,
+            90 if "payor" in lead["tags"] else 75,
+            85 if "workflow" in lead["tags"] else 70,
+            "high" if lead["lead_score"] > 80 else "medium",
+            json.dumps(["Billing Services" if "billing" in lead["tags"] else "Payor Contracting"]),
+            json.dumps({
+                "first_name": lead["first_name"],
+                "last_name": lead["last_name"],
+                "title": "Medical Director",
+                "phone": lead["phone"]
+            })
+        ))
+    
     conn.commit()
     conn.close()
 
@@ -308,6 +447,12 @@ def save_lead_emails(npi: str, emails: list) -> int:
     cursor = conn.cursor()
     saved = 0
     for e in emails:
+        email = e.get("email", "")
+        # Apply final quality check before saving
+        if not _is_quality_email(email):
+            print(f"WARNING: Blocked bad email from saving: {email}")
+            continue
+            
         try:
             cursor.execute("""
                 INSERT OR IGNORE INTO lead_emails (
@@ -316,7 +461,7 @@ def save_lead_emails(npi: str, emails: list) -> int:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 npi,
-                e.get("email", ""),
+                email,
                 e.get("first_name", ""),
                 e.get("last_name", ""),
                 e.get("position", ""),

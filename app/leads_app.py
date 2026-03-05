@@ -43,6 +43,14 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and seed demo data on startup."""
+    init_db()
+    from app.database import seed_demo_leads
+    seed_demo_leads()
+
+
 @app.get("/healthz")
 async def health_check():
     """Health check endpoint for monitoring."""
@@ -1530,7 +1538,7 @@ async def export_emails_csv():
             "NO QUALITY EMAILS FOUND", "", "", "", "", "", "", "", "", "", "", ""
         ])
         writer.writerow([
-            "Run enrichment and email finding first. Only emails with 60%+ confidence are exported.", "", "", "", "", "", "", "", "", "", "", ""
+            "Run enrichment and email finding first. Emails now include verification and quality filtering.", "", "", "", "", "", "", "", "", "", "", ""
         ])
     else:
         # Data
@@ -1556,6 +1564,39 @@ async def export_emails_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=lead_emails.csv"}
     )
+
+
+@app.get("/api/admin/email-quality-audit")
+async def audit_email_quality():
+    """Audit existing emails for quality issues. Returns bad emails that should be removed."""
+    from app.email_finder import _is_quality_email
+    
+    db = get_db()
+    emails = db.execute("""
+        SELECT npi, email, source, domain, confidence
+        FROM lead_emails
+        ORDER BY npi, confidence DESC
+    """).fetchall()
+    db.close()
+    
+    bad_emails = []
+    for email in emails:
+        if not _is_quality_email(email['email']):
+            bad_emails.append({
+                "npi": email['npi'],
+                "email": email['email'],
+                "source": email['source'],
+                "domain": email['domain'],
+                "confidence": email['confidence'],
+                "reason": "Failed quality check"
+            })
+    
+    return {
+        "total_emails": len(emails),
+        "bad_emails": len(bad_emails),
+        "bad_email_list": bad_emails[:50],  # Limit for display
+        "recommendation": "Run cleanup if bad emails found"
+    }
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────
