@@ -448,8 +448,8 @@ async def _pull_and_save_segment(
 
         email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 6) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
         if email_lookups < email_lookup_cap:
+            domain_hint = _domain_from_url(row.get("url", ""))
             try:
-                domain_hint = _domain_from_url(row.get("url", ""))
                 # Get names from enrichment for pattern generation
                 first_name = ""
                 last_name = ""
@@ -475,7 +475,12 @@ async def _pull_and_save_segment(
                     emails_found += len(found)
                 email_lookups += 1
             except Exception:
-                pass
+                # Keep strict-mode UX functional even when remote lookup times out.
+                fallback = _fallback_contact_emails(domain_hint)
+                if fallback:
+                    save_lead_emails(npi, fallback)
+                    emails_found += len(fallback)
+                email_lookups += 1
 
     return {
         "segment": segment,
@@ -1044,13 +1049,21 @@ async def list_leads(
     if urgent_only:
         leads = [row for row in leads if int(row.get("urgency_score", 0) or 0) >= 62]
     if quality_only:
-        leads = [
-            row for row in leads
-            if int(row.get("lead_score", 0) or 0) >= 50
-            and int(row.get("urgency_score", 0) or 0) >= 35
-            and isinstance(row.get("services_wanted", []), list)
-            and len(row.get("services_wanted", [])) > 0
-        ]
+        def _is_quality_row(row: dict) -> bool:
+            tags = str(row.get("tags", "") or "")
+            # Primary path: rely on poll-time quality tier tagging.
+            if STRICT_POOL_TAG in tags or "quality_tier=strict" in tags:
+                return True
+
+            # Backward compatibility for legacy rows without quality tags.
+            return (
+                int(row.get("lead_score", 0) or 0) >= 65
+                and int(row.get("urgency_score", 0) or 0) >= 40
+                and isinstance(row.get("services_wanted", []), list)
+                and len(row.get("services_wanted", [])) > 0
+            )
+
+        leads = [row for row in leads if _is_quality_row(row)]
     if need_signal_only:
         leads = [
             row for row in leads
