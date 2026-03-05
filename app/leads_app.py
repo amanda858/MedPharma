@@ -181,6 +181,21 @@ def _clear_quality_pools() -> int:
     return int(deleted or 0)
 
 
+def _quality_tier_from_tags(tags_value: str) -> str | None:
+    tags = str(tags_value or "")
+    for part in tags.split(","):
+        token = part.strip().lower()
+        if token.startswith("quality_tier="):
+            value = token.split("=", 1)[1].strip()
+            if value in {"strict", "review"}:
+                return value
+    if STRICT_POOL_TAG in tags:
+        return "strict"
+    if REVIEW_POOL_TAG in tags:
+        return "review"
+    return None
+
+
 def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
     headline = str(row.get("headline", "") or "").strip()
     note_text = str(row.get("notes", "") or "").strip()
@@ -1057,6 +1072,7 @@ async def list_leads(
     urgency_level: Optional[str] = Query(None),
     urgent_only: bool = Query(False),
     quality_only: bool = Query(False),
+    quality_tier: Optional[str] = Query(None, description="strict|review"),
     need_signal_only: bool = Query(False),
     require_email: bool = Query(False),
 ):
@@ -1071,6 +1087,10 @@ async def list_leads(
         leads = [row for row in leads if (row.get("urgency_level", "").lower() == urgency_level.lower())]
     if urgent_only:
         leads = [row for row in leads if int(row.get("urgency_score", 0) or 0) >= 62]
+    if quality_tier:
+        tier = str(quality_tier).strip().lower()
+        if tier in {"strict", "review"}:
+            leads = [row for row in leads if _quality_tier_from_tags(row.get("tags", "")) == tier]
     if quality_only:
         def _is_quality_row(row: dict) -> bool:
             tags = str(row.get("tags", "") or "")

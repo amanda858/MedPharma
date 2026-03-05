@@ -1534,24 +1534,46 @@
             if (!container) return;
 
             try {
-                const resp = await fetch(`/api/leads?${params}`);
-                const data = await resp.json();
-                renderSavedLeads(data.leads || [], container);
+                let effectiveData = null;
+                let usedReviewFallback = false;
+
+                if (!exploratory) {
+                    const strictParams = new URLSearchParams(params);
+                    strictParams.set('quality_tier', 'strict');
+                    const strictResp = await fetch(`/api/leads?${strictParams}`);
+                    const strictData = await strictResp.json();
+
+                    if ((strictData.leads || []).length > 0) {
+                        effectiveData = strictData;
+                    } else {
+                        const reviewParams = new URLSearchParams(params);
+                        reviewParams.set('quality_tier', 'review');
+                        const reviewResp = await fetch(`/api/leads?${reviewParams}`);
+                        const reviewData = await reviewResp.json();
+                        effectiveData = reviewData;
+                        usedReviewFallback = (reviewData.leads || []).length > 0;
+                    }
+                } else {
+                    const resp = await fetch(`/api/leads?${params}`);
+                    effectiveData = await resp.json();
+                }
+
+                renderSavedLeads((effectiveData && effectiveData.leads) || [], container);
 
                 const summary = document.getElementById('savedFilterSummary');
                 if (summary) {
                     summary.textContent = exploratory
                         ? 'Exploratory mode: showing broader leads (may include missing email or weaker signal).'
-                        : 'Strict mode: showing actionable leads with need evidence and at least one email.';
+                        : (usedReviewFallback
+                            ? 'Strict pool is temporarily empty. Showing top review-quality leads with need evidence and at least one email.'
+                            : 'Strict mode: showing actionable leads with need evidence and at least one email.');
                 }
 
-                if (!autoPollAttempted && (!data.leads || data.leads.length === 0)) {
+                if (!autoPollAttempted && (!effectiveData?.leads || effectiveData.leads.length === 0)) {
                     autoPollAttempted = true;
                     showToast('No quality leads with emails yet. Running poll now...', 'success');
                     await runDailyPollNow();
-                    const retryResp = await fetch(`/api/leads?${params}`);
-                    const retryData = await retryResp.json();
-                    renderSavedLeads(retryData.leads || [], container);
+                    await loadSavedLeads();
                 }
             } catch (err) {
                 container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading leads</div>`;
