@@ -169,7 +169,9 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     # Keep strict quality tight, but allow strong identity + signal rows into review.
     if not services_needed:
-        if score >= STRICT_MIN_SIGNAL_SCORE and has_identity_signal:
+        # Sparse-enrichment lane: strong signal + contactability can still be a
+        # review-quality lead; strict still requires richer identity/service data.
+        if score >= 68 and (has_identity_signal or has_phone):
             return "review"
         return None
 
