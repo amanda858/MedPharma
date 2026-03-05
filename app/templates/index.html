@@ -1568,7 +1568,7 @@
                 showToast('Running daily lead poll...', 'success');
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 15000);
-                const resp = await fetch('/api/leads/poll-daily?segment=all', { method: 'POST', signal: controller.signal });
+                const resp = await fetch('/api/leads/poll-daily?segment=all&fast=true', { method: 'POST', signal: controller.signal });
                 clearTimeout(timeout);
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');

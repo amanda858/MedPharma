@@ -424,10 +424,10 @@ def _urgency_from_service_needs(service_needs: dict) -> tuple[int, str, str]:
     return urgency_score, level, reason
 
 
-async def run_daily_lead_poll(segment: str = "all") -> dict:
+async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
     """Pull fresh external signals, save leads, enrich, and update urgency fields."""
     if segment == "all":
-        segments = list(NATIONWIDE_SEGMENTS)
+        segments = ["laboratory", "urgent_care", "primary_care"] if fast else list(NATIONWIDE_SEGMENTS)
         deleted_old = _clear_quality_pools()
         per_segment = []
         totals = {
@@ -441,7 +441,7 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
         }
 
         for seg in segments:
-            result = await _pull_and_save_segment(seg, max_per_query=12)
+            result = await _pull_and_save_segment(seg, max_per_query=4 if fast else 12)
             per_segment.append(result)
             totals["pulled"] += int(result["pulled"])
             totals["saved"] += int(result["saved"])
@@ -465,9 +465,10 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
             "filtered_out": totals["filtered_out"],
             "deleted_previous_pool": deleted_old,
             "polled_at": datetime.now().isoformat(),
+            "fast": fast,
         }
 
-    single = await _pull_and_save_segment(segment, max_per_query=10)
+    single = await _pull_and_save_segment(segment, max_per_query=4 if fast else 10)
     return {
         "ok": True,
         "segment": segment,
@@ -479,6 +480,7 @@ async def run_daily_lead_poll(segment: str = "all") -> dict:
         "emails_found": single.get("emails_found", 0),
         "filtered_out": single["filtered_out"],
         "polled_at": datetime.now().isoformat(),
+        "fast": fast,
     }
 
 
@@ -967,15 +969,16 @@ async def list_leads(
 async def poll_leads_now(
     segment: str = Query("all", description="all|laboratory|urgent_care|primary_care|asc"),
     wait: bool = Query(False, description="If true, wait for poll completion; otherwise run in background"),
+    fast: bool = Query(True, description="If true, run a faster reduced-scope poll"),
 ):
     """Manual trigger for daily polling and urgency updates (same logic as 9 AM scheduler)."""
-    async def _run_poll(seg: str):
+    async def _run_poll(seg: str, fast_mode: bool):
         _poll_status["running"] = True
         _poll_status["started_at"] = datetime.now().isoformat()
         _poll_status["finished_at"] = ""
         _poll_status["last_error"] = ""
         try:
-            result = await run_daily_lead_poll(segment=seg)
+            result = await run_daily_lead_poll(segment=seg, fast=fast_mode)
             _poll_status["last_result"] = result
             return result
         except Exception as e:
@@ -995,14 +998,15 @@ async def poll_leads_now(
 
     try:
         if wait:
-            return await _run_poll(segment)
+            return await _run_poll(segment, fast)
 
-        asyncio.create_task(_run_poll(segment))
+        asyncio.create_task(_run_poll(segment, fast))
         return {
             "ok": True,
             "running": True,
             "started": True,
             "segment": segment,
+            "fast": fast,
             "message": "Lead poll started in background",
             "status": _poll_status,
         }
