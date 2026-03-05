@@ -884,10 +884,23 @@ def _is_quality_email(email: str) -> bool:
         'wixpress.', 'wix.'
     ]
 
+    # Block registry/aggregator/system domains from outreach qualification.
+    blocked_domains = {
+        'npiregistry.cms.hhs.gov',
+        'cms.hhs.gov',
+        'hhs.gov',
+        'reddit.com',
+        'linkedin.com',
+        'indeed.com',
+    }
+
     if any(skip in email_lower for skip in skip_patterns):
         return False
 
     if any(error_domain in domain for error_domain in error_domains):
+        return False
+
+    if domain in blocked_domains or any(domain.endswith(f'.{d}') for d in blocked_domains):
         return False
 
     # Skip suspicious patterns

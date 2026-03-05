@@ -32,7 +32,7 @@ except ImportError:
 from app.npi_client import (
     search_npi, search_npi_by_taxonomy, get_npi_detail, bulk_search_labs,
 )
-from app.email_finder import find_emails_for_lab
+from app.email_finder import find_emails_for_lab, _is_quality_email
 from app.enrichment import enrich_lead, enrich_leads_bulk
 from app.lead_scraper import run_national_lead_pull
 from app.build_info import BUILD_MARKER
@@ -1170,7 +1170,14 @@ async def list_leads(
             or "need_signal=yes" in str(row.get("tags", "") or "")
         ]
     if require_email:
-        leads = [row for row in leads if (str(row.get("emails", "") or "").strip())]
+        def _has_quality_email(row: dict) -> bool:
+            raw = str(row.get("emails", "") or "").strip()
+            if not raw:
+                return False
+            parts = [p.strip() for p in raw.split(";") if p.strip()]
+            return any(_is_quality_email(email) for email in parts)
+
+        leads = [row for row in leads if _has_quality_email(row)]
 
     leads.sort(
         key=lambda row: (
