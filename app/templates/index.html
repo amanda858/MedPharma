@@ -1574,8 +1574,8 @@
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
 
                 if (data.running && data.started) {
-                    showToast('Poll started in background. Refreshing quality leads shortly...', 'success');
-                    setTimeout(() => loadSavedLeads(), 25000);
+                    showToast('Poll started. Waiting for completion...', 'success');
+                    await waitForPollCompletionAndReload();
                     return;
                 }
 
@@ -1583,8 +1583,8 @@
                 loadSavedLeads();
             } catch (err) {
                 if (err.name === 'AbortError') {
-                    showToast('Poll started. Refreshing quality leads soon...', 'success');
-                    setTimeout(() => loadSavedLeads(), 25000);
+                    showToast('Poll started. Waiting for completion...', 'success');
+                    await waitForPollCompletionAndReload();
                 } else {
                     showToast(`Poll error: ${err.message}`, 'error');
                 }
@@ -1594,6 +1594,31 @@
                     pollBtn.textContent = '⏱ Run Poll Now';
                 }
             }
+        }
+
+        async function waitForPollCompletionAndReload() {
+            const maxChecks = 30; // ~3 minutes at 6s intervals
+            for (let i = 0; i < maxChecks; i++) {
+                try {
+                    const statusResp = await fetch('/api/leads/poll-status');
+                    const statusData = await statusResp.json();
+                    const running = !!statusData?.status?.running;
+                    if (!running) {
+                        const last = statusData?.status?.last_result || {};
+                        if (last && typeof last === 'object' && (last.saved !== undefined || last.strict_saved !== undefined)) {
+                            showToast(`Poll finished: ${last.strict_saved || 0} strict, ${last.review_saved || 0} review, ${last.emails_found || 0} emails`, 'success');
+                        }
+                        await loadSavedLeads();
+                        return;
+                    }
+                } catch (_) {
+                    // Keep polling; transient network failures should not break the loop.
+                }
+                await new Promise(resolve => setTimeout(resolve, 6000));
+            }
+
+            showToast('Poll is still running. We will keep existing leads visible and you can refresh shortly.', 'success');
+            await loadSavedLeads();
         }
 
         function renderSavedLeads(leads, container) {
