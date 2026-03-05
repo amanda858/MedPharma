@@ -116,11 +116,15 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
 
     org_name = (row.get("org_name") or "").strip()
     state = (row.get("state") or "").strip()
-    if not org_name or not state:
+    city = (row.get("city") or "").strip()
+    if not org_name:
         return None
 
     npi = str((enrichment or {}).get("npi") or row.get("npi") or "").strip()
     has_valid_npi = npi.isdigit() and len(npi) == 10
+    has_location_signal = bool(state or city or has_valid_npi)
+    if not has_location_signal:
+        return None
 
     auth = enrichment.get("authorized_official", {}) if isinstance(enrichment.get("authorized_official", {}), dict) else {}
     has_named_official = bool((auth.get("first_name") or "").strip() or (auth.get("last_name") or "").strip())
@@ -128,7 +132,7 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
 
     phone = (row.get("phone") or "").strip()
     has_phone = bool(phone and phone not in {"—", "N/A", "na"})
-    if not has_phone and not has_identity_signal:
+    if not has_phone and not has_identity_signal and score < STRICT_MIN_SIGNAL_SCORE:
         return None
 
     service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
@@ -158,8 +162,8 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
     if len(services_needed) < STRICT_MIN_SERVICES_COUNT:
         return "review"
 
-    strong_identity = has_valid_npi and (has_named_official or overall >= 75)
-    if score >= STRICT_MIN_SIGNAL_SCORE and strong_identity:
+    strong_identity = has_identity_signal or has_phone
+    if score >= STRICT_MIN_SIGNAL_SCORE and (strong_identity or overall >= 60):
         return "strict"
     return "review"
 
