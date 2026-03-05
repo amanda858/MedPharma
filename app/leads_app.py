@@ -41,7 +41,7 @@ app = FastAPI(
     description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
-BUILD_MARKER = "build-2026-03-05-incident-fix-03"
+BUILD_MARKER = "build-2026-03-05-incident-fix-04"
 
 
 @app.on_event("startup")
@@ -200,6 +200,62 @@ def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def _infer_service_needs_from_text(row: dict, segment: str) -> dict:
+    """Infer a minimal service_needs payload when enrichment is sparse.
+
+    This keeps strict filtering meaningful while avoiding total drop-off when
+    a lead has clear intent text but incomplete structured enrichment.
+    """
+    text = f"{row.get('headline', '')} {row.get('notes', '')}".lower()
+
+    billing_terms = [
+        "billing", "claims", "denial", "revenue cycle", "rcm", "ar", "accounts receivable", "coding",
+    ]
+    payor_terms = [
+        "payor", "payer", "credential", "credentialing", "contracting", "enrollment", "caqh", "pecos",
+    ]
+    workflow_terms = [
+        "workflow", "compliance", "audit", "backlog", "turnaround", "prior auth", "prior authorization",
+    ]
+
+    billing_score = 0
+    payor_score = 0
+    workflow_score = 0
+    services_needed: list[str] = []
+
+    if any(t in text for t in billing_terms):
+        billing_score = 48
+        services_needed.append("Billing Services")
+    if any(t in text for t in payor_terms):
+        payor_score = 46
+        services_needed.append("Payor Contracting")
+    if any(t in text for t in workflow_terms):
+        workflow_score = 44
+        services_needed.append("Workflow Support")
+
+    if not services_needed and segment in {"urgent_care", "primary_care", "clinic", "hospital"}:
+        # Conservative default for medically operational segments.
+        workflow_score = 36
+        services_needed = ["Workflow Support"]
+
+    if not services_needed:
+        return {}
+
+    overall_score = max(billing_score, payor_score, workflow_score)
+    if len(services_needed) >= 2:
+        overall_score = max(overall_score, 50)
+
+    return {
+        "overall_score": int(overall_score),
+        "billing_score": int(billing_score),
+        "payor_score": int(payor_score),
+        "workflow_score": int(workflow_score),
+        "services_needed": services_needed,
+        "priority": "medium" if overall_score >= 45 else "low",
+        "recommendation": "Inferred from source text signals",
+    }
+
+
 def _domain_from_url(url: str) -> str:
     try:
         parsed = urlparse(str(url or "").strip())
@@ -293,6 +349,7 @@ async def _pull_and_save_segment(
     segment: str,
     *,
     max_per_query: int = 10,
+    fast_mode: bool = False,
 ) -> dict:
     discovered = await run_national_lead_pull(
         segment=segment,
@@ -324,6 +381,13 @@ async def _pull_and_save_segment(
         if not enrichment or enrichment.get("error"):
             filtered_out += 1
             continue
+
+        service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
+        services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
+        if not services_needed:
+            inferred = _infer_service_needs_from_text(row, segment)
+            if inferred:
+                enrichment["service_needs"] = inferred
 
         tier = _quality_tier(row, enrichment)
         if tier is None:
@@ -371,7 +435,8 @@ async def _pull_and_save_segment(
             update_enrichment_urgency(npi, urgency_score, urgency_level, urgency_reason)
             urgency_updated += 1
 
-        if email_lookups < EMAIL_LOOKUP_PER_SEGMENT:
+        email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 6) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
+        if email_lookups < email_lookup_cap:
             try:
                 domain_hint = _domain_from_url(row.get("url", ""))
                 # Get names from enrichment for pattern generation
@@ -382,11 +447,14 @@ async def _pull_and_save_segment(
                     if isinstance(auth, dict):
                         first_name = auth.get("first_name", "")
                         last_name = auth.get("last_name", "")
-                email_result = await find_emails_for_lab(
-                    row.get("org_name", ""), 
-                    domain_hint=domain_hint or None,
-                    first_name=first_name,
-                    last_name=last_name
+                email_result = await asyncio.wait_for(
+                    find_emails_for_lab(
+                        row.get("org_name", ""),
+                        domain_hint=domain_hint or None,
+                        first_name=first_name,
+                        last_name=last_name,
+                    ),
+                    timeout=8 if fast_mode else 20,
                 )
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
                 if not found:
@@ -467,7 +535,7 @@ async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
         }
 
         for seg in segments:
-            result = await _pull_and_save_segment(seg, max_per_query=4 if fast else 12)
+            result = await _pull_and_save_segment(seg, max_per_query=4 if fast else 12, fast_mode=fast)
             per_segment.append(result)
             totals["pulled"] += int(result["pulled"])
             totals["saved"] += int(result["saved"])
@@ -494,7 +562,7 @@ async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
             "fast": fast,
         }
 
-    single = await _pull_and_save_segment(segment, max_per_query=4 if fast else 10)
+    single = await _pull_and_save_segment(segment, max_per_query=4 if fast else 10, fast_mode=fast)
     return {
         "ok": True,
         "segment": segment,
