@@ -359,18 +359,30 @@ def _fallback_contact_emails(domain_hint: str, first_name: str = "", last_name: 
         return []
     first = str(first_name or "").strip().lower()
     last = str(last_name or "").strip().lower()
-    if not first or not last:
-        return []
-    email = f"{first}.{last}@{domain}"
+    if first and last:
+        email = f"{first}.{last}@{domain}"
+        return [{
+            "email": email,
+            "first_name": first_name or "",
+            "last_name": last_name or "",
+            "position": "Authorized Official",
+            "is_decision_maker": True,
+            "confidence": 40,
+            "type": "pattern",
+            "source": "strict_fallback_pattern",
+            "domain": domain,
+        }]
+
+    # Keep a contactable business address when names are unavailable.
     return [{
-        "email": email,
-        "first_name": first_name or "",
-        "last_name": last_name or "",
-        "position": "Authorized Official",
-        "is_decision_maker": True,
-        "confidence": 40,
-        "type": "pattern",
-        "source": "strict_fallback_pattern",
+        "email": f"billing@{domain}",
+        "first_name": "",
+        "last_name": "",
+        "position": "Billing",
+        "is_decision_maker": False,
+        "confidence": 35,
+        "type": "role",
+        "source": "strict_fallback_role",
         "domain": domain,
     }]
 
