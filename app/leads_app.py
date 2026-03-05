@@ -105,8 +105,38 @@ NEED_SERVICE_TERMS = [
     "billing", "claims", "credentialing", "payer", "payor", "contracting",
     "workflow", "compliance", "coding", "audit", "prior authorization",
 ]
+SEGMENT_INTENT_TERMS = {
+    "laboratory": ["turnaround", "specimen backlog", "lis", "referral volume"],
+    "urgent_care": ["patient volume", "front desk overload", "claims lag", "same-day billing"],
+    "primary_care": ["provider enrollment", "chronic care billing", "coding backlog"],
+    "asc": ["case mix", "authorization delay", "surgical billing"],
+    "hospital": ["denials spike", "discharge backlog", "revenue integrity"],
+    "clinic": ["payer mix", "intake overload", "credentialing delay"],
+    "diagnostic": ["imaging claims", "radiology coding", "prior auth delay"],
+}
+SEGMENT_SERVICE_TERMS = {
+    "laboratory": ["lab billing", "specimen processing", "clia compliance"],
+    "urgent_care": ["urgent care billing", "payer enrollment", "point-of-care workflow"],
+    "primary_care": ["fee schedule", "medicare billing", "preventive coding"],
+    "asc": ["ambulatory surgery billing", "facility claims", "payor contracting"],
+    "hospital": ["hospital billing", "drg", "denial management", "utilization review"],
+    "clinic": ["medical billing", "credentialing", "claims cleanup"],
+    "diagnostic": ["diagnostic billing", "radiology workflow", "authorization management"],
+}
 EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "20") or 20))
 AUTO_BOOTSTRAP_POLL = str(os.getenv("AUTO_BOOTSTRAP_POLL", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _segment_terms(segment: str, base_terms: list[str], segment_map: dict[str, list[str]]) -> list[str]:
+    seg = str(segment or "all").strip().lower()
+    scoped = segment_map.get(seg, []) if seg and seg != "all" else []
+    # Keep insertion order while deduplicating.
+    merged: list[str] = []
+    for term in [*base_terms, *scoped]:
+        t = str(term).strip().lower()
+        if t and t not in merged:
+            merged.append(t)
+    return merged
 
 
 def _quality_tier(row: dict, enrichment: dict) -> str | None:
@@ -196,13 +226,15 @@ def _quality_tier_from_tags(tags_value: str) -> str | None:
     return None
 
 
-def _extract_need_signal(row: dict, enrichment: dict) -> tuple[bool, str]:
+def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> tuple[bool, str]:
     headline = str(row.get("headline", "") or "").strip()
     note_text = str(row.get("notes", "") or "").strip()
     source_text = f"{headline} {note_text}".lower()
 
-    has_intent = any(term in source_text for term in NEED_INTENT_TERMS)
-    has_service = any(term in source_text for term in NEED_SERVICE_TERMS)
+    intent_terms = _segment_terms(segment, NEED_INTENT_TERMS, SEGMENT_INTENT_TERMS)
+    service_terms = _segment_terms(segment, NEED_SERVICE_TERMS, SEGMENT_SERVICE_TERMS)
+    has_intent = any(term in source_text for term in intent_terms)
+    has_service = any(term in source_text for term in service_terms)
     # Accept explicit service + headline even if intent verb is implicit.
     if (has_intent and has_service and headline) or (has_service and headline):
         return True, headline[:180]
@@ -239,6 +271,19 @@ def _infer_service_needs_from_text(row: dict, segment: str) -> dict:
     workflow_terms = [
         "workflow", "compliance", "audit", "backlog", "turnaround", "prior auth", "prior authorization",
     ]
+
+    seg_intent_terms = SEGMENT_INTENT_TERMS.get(str(segment or "").strip().lower(), [])
+    seg_service_terms = SEGMENT_SERVICE_TERMS.get(str(segment or "").strip().lower(), [])
+    for term in seg_intent_terms + seg_service_terms:
+        t = str(term).strip().lower()
+        if not t:
+            continue
+        if any(k in t for k in ["billing", "claims", "coding", "revenue"]):
+            billing_terms.append(t)
+        if any(k in t for k in ["payor", "payer", "credential", "contract", "enrollment"]):
+            payor_terms.append(t)
+        if any(k in t for k in ["workflow", "compliance", "audit", "backlog", "turnaround", "authorization"]):
+            workflow_terms.append(t)
 
     billing_score = 0
     payor_score = 0
@@ -432,7 +477,7 @@ async def _pull_and_save_segment(
             filtered_out += 1
             continue
 
-        has_need_signal, need_evidence = _extract_need_signal(row, enrichment)
+        has_need_signal, need_evidence = _extract_need_signal(row, enrichment, segment=segment)
         if not has_need_signal:
             filtered_out += 1
             continue
