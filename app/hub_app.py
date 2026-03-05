@@ -17,6 +17,7 @@ from app.config import DATABASE_PATH
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
 log = logging.getLogger(__name__)
+BUILD_MARKER = "build-2026-03-05-incident-fix-01"
 
 app = FastAPI(
     title="MedPharma Client Hub",
@@ -195,6 +196,15 @@ async def admin_leads_root():
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "service": "hub"}
+
+
+@app.get("/buildz")
+async def buildz():
+    return {
+        "ok": True,
+        "service": "hub",
+        "build_marker": BUILD_MARKER,
+    }
 
 
 @app.get("/api/admin/integrations/readiness")

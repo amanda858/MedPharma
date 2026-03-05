@@ -41,6 +41,7 @@ app = FastAPI(
     description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
+BUILD_MARKER = "build-2026-03-05-incident-fix-01"
 
 
 @app.on_event("startup")
@@ -55,6 +56,15 @@ async def startup_event():
 async def health_check():
     """Health check endpoint for monitoring."""
     return {"status": "healthy", "service": "medpharma-leads", "version": "2.0.1"}
+
+
+@app.get("/buildz")
+async def leads_buildz():
+    return {
+        "ok": True,
+        "service": "leads",
+        "build_marker": BUILD_MARKER,
+    }
 
 
 _scheduler_started = False
