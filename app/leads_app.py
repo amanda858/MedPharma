@@ -328,11 +328,14 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
-def _fallback_contact_emails(domain_hint: str) -> list[str]:
+def _is_blocked_contact_domain(domain_hint: str) -> bool:
     domain = str(domain_hint or "").strip().lower()
+    if not domain or "." not in domain:
+        return True
     blocked = {
         "npiregistry.cms.hhs.gov",
         "cms.hhs.gov",
+        "hhs.gov",
         "reddit.com",
         "www.reddit.com",
         "linkedin.com",
@@ -340,13 +343,36 @@ def _fallback_contact_emails(domain_hint: str) -> list[str]:
         "indeed.com",
         "www.indeed.com",
     }
-    if not domain or "." not in domain or domain in blocked:
+    return domain in blocked or any(domain.endswith(f".{d}") for d in blocked)
+
+
+def _clean_domain_hint(domain_hint: str) -> str:
+    domain = str(domain_hint or "").strip().lower()
+    if _is_blocked_contact_domain(domain):
+        return ""
+    return domain
+
+
+def _fallback_contact_emails(domain_hint: str, first_name: str = "", last_name: str = "") -> list[dict]:
+    domain = str(domain_hint or "").strip().lower()
+    if _is_blocked_contact_domain(domain):
         return []
-    return [
-        f"contact@{domain}",
-        f"info@{domain}",
-        f"billing@{domain}",
-    ]
+    first = str(first_name or "").strip().lower()
+    last = str(last_name or "").strip().lower()
+    if not first or not last:
+        return []
+    email = f"{first}.{last}@{domain}"
+    return [{
+        "email": email,
+        "first_name": first_name or "",
+        "last_name": last_name or "",
+        "position": "Authorized Official",
+        "is_decision_maker": True,
+        "confidence": 40,
+        "type": "pattern",
+        "source": "strict_fallback_pattern",
+        "domain": domain,
+    }]
 
 
 def _is_valid_npi(value: str) -> bool:
@@ -542,7 +568,8 @@ async def _pull_and_save_segment(
 
         email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 6) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
         if email_lookups < email_lookup_cap:
-            domain_hint = _domain_from_url(row.get("url", ""))
+            raw_domain_hint = _domain_from_url(row.get("url", ""))
+            domain_hint = _clean_domain_hint(raw_domain_hint)
             try:
                 # Get names from enrichment for pattern generation
                 first_name = ""
@@ -552,6 +579,7 @@ async def _pull_and_save_segment(
                     if isinstance(auth, dict):
                         first_name = auth.get("first_name", "")
                         last_name = auth.get("last_name", "")
+                lookup_timeout = 12 if (fast_mode and tier == "strict") else (8 if fast_mode else 20)
                 email_result = await asyncio.wait_for(
                     find_emails_for_lab(
                         row.get("org_name", ""),
@@ -559,18 +587,30 @@ async def _pull_and_save_segment(
                         first_name=first_name,
                         last_name=last_name,
                     ),
-                    timeout=8 if fast_mode else 20,
+                    timeout=lookup_timeout,
                 )
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
+                if not found and domain_hint:
+                    # Second pass without hint avoids getting trapped on stale/non-actionable source URLs.
+                    second_try = await asyncio.wait_for(
+                        find_emails_for_lab(
+                            row.get("org_name", ""),
+                            domain_hint=None,
+                            first_name=first_name,
+                            last_name=last_name,
+                        ),
+                        timeout=lookup_timeout,
+                    )
+                    found = second_try.get("emails", []) if isinstance(second_try, dict) else []
                 if not found:
-                    found = _fallback_contact_emails(domain_hint)
+                    found = _fallback_contact_emails(domain_hint, first_name=first_name, last_name=last_name)
                 if found:
                     save_lead_emails(npi, found)
                     emails_found += len(found)
                 email_lookups += 1
             except Exception:
                 # Keep strict-mode UX functional even when remote lookup times out.
-                fallback = _fallback_contact_emails(domain_hint)
+                fallback = _fallback_contact_emails(domain_hint, first_name=first_name, last_name=last_name)
                 if fallback:
                     save_lead_emails(npi, fallback)
                     emails_found += len(fallback)
