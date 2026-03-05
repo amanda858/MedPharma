@@ -14,10 +14,10 @@ from app.notifications import start_daily_scheduler, get_notification_status
 from app.database import init_db
 from app.leads_app import app as leads_subapp
 from app.config import DATABASE_PATH
+from app.build_info import BUILD_MARKER
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT; local dev does not
 log = logging.getLogger(__name__)
-BUILD_MARKER = "build-2026-03-05-incident-fix-02"
 
 app = FastAPI(
     title="MedPharma Client Hub",

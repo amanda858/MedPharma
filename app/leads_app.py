@@ -35,15 +35,13 @@ from app.npi_client import (
 from app.email_finder import find_emails_for_lab
 from app.enrichment import enrich_lead, enrich_leads_bulk
 from app.lead_scraper import run_national_lead_pull
+from app.build_info import BUILD_MARKER
 
 app = FastAPI(
     title="MedPharma Healthcare Leads",
     description="Lead Generator — search NPI Registry for healthcare prospects",
     version="2.0.1",
 )
-BUILD_MARKER = "build-2026-03-05-incident-fix-04"
-
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and seed demo data on startup."""
@@ -130,7 +128,7 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
 
     phone = (row.get("phone") or "").strip()
     has_phone = bool(phone and phone not in {"—", "N/A", "na"})
-    if not has_phone:
+    if not has_phone and not has_identity_signal:
         return None
 
     service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
@@ -378,7 +376,7 @@ async def _pull_and_save_segment(
     for row in discovered:
         enrichment = row.get("enrichment", {}) if isinstance(row.get("enrichment", {}), dict) else {}
 
-        if not enrichment or enrichment.get("error"):
+        if row.get("enrichment_error") or enrichment.get("error"):
             filtered_out += 1
             continue
 
@@ -388,6 +386,19 @@ async def _pull_and_save_segment(
             inferred = _infer_service_needs_from_text(row, segment)
             if inferred:
                 enrichment["service_needs"] = inferred
+            elif row.get("source") in {"news_rss", "reddit", "jobs"}:
+                enrichment["service_needs"] = {
+                    "overall_score": 42,
+                    "billing_score": 45,
+                    "payor_score": 40,
+                    "workflow_score": 42,
+                    "services_needed": ["Billing Services", "Payor Contracting"],
+                    "priority": "medium",
+                    "recommendation": "Conservative fallback from targeted discovery source",
+                }
+
+            service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
+            services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
 
         tier = _quality_tier(row, enrichment)
         if tier is None:
