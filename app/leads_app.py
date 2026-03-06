@@ -261,6 +261,46 @@ def _quality_tier_from_tags(tags_value: str) -> str | None:
     return None
 
 
+def _promote_review_floor_lead() -> bool:
+    """Promote one contactable review lead to strict when strict pool is empty."""
+    candidates = []
+    for row in get_saved_leads(status="new"):
+        tags = str(row.get("tags", "") or "")
+        if _quality_tier_from_tags(tags) != "review":
+            continue
+
+        raw_emails = str(row.get("emails", "") or "").strip()
+        if not raw_emails:
+            continue
+        parts = [p.strip() for p in raw_emails.split(";") if p.strip()]
+        if not any(_is_quality_email(email) for email in parts):
+            continue
+
+        candidates.append(row)
+
+    if not candidates:
+        return False
+
+    best = max(
+        candidates,
+        key=lambda row: int(row.get("urgency_score", row.get("lead_score", 0)) or 0),
+    )
+
+    tags = str(best.get("tags", "") or "")
+    updated_tags = tags.replace(REVIEW_POOL_TAG, STRICT_POOL_TAG).replace("quality_tier=review", "quality_tier=strict")
+    if "quality_tier=strict" not in updated_tags:
+        updated_tags = f"{updated_tags},quality_tier=strict" if updated_tags else "quality_tier=strict"
+    if STRICT_POOL_TAG not in updated_tags:
+        updated_tags = f"{updated_tags},{STRICT_POOL_TAG}" if updated_tags else STRICT_POOL_TAG
+
+    lead_id = int(best.get("id", 0) or 0)
+    if lead_id <= 0:
+        return False
+
+    update_lead(lead_id, {"tags": updated_tags})
+    return True
+
+
 def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> tuple[bool, str]:
     headline = str(row.get("headline", "") or "").strip()
     note_text = str(row.get("notes", "") or "").strip()
@@ -796,6 +836,11 @@ async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
             totals["emails_found"] += int(result.get("emails_found", 0))
             totals["filtered_out"] += int(result["filtered_out"])
             all_saved_npis.extend(result.get("saved_npis", []))
+
+        if totals["strict_saved"] == 0 and totals["review_saved"] > 0:
+            if _promote_review_floor_lead():
+                totals["strict_saved"] += 1
+                totals["review_saved"] = max(0, totals["review_saved"] - 1)
 
         # Clear stale quality-pool rows only after successful saves.
         # This prevents temporary "all leads disappeared" behavior while a poll is running
