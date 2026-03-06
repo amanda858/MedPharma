@@ -28,6 +28,8 @@ POLL_TIMEOUT_S = int(os.getenv("DAILY_OPS_POLL_TIMEOUT_S", "300") or 300)
 POLL_INTERVAL_S = int(os.getenv("DAILY_OPS_POLL_INTERVAL_S", "6") or 6)
 STRICT_RETRIES = int(os.getenv("DAILY_OPS_STRICT_RETRIES", "3") or 3)
 STRICT_RETRY_SLEEP_S = int(os.getenv("DAILY_OPS_STRICT_RETRY_SLEEP_S", "10") or 10)
+ZERO_RECOVERY_WINDOW_S = int(os.getenv("DAILY_OPS_ZERO_RECOVERY_WINDOW_S", "180") or 180)
+ZERO_RECOVERY_INTERVAL_S = int(os.getenv("DAILY_OPS_ZERO_RECOVERY_INTERVAL_S", "8") or 8)
 
 
 def _login(client: httpx.Client) -> int:
@@ -92,6 +94,19 @@ def _wait_for_poll_completion(client: httpx.Client, timeout_s: int, interval_s: 
             return True, last, checks
         time.sleep(interval_s)
     return False, last, checks
+
+
+def _strict_saved_from_status(status_payload: dict[str, Any]) -> int:
+    status = status_payload.get("status") if isinstance(status_payload, dict) else {}
+    if not isinstance(status, dict):
+        return 0
+    last_result = status.get("last_result")
+    if not isinstance(last_result, dict):
+        return 0
+    try:
+        return int(last_result.get("strict_saved", 0) or 0)
+    except Exception:
+        return 0
 
 
 def main() -> int:
@@ -159,11 +174,72 @@ def main() -> int:
                 return 2
 
             if strict_count <= 0:
-                out["status"] = "error"
-                out["code"] = "STRICT_ZERO"
-                out["message"] = "Strict actionable leads are zero after completed poll and retries"
-                print(json.dumps(out, ensure_ascii=False))
-                return 1
+                # Recovery lane for poll/count race conditions seen in hosted runs.
+                # If status is stale or data is still settling, keep checking before
+                # declaring a hard failure.
+                recovery = {
+                    "window_s": ZERO_RECOVERY_WINDOW_S,
+                    "interval_s": ZERO_RECOVERY_INTERVAL_S,
+                    "checks": 0,
+                    "retriggered": False,
+                    "strict_history": [],
+                }
+                deadline = time.time() + ZERO_RECOVERY_WINDOW_S
+                while time.time() < deadline:
+                    recovery["checks"] += 1
+                    _login(client)
+                    status_payload = _poll_status(client)
+                    running = bool((status_payload.get("status") or {}).get("running"))
+
+                    if running:
+                        remaining = max(20, int(deadline - time.time()))
+                        _, status_payload, _ = _wait_for_poll_completion(
+                            client,
+                            timeout_s=remaining,
+                            interval_s=POLL_INTERVAL_S,
+                        )
+
+                    _login(client)
+                    post_retry = _fetch_counts(client)
+                    retry_strict = int(post_retry.get("strict_count", 0) or 0)
+                    recovery["strict_history"].append(retry_strict)
+                    out["post_counts"] = post_retry
+                    strict_history.append(retry_strict)
+                    out["strict_history"] = strict_history
+
+                    if retry_strict > 0:
+                        out["recovery"] = recovery
+                        strict_count = retry_strict
+                        break
+
+                    strict_saved_hint = _strict_saved_from_status(status_payload)
+                    stale_status = bool(
+                        isinstance((status_payload.get("status") or {}), dict)
+                        and (status_payload.get("status") or {}).get("last_result") is None
+                    )
+
+                    # If status looks stale, re-trigger a fast poll once.
+                    if stale_status and not recovery["retriggered"]:
+                        retrigger = client.post(
+                            f"{BASE}/admin/leads/api/leads/poll-daily?segment=all&fast=true"
+                        )
+                        recovery["retriggered"] = True
+                        recovery["retrigger_status"] = int(retrigger.status_code)
+
+                    # If backend reports strict leads were saved, give storage a
+                    # little longer to surface counts in API.
+                    if strict_saved_hint > 0:
+                        time.sleep(max(ZERO_RECOVERY_INTERVAL_S, 10))
+                    else:
+                        time.sleep(ZERO_RECOVERY_INTERVAL_S)
+
+                if strict_count <= 0:
+                    out["recovery"] = recovery
+                    out["status"] = "warning"
+                    out["code"] = "STRICT_ZERO_TRANSIENT"
+                    out["message"] = "Strict actionable leads still zero after recovery window; rerun shortly"
+                    print(json.dumps(out, ensure_ascii=False))
+                    return 2
 
             out["status"] = "ok"
             out["code"] = "READY"

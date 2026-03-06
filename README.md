@@ -106,7 +106,7 @@ The script prints JSON and returns a stable outcome:
 
 - `status=ok` and `code=READY`: daily data is ready
 - `status=warning` and `code=POLL_TIMEOUT`: poll still running too long; rerun shortly
-- `status=error` and `code=STRICT_ZERO`: poll completed but strict leads are still zero
+- `status=warning` and `code=STRICT_ZERO_TRANSIENT`: strict leads still zero after recovery window; rerun shortly
 
 Recommended environment variables:
 
