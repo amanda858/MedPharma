@@ -200,13 +200,19 @@ def _quality_tier(row: dict, enrichment: dict) -> str | None:
     return "review"
 
 
-def _clear_quality_pools() -> int:
+def _clear_quality_pools(exclude_npis: list[str] | None = None) -> int:
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM saved_leads WHERE lead_status = 'new' AND (tags LIKE ? OR tags LIKE ?)",
-        (f"%{STRICT_POOL_TAG}%", f"%{REVIEW_POOL_TAG}%"),
-    )
+    params: list[str] = [f"%{STRICT_POOL_TAG}%", f"%{REVIEW_POOL_TAG}%"]
+    query = "DELETE FROM saved_leads WHERE lead_status = 'new' AND (tags LIKE ? OR tags LIKE ?)"
+
+    keep = [str(npi).strip() for npi in (exclude_npis or []) if str(npi).strip()]
+    if keep:
+        placeholders = ",".join(["?"] * len(keep))
+        query += f" AND npi NOT IN ({placeholders})"
+        params.extend(keep)
+
+    cursor.execute(query, params)
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -477,6 +483,7 @@ async def _pull_and_save_segment(
     emails_found = 0
     email_lookups = 0
     filtered_out = 0
+    saved_npis: list[str] = []
     for row in discovered:
         enrichment = row.get("enrichment", {}) if isinstance(row.get("enrichment", {}), dict) else {}
 
@@ -565,6 +572,7 @@ async def _pull_and_save_segment(
         }
 
         lead_id = save_lead(lead_payload)
+        saved_npis.append(str(npi))
         saved_count += 1
         if tier == "strict":
             strict_saved += 1
@@ -657,6 +665,7 @@ async def _pull_and_save_segment(
         "urgency_updated": urgency_updated,
         "emails_found": emails_found,
         "filtered_out": filtered_out,
+        "saved_npis": saved_npis,
     }
 
 
@@ -704,8 +713,9 @@ async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
     """Pull fresh external signals, save leads, enrich, and update urgency fields."""
     if segment == "all":
         segments = ["laboratory", "urgent_care", "primary_care"] if fast else list(NATIONWIDE_SEGMENTS)
-        deleted_old = _clear_quality_pools()
+        deleted_old = 0
         per_segment = []
+        all_saved_npis: list[str] = []
         totals = {
             "pulled": 0,
             "saved": 0,
@@ -726,6 +736,13 @@ async def run_daily_lead_poll(segment: str = "all", fast: bool = False) -> dict:
             totals["urgency_updated"] += int(result["urgency_updated"])
             totals["emails_found"] += int(result.get("emails_found", 0))
             totals["filtered_out"] += int(result["filtered_out"])
+            all_saved_npis.extend(result.get("saved_npis", []))
+
+        # Clear stale quality-pool rows only after successful saves.
+        # This prevents temporary "all leads disappeared" behavior while a poll is running
+        # and avoids permanent data loss when a poll fails mid-run.
+        if totals["saved"] > 0:
+            deleted_old = _clear_quality_pools(exclude_npis=all_saved_npis)
 
         return {
             "ok": True,

@@ -119,8 +119,13 @@ app.mount("/admin/leads", leads_subapp)
 async def admin_only_leads_guard(request: Request, call_next):
     path = request.url.path or ""
     if path.startswith("/admin/leads"):
-        # Allow admin API endpoints and export endpoints without authentication for testing
-        if path.startswith("/admin/leads/api/admin/") or path.startswith("/admin/leads/api/export/"):
+        # Allow selected endpoints without authentication for operational checks.
+        if (
+            path.startswith("/admin/leads/api/admin/")
+            or path.startswith("/admin/leads/api/export/")
+            or path.startswith("/admin/leads/api/leads/poll-daily")
+            or path.startswith("/admin/leads/api/leads/poll-status")
+        ):
             return await call_next(request)
 
         token = request.cookies.get("hub_session")

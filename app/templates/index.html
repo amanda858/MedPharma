@@ -1590,7 +1590,11 @@
                 showToast('Running daily lead poll...', 'success');
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 15000);
-                const resp = await fetch('/api/leads/poll-daily?segment=all&fast=true', { method: 'POST', signal: controller.signal });
+                const resp = await fetch(withBase('/api/leads/poll-daily?segment=all&fast=true'), {
+                    method: 'POST',
+                    signal: controller.signal,
+                    credentials: 'include',
+                });
                 clearTimeout(timeout);
                 const data = await resp.json();
                 if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
@@ -1622,7 +1626,7 @@
             const maxChecks = 30; // ~3 minutes at 6s intervals
             for (let i = 0; i < maxChecks; i++) {
                 try {
-                    const statusResp = await fetch('/api/leads/poll-status');
+                    const statusResp = await fetch(withBase('/api/leads/poll-status'), { credentials: 'include' });
                     const statusData = await statusResp.json();
                     const running = !!statusData?.status?.running;
                     if (!running) {
