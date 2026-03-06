@@ -712,32 +712,89 @@ async def find_emails_for_lab(
                 return result
         return result
 
+    def _normalize_email_records(raw_emails: list, fallback_domain: str) -> list[dict]:
+        normalized: list[dict] = []
+        for item in raw_emails or []:
+            if isinstance(item, dict):
+                email = str(item.get("email", "") or "").strip()
+                if not email or not _is_quality_email(email):
+                    continue
+                rec = {
+                    "email": email,
+                    "first_name": item.get("first_name", "") or "",
+                    "last_name": item.get("last_name", "") or "",
+                    "full_name": item.get("full_name"),
+                    "position": item.get("position", "") or "",
+                    "is_decision_maker": bool(item.get("is_decision_maker", False)),
+                    "confidence": int(item.get("confidence", 50) or 50),
+                    "verified": bool(item.get("verified", False)),
+                    "source": item.get("source", "normalized") or "normalized",
+                    "domain": item.get("domain", fallback_domain) or fallback_domain,
+                }
+                normalized.append(rec)
+                continue
+
+            if isinstance(item, str):
+                email = item.strip().lower()
+                if not email or not _is_quality_email(email):
+                    continue
+                normalized.append({
+                    "email": email,
+                    "first_name": "",
+                    "last_name": "",
+                    "full_name": None,
+                    "position": "",
+                    "is_decision_maker": False,
+                    "confidence": 62,
+                    "verified": False,
+                    "source": "website_scrape",
+                    "domain": fallback_domain,
+                })
+
+        deduped: list[dict] = []
+        seen: set[str] = set()
+        for rec in sorted(normalized, key=lambda r: int(r.get("confidence", 0) or 0), reverse=True):
+            email = str(rec.get("email", "") or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            deduped.append(rec)
+        return deduped[:8]
+
     # Try Hunter.io first if available (highest quality)
     if HUNTER_API_KEY:
         print(f"Trying Hunter.io for {live_domain}")
         hunter_emails = await _try_hunter_approaches(live_domain, first_name, last_name, HUNTER_API_KEY)
         if hunter_emails:
-            result["emails"] = hunter_emails
-            result["total_at_domain"] = len(hunter_emails)
-            print(f"Found {len(hunter_emails)} emails via Hunter.io")
-            return result
+            normalized_hunter = _normalize_email_records(hunter_emails, live_domain)
+            if normalized_hunter:
+                result["emails"] = normalized_hunter
+                result["total_at_domain"] = len(normalized_hunter)
+                print(f"Found {len(normalized_hunter)} emails via Hunter.io")
+                return result
 
     # Fallback to enhanced website scraping
     print(f"Trying enhanced website scraping for {live_domain}")
     scraped_emails = await _try_enhanced_scraping(live_domain, first_name, last_name)
     if scraped_emails:
-        result["emails"] = scraped_emails
-        print(f"Found {len(scraped_emails)} emails via scraping")
-        return result
+        normalized_scraped = _normalize_email_records(scraped_emails, live_domain)
+        if normalized_scraped:
+            result["emails"] = normalized_scraped
+            result["total_at_domain"] = len(normalized_scraped)
+            print(f"Found {len(normalized_scraped)} emails via scraping")
+            return result
 
     # Final fallback: professional patterns
     if first_name and last_name:
         pattern_emails = _generate_professional_patterns(first_name, last_name, live_domain)
         if pattern_emails:
-            result["emails"] = pattern_emails
-            result["error"] = f"Generated professional email patterns for {live_domain}"
-            print(f"Generated {len(pattern_emails)} pattern emails as final fallback")
-            return result
+            normalized_patterns = _normalize_email_records(pattern_emails, live_domain)
+            if normalized_patterns:
+                result["emails"] = normalized_patterns
+                result["total_at_domain"] = len(normalized_patterns)
+                result["error"] = f"Generated professional email patterns for {live_domain}"
+                print(f"Generated {len(normalized_patterns)} pattern emails as final fallback")
+                return result
 
     result["error"] = f"Live domain found: {live_domain} — No emails found via any method"
     return result
