@@ -125,6 +125,33 @@ SEGMENT_SERVICE_TERMS = {
 }
 EMAIL_LOOKUP_PER_SEGMENT = max(0, int(os.getenv("EMAIL_LOOKUP_PER_SEGMENT", "20") or 20))
 AUTO_BOOTSTRAP_POLL = str(os.getenv("AUTO_BOOTSTRAP_POLL", "0")).strip().lower() in {"1", "true", "yes", "on"}
+POLL_MAX_SECONDS = max(120, int(os.getenv("POLL_MAX_SECONDS", "900") or 900))
+POLL_STALE_SECONDS = max(180, int(os.getenv("POLL_STALE_SECONDS", "1200") or 1200))
+
+
+def _poll_started_epoch() -> float | None:
+    started_at = str(_poll_status.get("started_at") or "").strip()
+    if not started_at:
+        return None
+    try:
+        return datetime.fromisoformat(started_at).timestamp()
+    except Exception:
+        return None
+
+
+def _recover_stale_poll_status() -> bool:
+    if not _poll_status.get("running"):
+        return False
+    started_epoch = _poll_started_epoch()
+    if not started_epoch:
+        return False
+    if (datetime.now().timestamp() - started_epoch) < POLL_STALE_SECONDS:
+        return False
+
+    _poll_status["running"] = False
+    _poll_status["finished_at"] = datetime.now().isoformat()
+    _poll_status["last_error"] = "Previous poll marked stale and auto-recovered"
+    return True
 
 
 def _segment_terms(segment: str, base_terms: list[str], segment_map: dict[str, list[str]]) -> list[str]:
@@ -1285,15 +1312,23 @@ async def poll_leads_now(
     fast: bool = Query(True, description="If true, run a faster reduced-scope poll"),
 ):
     """Manual trigger for daily polling and urgency updates (same logic as 9 AM scheduler)."""
+    _recover_stale_poll_status()
+
     async def _run_poll(seg: str, fast_mode: bool):
         _poll_status["running"] = True
         _poll_status["started_at"] = datetime.now().isoformat()
         _poll_status["finished_at"] = ""
         _poll_status["last_error"] = ""
         try:
-            result = await run_daily_lead_poll(segment=seg, fast=fast_mode)
+            result = await asyncio.wait_for(
+                run_daily_lead_poll(segment=seg, fast=fast_mode),
+                timeout=POLL_MAX_SECONDS,
+            )
             _poll_status["last_result"] = result
             return result
+        except asyncio.TimeoutError:
+            _poll_status["last_error"] = f"Poll timed out after {POLL_MAX_SECONDS}s"
+            raise HTTPException(status_code=504, detail=_poll_status["last_error"])
         except Exception as e:
             _poll_status["last_error"] = str(e)
             raise
@@ -1329,6 +1364,7 @@ async def poll_leads_now(
 
 @app.get("/api/leads/poll-status")
 async def poll_status():
+    _recover_stale_poll_status()
     return {"ok": True, "status": _poll_status}
 
 
