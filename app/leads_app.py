@@ -511,6 +511,7 @@ async def _pull_and_save_segment(
     email_lookups = 0
     filtered_out = 0
     saved_npis: list[str] = []
+    review_promotion_candidates: list[dict] = []
     for row in discovered:
         enrichment = row.get("enrichment", {}) if isinstance(row.get("enrichment", {}), dict) else {}
 
@@ -682,6 +683,37 @@ async def _pull_and_save_segment(
             })
             strict_saved = max(0, strict_saved - 1)
             review_saved += 1
+
+        # Track review leads that are already contactable so we can keep a
+        # minimum strict floor even when strict gating is temporarily sparse.
+        has_existing_quality_email = False
+        if not lead_has_quality_email:
+            try:
+                existing = get_lead_emails(str(npi))
+                has_existing_quality_email = any(
+                    _is_quality_email(str(item.get("email", "")))
+                    for item in existing
+                    if isinstance(item, dict)
+                )
+            except Exception:
+                has_existing_quality_email = False
+
+        final_has_quality_email = bool(lead_has_quality_email or has_existing_quality_email)
+        lead_score_value = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
+        if tier == "review" and final_has_quality_email and lead_score_value >= 45:
+            review_promotion_candidates.append({
+                "lead_id": lead_id,
+                "score": lead_score_value,
+                "strict_tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG},quality_tier=strict,need_signal=yes",
+            })
+
+    # Guardrail: if strict ends up empty for this segment, promote the
+    # strongest contactable review lead so strict mode doesn't collapse to zero.
+    if strict_saved == 0 and review_saved > 0 and review_promotion_candidates:
+        best = max(review_promotion_candidates, key=lambda item: int(item.get("score", 0) or 0))
+        update_lead(int(best.get("lead_id", 0) or 0), {"tags": best.get("strict_tags", "")})
+        strict_saved += 1
+        review_saved = max(0, review_saved - 1)
 
     return {
         "segment": segment,
