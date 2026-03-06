@@ -763,6 +763,10 @@
             <button class="btn btn-secondary" onclick="exportCSV('saved')" title="Export saved leads">
                 ↓ Export CSV
             </button>
+            <button class="btn btn-secondary" onclick="exportExcel('saved')" title="Export saved leads for Excel"
+                style="margin-left:8px;">
+                ↓ Export Excel
+            </button>
         </div>
     </header>
 
@@ -909,7 +913,10 @@
                     </div>
                     <div class="form-group">
                         <label>&nbsp;</label>
-                        <button class="btn btn-secondary" onclick="exportCSV('saved')">↓ Export</button>
+                        <div style="display:flex;gap:8px;">
+                            <button class="btn btn-secondary" onclick="exportCSV('saved')">↓ CSV</button>
+                            <button class="btn btn-secondary" onclick="exportExcel('saved')">↓ Excel</button>
+                        </div>
                     </div>
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -958,6 +965,9 @@
                     </button>
                     <button class="btn btn-success" onclick="exportEmailsCSV()">
                         📊 Export Quality Emails (CSV)
+                    </button>
+                    <button class="btn btn-success" onclick="exportEmailsExcel()">
+                        📊 Export Quality Emails (Excel)
                     </button>
                     <button class="btn btn-secondary" onclick="loadIntelligence()">
                         ↻ Refresh
@@ -1034,6 +1044,7 @@
         let currentRequestedServices = [];
         let bulkSelectedStates = new Set();
         let autoPollAttempted = false;
+        let emailRecoveryAttempted = false;
 
         const APP_BASE = window.location.pathname.startsWith('/admin/leads') ? '/admin/leads' : '';
 
@@ -1552,6 +1563,23 @@
                         const reviewData = await reviewResp.json();
                         effectiveData = reviewData;
                         usedReviewFallback = (reviewData.leads || []).length > 0;
+
+                        if (!usedReviewFallback && !emailRecoveryAttempted) {
+                            emailRecoveryAttempted = true;
+                            showToast('No emailed leads found. Running email recovery...', 'success');
+                            try {
+                                await fetch('/api/admin/enrich-emails', { method: 'POST' });
+                            } catch (_) {
+                                // Ignore and continue to relaxed fallback.
+                            }
+
+                            const relaxedReviewParams = new URLSearchParams(reviewParams);
+                            relaxedReviewParams.set('require_email', 'false');
+                            const relaxedReviewResp = await fetch(`/api/leads?${relaxedReviewParams}`);
+                            const relaxedReviewData = await relaxedReviewResp.json();
+                            effectiveData = relaxedReviewData;
+                            usedReviewFallback = (relaxedReviewData.leads || []).length > 0;
+                        }
                     }
                 } else {
                     const resp = await fetch(`/api/leads?${params}`);
@@ -2159,6 +2187,41 @@
 
         function exportEmailsCSV() {
             window.open(withBase('/admin/leads/api/export/emails/csv'), '_blank');
+        }
+
+        async function exportExcel(source = 'saved') {
+            const params = new URLSearchParams();
+            params.set('source', source || 'saved');
+
+            if ((source || 'saved') === 'saved') {
+                const status = document.getElementById('savedFilterStatus')?.value || '';
+                const state = document.getElementById('savedFilterState')?.value || '';
+                if (status) params.set('status', status);
+                if (state) params.set('state', state);
+                params.set('include_emails', 'true');
+            }
+
+            const resp = await fetch(withBase(`/api/export/csv?${params.toString()}`));
+            const text = await resp.text();
+            const blob = new Blob([text], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'saved_leads.xls';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function exportEmailsExcel() {
+            const resp = await fetch(withBase('/api/export/emails/csv'));
+            const text = await resp.text();
+            const blob = new Blob([text], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'lead_emails.xls';
+            a.click();
+            URL.revokeObjectURL(url);
         }
 
         function exportSearchCSV() {
