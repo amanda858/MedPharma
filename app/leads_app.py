@@ -1325,52 +1325,67 @@ async def list_leads(
     need_signal_only: bool = Query(False),
     require_email: bool = Query(False),
 ):
-    leads = get_all_leads_with_emails()
-    if status:
-        leads = [row for row in leads if str(row.get("lead_status", "")).lower() == status.lower()]
-    if state:
-        leads = [row for row in leads if str(row.get("state", "")).upper() == state.upper()]
-    if min_score is not None:
-        leads = [row for row in leads if int(row.get("lead_score", 0) or 0) >= int(min_score)]
-    if urgency_level:
-        leads = [row for row in leads if (row.get("urgency_level", "").lower() == urgency_level.lower())]
-    if urgent_only:
-        leads = [row for row in leads if int(row.get("urgency_score", 0) or 0) >= 62]
-    if quality_tier:
-        tier = str(quality_tier).strip().lower()
-        if tier in {"strict", "review"}:
-            leads = [row for row in leads if _quality_tier_from_tags(row.get("tags", "")) == tier]
-    if quality_only:
-        def _is_quality_row(row: dict) -> bool:
-            tags = str(row.get("tags", "") or "")
-            # Primary path: rely on poll-time quality tier tagging.
-            if STRICT_POOL_TAG in tags or "quality_tier=strict" in tags:
-                return True
+    def _has_quality_email(row: dict) -> bool:
+        raw = str(row.get("emails", "") or "").strip()
+        if not raw:
+            return False
+        parts = [p.strip() for p in raw.split(";") if p.strip()]
+        return any(_is_quality_email(email) for email in parts)
 
-            # Backward compatibility for legacy rows without quality tags.
-            return (
-                int(row.get("lead_score", 0) or 0) >= 65
-                and int(row.get("urgency_score", 0) or 0) >= 40
-                and isinstance(row.get("services_wanted", []), list)
-                and len(row.get("services_wanted", [])) > 0
-            )
+    def _is_quality_row(row: dict) -> bool:
+        tags = str(row.get("tags", "") or "")
+        # Primary path: rely on poll-time quality tier tagging.
+        if STRICT_POOL_TAG in tags or "quality_tier=strict" in tags:
+            return True
 
-        leads = [row for row in leads if _is_quality_row(row)]
-    if need_signal_only:
-        leads = [
-            row for row in leads
-            if "Need Evidence:" in str(row.get("notes", "") or "")
-            or "need_signal=yes" in str(row.get("tags", "") or "")
-        ]
-    if require_email:
-        def _has_quality_email(row: dict) -> bool:
-            raw = str(row.get("emails", "") or "").strip()
-            if not raw:
-                return False
-            parts = [p.strip() for p in raw.split(";") if p.strip()]
-            return any(_is_quality_email(email) for email in parts)
+        # Backward compatibility for legacy rows without quality tags.
+        return (
+            int(row.get("lead_score", 0) or 0) >= 65
+            and int(row.get("urgency_score", 0) or 0) >= 40
+            and isinstance(row.get("services_wanted", []), list)
+            and len(row.get("services_wanted", [])) > 0
+        )
 
-        leads = [row for row in leads if _has_quality_email(row)]
+    def _apply_filters(rows: list[dict]) -> list[dict]:
+        filtered = rows
+        if status:
+            filtered = [row for row in filtered if str(row.get("lead_status", "")).lower() == status.lower()]
+        if state:
+            filtered = [row for row in filtered if str(row.get("state", "")).upper() == state.upper()]
+        if min_score is not None:
+            filtered = [row for row in filtered if int(row.get("lead_score", 0) or 0) >= int(min_score)]
+        if urgency_level:
+            filtered = [row for row in filtered if (row.get("urgency_level", "").lower() == urgency_level.lower())]
+        if urgent_only:
+            filtered = [row for row in filtered if int(row.get("urgency_score", 0) or 0) >= 62]
+        if quality_tier:
+            tier = str(quality_tier).strip().lower()
+            if tier in {"strict", "review"}:
+                filtered = [row for row in filtered if _quality_tier_from_tags(row.get("tags", "")) == tier]
+        if quality_only:
+            filtered = [row for row in filtered if _is_quality_row(row)]
+        if need_signal_only:
+            filtered = [
+                row for row in filtered
+                if "Need Evidence:" in str(row.get("notes", "") or "")
+                or "need_signal=yes" in str(row.get("tags", "") or "")
+            ]
+        if require_email:
+            filtered = [row for row in filtered if _has_quality_email(row)]
+        return filtered
+
+    leads = _apply_filters(get_all_leads_with_emails())
+
+    # Runtime repair: if strict quality-with-email view is empty, promote one
+    # contactable review lead and re-run filters to avoid a persistent empty state.
+    if (
+        not leads
+        and quality_only
+        and require_email
+        and str(quality_tier or "").strip().lower() == "strict"
+    ):
+        if _promote_review_floor_lead():
+            leads = _apply_filters(get_all_leads_with_emails())
 
     leads.sort(
         key=lambda row: (
