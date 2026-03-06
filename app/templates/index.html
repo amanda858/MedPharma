@@ -949,14 +949,25 @@
                         <input type="number" id="intelMinScore" value="0" min="0" max="100" style="width:80px;"
                             onchange="loadIntelligence()">
                     </div>
-                    <div class="form-group">
-                        <label>SERVICE NEED</label>
-                        <select id="intelServiceFilter" onchange="loadIntelligence()">
-                            <option value="">All Services</option>
-                            <option value="Billing Services">Billing Services</option>
-                            <option value="Payor Contracting">Payor Contracting</option>
-                            <option value="Workflow Support">Workflow Support</option>
-                        </select>
+                    <div class="form-group" style="min-width:260px;">
+                        <label>SERVICE NEED (MULTI-SELECT)</label>
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" class="intelServiceCheck" value="Billing Services"
+                                    onchange="loadIntelligence()">
+                                Billing Services
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" class="intelServiceCheck" value="Payor Contracting"
+                                    onchange="loadIntelligence()">
+                                Payor Contracting
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="checkbox" class="intelServiceCheck" value="Workflow Support"
+                                    onchange="loadIntelligence()">
+                                Workflow Support
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div style="display:flex;gap:8px;">
@@ -1801,7 +1812,9 @@
         // ──────────────────────────────────────────────────────────────
         async function loadIntelligence() {
             const minScore = document.getElementById('intelMinScore')?.value || 0;
-            const service = document.getElementById('intelServiceFilter')?.value || '';
+            const selectedServices = Array.from(document.querySelectorAll('.intelServiceCheck:checked'))
+                .map(el => el.value)
+                .filter(Boolean);
 
             const statsContainer = document.getElementById('intelStats');
             const resultsContainer = document.getElementById('intelResults');
@@ -1810,13 +1823,21 @@
             try {
                 const [statsResp, enrichResp] = await Promise.all([
                     fetch('/api/enrich/stats'),
-                    fetch(`/api/enrich/all?min_score=${minScore}${service ? '&service=' + encodeURIComponent(service) : ''}`),
+                    fetch(`/api/enrich/all?min_score=${minScore}`),
                 ]);
                 const stats = await statsResp.json();
                 const data = await enrichResp.json();
 
+                let rows = data.enrichments || [];
+                if (selectedServices.length) {
+                    rows = rows.filter(item => {
+                        const needs = Array.isArray(item.services_needed) ? item.services_needed : [];
+                        return selectedServices.some(service => needs.includes(service));
+                    });
+                }
+
                 renderIntelStats(stats, statsContainer);
-                renderIntelResults(data.enrichments || [], resultsContainer);
+                renderIntelResults(rows, resultsContainer);
             } catch (err) {
                 resultsContainer.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
             }
