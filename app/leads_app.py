@@ -564,7 +564,7 @@ async def _pull_and_save_segment(
             "tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG if tier == 'strict' else REVIEW_POOL_TAG},quality_tier={tier},need_signal=yes",
         }
 
-        save_lead(lead_payload)
+        lead_id = save_lead(lead_payload)
         saved_count += 1
         if tier == "strict":
             strict_saved += 1
@@ -579,9 +579,14 @@ async def _pull_and_save_segment(
             urgency_updated += 1
 
         email_lookup_cap = min(EMAIL_LOOKUP_PER_SEGMENT, 6) if fast_mode else EMAIL_LOOKUP_PER_SEGMENT
-        if email_lookups < email_lookup_cap:
+        lead_has_quality_email = False
+        email_lookup_attempted = False
+        should_lookup_email = tier == "strict" or email_lookups < email_lookup_cap
+        if should_lookup_email:
+            email_lookup_attempted = True
             raw_domain_hint = _domain_from_url(row.get("url", ""))
             domain_hint = _clean_domain_hint(raw_domain_hint)
+            live_domain_hint = ""
             try:
                 # Get names from enrichment for pattern generation
                 first_name = ""
@@ -601,6 +606,8 @@ async def _pull_and_save_segment(
                     ),
                     timeout=lookup_timeout,
                 )
+                if isinstance(email_result, dict):
+                    live_domain_hint = str(email_result.get("live_domain", "") or "").strip().lower()
                 found = email_result.get("emails", []) if isinstance(email_result, dict) else []
                 if not found and domain_hint:
                     # Second pass without hint avoids getting trapped on stale/non-actionable source URLs.
@@ -613,20 +620,33 @@ async def _pull_and_save_segment(
                         ),
                         timeout=lookup_timeout,
                     )
+                    if isinstance(second_try, dict):
+                        live_domain_hint = str(second_try.get("live_domain", "") or live_domain_hint).strip().lower()
                     found = second_try.get("emails", []) if isinstance(second_try, dict) else []
                 if not found:
-                    found = _fallback_contact_emails(domain_hint, first_name=first_name, last_name=last_name)
+                    fallback_domain = _clean_domain_hint(live_domain_hint) or domain_hint
+                    found = _fallback_contact_emails(fallback_domain, first_name=first_name, last_name=last_name)
                 if found:
-                    save_lead_emails(npi, found)
-                    emails_found += len(found)
+                    saved_email_count = save_lead_emails(npi, found)
+                    lead_has_quality_email = saved_email_count > 0
+                    emails_found += int(saved_email_count or 0)
                 email_lookups += 1
             except Exception:
                 # Keep strict-mode UX functional even when remote lookup times out.
                 fallback = _fallback_contact_emails(domain_hint, first_name=first_name, last_name=last_name)
                 if fallback:
-                    save_lead_emails(npi, fallback)
-                    emails_found += len(fallback)
+                    saved_email_count = save_lead_emails(npi, fallback)
+                    lead_has_quality_email = saved_email_count > 0
+                    emails_found += int(saved_email_count or 0)
                 email_lookups += 1
+
+        # Strict leads must remain contactable under require_email=true.
+        if tier == "strict" and email_lookup_attempted and not lead_has_quality_email:
+            update_lead(lead_id, {
+                "tags": f"daily_poll,{segment},nationwide,{REVIEW_POOL_TAG},quality_tier=review,need_signal=yes",
+            })
+            strict_saved = max(0, strict_saved - 1)
+            review_saved += 1
 
     return {
         "segment": segment,
