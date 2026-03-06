@@ -1,8 +1,8 @@
-# MedPharma — Lab Lead Generator
+# MedPharma — Lead Generator
 
 [Download MedPharma Hub](https://github.com/amanda858/MedPharma/archive/refs/heads/main.zip)
 
-Find clinical laboratories across the United States for **medical billing**, **compliance**, and **payor contracting** services. Stop exhausting yourself with Google Ads and LinkedIn — pull real, verified leads directly from federal databases.
+Find clinical laboratories, hospitals, clinics, urgent care, primary care, and ASCs across the United States for **medical billing**, **compliance**, and **payor contracting** services. Stop exhausting yourself with Google Ads and LinkedIn — pull real, verified leads directly from federal databases.
 
 ## What It Does
 
@@ -73,8 +73,9 @@ To make it live:
 
 1. Buy/own `medpharmahub.com` at any registrar (Cloudflare/Namecheap/GoDaddy).
 2. In DNS, point:
- - `@` (apex) → Render target (ALIAS/ANAME or A record per Render dashboard)
- - `www` → CNAME to your Render hostname (for example `medpharma-hub.onrender.com`)
+   - `@` (apex) -> Render target (ALIAS/ANAME or A record per Render dashboard)
+   - `www` -> CNAME to your Render hostname (for example `medpharma-hub.onrender.com`)
+
 3. In Render service settings, confirm both domains are attached and SSL is issued.
 4. Set your primary domain to `https://medpharmahub.com` and enable redirect from `www`.
 
@@ -92,6 +93,27 @@ Each lab gets a score from 0-100 based on:
 | Has phone number | +5 | Reachable lead |
 | Recently updated NPI (2024+) | +10 | Actively operating |
 | Updated in 2023 | +5 | Likely still active |
+
+## Daily Operations (Permanent)
+
+Use this once per day to run a safe poll and verify strict actionable leads are available:
+
+```bash
+python3 /workspaces/CVOPro/run_daily_ops_now.py
+```
+
+The script prints JSON and returns a stable outcome:
+
+- `status=ok` and `code=READY`: daily data is ready
+- `status=warning` and `code=POLL_TIMEOUT`: poll still running too long; rerun shortly
+- `status=error` and `code=STRICT_ZERO`: poll completed but strict leads are still zero
+
+Recommended environment variables:
+
+- `LEADS_BASE_URL` (default: `https://medpharma-hub.onrender.com`)
+- `HUB_ADMIN_USERNAME` and `HUB_ADMIN_PASSWORD`
+- `DAILY_OPS_POLL_TIMEOUT_S` (default: `300`)
+- `DAILY_OPS_STRICT_RETRIES` (default: `3`)
 
 ## API Endpoints
 

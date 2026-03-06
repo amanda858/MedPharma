@@ -129,6 +129,27 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "daily-ops-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/run_daily_ops_now.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "push-daily-ops-solution",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" && git push origin main",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }
