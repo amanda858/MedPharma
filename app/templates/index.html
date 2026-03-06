@@ -2142,6 +2142,21 @@
         // ──────────────────────────────────────────────────────────────
         // Export
         // ──────────────────────────────────────────────────────────────
+        function exportCSV(source = 'saved') {
+            const params = new URLSearchParams();
+            params.set('source', source || 'saved');
+
+            if ((source || 'saved') === 'saved') {
+                const status = document.getElementById('savedFilterStatus')?.value || '';
+                const state = document.getElementById('savedFilterState')?.value || '';
+                if (status) params.set('status', status);
+                if (state) params.set('state', state);
+                params.set('include_emails', 'true');
+            }
+
+            window.open(withBase(`/api/export/csv?${params.toString()}`), '_blank');
+        }
+
         function exportEmailsCSV() {
             window.open(withBase('/admin/leads/api/export/emails/csv'), '_blank');
         }
