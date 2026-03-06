@@ -4,7 +4,7 @@
         {
             "label": "release-push-main",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/*.py app/templates/*.html run.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add app run.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" -- app run.py render.yaml requirements.txt .vscode/tasks.json && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -14,15 +14,6 @@
             "label": "deploy-trigger-empty-commit",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git commit --allow-empty -m \"chore: trigger render deploy\" && git push origin main",
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "cleanup-remove-xls",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && git rm -f app/6683111743950724219.xls && git add .vscode/tasks.json && git commit -m \"chore: remove accidental xls artifact and tighten release task\" && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -40,7 +31,7 @@
         {
             "label": "push-hotfix-fast-poll",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/leads_app.py app/templates/index.html && git commit -m \"fix: prevent poll UI pinwheel and speed manual poll\" && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/templates/index.html && git commit -m \"fix: prevent poll UI pinwheel and speed manual poll\" -- app/leads_app.py app/templates/index.html && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -145,7 +136,7 @@
         {
             "label": "push-daily-ops-solution",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" -- run_daily_ops_now.py .vscode/tasks.json README.md && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
