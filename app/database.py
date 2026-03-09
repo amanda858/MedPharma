@@ -448,9 +448,23 @@ def save_lead_emails(npi: str, emails: list) -> int:
     saved = 0
     for e in emails:
         email = e.get("email", "")
+        source = str(e.get("source", "") or "").strip().lower()
+        confidence = int(e.get("confidence", 0) or 0)
+        verified = bool(e.get("verified", False))
+
         # Apply final quality check before saving
         if not _is_quality_email(email):
             print(f"WARNING: Blocked bad email from saving: {email}")
+            continue
+
+        # Block synthetic pattern emails unless explicitly verified.
+        if ("pattern" in source or source in {"generated", "fallback"}) and not verified:
+            print(f"WARNING: Blocked unverified pattern email: {email} ({source})")
+            continue
+
+        # Require stronger confidence for non-verified emails.
+        if confidence < 70 and not verified:
+            print(f"WARNING: Blocked low-confidence email: {email} ({confidence})")
             continue
             
         try:
@@ -466,9 +480,9 @@ def save_lead_emails(npi: str, emails: list) -> int:
                 e.get("last_name", ""),
                 e.get("position", ""),
                 1 if e.get("is_decision_maker") else 0,
-                e.get("confidence", 0),
+                confidence,
                 e.get("type", "pattern"),
-                e.get("source", "generated"),
+                source or e.get("source", "generated"),
                 e.get("domain", ""),
             ))
             saved += cursor.rowcount
