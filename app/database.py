@@ -4,6 +4,7 @@ import json
 import sqlite3
 import os
 import time
+import threading
 from typing import Callable, Any
 from datetime import datetime
 from app.config import DATABASE_PATH
@@ -12,6 +13,7 @@ from app.email_finder import _is_quality_email
 
 SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30000
+DB_WRITE_LOCK = threading.RLock()
 
 
 def _configure_sqlite_connection(conn: sqlite3.Connection) -> None:
@@ -28,13 +30,14 @@ def _is_locked_error(exc: Exception) -> bool:
 
 def _run_write_with_retry(write_fn: Callable[[], Any], max_attempts: int = 8, base_delay: float = 0.15):
     """Retry transient SQLite lock errors with short backoff."""
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return write_fn()
-        except sqlite3.OperationalError as exc:
-            if not _is_locked_error(exc) or attempt >= max_attempts:
-                raise
-            time.sleep(base_delay * attempt)
+    with DB_WRITE_LOCK:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return write_fn()
+            except sqlite3.OperationalError as exc:
+                if not _is_locked_error(exc) or attempt >= max_attempts:
+                    raise
+                time.sleep(base_delay * attempt)
 
 
 def get_db():
