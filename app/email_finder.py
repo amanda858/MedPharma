@@ -358,15 +358,16 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
                 # Verify the email
                 try:
                     verification = await hunter_verify_email(email, api_key)
-                    if verification.get('is_valid') and verification.get('score', 0) >= 70:
+                    if verification.get('status') == 'valid' and verification.get('score', 0) >= 70:
                         # Boost confidence based on verification
                         email_record['confidence'] = min(95, email_record['confidence'] + 20)
                         email_record['verified'] = True
                         verified_emails.append(email_record)
                     elif verification.get('status') in ('valid', 'accept_all'):
-                        # Accept but lower confidence
+                        # accept_all is not mailbox-level proof; keep but unverified
+                        # so persistence gates can block it for outreach exports.
                         email_record['confidence'] = max(50, email_record['confidence'] - 10)
-                        email_record['verified'] = True
+                        email_record['verified'] = verification.get('status') == 'valid'
                         verified_emails.append(email_record)
                 except Exception:
                     # If verification fails, still include but mark unverified
@@ -582,7 +583,9 @@ async def hunter_verify_email(email: str, api_key: str) -> dict:
     status = data.get("status", "unknown")
     return {
         "email": email,
-        "is_valid": status in ("valid", "accept_all"),
+        # `accept_all` means domain accepts recipients without confirming mailbox.
+        # Keep it explicitly non-valid for outreach-quality persistence.
+        "is_valid": status == "valid",
         "status": status,
         "score": data.get("score", 0),
         "mx_records": data.get("mx_records", False),
