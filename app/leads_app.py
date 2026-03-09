@@ -268,6 +268,8 @@ def _promote_review_floor_lead() -> bool:
         tags = str(row.get("tags", "") or "")
         if _quality_tier_from_tags(tags) != "review":
             continue
+        if _need_signal_source_from_tags(tags) != "direct" and "Need Evidence [direct]" not in str(row.get("notes", "") or ""):
+            continue
 
         raw_emails = str(row.get("emails", "") or "").strip()
         if not raw_emails:
@@ -622,7 +624,7 @@ async def _pull_and_save_segment(
             tier = "review"
 
         # If strict pool is starved, promote only high-confidence review rows
-        # that are clearly actionable and contactable.
+        # with direct need evidence that are clearly actionable and contactable.
         if tier == "review":
             score = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
             auth = enrichment.get("authorized_official", {}) if isinstance(enrichment.get("authorized_official", {}), dict) else {}
@@ -632,7 +634,7 @@ async def _pull_and_save_segment(
             phone_text = (row.get("phone") or "").strip()
             has_phone = bool(phone_text and phone_text not in {"—", "N/A", "na"})
             overall = int(service_needs.get("overall_score", 0) or 0)
-            if score >= 50 and len(services_needed) >= 1 and overall >= 30 and (has_phone or has_named_official or has_valid_npi):
+            if need_signal_source == "direct" and score >= 50 and len(services_needed) >= 1 and overall >= 30 and (has_phone or has_named_official or has_valid_npi):
                 tier = "strict"
 
         npi = (
@@ -734,7 +736,7 @@ async def _pull_and_save_segment(
         # Strict leads must remain contactable under require_email=true.
         if tier == "strict" and email_lookup_attempted and not lead_has_quality_email:
             update_lead(lead_id, {
-                "tags": f"daily_poll,{segment},nationwide,{REVIEW_POOL_TAG},quality_tier=review,need_signal=yes",
+                "tags": f"daily_poll,{segment},nationwide,{REVIEW_POOL_TAG},quality_tier=review,need_signal=yes,need_signal_source={need_signal_source}",
             })
             strict_saved = max(0, strict_saved - 1)
             review_saved += 1
@@ -755,11 +757,11 @@ async def _pull_and_save_segment(
 
         final_has_quality_email = bool(lead_has_quality_email or has_existing_quality_email)
         lead_score_value = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
-        if tier == "review" and final_has_quality_email and lead_score_value >= 45:
+        if tier == "review" and need_signal_source == "direct" and final_has_quality_email and lead_score_value >= 45:
             review_promotion_candidates.append({
                 "lead_id": lead_id,
                 "score": lead_score_value,
-                "strict_tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG},quality_tier=strict,need_signal=yes",
+                "strict_tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG},quality_tier=strict,need_signal=yes,need_signal_source=direct",
             })
 
     # Guardrail: if strict ends up empty for this segment, promote the
@@ -1352,7 +1354,10 @@ async def list_leads(
         tags = str(row.get("tags", "") or "")
         # Primary path: rely on poll-time quality tier tagging.
         if STRICT_POOL_TAG in tags or "quality_tier=strict" in tags:
-            return True
+            source = _need_signal_source_from_tags(tags)
+            if source is None:
+                return "Need Evidence [direct]" in str(row.get("notes", "") or "")
+            return source == "direct"
 
         # Backward compatibility for legacy rows without quality tags.
         return (
@@ -1378,6 +1383,12 @@ async def list_leads(
             tier = str(quality_tier).strip().lower()
             if tier in {"strict", "review"}:
                 filtered = [row for row in filtered if _quality_tier_from_tags(row.get("tags", "")) == tier]
+                if tier == "strict":
+                    filtered = [
+                        row for row in filtered
+                        if _need_signal_source_from_tags(row.get("tags", "")) == "direct"
+                        or "Need Evidence [direct]" in str(row.get("notes", "") or "")
+                    ]
         if quality_only:
             filtered = [row for row in filtered if _is_quality_row(row)]
         if need_signal_only:
