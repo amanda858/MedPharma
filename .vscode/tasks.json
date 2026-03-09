@@ -4,7 +4,7 @@
         {
             "label": "release-push-main",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app run.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" -- app run.py render.yaml requirements.txt .vscode/tasks.json && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py render.yaml requirements.txt .vscode/tasks.json && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
