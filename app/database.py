@@ -127,6 +127,11 @@ def init_db():
     """)
 
     # Backward-compatible schema upgrades
+    cursor.execute("PRAGMA table_info(saved_leads)")
+    saved_lead_cols = {row[1] for row in cursor.fetchall()}
+    if "source" not in saved_lead_cols:
+        cursor.execute("ALTER TABLE saved_leads ADD COLUMN source TEXT DEFAULT 'scraped'")
+
     cursor.execute("PRAGMA table_info(lead_enrichment)")
     existing_cols = {row[1] for row in cursor.fetchall()}
     if "urgency_score" not in existing_cols:

@@ -1,15 +1,50 @@
 import sys
 import os
 import asyncio
+from datetime import datetime
 sys.path.append('.')
 
 from app.config import HUNTER_API_KEY
-from app.database import init_db, save_lead, save_lead_emails
+from app.database import init_db, get_db, save_lead_emails
 from app.email_finder import find_emails_for_lab
 from app.lead_scraper import run_national_lead_pull
 from app.npi_client import bulk_search_labs
 
 FALLBACK_STATES = ["TX", "CA", "FL", "NY", "PA", "OH"]
+
+
+def _save_lead_compat(lead_payload: dict) -> None:
+    """Insert lead while adapting to the current saved_leads schema."""
+    conn = get_db()
+    cur = conn.cursor()
+    cols = {row[1] for row in cur.execute("PRAGMA table_info(saved_leads)").fetchall()}
+
+    base = {
+        "npi": lead_payload.get("npi", ""),
+        "organization_name": lead_payload.get("organization_name", ""),
+        "city": lead_payload.get("city", ""),
+        "state": lead_payload.get("state", ""),
+        "taxonomy_desc": lead_payload.get("taxonomy_desc", ""),
+        "lead_score": int(lead_payload.get("lead_score", 0) or 0),
+        "lead_status": lead_payload.get("lead_status", "new"),
+        "notes": lead_payload.get("notes", ""),
+        "tags": lead_payload.get("tags", ""),
+        "source": lead_payload.get("source", "scraped"),
+        "updated_at": datetime.now().isoformat(),
+    }
+
+    payload = {k: v for k, v in base.items() if k in cols}
+    if not payload.get("npi") or "npi" not in payload:
+        conn.close()
+        return
+
+    keys = list(payload.keys())
+    placeholders = ", ".join(["?"] * len(keys))
+    columns = ", ".join(keys)
+    values = [payload[k] for k in keys]
+    cur.execute(f"INSERT OR REPLACE INTO saved_leads ({columns}) VALUES ({placeholders})", values)
+    conn.commit()
+    conn.close()
 
 async def _scheduled_daily_lead_pull():
     try:
@@ -56,14 +91,7 @@ async def _scheduled_daily_lead_pull():
                         "tags": "daily_runner,nationwide,quality_tier=review,need_signal=yes,need_signal_source=direct",
                         "source": source,
                     }
-                    try:
-                        save_lead(lead_payload)
-                    except Exception as save_err:
-                        if "no column named source" in str(save_err).lower():
-                            lead_payload.pop("source", None)
-                            save_lead(lead_payload)
-                        else:
-                            raise
+                    _save_lead_compat(lead_payload)
                     saved_count += 1
                     print(f"Saved lead: {org_name}")
 
