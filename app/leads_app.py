@@ -648,7 +648,7 @@ async def _pull_and_save_segment(
             phone_text = (row.get("phone") or "").strip()
             has_phone = bool(phone_text and phone_text not in {"—", "N/A", "na"})
             overall = int(service_needs.get("overall_score", 0) or 0)
-            if need_signal_source == "direct" and score >= 50 and len(services_needed) >= 1 and overall >= 30 and (has_phone or has_named_official or has_valid_npi):
+            if need_signal_source == "direct" and score >= 65 and len(services_needed) >= 2 and overall >= 50 and (has_phone or has_named_official or has_valid_npi):
                 tier = "strict"
 
         npi = (
@@ -771,7 +771,7 @@ async def _pull_and_save_segment(
 
         final_has_quality_email = bool(lead_has_quality_email or has_existing_quality_email)
         lead_score_value = int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0)
-        if tier == "review" and need_signal_source == "direct" and final_has_quality_email and lead_score_value >= 45:
+        if tier == "review" and need_signal_source == "direct" and final_has_quality_email and lead_score_value >= 65:
             review_promotion_candidates.append({
                 "lead_id": lead_id,
                 "score": lead_score_value,
@@ -1370,14 +1370,14 @@ async def list_leads(
         if STRICT_POOL_TAG in tags or "quality_tier=strict" in tags:
             source = _need_signal_source_from_tags(tags)
             if source is None:
-                return "Need Evidence [direct]" in str(row.get("notes", "") or "")
+                return str(row.get("notes", "") or "").startswith("Need Evidence [direct]")
             return source == "direct"
 
         # Legacy rows without strict-quality tags are not treated as strict-ready
         # unless they carry explicit direct need evidence.
         notes = str(row.get("notes", "") or "")
         source = _need_signal_source_from_tags(tags)
-        return source == "direct" or "Need Evidence [direct]" in notes
+        return source == "direct" or notes.startswith("Need Evidence [direct]")
 
     def _apply_filters(rows: list[dict]) -> list[dict]:
         filtered = rows
@@ -1399,7 +1399,7 @@ async def list_leads(
                     filtered = [
                         row for row in filtered
                         if _need_signal_source_from_tags(row.get("tags", "")) == "direct"
-                        or "Need Evidence [direct]" in str(row.get("notes", "") or "")
+                        or str(row.get("notes", "") or "").startswith("Need Evidence [direct]")
                     ]
         if quality_only:
             filtered = [row for row in filtered if _is_quality_row(row)]
@@ -2097,8 +2097,11 @@ async def export_emails_csv():
             l.phone
         FROM lead_emails e
         JOIN saved_leads l ON e.npi = l.npi
-                WHERE e.confidence >= 75
-                    AND lower(COALESCE(e.source, '')) NOT LIKE '%pattern%'
+        WHERE e.confidence >= 80
+            AND lower(COALESCE(e.source, '')) NOT LIKE '%pattern%'
+            AND lower(COALESCE(e.source, '')) NOT IN ('generated', 'fallback')
+            AND l.tags LIKE '%quality_tier=strict%'
+            AND l.tags LIKE '%need_signal_source=direct%'
         ORDER BY l.organization_name, e.is_decision_maker DESC, e.confidence DESC
     """).fetchall()
     db.close()

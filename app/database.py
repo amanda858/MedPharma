@@ -457,14 +457,22 @@ def save_lead_emails(npi: str, emails: list) -> int:
             print(f"WARNING: Blocked bad email from saving: {email}")
             continue
 
-        # Block synthetic pattern emails unless explicitly verified.
-        if ("pattern" in source or source in {"generated", "fallback"}) and not verified:
-            print(f"WARNING: Blocked unverified pattern email: {email} ({source})")
-            continue
+        # Pattern/fallback/generated sources are only acceptable when both
+        # verified and very high confidence.
+        if "pattern" in source or source in {"generated", "fallback"}:
+            if (not verified) or confidence < 90:
+                print(
+                    "WARNING: Blocked synthetic email: "
+                    f"{email} ({source}, confidence={confidence}, verified={verified})"
+                )
+                continue
 
-        # Require stronger confidence for non-verified emails.
-        if confidence < 70 and not verified:
-            print(f"WARNING: Blocked low-confidence email: {email} ({confidence})")
+        # Require all persisted emails to be verified and high confidence.
+        if not verified or confidence < 80:
+            print(
+                "WARNING: Blocked unverified/low-confidence email: "
+                f"{email} ({source}, confidence={confidence}, verified={verified})"
+            )
             continue
             
         try:
