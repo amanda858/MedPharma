@@ -8,10 +8,22 @@ from app.config import DATABASE_PATH
 from app.email_finder import _is_quality_email
 
 
+SQLITE_TIMEOUT_SECONDS = 30
+SQLITE_BUSY_TIMEOUT_MS = 30000
+
+
+def _configure_sqlite_connection(conn: sqlite3.Connection) -> None:
+    """Apply SQLite pragmas that reduce lock contention in concurrent workloads."""
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+
+
 def get_db():
     """Get database connection."""
     os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
+    _configure_sqlite_connection(conn)
     conn.row_factory = sqlite3.Row
     return conn
 
