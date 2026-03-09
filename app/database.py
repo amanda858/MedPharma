@@ -3,6 +3,8 @@
 import json
 import sqlite3
 import os
+import time
+from typing import Callable, Any
 from datetime import datetime
 from app.config import DATABASE_PATH
 from app.email_finder import _is_quality_email
@@ -17,6 +19,22 @@ def _configure_sqlite_connection(conn: sqlite3.Connection) -> None:
     conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+
+
+def _is_locked_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "database is locked" in msg or "database table is locked" in msg
+
+
+def _run_write_with_retry(write_fn: Callable[[], Any], max_attempts: int = 8, base_delay: float = 0.15):
+    """Retry transient SQLite lock errors with short backoff."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return write_fn()
+        except sqlite3.OperationalError as exc:
+            if not _is_locked_error(exc) or attempt >= max_attempts:
+                raise
+            time.sleep(base_delay * attempt)
 
 
 def get_db():
@@ -299,45 +317,47 @@ def seed_demo_leads():
 
 def save_lead(lead_data: dict) -> int:
     """Save a lead to the database. Returns the lead ID."""
-    conn = get_db()
-    cursor = conn.cursor()
+    def _write() -> int:
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT OR REPLACE INTO saved_leads (
+                    npi, organization_name, first_name, last_name, credential,
+                    taxonomy_code, taxonomy_desc, address_line1, address_line2,
+                    city, state, zip_code, phone, fax, enumeration_date,
+                    last_updated, lead_score, lead_status, notes, tags, source, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                lead_data.get("npi"),
+                lead_data.get("organization_name"),
+                lead_data.get("first_name"),
+                lead_data.get("last_name"),
+                lead_data.get("credential"),
+                lead_data.get("taxonomy_code"),
+                lead_data.get("taxonomy_desc"),
+                lead_data.get("address_line1"),
+                lead_data.get("address_line2"),
+                lead_data.get("city"),
+                lead_data.get("state"),
+                lead_data.get("zip_code"),
+                lead_data.get("phone"),
+                lead_data.get("fax"),
+                lead_data.get("enumeration_date"),
+                lead_data.get("last_updated"),
+                lead_data.get("lead_score", 0),
+                lead_data.get("lead_status", "new"),
+                lead_data.get("notes", ""),
+                lead_data.get("tags", ""),
+                lead_data.get("source", "scraped"),
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
 
-    try:
-        cursor.execute("""
-            INSERT OR REPLACE INTO saved_leads (
-                npi, organization_name, first_name, last_name, credential,
-                taxonomy_code, taxonomy_desc, address_line1, address_line2,
-                city, state, zip_code, phone, fax, enumeration_date,
-                last_updated, lead_score, lead_status, notes, tags, source, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            lead_data.get("npi"),
-            lead_data.get("organization_name"),
-            lead_data.get("first_name"),
-            lead_data.get("last_name"),
-            lead_data.get("credential"),
-            lead_data.get("taxonomy_code"),
-            lead_data.get("taxonomy_desc"),
-            lead_data.get("address_line1"),
-            lead_data.get("address_line2"),
-            lead_data.get("city"),
-            lead_data.get("state"),
-            lead_data.get("zip_code"),
-            lead_data.get("phone"),
-            lead_data.get("fax"),
-            lead_data.get("enumeration_date"),
-            lead_data.get("last_updated"),
-            lead_data.get("lead_score", 0),
-            lead_data.get("lead_status", "new"),
-            lead_data.get("notes", ""),
-            lead_data.get("tags", ""),
-            lead_data.get("source", "scraped"),
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        return cursor.lastrowid
-    finally:
-        conn.close()
+    return _run_write_with_retry(_write)
 
 
 def get_saved_leads(status=None, state=None, min_score=None):
@@ -390,28 +410,31 @@ def get_saved_leads(status=None, state=None, min_score=None):
 
 def update_lead(lead_id: int, updates: dict):
     """Update a saved lead."""
-    conn = get_db()
-    cursor = conn.cursor()
+    def _write() -> None:
+        conn = get_db()
+        cursor = conn.cursor()
 
-    allowed_fields = ["lead_status", "lead_score", "notes", "tags"]
-    set_parts = []
-    params = []
+        allowed_fields = ["lead_status", "lead_score", "notes", "tags"]
+        set_parts = []
+        params = []
 
-    for field in allowed_fields:
-        if field in updates:
-            set_parts.append(f"{field} = ?")
-            params.append(updates[field])
+        for field in allowed_fields:
+            if field in updates:
+                set_parts.append(f"{field} = ?")
+                params.append(updates[field])
 
-    if set_parts:
-        set_parts.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(lead_id)
+        if set_parts:
+            set_parts.append("updated_at = ?")
+            params.append(datetime.now().isoformat())
+            params.append(lead_id)
 
-        query = f"UPDATE saved_leads SET {', '.join(set_parts)} WHERE id = ?"
-        cursor.execute(query, params)
-        conn.commit()
+            query = f"UPDATE saved_leads SET {', '.join(set_parts)} WHERE id = ?"
+            cursor.execute(query, params)
+            conn.commit()
 
-    conn.close()
+        conn.close()
+
+    _run_write_with_retry(_write)
 
 
 def delete_lead(lead_id: int):
@@ -460,62 +483,68 @@ def log_search(search_type: str, params: str, count: int):
 
 def save_lead_emails(npi: str, emails: list) -> int:
     """Save discovered emails for a lead. Returns count saved."""
-    conn = get_db()
-    cursor = conn.cursor()
-    saved = 0
-    for e in emails:
-        email = e.get("email", "")
-        source = str(e.get("source", "") or "").strip().lower()
-        confidence = int(e.get("confidence", 0) or 0)
-        verified = bool(e.get("verified", False))
+    def _write() -> int:
+        conn = get_db()
+        cursor = conn.cursor()
+        saved = 0
+        for e in emails:
+            email = e.get("email", "")
+            source = str(e.get("source", "") or "").strip().lower()
+            confidence = int(e.get("confidence", 0) or 0)
+            verified = bool(e.get("verified", False))
 
-        # Apply final quality check before saving
-        if not _is_quality_email(email):
-            print(f"WARNING: Blocked bad email from saving: {email}")
-            continue
+            # Apply final quality check before saving
+            if not _is_quality_email(email):
+                print(f"WARNING: Blocked bad email from saving: {email}")
+                continue
 
-        # Pattern/fallback/generated sources are only acceptable when both
-        # verified and very high confidence.
-        if "pattern" in source or source in {"generated", "fallback"}:
-            if (not verified) or confidence < 90:
+            # Pattern/fallback/generated sources are only acceptable when both
+            # verified and very high confidence.
+            if "pattern" in source or source in {"generated", "fallback"}:
+                if (not verified) or confidence < 90:
+                    print(
+                        "WARNING: Blocked synthetic email: "
+                        f"{email} ({source}, confidence={confidence}, verified={verified})"
+                    )
+                    continue
+
+            # Require all persisted emails to be verified and high confidence.
+            if not verified or confidence < 80:
                 print(
-                    "WARNING: Blocked synthetic email: "
+                    "WARNING: Blocked unverified/low-confidence email: "
                     f"{email} ({source}, confidence={confidence}, verified={verified})"
                 )
                 continue
-
-        # Require all persisted emails to be verified and high confidence.
-        if not verified or confidence < 80:
-            print(
-                "WARNING: Blocked unverified/low-confidence email: "
-                f"{email} ({source}, confidence={confidence}, verified={verified})"
-            )
-            continue
             
-        try:
-            cursor.execute("""
-                INSERT OR IGNORE INTO lead_emails (
-                    npi, email, first_name, last_name, position,
-                    is_decision_maker, confidence, email_type, source, domain
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                npi,
-                email,
-                e.get("first_name", ""),
-                e.get("last_name", ""),
-                e.get("position", ""),
-                1 if e.get("is_decision_maker") else 0,
-                confidence,
-                e.get("type", "pattern"),
-                source or e.get("source", "generated"),
-                e.get("domain", ""),
-            ))
-            saved += cursor.rowcount
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
-    return saved
+            try:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO lead_emails (
+                        npi, email, first_name, last_name, position,
+                        is_decision_maker, confidence, email_type, source, domain
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    npi,
+                    email,
+                    e.get("first_name", ""),
+                    e.get("last_name", ""),
+                    e.get("position", ""),
+                    1 if e.get("is_decision_maker") else 0,
+                    confidence,
+                    e.get("type", "pattern"),
+                    source or e.get("source", "generated"),
+                    e.get("domain", ""),
+                ))
+                saved += cursor.rowcount
+            except sqlite3.OperationalError as exc:
+                if _is_locked_error(exc):
+                    raise
+            except Exception:
+                pass
+        conn.commit()
+        conn.close()
+        return saved
+
+    return _run_write_with_retry(_write)
 
 
 def get_lead_emails(npi: str) -> list:
@@ -565,57 +594,60 @@ def get_all_leads_with_emails() -> list:
 
 def save_enrichment(npi: str, enrichment_data: dict) -> int:
     """Save or update enrichment data for a lead."""
-    conn = get_db()
-    cursor = conn.cursor()
+    def _write() -> int:
+        conn = get_db()
+        cursor = conn.cursor()
 
-    sn = enrichment_data.get("service_needs", {})
-    billing = sn.get("billing", {})
-    payor = sn.get("payor_contracting", {})
-    workflow = sn.get("workflow", {})
+        sn = enrichment_data.get("service_needs", {})
+        billing = sn.get("billing", {})
+        payor = sn.get("payor_contracting", {})
+        workflow = sn.get("workflow", {})
 
-    try:
-        cursor.execute("""
-            INSERT OR REPLACE INTO lead_enrichment (
-                npi, organization_name, enriched_at,
-                overall_score, billing_score, payor_score, workflow_score,
-                priority, services_needed, recommendation,
-                billing_reasons, payor_reasons, workflow_reasons,
-                clia_data, medicare_data, authorized_official,
-                location_count, multi_state, states_present, taxonomy_count,
-                urgency_score, urgency_level, urgency_reason, urgency_updated_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            npi,
-            enrichment_data.get("organization_name", ""),
-            enrichment_data.get("enriched_at", datetime.now().isoformat()),
-            sn.get("overall_score", 0),
-            billing.get("score", 0),
-            payor.get("score", 0),
-            workflow.get("score", 0),
-            sn.get("priority", "low"),
-            json.dumps(sn.get("services_needed", [])),
-            sn.get("recommendation", ""),
-            json.dumps(billing.get("reasons", [])),
-            json.dumps(payor.get("reasons", [])),
-            json.dumps(workflow.get("reasons", [])),
-            json.dumps(enrichment_data.get("data_sources", {}).get("clia", {})),
-            json.dumps(enrichment_data.get("data_sources", {}).get("medicare", {})),
-            json.dumps(enrichment_data.get("authorized_official", {})),
-            enrichment_data.get("location_count", 0),
-            1 if enrichment_data.get("multi_state") else 0,
-            json.dumps(enrichment_data.get("states_present", [])),
-            len(enrichment_data.get("data_sources", {}).get("npi", {}).get("taxonomies", [])),
-            0,
-            "low",
-            "",
-            "",
-            datetime.now().isoformat(),
-        ))
-        conn.commit()
-        return cursor.lastrowid
-    finally:
-        conn.close()
+        try:
+            cursor.execute("""
+                INSERT OR REPLACE INTO lead_enrichment (
+                    npi, organization_name, enriched_at,
+                    overall_score, billing_score, payor_score, workflow_score,
+                    priority, services_needed, recommendation,
+                    billing_reasons, payor_reasons, workflow_reasons,
+                    clia_data, medicare_data, authorized_official,
+                    location_count, multi_state, states_present, taxonomy_count,
+                    urgency_score, urgency_level, urgency_reason, urgency_updated_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                npi,
+                enrichment_data.get("organization_name", ""),
+                enrichment_data.get("enriched_at", datetime.now().isoformat()),
+                sn.get("overall_score", 0),
+                billing.get("score", 0),
+                payor.get("score", 0),
+                workflow.get("score", 0),
+                sn.get("priority", "low"),
+                json.dumps(sn.get("services_needed", [])),
+                sn.get("recommendation", ""),
+                json.dumps(billing.get("reasons", [])),
+                json.dumps(payor.get("reasons", [])),
+                json.dumps(workflow.get("reasons", [])),
+                json.dumps(enrichment_data.get("data_sources", {}).get("clia", {})),
+                json.dumps(enrichment_data.get("data_sources", {}).get("medicare", {})),
+                json.dumps(enrichment_data.get("authorized_official", {})),
+                enrichment_data.get("location_count", 0),
+                1 if enrichment_data.get("multi_state") else 0,
+                json.dumps(enrichment_data.get("states_present", [])),
+                len(enrichment_data.get("data_sources", {}).get("npi", {}).get("taxonomies", [])),
+                0,
+                "low",
+                "",
+                "",
+                datetime.now().isoformat(),
+            ))
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    return _run_write_with_retry(_write)
 
 
 def update_enrichment_urgency(npi: str, urgency_score: int, urgency_level: str, urgency_reason: str):
