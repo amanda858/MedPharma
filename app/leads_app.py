@@ -308,6 +308,20 @@ def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> t
     note_text = str(row.get("notes", "") or "").strip()
     source_text = f"{headline} {note_text}".lower()
 
+    # Prefer explicit structured request fields as direct evidence.
+    explicit_candidates: list[str] = []
+    for key in ("requested_services", "services_needed", "services_wanted", "service_need"):
+        value = row.get(key)
+        if isinstance(value, list):
+            explicit_candidates.extend(str(item).strip() for item in value if str(item).strip())
+        elif isinstance(value, str) and value.strip():
+            explicit_candidates.extend(part.strip() for part in value.replace("|", ",").split(",") if part.strip())
+
+    if explicit_candidates:
+        # Keep concise and deterministic evidence text in notes.
+        preview = ", ".join(explicit_candidates[:3])
+        return True, f"Requested services: {preview}", "direct"
+
     intent_terms = _segment_terms(segment, NEED_INTENT_TERMS, SEGMENT_INTENT_TERMS)
     service_terms = _segment_terms(segment, NEED_SERVICE_TERMS, SEGMENT_SERVICE_TERMS)
     has_intent = any(term in source_text for term in intent_terms)
