@@ -1359,13 +1359,11 @@ async def list_leads(
                 return "Need Evidence [direct]" in str(row.get("notes", "") or "")
             return source == "direct"
 
-        # Backward compatibility for legacy rows without quality tags.
-        return (
-            int(row.get("lead_score", 0) or 0) >= 65
-            and int(row.get("urgency_score", 0) or 0) >= 40
-            and isinstance(row.get("services_wanted", []), list)
-            and len(row.get("services_wanted", [])) > 0
-        )
+        # Legacy rows without strict-quality tags are not treated as strict-ready
+        # unless they carry explicit direct need evidence.
+        notes = str(row.get("notes", "") or "")
+        source = _need_signal_source_from_tags(tags)
+        return source == "direct" or "Need Evidence [direct]" in notes
 
     def _apply_filters(rows: list[dict]) -> list[dict]:
         filtered = rows
