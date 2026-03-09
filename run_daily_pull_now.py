@@ -44,7 +44,7 @@ async def _scheduled_daily_lead_pull():
                     state = lead.get('state', '')
                     source = f"auto_scraper_{lead.get('source', 'unknown')}"
                     notes = f"Auto-discovered high-priority lead: {lead.get('signal', '')} | Score: {lead['overall_priority_score']}"
-                    save_lead({
+                    lead_payload = {
                         "npi": npi,
                         "organization_name": org_name,
                         "city": city,
@@ -55,7 +55,15 @@ async def _scheduled_daily_lead_pull():
                         "notes": notes,
                         "tags": "daily_runner,nationwide,quality_tier=review,need_signal=yes,need_signal_source=direct",
                         "source": source,
-                    })
+                    }
+                    try:
+                        save_lead(lead_payload)
+                    except Exception as save_err:
+                        if "no column named source" in str(save_err).lower():
+                            lead_payload.pop("source", None)
+                            save_lead(lead_payload)
+                        else:
+                            raise
                     saved_count += 1
                     print(f"Saved lead: {org_name}")
 
