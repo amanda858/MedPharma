@@ -1549,6 +1549,7 @@
             if (!exploratory) {
                 params.set('quality_only', 'true');
                 params.set('need_signal_only', 'true');
+                params.set('need_signal_source', 'direct');
                 params.set('require_email', 'true');
             }
 
@@ -1604,8 +1605,8 @@
                     summary.textContent = exploratory
                         ? 'Exploratory mode: showing broader leads (may include missing email or weaker signal).'
                         : (usedReviewFallback
-                            ? 'Strict pool is temporarily empty. Showing top review-quality leads with need evidence and at least one email.'
-                            : 'Strict mode: showing actionable leads with need evidence and at least one email.');
+                            ? 'Strict pool is temporarily empty. Showing top review-quality leads with direct need evidence and at least one email.'
+                            : 'Strict mode: showing actionable leads with direct need evidence and at least one email.');
                 }
 
                 if (!autoPollAttempted && (!effectiveData?.leads || effectiveData.leads.length === 0)) {

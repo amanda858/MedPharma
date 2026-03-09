@@ -301,7 +301,7 @@ def _promote_review_floor_lead() -> bool:
     return True
 
 
-def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> tuple[bool, str]:
+def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> tuple[bool, str, str]:
     headline = str(row.get("headline", "") or "").strip()
     note_text = str(row.get("notes", "") or "").strip()
     source_text = f"{headline} {note_text}".lower()
@@ -312,21 +312,32 @@ def _extract_need_signal(row: dict, enrichment: dict, segment: str = "all") -> t
     has_service = any(term in source_text for term in service_terms)
     # Accept explicit service + headline even if intent verb is implicit.
     if (has_intent and has_service and headline) or (has_service and headline):
-        return True, headline[:180]
+        return True, headline[:180], "direct"
 
     service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
     services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
     overall = int(service_needs.get("overall_score", 0) or 0)
     # Lower threshold so strong-but-not-perfect enrichment still qualifies.
     if overall >= 38 and len(services_needed) >= 1:
-        return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})"
+        return True, f"Inferred high-need profile ({', '.join(str(s) for s in services_needed[:3])})", "inferred"
 
     # Conservative fallback for sparse enrichment: keep rows that still show
     # concrete service needs instead of collapsing strict/review pools to zero.
     if enrichment and not enrichment.get("error") and len(services_needed) >= 1:
-        return True, f"Enrichment-detected services ({', '.join(str(s) for s in services_needed[:2])})"
+        return True, f"Enrichment-detected services ({', '.join(str(s) for s in services_needed[:2])})", "inferred"
 
-    return False, ""
+    return False, "", "none"
+
+
+def _need_signal_source_from_tags(tags_value: str) -> str | None:
+    tags = str(tags_value or "")
+    for part in tags.split(","):
+        token = part.strip().lower()
+        if token.startswith("need_signal_source="):
+            value = token.split("=", 1)[1].strip()
+            if value in {"direct", "inferred"}:
+                return value
+    return None
 
 
 def _infer_service_needs_from_text(row: dict, segment: str) -> dict:
@@ -579,7 +590,7 @@ async def _pull_and_save_segment(
             service_needs = enrichment.get("service_needs", {}) if isinstance(enrichment.get("service_needs", {}), dict) else {}
             services_needed = service_needs.get("services_needed", []) if isinstance(service_needs.get("services_needed", []), list) else []
 
-        has_need_signal, need_evidence = _extract_need_signal(row, enrichment, segment=segment)
+        has_need_signal, need_evidence, need_signal_source = _extract_need_signal(row, enrichment, segment=segment)
         if not has_need_signal:
             filtered_out += 1
             continue
@@ -605,6 +616,10 @@ async def _pull_and_save_segment(
         if tier == "review" and not ALLOW_REVIEW_POOL:
             filtered_out += 1
             continue
+
+        # Strict pool must be rooted in direct need evidence only.
+        if tier == "strict" and need_signal_source != "direct":
+            tier = "review"
 
         # If strict pool is starved, promote only high-confidence review rows
         # that are clearly actionable and contactable.
@@ -635,8 +650,8 @@ async def _pull_and_save_segment(
             "phone": row.get("phone", ""),
             "lead_score": int(row.get("overall_priority_score", row.get("signal_score", 0)) or 0),
             "lead_status": "new",
-            "notes": f"Need Evidence: {need_evidence} | [{row.get('source', 'source')}] {row.get('headline', '')} | {row.get('url', '')}",
-            "tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG if tier == 'strict' else REVIEW_POOL_TAG},quality_tier={tier},need_signal=yes",
+            "notes": f"Need Evidence [{need_signal_source}]: {need_evidence} | [{row.get('source', 'source')}] {row.get('headline', '')} | {row.get('url', '')}",
+            "tags": f"daily_poll,{segment},nationwide,{STRICT_POOL_TAG if tier == 'strict' else REVIEW_POOL_TAG},quality_tier={tier},need_signal=yes,need_signal_source={need_signal_source}",
         }
 
         lead_id = save_lead(lead_payload)
@@ -1323,6 +1338,7 @@ async def list_leads(
     quality_only: bool = Query(False),
     quality_tier: Optional[str] = Query(None, description="strict|review"),
     need_signal_only: bool = Query(False),
+    need_signal_source: Optional[str] = Query(None, description="direct|inferred"),
     require_email: bool = Query(False),
 ):
     def _has_quality_email(row: dict) -> bool:
@@ -1370,6 +1386,14 @@ async def list_leads(
                 if "Need Evidence:" in str(row.get("notes", "") or "")
                 or "need_signal=yes" in str(row.get("tags", "") or "")
             ]
+        if need_signal_source:
+            source = str(need_signal_source).strip().lower()
+            if source in {"direct", "inferred"}:
+                filtered = [
+                    row for row in filtered
+                    if _need_signal_source_from_tags(row.get("tags", "")) == source
+                    or f"Need Evidence [{source}]" in str(row.get("notes", "") or "")
+                ]
         if require_email:
             filtered = [row for row in filtered if _has_quality_email(row)]
         return filtered
