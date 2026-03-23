@@ -832,7 +832,16 @@ def get_production(client_id: Optional[int] = None,
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
-    return {"logs": logs}
+    # Turnkey admin fallback: when a selected account has no rows,
+    # return all production rows so the panel is never empty by mistake.
+    if user.get("role") == "admin" and client_id is not None and not logs:
+        logs = list_production_logs(None, start_date, end_date, username=None)
+        return {
+            "logs": logs,
+            "fallback_all_clients": True,
+            "selected_client_id": client_id,
+        }
+    return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
 
 
 @router.post("/production")
@@ -864,6 +873,13 @@ def production_report(client_id: Optional[int] = None,
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
     report = get_production_report(scope, start_date, end_date)
+    if user.get("role") == "admin" and client_id is not None and not (report.get("details") or []):
+        report = get_production_report(None, start_date, end_date)
+        report["fallback_all_clients"] = True
+        report["selected_client_id"] = client_id
+        return report
+    report["fallback_all_clients"] = False
+    report["selected_client_id"] = client_id
     return report
 
 
