@@ -41,6 +41,59 @@ from app.notifications import notify_activity, notify_bulk_activity, flush_and_n
 router = APIRouter(prefix="/hub/api")
 
 
+DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
+
+
+def _norm_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _infer_excel_category(content: bytes, ext: str, filename: str = "", description: str = "") -> tuple[Optional[str], dict]:
+    """Infer the best import category from Excel headers + filename/description text."""
+    scores = {"Claims": 0, "Credentialing": 0, "Enrollment": 0, "EDI": 0}
+    keywords = {
+        "Claims": [
+            "claim", "patient", "dos", "cpt", "charge", "allowed", "paid", "balance", "denial", "remit",
+        ],
+        "Credentialing": [
+            "credential", "recredential", "expiration", "approved", "follow up", "provider enrollment",
+        ],
+        "Enrollment": [
+            "enroll", "effective", "participation", "in network", "in-network", "payer enrollment",
+        ],
+        "EDI": [
+            "edi", "era", "eft", "clearinghouse", "trading partner", "submitter", "receiver", "payer id", "837", "835",
+        ],
+    }
+
+    headers: list[str] = []
+    try:
+        rows = _parse_excel_rows(content, ext, combine_sheets=True)
+        if rows:
+            headers = [str(k or "") for k in rows[0].keys()]
+    except Exception:
+        headers = []
+
+    blob = " ".join([*headers, filename or "", description or ""]).lower()
+    for category, words in keywords.items():
+        for word in words:
+            if word in blob:
+                # Longer keywords get a little more weight to reduce collisions.
+                scores[category] += 2 if len(word) >= 7 else 1
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_cat, best_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0
+    inferred = best_cat if best_score >= 2 and (best_score - second_score) >= 1 else None
+    debug = {
+        "scores": scores,
+        "headers_sample": headers[:20],
+        "best_score": best_score,
+        "second_score": second_score,
+    }
+    return inferred, debug
+
+
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 def _get_user(hub_session: Optional[str] = None):
@@ -1093,13 +1146,24 @@ async def upload_file(
         except Exception:
             row_count = 0
 
+    requested_category = (category or "General").strip() or "General"
+    effective_category = requested_category
+    category_source = "requested"
+    infer_debug = None
+
+    if file_type == "excel" and requested_category not in DATA_IMPORT_CATEGORIES:
+        inferred, infer_debug = _infer_excel_category(content, ext, file.filename or "", description or "")
+        if inferred in DATA_IMPORT_CATEGORIES:
+            effective_category = inferred
+            category_source = "auto"
+
     file_id = add_file(
         client_id=scope,
         filename=unique_name,
         original_name=file.filename or "file",
         file_type=file_type,
         file_size=file_size,
-        category=category,
+        category=effective_category,
         description=description,
         row_count=row_count,
         uploaded_by=user["username"],
@@ -1109,18 +1173,18 @@ async def upload_file(
     imported = 0
     import_errors = []
     import_category = None
-    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
-        import_category = category
+    if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
+        import_category = effective_category
         try:
-            if category == "Claims":
+            if effective_category == "Claims":
                 imported, import_errors = _import_claims_from_excel(content, ext, scope)
-            elif category == "Credentialing":
+            elif effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
-            elif category == "Enrollment":
+            elif effective_category == "Enrollment":
                 imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
-            elif category == "EDI":
+            elif effective_category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
@@ -1129,6 +1193,10 @@ async def upload_file(
         "id": file_id,
         "filename": unique_name,
         "original_name": file.filename,
+        "requested_category": requested_category,
+        "effective_category": effective_category,
+        "category_source": category_source,
+        "category_inference": infer_debug,
         "row_count": row_count,
         "imported": imported,
         "import_category": import_category,
@@ -2278,15 +2346,25 @@ async def replace_file(
     imported = 0
     import_errors = []
     category = rec.get("category", "")
-    if file_type == "excel" and category in ("Claims", "Credentialing", "Enrollment", "EDI"):
+    effective_category = category
+    category_source = "existing"
+    infer_debug = None
+    if file_type == "excel" and category not in DATA_IMPORT_CATEGORIES:
+        inferred, infer_debug = _infer_excel_category(content, ext, file.filename or "", rec.get("description", "") or "")
+        if inferred in DATA_IMPORT_CATEGORIES:
+            effective_category = inferred
+            category_source = "auto"
+            update_file_record(file_id, {"category": effective_category}, scope)
+
+    if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
         try:
-            if category == "Claims":
+            if effective_category == "Claims":
                 imported, import_errors = _import_claims_from_excel(content, ext, scope)
-            elif category == "Credentialing":
+            elif effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
-            elif category == "Enrollment":
+            elif effective_category == "Enrollment":
                 imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
-            elif category == "EDI":
+            elif effective_category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope)
         except Exception as e:
             import_errors = [str(e)]
@@ -2298,6 +2376,9 @@ async def replace_file(
         "ok": True,
         "file_id": file_id,
         "original_name": file.filename,
+        "effective_category": effective_category,
+        "category_source": category_source,
+        "category_inference": infer_debug,
         "imported": imported,
         "import_errors": import_errors[:5],
     }

@@ -134,6 +134,39 @@
             "problemMatcher": []
         },
         {
+            "label": "db-kinder-check-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/db_kinder_check.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "relink-kindercare-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/relink_kindercare_now.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "push-excel-upload-deploy-fix",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/client_routes.py .vscode/tasks.json && git commit -m \"fix: auto-detect excel import category and stabilize deploy task\" -- app/client_routes.py .vscode/tasks.json && git push origin main",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "push-daily-ops-solution",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && set -e && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" -- run_daily_ops_now.py .vscode/tasks.json README.md && git push origin main",
