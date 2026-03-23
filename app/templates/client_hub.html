@@ -2833,6 +2833,11 @@
             </div>
           </div>
 
+          <div id="prodFallbackBanner" class="card" style="display:none;margin-bottom:12px;border-left:4px solid #f59e0b">
+            <div style="font-size:13px;color:#92400e;font-weight:700">Showing all-client production data</div>
+            <div id="prodFallbackBannerText" style="font-size:12px;color:#78350f;margin-top:4px"></div>
+          </div>
+
           <!-- Daily Log Entry View -->
           <div id="prodLogView">
             <div class="card" style="margin-bottom:18px">
@@ -6463,6 +6468,25 @@
     // ═══════════════════════════════════════
     let prodViewMode = 'log'; // 'log' or 'report'
 
+    function _productionClientName(clientId) {
+      const c = (clientsList || []).find(x => Number(x.id) === Number(clientId));
+      return c ? (c.company || c.username || `Client ${clientId}`) : `Client ${clientId}`;
+    }
+
+    function setProductionFallbackBanner(enabled, selectedClientId) {
+      const box = document.getElementById('prodFallbackBanner');
+      const msg = document.getElementById('prodFallbackBannerText');
+      if (!box || !msg) return;
+      if (!enabled) {
+        box.style.display = 'none';
+        msg.textContent = '';
+        return;
+      }
+      const clientName = selectedClientId ? _productionClientName(selectedClientId) : 'selected account';
+      msg.textContent = `${clientName} has no direct production rows for this filter, so all-client rows are shown.`;
+      box.style.display = '';
+    }
+
     function toggleProductionView(mode) {
       prodViewMode = mode;
       document.getElementById('prodLogView').style.display = mode === 'log' ? '' : 'none';
@@ -6494,6 +6518,7 @@
       try {
         const r = await fetch(url);
         const d = await r.json();
+        setProductionFallbackBanner(Boolean(d.fallback_all_clients), d.selected_client_id || activeClientId);
         const logs = d.logs || [];
         const tbody = document.getElementById('prodTbody');
         if (!logs.length) {
@@ -6562,6 +6587,7 @@
       try {
         const r = await fetch(url);
         const d = await r.json();
+        setProductionFallbackBanner(Boolean(d.fallback_all_clients), d.selected_client_id || activeClientId);
         renderProductionReport(d, start, end);
       } catch (e) { toast('Failed to load report', 'error'); console.error(e); }
     }
