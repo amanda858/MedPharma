@@ -16,6 +16,7 @@ from pydantic import BaseModel
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT in production
 
 from app.client_db import (
+    get_db,
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client,
     get_profile, update_profile,
@@ -824,6 +825,13 @@ class ProductionLogIn(BaseModel):
     notes: str = ""
 
 
+class ProductionRelinkIn(BaseModel):
+    source_client_ids: Optional[list[int]] = None
+    usernames: Optional[list[str]] = None
+    dry_run: bool = False
+    max_rows: int = 5000
+
+
 @router.get("/production")
 def get_production(client_id: Optional[int] = None,
                    start_date: Optional[str] = None,
@@ -881,6 +889,147 @@ def production_report(client_id: Optional[int] = None,
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
+
+
+@router.post("/admin/production/relink-kindercare")
+def relink_kindercare_production(body: ProductionRelinkIn, hub_session: Optional[str] = Cookie(None)):
+    """Safely copy legacy production rows into the KinderCare account.
+
+    This endpoint is idempotent: rows that already exist for KinderCare are skipped.
+    """
+    _require_admin(hub_session)
+
+    usernames = [str(u or "").strip().lower() for u in (body.usernames or []) if str(u or "").strip()]
+    if not usernames:
+        usernames = ["mike", "sarah"]
+
+    source_ids = [int(x) for x in (body.source_client_ids or []) if int(x) > 0]
+    max_rows = max(1, min(int(body.max_rows or 5000), 20000))
+
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        target = cur.execute(
+            """
+            SELECT id, username, company
+            FROM clients
+            WHERE lower(username)='kindercare' OR lower(company) LIKE '%kindercare%'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="KinderCare account not found")
+
+        target_id = int(target["id"])
+        target_existing = int(
+            cur.execute("SELECT COUNT(*) FROM team_production WHERE client_id=?", (target_id,)).fetchone()[0]
+        )
+
+        conditions = ["client_id <> ?"]
+        params: list[object] = [target_id]
+        if source_ids:
+            conditions.append("client_id IN ({})".format(",".join(["?"] * len(source_ids))))
+            params.extend(source_ids)
+        if usernames:
+            conditions.append("lower(username) IN ({})".format(",".join(["?"] * len(usernames))))
+            params.extend(usernames)
+
+        where = " AND ".join(conditions)
+        rows = cur.execute(
+            f"""
+            SELECT id, client_id, work_date, username, category, task_description, quantity, time_spent, notes
+            FROM team_production
+            WHERE {where}
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            [*params, max_rows],
+        ).fetchall()
+
+        copied = 0
+        skipped_existing = 0
+        sample = []
+        for row in rows:
+            exists = cur.execute(
+                """
+                SELECT 1
+                FROM team_production
+                WHERE client_id=?
+                  AND work_date=?
+                  AND lower(username)=lower(?)
+                  AND category=?
+                  AND task_description=?
+                  AND IFNULL(quantity, 0)=IFNULL(?, 0)
+                  AND ABS(IFNULL(time_spent, 0)-IFNULL(?, 0)) < 0.0001
+                  AND IFNULL(notes, '')=IFNULL(?, '')
+                LIMIT 1
+                """,
+                (
+                    target_id,
+                    row["work_date"],
+                    row["username"],
+                    row["category"],
+                    row["task_description"],
+                    row["quantity"],
+                    row["time_spent"],
+                    row["notes"],
+                ),
+            ).fetchone()
+            if exists:
+                skipped_existing += 1
+                continue
+
+            if not body.dry_run:
+                cur.execute(
+                    """
+                    INSERT INTO team_production
+                    (client_id, work_date, username, category, task_description, quantity, time_spent, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_id,
+                        row["work_date"],
+                        row["username"],
+                        row["category"],
+                        row["task_description"],
+                        row["quantity"],
+                        row["time_spent"],
+                        row["notes"],
+                    ),
+                )
+            copied += 1
+            if len(sample) < 10:
+                sample.append(
+                    {
+                        "source_row_id": int(row["id"]),
+                        "source_client_id": int(row["client_id"]),
+                        "work_date": row["work_date"],
+                        "username": row["username"],
+                        "category": row["category"],
+                    }
+                )
+
+        if not body.dry_run:
+            conn.commit()
+
+        target_after = int(
+            cur.execute("SELECT COUNT(*) FROM team_production WHERE client_id=?", (target_id,)).fetchone()[0]
+        )
+        return {
+            "ok": True,
+            "dry_run": bool(body.dry_run),
+            "target": {"id": target_id, "username": target["username"], "company": target["company"]},
+            "target_existing_before": target_existing,
+            "source_candidates": len(rows),
+            "copied": copied,
+            "skipped_existing": skipped_existing,
+            "target_after": target_after,
+            "sample": sample,
+        }
+    finally:
+        conn.close()
 
 
 # ─── Files ────────────────────────────────────────────────────────────────────
