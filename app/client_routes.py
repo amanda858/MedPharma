@@ -120,7 +120,10 @@ def me(hub_session: Optional[str] = Cookie(None)):
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    # Filter out admin accounts – only real client accounts should appear
+    # Admins need full account visibility so misclassified client records
+    # (e.g., accidentally set to role=admin) do not disappear from selector.
+    if user.get("role") == "admin":
+        return list_clients()
     return [c for c in list_clients() if c.get("role") != "admin"]
 
 
