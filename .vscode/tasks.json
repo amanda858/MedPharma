@@ -167,6 +167,15 @@
             "problemMatcher": []
         },
         {
+            "label": "push-rule-intercept-module",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add rule_intercept.py && git commit -m \"feat: add deterministic rule intercept engine for routing\" -- rule_intercept.py && git push origin main",
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "push-daily-ops-solution",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && set -e && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" -- run_daily_ops_now.py .vscode/tasks.json README.md && git push origin main",

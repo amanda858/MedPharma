@@ -37,6 +37,7 @@ from app.client_db import (
 )
 
 from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
+from rule_intercept import intercept_excel_upload
 
 router = APIRouter(prefix="/hub/api")
 
@@ -75,6 +76,21 @@ def _infer_excel_category(content: bytes, ext: str, filename: str = "", descript
         headers = []
 
     blob = " ".join([*headers, filename or "", description or ""]).lower()
+
+    # Rule-intercept (deterministic) gets first shot.
+    intercept = intercept_excel_upload(headers=headers, filename=filename, description=description)
+    intercepted_category = intercept.get("category")
+    if intercepted_category in DATA_IMPORT_CATEGORIES:
+        debug = {
+            "scores": scores,
+            "headers_sample": headers[:20],
+            "best_score": None,
+            "second_score": None,
+            "intercept": intercept,
+        }
+        return intercepted_category, debug
+
+    # Heuristic fallback.
     for category, words in keywords.items():
         for word in words:
             if word in blob:
@@ -90,6 +106,7 @@ def _infer_excel_category(content: bytes, ext: str, filename: str = "", descript
         "headers_sample": headers[:20],
         "best_score": best_score,
         "second_score": second_score,
+        "intercept": intercept,
     }
     return inferred, debug
 
@@ -173,12 +190,25 @@ def me(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    # Admins need full account visibility so misclassified client records
-    # (e.g., accidentally set to role=admin) do not disappear from selector.
-    if user.get("role") == "admin":
-        return list_clients()
-    return [c for c in list_clients() if c.get("role") != "admin"]
+    _require_user(hub_session)
+
+    # Account selector should show client companies only (not internal/admin users),
+    # and avoid duplicate cards for the same company.
+    clients = [
+        c for c in list_clients()
+        if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
+    ]
+
+    deduped: dict[str, dict] = {}
+    for c in clients:
+        key = str(c.get("company") or "").strip().lower()
+        if not key:
+            key = f"id:{c.get('id')}"
+        prev = deduped.get(key)
+        if prev is None or int(c.get("id", 0) or 0) < int(prev.get("id", 0) or 0):
+            deduped[key] = c
+
+    return sorted(deduped.values(), key=lambda x: str(x.get("company") or "").lower())
 
 
 # ─── Clients (admin) ──────────────────────────────────────────────────────────
