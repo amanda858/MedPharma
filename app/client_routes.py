@@ -1186,6 +1186,16 @@ async def upload_file(
         if inferred in DATA_IMPORT_CATEGORIES:
             effective_category = inferred
             category_source = "auto"
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CATEGORY_INTERCEPT_REQUIRED",
+                    "message": "Could not confidently map spreadsheet to Claims, Credentialing, Enrollment, or EDI. Select a valid category or upload a clearly labeled sheet.",
+                    "requested_category": requested_category,
+                    "category_inference": infer_debug,
+                },
+            )
 
     file_id = add_file(
         client_id=scope,
@@ -2361,20 +2371,7 @@ async def replace_file(
         except Exception:
             pass
 
-    # Update DB record
-    update_file_record(file_id, {
-        "filename": new_unique,
-        "original_name": file.filename or rec["original_name"],
-        "file_type": file_type,
-        "file_size": file_size,
-        "row_count": row_count,
-        "uploaded_by": user["username"],
-        "status": "Replaced",
-    }, scope)
-
-    # Auto re-import if data category
-    imported = 0
-    import_errors = []
+    # Hard intercept (before replacing old file): never allow ambiguous excel routing.
     category = rec.get("category", "")
     effective_category = category
     category_source = "existing"
@@ -2384,8 +2381,32 @@ async def replace_file(
         if inferred in DATA_IMPORT_CATEGORIES:
             effective_category = inferred
             category_source = "auto"
-            update_file_record(file_id, {"category": effective_category}, scope)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CATEGORY_INTERCEPT_REQUIRED",
+                    "message": "Could not confidently map replacement spreadsheet to Claims, Credentialing, Enrollment, or EDI. Set the file category first or upload a clearly labeled sheet.",
+                    "existing_category": category,
+                    "category_inference": infer_debug,
+                },
+            )
 
+    # Update DB record
+    update_file_record(file_id, {
+        "filename": new_unique,
+        "original_name": file.filename or rec["original_name"],
+        "file_type": file_type,
+        "file_size": file_size,
+        "row_count": row_count,
+        "uploaded_by": user["username"],
+        "status": "Replaced",
+        "category": effective_category,
+    }, scope)
+
+    # Auto re-import if data category
+    imported = 0
+    import_errors = []
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
         try:
             if effective_category == "Claims":
