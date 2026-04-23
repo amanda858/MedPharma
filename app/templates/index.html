@@ -774,6 +774,7 @@
     <div class="tab-bar">
         <div class="tab active" data-tab="search" onclick="switchTab('search')">Search Leads</div>
         <div class="tab" data-tab="bulk" onclick="switchTab('bulk')">Multi-State Search</div>
+        <div class="tab" data-tab="scrub" onclick="switchTab('scrub')">Scrub CSV / Excel</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
         <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
@@ -882,6 +883,36 @@
                 </div>
             </div>
             <div id="bulkResults"></div>
+        </div>
+
+        <!-- ═══════════════════ SCRUB CSV PANEL ═══════════════════ -->
+        <div class="panel" id="panel-scrub">
+            <div class="card">
+                <div class="card-title">Scrub CSV / Excel — Verify Domains & Find Emails</div>
+                <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
+                    Upload any CSV/XLSX of companies. We auto-detect Org, Phone, City, State, Website columns,
+                    verify each org against its real website (using phone + city match), scrape contact pages
+                    for on-domain emails, and rule-intercept score the fit. No external paid APIs.
+                </p>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input type="file" id="scrubFile" accept=".csv,.xlsx,.xls"
+                        style="padding:8px;border:1px solid var(--gray-200);border-radius:6px;">
+                    <div class="form-group" style="width:130px;margin:0;">
+                        <label style="font-size:11px;">Max rows</label>
+                        <select id="scrubMaxRows">
+                            <option value="100">100</option>
+                            <option value="250">250</option>
+                            <option value="500" selected>500</option>
+                            <option value="1000">1000</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="runScrubUpload()">Scrub File</button>
+                    <span id="scrubStatus" style="font-size:13px;color:var(--gray-500);"></span>
+                </div>
+                <div id="scrubSummary" style="margin-top:14px;"></div>
+                <div id="scrubDownloads" style="margin-top:10px;"></div>
+            </div>
+            <div id="scrubResults"></div>
         </div>
 
         <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
@@ -1378,6 +1409,72 @@
                 chip.classList.add('selected');
             }
             document.getElementById('bulkSelectedCount').textContent = `${bulkSelectedStates.size} state${bulkSelectedStates.size !== 1 ? 's' : ''} selected`;
+        }
+
+        // ─── Scrub CSV/Excel ──────────────────────────────────────
+        async function runScrubUpload() {
+            const fileInput = document.getElementById('scrubFile');
+            const status = document.getElementById('scrubStatus');
+            const summary = document.getElementById('scrubSummary');
+            const downloads = document.getElementById('scrubDownloads');
+            const results = document.getElementById('scrubResults');
+            summary.innerHTML = ''; downloads.innerHTML = ''; results.innerHTML = '';
+            if (!fileInput.files || !fileInput.files[0]) {
+                showToast('Pick a CSV or XLSX file first', 'error');
+                return;
+            }
+            const file = fileInput.files[0];
+            const maxRows = document.getElementById('scrubMaxRows').value;
+            status.textContent = `Uploading ${file.name}… this can take a few minutes for large files.`;
+            results.innerHTML = '<div class="loading"><div class="spinner"></div><p>Verifying domains and scraping emails…</p></div>';
+            const fd = new FormData();
+            fd.append('file', file);
+            try {
+                const resp = await fetch(withBase(`/api/scrub/upload?max_rows=${maxRows}`), { method: 'POST', body: fd });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Scrub failed');
+                status.textContent = `Scrubbed ${data.summary.output_rows} rows.`;
+                const s = data.summary;
+                summary.innerHTML = `
+                    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;">
+                      <div><b>${s.input_rows}</b> input rows</div>
+                      <div><b>${s.verified_domains}</b> verified domains</div>
+                      <div><b>${s.rows_with_email}</b> with email</div>
+                      <div><b>${s.errors}</b> errors</div>
+                    </div>
+                    <div style="font-size:12px;color:var(--gray-500);margin-top:6px;">Detected columns: ${Object.entries(s.detected_columns).filter(([,v])=>v).map(([k,v])=>k+'→'+v).join(' · ') || 'auto'}</div>
+                `;
+                downloads.innerHTML = `
+                    <a class="btn btn-success" href="${withBase(data.download.xlsx)}" download>Download Excel (.xlsx)</a>
+                    <a class="btn btn-primary" href="${withBase(data.download.csv)}" download style="margin-left:8px;">Download CSV</a>
+                `;
+                const rows = data.preview || [];
+                if (!rows.length) { results.innerHTML = '<p style="padding:14px;">No rows returned.</p>'; return; }
+                let html = '<div class="card" style="margin-top:14px;"><div class="card-title">Preview (top 25 by Fit Score)</div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                ['Fit', 'Org Name', 'State', 'Phone', 'Verified Domain', 'Email 1', 'Email 2', 'Email 3', 'Status'].forEach(h => {
+                    html += `<th style="text-align:left;padding:6px;border-bottom:1px solid var(--gray-200);">${h}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+                rows.forEach(r => {
+                    html += `<tr>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);"><b>${r['Fit Score']||0}</b></td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${(r['Org Name']||'').replace(/</g,'&lt;')}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['State']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Phone']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Verified Domain']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 1']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 2']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 3']||''}</td>
+                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Scrub Status']||''}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div></div>';
+                results.innerHTML = html;
+            } catch (e) {
+                status.textContent = '';
+                results.innerHTML = `<div class="card" style="color:#b91c1c;">Scrub failed: ${e.message}</div>`;
+                showToast(e.message, 'error');
+            }
         }
 
         async function runBulkSearch() {

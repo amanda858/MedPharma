@@ -8,7 +8,7 @@ import asyncio
 from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional, List
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,6 +36,18 @@ from app.email_finder import find_emails_for_lab, _is_quality_email
 from app.enrichment import enrich_lead, enrich_leads_bulk
 from app.lead_scraper import run_national_lead_pull
 from app.build_info import BUILD_MARKER
+from rule_intercept import intercept_request
+from app.scrubber import (
+    parse_uploaded as _scrub_parse_uploaded,
+    scrub_rows as _scrub_rows,
+    to_csv_bytes as _scrub_to_csv,
+    to_xlsx_bytes as _scrub_to_xlsx,
+)
+import uuid as _uuid
+
+# In-memory store of recent scrub jobs (per-process). Keys are job_ids.
+_SCRUB_JOBS: dict[str, dict] = {}
+_SCRUB_JOBS_MAX = 20
 
 app = FastAPI(
     title="MedPharma Healthcare Leads",
@@ -1054,6 +1066,10 @@ class ContactFormRequest(BaseModel):
     message: str
 
 
+class RuleInterceptRequest(BaseModel):
+    text: str
+
+
 def _fallback_intent_parse(needs: str) -> dict:
     text = (needs or "").strip().lower()
     service_map = {
@@ -1213,6 +1229,8 @@ async def ai_find_leads(req: AILeadFindRequest):
         phone = (row.get("phone") or "").strip()
         has_phone = bool(phone and phone not in {"—", "N/A", "na"})
         has_reason_evidence = len(match_reasons) >= 2
+
+
         multi_service_match = len(matched_services) >= 2
 
         is_qualified = (
@@ -1263,6 +1281,98 @@ async def ai_find_leads(req: AILeadFindRequest):
         "strict_mode": bool(req.strict),
         "message": "No qualified buyer-intent leads found; broaden geography or disable strict mode." if not ranked else "OK",
     }
+
+
+@app.post("/api/intercept/request")
+async def intercept_support_request(req: RuleInterceptRequest):
+    """Route inbound support text through the rule engine."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    return intercept_request(text)
+
+
+# ─── CSV/XLSX Scrub API ─────────────────────────────────────────────
+def _scrub_remember(job_id: str, payload: dict) -> None:
+    _SCRUB_JOBS[job_id] = payload
+    if len(_SCRUB_JOBS) > _SCRUB_JOBS_MAX:
+        for k in list(_SCRUB_JOBS.keys())[:-_SCRUB_JOBS_MAX]:
+            _SCRUB_JOBS.pop(k, None)
+
+
+@app.post("/api/scrub/upload")
+async def scrub_upload(
+    file: UploadFile = File(...),
+    max_rows: int = Query(500, ge=1, le=2000),
+):
+    """Upload any CSV/XLSX of orgs/companies and run the scrub pipeline."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="file required")
+    name = file.filename.lower()
+    if not name.endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="only .csv, .xlsx, .xls accepted")
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not read upload: {e}")
+    if not content:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file too large (max 10MB)")
+    try:
+        headers, rows = _scrub_parse_uploaded(content, file.filename)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not parse file: {e}")
+    if not headers or not rows:
+        raise HTTPException(status_code=400, detail="no data rows detected")
+    try:
+        scrub = await _scrub_rows(headers, rows, max_rows=max_rows)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"scrub failed: {e}")
+    job_id = _uuid.uuid4().hex
+    _scrub_remember(job_id, {
+        "filename": file.filename,
+        "summary": scrub["summary"],
+        "rows": scrub["rows"],
+        "created_at": datetime.now().isoformat(),
+    })
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "summary": scrub["summary"],
+        "preview": scrub["rows"][:25],
+        "download": {
+            "csv": f"/api/scrub/download/{job_id}.csv",
+            "xlsx": f"/api/scrub/download/{job_id}.xlsx",
+        },
+    }
+
+
+@app.get("/api/scrub/download/{job_id}.csv")
+async def scrub_download_csv(job_id: str):
+    job = _SCRUB_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    body = _scrub_to_csv(job["rows"])
+    fn = f"scrubbed_{job_id[:8]}.csv"
+    return Response(
+        content=body, media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.get("/api/scrub/download/{job_id}.xlsx")
+async def scrub_download_xlsx(job_id: str):
+    job = _SCRUB_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    body = _scrub_to_xlsx(job["rows"])
+    fn = f"scrubbed_{job_id[:8]}.xlsx"
+    return Response(
+        content=body,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
 
 
 @app.get("/api/search/taxonomy")

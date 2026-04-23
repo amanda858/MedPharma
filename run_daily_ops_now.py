@@ -13,14 +13,31 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 
-BASE = os.getenv("LEADS_BASE_URL", "https://medpharma-hub.onrender.com").rstrip("/")
+PRIMARY_BASE = os.getenv("LEADS_BASE_URL", "https://medpharmahub.com").rstrip("/")
+FALLBACK_BASE = "https://medpharma-hub.onrender.com"
+
+
+def _host_resolves(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip()
+    if not host:
+        return False
+    try:
+        socket.getaddrinfo(host, 443)
+        return True
+    except Exception:
+        return False
+
+
+BASE = PRIMARY_BASE if _host_resolves(PRIMARY_BASE) else FALLBACK_BASE
 USERNAME = os.getenv("HUB_ADMIN_USERNAME", "admin")
 PASSWORD = os.getenv("HUB_ADMIN_PASSWORD", "admin123")
 

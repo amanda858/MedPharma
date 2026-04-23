@@ -110,7 +110,7 @@ The script prints JSON and returns a stable outcome:
 
 Recommended environment variables:
 
-- `LEADS_BASE_URL` (default: `https://medpharma-hub.onrender.com`)
+- `LEADS_BASE_URL` (default: `https://medpharmahub.com`)
 - `HUB_ADMIN_USERNAME` and `HUB_ADMIN_PASSWORD`
 - `DAILY_OPS_POLL_TIMEOUT_S` (default: `300`)
 - `DAILY_OPS_STRICT_RETRIES` (default: `3`)

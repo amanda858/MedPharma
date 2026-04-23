@@ -8,3 +8,4 @@ data/
 venv/
 dist/
 *.egg-info/
+.vscode/live_check_latest.json
