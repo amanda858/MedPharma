@@ -36,7 +36,13 @@ from app.client_db import (
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
 )
 
-from app.notifications import notify_activity, notify_bulk_activity, flush_and_notify
+from app.notifications import (
+    notify_activity,
+    notify_bulk_activity,
+    flush_and_notify,
+    send_test_notification,
+    get_notification_status,
+)
 from rule_intercept import intercept_excel_upload
 
 router = APIRouter(prefix="/hub/api")
@@ -972,6 +978,23 @@ def production_report(client_id: Optional[int] = None,
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
+
+
+@router.get("/notifications/status")
+def notifications_status_endpoint(hub_session: Optional[str] = Cookie(None)):
+    """Return the live notification channel configuration (admin only)."""
+    _require_admin(hub_session)
+    return get_notification_status()
+
+
+@router.post("/notifications/test")
+def notifications_test_endpoint(hub_session: Optional[str] = Cookie(None)):
+    """Fire a real test notification through configured email/SMS channels.
+
+    Admin only. Returns the per-channel delivery results plus current status.
+    """
+    user = _require_admin(hub_session)
+    return send_test_notification(triggered_by=user.get("username") or "admin")
 
 
 @router.post("/admin/production/relink-kindercare")
