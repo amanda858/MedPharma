@@ -996,17 +996,6 @@ def _start_daily_poll_scheduler():
     _scheduler_started = True
 
 
-class ContactFormRequest(BaseModel):
-    organization_name: str
-    contact_name: str
-    email: str
-    phone: str
-    state: str
-    city: str
-    services_needed: str
-    message: str
-
-
 class RuleInterceptRequest(BaseModel):
     text: str
 
@@ -2073,49 +2062,6 @@ async def audit_email_quality():
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────
-
-@app.get("/contact", response_class=HTMLResponse)
-async def serve_contact_form():
-    with open(os.path.join(os.path.dirname(__file__), "templates", "contact.html"), "r", encoding="utf-8") as f:
-        content = f.read()
-    return Response(
-        content=content,
-        media_type="text/html",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Surrogate-Control": "no-store",
-            "CDN-Cache-Control": "no-store",
-        },
-    )
-
-
-@app.post("/api/contact/submit")
-async def submit_contact_form(req: ContactFormRequest):
-    # Save as a lead with source="contact_form"
-    lead_data = {
-        "organization_name": req.organization_name,
-        "first_name": req.contact_name.split()[0] if req.contact_name else "",
-        "last_name": " ".join(req.contact_name.split()[1:]) if req.contact_name else "",
-        "address_line1": "",
-        "city": req.city,
-        "state": req.state,
-        "phone": req.phone,
-        "lead_score": 100,  # High score for direct contacts
-        "lead_status": "contact_form",
-        "notes": f"Services Needed: {req.services_needed}\nMessage: {req.message}",
-        "tags": "contact_form,explicit_intent",
-        "source": "contact_form",
-    }
-    lead_id = save_lead(lead_data)
-    
-    # Optionally save email
-    if req.email:
-        save_lead_emails(lead_data.get("npi", f"CONTACT-{lead_id}"), [{"email": req.email, "first_name": req.contact_name.split()[0] if req.contact_name else "", "position": "Contact"}])
-    
-    return {"ok": True, "lead_id": lead_id, "message": "Thank you for your inquiry. We'll be in touch soon!"}
-
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_leads_frontend():

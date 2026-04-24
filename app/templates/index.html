@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MedPharma — Healthcare Lead Generator (Live Build 2026-03-05)</title>
+    <title>MedPharma — Healthcare Lead Generator</title>
     <style>
         :root {
             --primary: #2563eb;
@@ -757,9 +757,8 @@
 
     <!-- ─── Header ─── -->
     <header>
-        <h1>MedPharma <span>Healthcare Lead Generator (Live Build 2026-03-05)</span></h1>
+        <h1>MedPharma <span>Healthcare Lead Generator</span></h1>
         <div class="header-actions">
-            <a href="/contact" class="btn btn-primary" style="margin-right:8px;">📝 Contact Form</a>
             <button class="btn btn-secondary" onclick="exportCSV('saved')" title="Export saved leads">
                 ↓ Export CSV
             </button>
@@ -772,7 +771,7 @@
 
     <!-- ─── Tabs ─── -->
     <div class="tab-bar">
-        <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Lab Intelligence Scrubber</div>
+        <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Intelligence Scrubber</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
         <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
@@ -783,7 +782,7 @@
         <!-- ═══════════════════ SCRUB CSV PANEL ═══════════════════ -->
         <div class="panel active" id="panel-scrub">
             <div class="card">
-                <div class="card-title">Lab Intelligence Scrubber — Verify Domains & Find Emails</div>
+                <div class="card-title">Intelligence Scrubber — Verify Domains & Find Emails</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
                     Upload any CSV/XLSX of companies. We auto-detect Org, Phone, City, State, Website columns,
                     verify each org against its real website (using phone + city match), scrape contact pages
@@ -846,7 +845,7 @@
                     </div>
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <span style="font-size:12px;color:var(--gray-500);">Leads saved from scrubber results. Upload leads via the Lab Intelligence Scrubber to generate email-enriched contacts.</span>
+                    <span style="font-size:12px;color:var(--gray-500);">Leads saved from scrubber results. Upload leads via the Intelligence Scrubber to generate email-enriched contacts.</span>
                 </div>
                 <div id="savedFilterSummary" style="margin-top:8px;font-size:12px;color:var(--gray-500);"></div>
             </div>
@@ -1515,7 +1514,7 @@
 
                 const summary = document.getElementById('savedFilterSummary');
                 if (summary) {
-                    summary.textContent = 'Showing saved leads. Upload a spreadsheet via Lab Intelligence Scrubber to generate new email-enriched contacts.';
+                    summary.textContent = 'Showing saved leads. Upload a spreadsheet via Intelligence Scrubber to generate new email-enriched contacts.';
                 }
             } catch (err) {
                 container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading leads</div>`;
@@ -1527,7 +1526,7 @@
                 container.innerHTML = `
             <div class="card empty-state">
                 <p style="font-size:18px;margin-bottom:8px;">No saved leads yet</p>
-                <p>Upload your lab spreadsheet via the Lab Intelligence Scrubber tab to generate email-enriched leads.</p>
+                <p>Upload your spreadsheet via the Intelligence Scrubber tab to generate email-enriched leads.</p>
             </div>`;
                 return;
             }
