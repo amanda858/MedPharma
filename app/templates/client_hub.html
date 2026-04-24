@@ -1937,8 +1937,8 @@
           <span class="ni">⏱️</span> Team Production
         </div>
         <div class="nav-section">Leads</div>
-        <div class="nav-item" onclick="window.open('/admin/leads','_blank')" style="color:#7c3aed;font-weight:600">
-          <span class="ni">🔬</span> Lab Leads <span style="font-size:10px;opacity:.7">(opens tab)</span>
+        <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">
+          <span class="ni">🔬</span> Lab Leads
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -2972,7 +2972,17 @@
           </div>
         </div>
 
-        <!-- ═══ AUDIT LOG (Admin) ═══ -->
+        <!-- ═══ LAB LEADS (embedded) ═══ -->
+        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
+          <iframe
+            id="leadsIframe"
+            src=""
+            style="width:100%;height:100%;border:none;display:block;"
+            allow="same-origin"
+          ></iframe>
+        </div>
+
+        <!-- ═══ ALERTS ═══ -->
         <div class="hub-panel" id="panel-audit">
           <div class="page-header">
             <div class="page-title">📜 Audit Log</div>
@@ -3654,6 +3664,7 @@
       if (panel === 'production') loadProduction();
       if (panel === 'alerts') loadAlerts();
       if (panel === 'audit') loadAuditLog();
+      if (panel === 'leads') loadLeadsPanel();
     }
 
     function toggleMobileSidebar() {
@@ -6939,6 +6950,18 @@
           <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.details || '')}</td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
+    }
+
+    // ═══════════════════════════════════════
+    // LAB LEADS PANEL
+    // ═══════════════════════════════════════
+    function loadLeadsPanel() {
+      const iframe = document.getElementById('leadsIframe');
+      if (!iframe) return;
+      // Only load once; subsequent navTo('leads') reuses the loaded page
+      if (!iframe.src || iframe.src === window.location.href) {
+        iframe.src = '/admin/leads/';
+      }
     }
 
     // ═══════════════════════════════════════
