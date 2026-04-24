@@ -1902,7 +1902,7 @@
       <!-- Sidebar -->
       <div class="sidebar">
         <div class="nav-section">Overview</div>
-        <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">
+        <div class="nav-item" data-panel="dashboard" onclick="navTo('dashboard')">
           <span class="ni">📊</span> Dashboard
         </div>
         <div class="nav-section">Operations</div>
@@ -1937,7 +1937,7 @@
           <span class="ni">⏱️</span> Team Production
         </div>
         <div class="nav-section">Leads</div>
-        <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">
+        <div class="nav-item active" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">
           <span class="ni">🔬</span> Lab Leads
         </div>
         <div id="adminNav" style="display:none">
@@ -3578,7 +3578,7 @@
       activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
       updateSubProfileBar();
-      navTo('dashboard');
+      navTo('leads');
     }
 
     function updateSubProfileBar() {
