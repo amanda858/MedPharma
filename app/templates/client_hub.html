@@ -1944,6 +1944,9 @@
           <div class="nav-item" data-panel="audit" onclick="navTo('audit')">
             <span class="ni">📜</span> Audit Log
           </div>
+          <div class="nav-item" onclick="window.open('/admin/leads','_blank')">
+            <span class="ni">🔬</span> Lab Leads
+          </div>
         </div>
         <div class="nav-section">Alerts</div>
         <div class="nav-item" data-panel="alerts" onclick="navTo('alerts')">
@@ -2349,6 +2352,7 @@
                     <th>Role</th>
                     <th>Last Login</th>
                     <th>Active</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="clientTbody"></tbody>
@@ -4663,7 +4667,18 @@
     <td><span class="badge ${c.role === 'admin' ? 'badge-purple' : 'badge-blue'}">${c.role}</span></td>
     <td style="font-size:12px">${c.last_login || 'Never'}</td>
     <td>${c.is_active ? '✅' : '❌'}</td>
+    <td><button class="btn btn-danger-outline btn-sm" onclick="deleteClient(${c.id},'${esc(c.username)}')">🗑 Remove</button></td>
   </tr>`).join('');
+    }
+
+    async function deleteClient(cid, username) {
+      if (!confirm(`Remove account "${username}"? This cannot be undone.`)) return;
+      try {
+        const r = await fetch(`/hub/api/clients/${cid}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Account removed', 'success');
+        loadClients();
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     function openClientModal() { document.getElementById('clientModal').classList.add('open'); }

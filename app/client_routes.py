@@ -19,7 +19,7 @@ IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT in production
 from app.client_db import (
     get_db,
     authenticate, validate_session, logout_session,
-    list_clients, create_client, update_client,
+    list_clients, create_client, update_client, delete_client,
     get_profile, update_profile,
     get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
@@ -299,6 +299,13 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
 def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cookie(None)):
     _require_admin(hub_session)
     update_client(cid, {k: v for k, v in body.model_dump().items() if v is not None})
+    return {"ok": True}
+
+
+@router.delete("/clients/{cid}")
+def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
+    _require_admin(hub_session)
+    delete_client(cid)
     return {"ok": True}
 
 

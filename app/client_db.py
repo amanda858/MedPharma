@@ -584,6 +584,15 @@ def update_client(cid: int, data: dict):
         conn.close()
 
 
+def delete_client(cid: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM clients WHERE id=?", [cid])
+        conn.commit()
+    finally:
+        conn.close()
+
+
 DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
 DEFAULT_REPORT_TABS = ["Claims", "Credentialing", "EDI"]
 
