@@ -134,10 +134,6 @@ async def admin_only_leads_guard(request: Request, call_next):
             if "/api/" in path:
                 return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
             return RedirectResponse(url="/hub?next=/admin/leads/", status_code=307)
-        if user.get("role") != "admin":
-            if "/api/" in path:
-                return JSONResponse(status_code=403, content={"detail": "Admin access required"})
-            return RedirectResponse(url="/hub", status_code=307)
     return await call_next(request)
 
 
