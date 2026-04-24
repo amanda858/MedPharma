@@ -131,12 +131,12 @@ _GENERIC_LOCAL = {
     "customerservice", "service", "interested",
 }
 _STOP_WORDS = {
+    # Corporate suffixes only — these are never part of a brand domain.
+    # Keep healthcare descriptors (diagnostics, labs, pathology, health, etc.)
+    # because they're often part of the actual domain (e.g. "Genova Diagnostics"
+    # → genovadiagnostics.com).
     "llc", "inc", "pllc", "pa", "pc", "llp", "lp", "ltd", "corp", "corporation",
-    "company", "co", "the", "and", "of", "for", "lab", "labs", "laboratory",
-    "laboratories", "diagnostics", "diagnostic", "medical", "services",
-    "service", "center", "centre", "group", "clinical", "pathology", "health",
-    "care", "solutions", "solution", "systems", "system", "associates",
-    "associate", "partners", "partnership",
+    "company", "co", "the", "and", "of", "for",
 }
 _PLACEHOLDER_LOCALS = {"user", "example", "yourname", "firstname", "lastname", "test", "demo"}
 

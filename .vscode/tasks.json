@@ -12,6 +12,16 @@
             "problemMatcher": []
         },
         {
+            "label": "diag-domain-filter",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_domain_filter.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "diag-npi-local",
             "type": "shell",
             "command": "python3",
