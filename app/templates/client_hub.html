@@ -1964,7 +1964,7 @@
       <div class="main-content">
 
         <!-- ═══ DASHBOARD ═══ -->
-        <div class="hub-panel active" id="panel-dashboard">
+        <div class="hub-panel" id="panel-dashboard">
           <!-- Hero Welcome Banner -->
           <div
             style="background:linear-gradient(135deg,#0d47a1 0%,#1565c0 40%,#1e88e5 100%);border-radius:16px;padding:28px 32px;margin-bottom:20px;position:relative;overflow:hidden">
@@ -2972,11 +2972,11 @@
           </div>
         </div>
 
-        <!-- ═══ LAB LEADS (embedded) ═══ -->
-        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
+        <!-- ═══ LAB LEADS (embedded, default panel) ═══ -->
+        <div class="hub-panel active" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
           <iframe
             id="leadsIframe"
-            src=""
+            src="/admin/leads/"
             style="width:100%;height:100%;border:none;display:block;"
             allow="same-origin"
           ></iframe>

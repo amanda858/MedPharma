@@ -195,6 +195,18 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "check-landing-panel",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/check_landing2.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }
