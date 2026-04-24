@@ -183,6 +183,18 @@
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "test-all-lab-leads-excel",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/test_all_lab_leads_excel.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
         }
     ]
 }

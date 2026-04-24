@@ -21,7 +21,7 @@ from typing import Any, Iterable, Optional
 
 import httpx
 
-from rule_intercept import intercept_excel_upload, intercept_request
+from rule_intercept import intercept_excel_upload, intercept_request, score_lab_lead
 
 
 # ─── Column auto-detection ──────────────────────────────────────────────
@@ -106,6 +106,8 @@ def parse_uploaded(content: bytes, filename: str) -> tuple[list[str], list[dict]
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ASSET_RE = re.compile(r"(@2x|\.png|\.jpg|\.jpeg|\.svg|\.webp|\.gif)$", re.I)
 PHONE_DIGITS = re.compile(r"\D+")
+# Matches US phone numbers in common formats: (555) 555-5555 / 555-555-5555 / 5555555555
+PHONE_RE = re.compile(r"\b(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})\b")
 
 _PUBLIC_MAIL = {
     "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
@@ -269,14 +271,27 @@ async def _verify_and_scrape(
     org: str,
     phone: str = "",
     city: str = "",
+    state: str = "",
     website_hint: str = "",
-) -> tuple[Optional[str], list[str]]:
-    """Find a verified domain + scrape on-domain emails."""
+) -> tuple[Optional[str], list[str], str]:
+    """Find a verified domain, scrape on-domain emails, and extract a direct line."""
     phone_d = _digits(phone)[-10:]
     city_l = (city or "").lower().strip()
+    state_l = (state or "").lower().strip()
 
     candidates = _candidate_domains(org, website_hint)
     chosen: Optional[str] = None
+
+    # Adaptive threshold:
+    #   phone available  → strict  (phone match alone = 50 pts, very reliable)
+    #   city available   → medium  (city + 1 token = 23 pts)
+    #   name-only (lab)  → lenient (2 name tokens = 16 pts, sufficient for labs)
+    if phone_d:
+        min_score = 30
+    elif city_l:
+        min_score = 20
+    else:
+        min_score = 16
 
     for dom in candidates:
         for sch in ("https://", "http://"):
@@ -289,30 +304,35 @@ async def _verify_and_scrape(
                 score += 50
             if city_l and len(city_l) > 2 and city_l in txt:
                 score += 15
+            if state_l and len(state_l) == 2 and state_l in txt:
+                score += 6
             for t in _tokens(org):
                 if t in txt:
                     score += 8
-            if score >= 30:
+            if score >= min_score:
                 chosen = dom
                 break
         if chosen:
             break
 
     if not chosen:
-        return None, []
+        return None, [], ""
 
-    # Scrape pages for emails
+    # Scrape pages for emails + phone numbers
     emails: set[str] = set()
+    raw_phones: list[str] = []
 
     async def _pull(url: str) -> None:
         html = await _fetch(client, url)
         if html:
             for e in EMAIL_RE.findall(html):
                 emails.add(e.lower())
+            for p in PHONE_RE.findall(html):
+                raw_phones.append(p)
 
     await asyncio.gather(*[_pull("https://" + chosen + p) for p in _PAGES])
 
-    # Filter to on-domain, non-junk, sort personal-first
+    # Filter emails to on-domain, non-junk, sort personal-first
     good: list[str] = []
     for e in emails:
         local, _, dom = e.partition("@")
@@ -324,7 +344,30 @@ async def _verify_and_scrape(
             continue
         good.append(e)
     good.sort(key=lambda e: (e.split("@")[0] in _GENERIC_LOCAL, e))
-    return chosen, good[:5]
+
+    # Extract best direct line — prefer non-toll-free, not the same as caller-provided phone
+    direct_line = ""
+    seen_digits: set[str] = set()
+    _TOLL_FREE = {"800", "888", "877", "866", "855", "844", "833"}
+    for raw in raw_phones:
+        d = _digits(raw)[-10:]
+        if len(d) != 10 or d in seen_digits:
+            continue
+        seen_digits.add(d)
+        if d[:3] in _TOLL_FREE:
+            continue
+        if phone_d and d == phone_d:
+            continue  # already known — not a new direct line
+        direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
+        break
+    # Fallback: any number (including toll-free) if nothing non-toll-free found
+    if not direct_line:
+        for d in seen_digits:
+            if len(d) == 10 and (not phone_d or d != phone_d):
+                direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
+                break
+
+    return chosen, good[:5], direct_line
 
 
 # ─── Public scrub API ───────────────────────────────────────────────────
@@ -361,14 +404,15 @@ async def scrub_rows(
 
         verified_domain: Optional[str] = None
         scraped_emails: list[str] = []
+        direct_line: str = ""
         scrub_status = "ok"
         scrub_error = ""
 
         if org:
             try:
                 async with sem:
-                    verified_domain, scraped_emails = await asyncio.wait_for(
-                        _verify_and_scrape(client, org, phone=phone, city=city, website_hint=web),
+                    verified_domain, scraped_emails, direct_line = await asyncio.wait_for(
+                        _verify_and_scrape(client, org, phone=phone, city=city, state=state, website_hint=web),
                         timeout=per_row_timeout,
                     )
             except asyncio.TimeoutError:
@@ -404,38 +448,32 @@ async def scrub_rows(
             seen.add(e)
             ranked.append((s, e))
 
-        # rule_intercept fit
-        intercept = intercept_excel_upload(
-            headers=[tax, org],
-            description=f"{org} {tax} billing claims credentialing enrollment edi rcm workflow",
-        )
-        cat = intercept.get("category") or ""
-        conf = intercept.get("confidence", 0.0)
+        # ── Lab intelligence scoring (rule_intercept) ──────────────────
+        lab_intel = score_lab_lead(org, lab_type=tax, state=state)
 
-        fit = 0
+        # Fit score = lab quality score + contact-info richness bonuses
+        fit = lab_intel["score"]
         if verified_domain:
-            fit += 30
+            fit = min(100, fit + 5)
         if ranked:
-            fit += 25
-        if phone:
-            fit += 15
-        if org:
-            fit += 10
-        if cat:
-            fit += int(conf * 20)
-        fit = min(100, fit)
+            fit = min(100, fit + 8)
+        if direct_line:
+            fit = min(100, fit + 3)
 
         return {
+            "Lead Score": lab_intel["score"],
+            "Lab Tier": lab_intel["tier"],
+            "Priority": lab_intel["priority"],
             "Org Name": org,
-            "Phone": phone,
+            "Taxonomy / Type": tax,
+            "Lab Type Detected": lab_intel.get("lab_type_detected", ""),
+            "NPI": npi,
+            "Address": addr,
             "City": city,
             "State": state,
             "ZIP": zipc,
-            "Address": addr,
-            "NPI": npi,
-            "Taxonomy / Type": tax,
-            "Original Website": web,
-            "Verified Domain": verified_domain or "",
+            "Phone": phone,
+            "Direct Line": direct_line,
             "Email 1": ranked[0][1] if len(ranked) >= 1 else "",
             "Email 1 Score": ranked[0][0] if len(ranked) >= 1 else "",
             "Email 2": ranked[1][1] if len(ranked) >= 2 else "",
@@ -443,9 +481,12 @@ async def scrub_rows(
             "Email 3": ranked[2][1] if len(ranked) >= 3 else "",
             "Email 3 Score": ranked[2][0] if len(ranked) >= 3 else "",
             "Existing Email (input)": existing_email,
-            "Intercept Category": cat,
-            "Intercept Confidence": conf,
+            "Original Website": web,
+            "Verified Domain": verified_domain or "",
+            "Lead Signals": "; ".join(lab_intel.get("signals", [])),
             "Fit Score": fit,
+            "Intercept Category": lab_intel["category"],
+            "Intercept Confidence": 1.0,
             "Scrub Status": scrub_status,
             "Scrub Error": scrub_error,
         }
@@ -464,7 +505,7 @@ async def scrub_rows(
         else:
             out.append(r)
 
-    out.sort(key=lambda r: -int(r.get("Fit Score", 0) or 0))
+    out.sort(key=lambda r: (-int(r.get("Lead Score", 0) or 0), -int(r.get("Fit Score", 0) or 0)))
 
     summary = {
         "input_rows": len(rows),
@@ -480,13 +521,23 @@ async def scrub_rows(
 # ─── Output writers ─────────────────────────────────────────────────────
 
 OUTPUT_FIELDS = [
-    "Fit Score", "Intercept Category", "Intercept Confidence",
-    "Org Name", "NPI", "Taxonomy / Type", "Address", "City", "State", "ZIP",
-    "Phone", "Original Website", "Verified Domain",
+    # ── Prioritization ───────────────────────────────────────────────
+    "Lead Score", "Lab Tier", "Priority",
+    # ── Organization ─────────────────────────────────────────────────
+    "Org Name", "Taxonomy / Type", "Lab Type Detected",
+    "NPI", "Address", "City", "State", "ZIP",
+    # ── Contact ──────────────────────────────────────────────────────
+    "Phone", "Direct Line",
     "Email 1", "Email 1 Score",
     "Email 2", "Email 2 Score",
     "Email 3", "Email 3 Score",
     "Existing Email (input)",
+    # ── Web ───────────────────────────────────────────────────────────
+    "Original Website", "Verified Domain",
+    # ── Intelligence ──────────────────────────────────────────────────
+    "Lead Signals",
+    # ── Metadata ─────────────────────────────────────────────────────
+    "Fit Score", "Intercept Category", "Intercept Confidence",
     "Scrub Status", "Scrub Error",
 ]
 
@@ -518,13 +569,18 @@ def to_xlsx_bytes(rows: Iterable[dict]) -> bytes:
         ws.append([r.get(k, "") for k in OUTPUT_FIELDS])
     # Reasonable column widths
     widths = {
-        "Org Name": 36, "NPI": 12, "Taxonomy / Type": 30, "Address": 28,
-        "City": 16, "State": 8, "ZIP": 10, "Phone": 16,
+        "Lead Score": 12, "Lab Tier": 10, "Priority": 12,
+        "Org Name": 38, "Taxonomy / Type": 28, "Lab Type Detected": 24,
+        "NPI": 12, "Address": 28, "City": 16, "State": 8, "ZIP": 10,
+        "Phone": 18, "Direct Line": 18,
+        "Email 1": 34, "Email 1 Score": 12,
+        "Email 2": 34, "Email 2 Score": 12,
+        "Email 3": 34, "Email 3 Score": 12,
+        "Existing Email (input)": 32,
         "Original Website": 26, "Verified Domain": 26,
-        "Email 1": 32, "Email 2": 32, "Email 3": 32,
-        "Existing Email (input)": 32, "Scrub Status": 12, "Scrub Error": 28,
-        "Intercept Category": 16, "Intercept Confidence": 14, "Fit Score": 10,
-        "Email 1 Score": 12, "Email 2 Score": 12, "Email 3 Score": 12,
+        "Lead Signals": 48,
+        "Fit Score": 10, "Intercept Category": 14, "Intercept Confidence": 14,
+        "Scrub Status": 12, "Scrub Error": 28,
     }
     for i, h in enumerate(OUTPUT_FIELDS, start=1):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = widths.get(h, 18)
