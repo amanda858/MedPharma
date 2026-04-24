@@ -121,6 +121,144 @@ ROUTE_MAP = {
 
 
 # =========================
+# LAB LEAD INTELLIGENCE
+# =========================
+# Tier A = specialty / highest RCM billing complexity (tox, molecular, genomics)
+# Tier B = clinical complexity (pathology, hematology, immunology, reference)
+# Tier C = general / commodity / hospital outreach
+
+_LAB_TIER_MAP: list[tuple[str, int]] = [
+    # ── Tier A ──────────────────────────────────────────────────────────
+    ("toxicology", 1), ("tox lab", 1), ("urine drug", 1), ("drug testing", 1),
+    ("substance abuse", 1), ("treatment monitoring", 1),
+    ("molecular diagnostics", 1), ("molecular biology", 1), ("molecular", 1),
+    ("genomics", 1), ("genetic testing", 1), ("genetics", 1),
+    ("pharmacogenomics", 1), ("pgx", 1),
+    ("oral fluid", 1), ("dna testing", 1), ("dna", 1), ("ngs", 1),
+    ("next generation sequencing", 1), ("rapid testing", 1),
+    ("point of care", 1), ("poc testing", 1), ("specialty lab", 1),
+    # ── Tier B ──────────────────────────────────────────────────────────
+    ("anatomic pathology", 2), ("surgical pathology", 2), ("cytology", 2),
+    ("histology", 2), ("clinical chemistry", 2), ("hematology", 2),
+    ("immunology", 2), ("serology", 2), ("clinical microbiology", 2),
+    ("microbiology", 2), ("blood bank", 2), ("transfusion medicine", 2),
+    ("endocrinology", 2), ("hormone testing", 2), ("allergy testing", 2),
+    ("fertility", 2), ("reproductive", 2), ("women's health", 2), ("womens health", 2),
+    ("urinalysis", 2), ("reference laboratory", 2), ("reference lab", 2),
+    ("clinical pathology", 2),
+    # ── Tier C ──────────────────────────────────────────────────────────
+    ("clinical lab", 3), ("general lab", 3), ("routine testing", 3),
+    ("hospital outreach", 3), ("outreach lab", 3), ("physician office", 3),
+    ("diagnostics", 3), ("diagnostic", 3), ("clinical", 3),
+]
+
+_HIGH_VALUE_SIGNALS: list[str] = [
+    "tox", "molecular", "genomic", "genetic", "pharmacogen", "pgx",
+    "dna", "ngs", "spectrum", "precision", "specialized", "specialty",
+    "analytical", "advanced", "elite", "premier", "prime", "core",
+    "rapid", "point of care", "poc",
+]
+
+_LOW_VALUE_SIGNALS: list[str] = [
+    "hospital", "health system", "university", "academic", "county",
+    "public health", "veterans", " va ", "kaiser", "quest",
+    "labcorp", "sonic", "aurora", "banner", "commonspirit",
+]
+
+# States with highest independent lab density and RCM billing complexity
+_PRIORITY_STATES: frozenset = frozenset({
+    "FL", "TX", "CA", "NY", "PA", "NJ", "GA", "IL", "OH", "NC",
+    "AZ", "CO", "TN", "VA", "MD", "SC", "NV", "LA", "MO", "AL",
+    "WA", "MA", "CT", "IN", "MI",
+})
+
+
+def score_lab_lead(org_name: str, lab_type: str = "", state: str = "") -> dict:
+    """Score a lab lead 0-100 and assign Tier A / B / C for outreach prioritization.
+
+    Higher score = better fit for MedPharma RCM / billing services.
+    Tiers align with billing complexity:
+      A = specialty (tox, molecular, genomics)  — highest value
+      B = clinical complexity (pathology, hematology, immunology)
+      C = general / commodity / hospital outreach
+
+    Returns:
+        {
+          "tier": "A"|"B"|"C"|"Unknown",
+          "score": int 0-100,
+          "category": "Lab Lead",
+          "lab_type_detected": str,
+          "signals": list[str],
+          "priority": "High"|"Medium"|"Low",
+        }
+    """
+    org_l = (org_name or "").lower()
+    type_l = re.sub(r"[^a-z0-9 ]+", " ", (lab_type or "").lower())
+    state_u = (state or "").upper().strip()[:2]
+
+    signals: list[str] = []
+    score = 10           # base: it is a lab lead
+    tier_num = 99        # 1=A  2=B  3=C  99=unknown
+
+    # ── Lab-type tier — all matches, best (lowest) tier wins ──────────
+    matched_type = ""
+    for kw, t in _LAB_TIER_MAP:
+        if kw in type_l or kw in org_l:
+            if t < tier_num:
+                tier_num = t
+                matched_type = kw
+
+    if tier_num == 1:
+        score += 45
+        signals.append(f"Tier A lab type: {matched_type}")
+    elif tier_num == 2:
+        score += 28
+        signals.append(f"Tier B lab type: {matched_type}")
+    elif tier_num == 3:
+        score += 12
+        signals.append(f"Tier C lab type: {matched_type}")
+
+    # ── Org name quality signals ──────────────────────────────────────
+    for sig in _HIGH_VALUE_SIGNALS:
+        if sig in org_l:
+            score += 12
+            signals.append(f"Name signal (+): {sig}")
+            break
+    for sig in _LOW_VALUE_SIGNALS:
+        if sig in org_l:
+            score -= 25
+            signals.append(f"Name signal (−): {sig} (large/public entity — low RCM fit)")
+            break
+
+    # ── State priority market ──────────────────────────────────────────
+    if state_u in _PRIORITY_STATES:
+        score += 15
+        signals.append(f"Priority market: {state_u}")
+    elif state_u:
+        score += 5
+
+    score = max(0, min(100, score))
+
+    if tier_num == 1:
+        tier, priority = "A", "High"
+    elif tier_num == 2:
+        tier, priority = "B", "Medium"
+    elif tier_num == 3:
+        tier, priority = "C", "Low"
+    else:
+        tier, priority = "Unknown", "Low"
+
+    return {
+        "tier": tier,
+        "score": score,
+        "category": "Lab Lead",
+        "lab_type_detected": matched_type,
+        "signals": signals,
+        "priority": priority,
+    }
+
+
+# =========================
 # EXCEL UPLOAD INTERCEPT
 # =========================
 
