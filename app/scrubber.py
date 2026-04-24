@@ -22,6 +22,10 @@ from typing import Any, Iterable, Optional
 import httpx
 
 from rule_intercept import intercept_excel_upload, intercept_request, score_lab_lead
+try:
+    from app.config import HUNTER_API_KEY as _HUNTER_API_KEY
+except ImportError:
+    _HUNTER_API_KEY = ""
 
 
 # ─── Column auto-detection ──────────────────────────────────────────────
@@ -248,7 +252,7 @@ def _candidate_domains(name: str, hint: str = "") -> list[str]:
     return out[:30]
 
 
-def _email_quality(email: str, name: str = "", title: str = "", org: str = "") -> int:
+def _email_quality(email: str, name: str = "", title: str = "", org: str = "", verified_domain: str = "") -> int:
     """Score 0-100. <30 = junk, drop. Personal decision-maker emails score highest."""
     if not email or "@" not in email:
         return 0
@@ -263,8 +267,9 @@ def _email_quality(email: str, name: str = "", title: str = "", org: str = "") -
     if not re.match(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$", email):
         return 0
 
-    # Domain must match org (unless public mail or no org provided)
-    if org and domain not in _PUBLIC_MAIL:
+    # Domain must match org — unless it's the pre-verified domain, or public mail, or no org
+    _vd_root = re.sub(r"^www\.", "", verified_domain) if verified_domain else ""
+    if org and domain not in _PUBLIC_MAIL and domain != _vd_root:
         droot = re.sub(r"^www\.", "", domain).split(".")[0]
         toks = _tokens(org)
         match = False
@@ -382,8 +387,14 @@ _HEADERS = {
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml",
 }
-_PAGES = ["", "/contact", "/contact-us", "/about", "/about-us", "/team",
-          "/leadership", "/staff", "/providers", "/people", "/our-team"]
+_PAGES = [
+    "", "/contact", "/contact-us", "/about", "/about-us", "/team",
+    "/leadership", "/staff", "/providers", "/people", "/our-team",
+    "/administration", "/management", "/billing", "/credentialing",
+    "/compliance", "/directory", "/physicians", "/medical-staff",
+    "/our-staff", "/who-we-are", "/meet-the-team", "/physician-directory",
+    "/locations", "/resources",
+]
 
 
 async def _fetch(client: httpx.AsyncClient, url: str) -> Optional[str]:
@@ -409,7 +420,18 @@ async def _verify_and_scrape(
     city_l = (city or "").lower().strip()
     state_l = (state or "").lower().strip()
 
-    candidates = _candidate_domains(org, website_hint)
+    _raw_candidates = _candidate_domains(org, website_hint)
+    # Interleave www. variants — many labs only resolve on www.
+    candidates: list[str] = []
+    _seen_c: set[str] = set()
+    for _d in _raw_candidates:
+        if _d not in _seen_c:
+            _seen_c.add(_d)
+            candidates.append(_d)
+        _wd = ("www." + _d) if not _d.startswith("www.") else _d
+        if _wd not in _seen_c:
+            _seen_c.add(_wd)
+            candidates.append(_wd)
     chosen: Optional[str] = None
 
     if phone_d:
@@ -442,9 +464,12 @@ async def _verify_and_scrape(
             break
 
     if not chosen:
-        return {"domain": None, "emails": [], "direct_line": "", "named_contacts": []}
+        return {"domain": None, "emails": [], "pattern_emails": [], "direct_line": "", "named_contacts": []}
 
-    # Scrape pages for emails, phone numbers, and full HTML for contact extraction
+    # Normalize: strip www. so email @domain matching is consistent
+    root_chosen = re.sub(r"^www\.", "", chosen)
+
+    # Scrape all contact/team/staff pages for emails, phones, named contacts
     emails: set[str] = set()
     raw_phones: list[str] = []
     html_pages: list[str] = []
@@ -458,13 +483,17 @@ async def _verify_and_scrape(
                 raw_phones.append(p)
             html_pages.append(html)
 
-    await asyncio.gather(*[_pull("https://" + chosen + p) for p in _PAGES])
+    # Try both www. and root forms so no page is missed
+    pull_urls = [f"https://{chosen}{p}" for p in _PAGES]
+    if chosen != root_chosen:
+        pull_urls += [f"https://{root_chosen}{p}" for p in _PAGES[:6]]
+    await asyncio.gather(*[_pull(u) for u in pull_urls])
 
-    # Filter emails to on-domain, non-junk, sort personal-first
+    # Accept emails whose domain matches root (strips www. from both sides)
     good: list[str] = []
     for e in emails:
         local, _, dom = e.partition("@")
-        if dom != chosen:
+        if re.sub(r"^www\.", "", dom) != root_chosen:
             continue
         if ASSET_RE.search(e):
             continue
@@ -496,11 +525,37 @@ async def _verify_and_scrape(
 
     # Extract named decision-maker contacts from all scraped pages
     combined_html = "\n".join(html_pages)
-    named_contacts = _extract_named_contacts(combined_html, chosen) if combined_html else []
+    named_contacts = _extract_named_contacts(combined_html, root_chosen) if combined_html else []
+
+    # --- Pattern email generation ---
+    # Build first.last@domain patterns from every named contact found on site
+    pattern_addrs: list[str] = []
+    _seen_p: set[str] = set(good)
+    for nc in named_contacts[:6]:
+        parts = (nc.get("name") or "").split()
+        if len(parts) >= 2:
+            fn = parts[0].lower().replace("-", "")
+            ln = parts[-1].lower().replace("-", "")
+            for pat in [
+                f"{fn}.{ln}@{root_chosen}",
+                f"{fn[0]}{ln}@{root_chosen}",
+                f"{fn}{ln[0]}@{root_chosen}",
+                f"{fn}.{ln[0]}@{root_chosen}",
+            ]:
+                if pat not in _seen_p and pat.split("@")[0] not in _PLACEHOLDER_LOCALS:
+                    _seen_p.add(pat)
+                    pattern_addrs.append(pat)
+    # Standard high-value role prefixes common across all lab/medical orgs
+    for _pfx in ("billing", "credentialing", "rcm", "lab", "director", "manager", "admin", "office"):
+        _addr = f"{_pfx}@{root_chosen}"
+        if _addr not in _seen_p:
+            _seen_p.add(_addr)
+            pattern_addrs.append(_addr)
 
     return {
-        "domain": chosen,
-        "emails": good[:5],
+        "domain": root_chosen,
+        "emails": good,                    # all on-domain scraped emails (no cap)
+        "pattern_emails": pattern_addrs,   # generated patterns (unverified)
         "direct_line": direct_line,
         "named_contacts": named_contacts,
     }
@@ -540,6 +595,7 @@ async def scrub_rows(
 
         verified_domain: Optional[str] = None
         scraped_emails: list[str] = []
+        pattern_email_list: list[str] = []
         direct_line: str = ""
         scrub_status = "ok"
         scrub_error = ""
@@ -552,10 +608,11 @@ async def scrub_rows(
                         _verify_and_scrape(client, org, phone=phone, city=city, state=state, website_hint=web),
                         timeout=per_row_timeout,
                     )
-                    verified_domain  = _scrape.get("domain")
-                    scraped_emails   = _scrape.get("emails", [])
-                    direct_line      = _scrape.get("direct_line", "")
-                    named_contacts   = _scrape.get("named_contacts", [])
+                    verified_domain    = _scrape.get("domain")
+                    scraped_emails     = _scrape.get("emails", [])
+                    pattern_email_list = _scrape.get("pattern_emails", [])
+                    direct_line        = _scrape.get("direct_line", "")
+                    named_contacts     = _scrape.get("named_contacts", [])
             except asyncio.TimeoutError:
                 scrub_status = "timeout"
                 scrub_error = f"row scrape exceeded {per_row_timeout}s"
@@ -566,18 +623,42 @@ async def scrub_rows(
             scrub_status = "skipped"
             scrub_error = "no organization name detected"
 
-        # Build candidate emails: scraped + existing
+        # Build candidate emails: scraped → pattern-generated → Hunter → existing
         candidates: list[tuple[int, str]] = []
+        vd = verified_domain or ""
         for e in scraped_emails:
-            s = _email_quality(e, org=org)
+            s = _email_quality(e, org=org, verified_domain=vd)
             if s > 0:
                 candidates.append((s, e))
+        # Pattern-generated (slight confidence penalty — not scrape-confirmed)
+        for e in pattern_email_list:
+            s = _email_quality(e, org=org, verified_domain=vd)
+            s = max(0, s - 10)
+            if s > 0:
+                candidates.append((s, e))
+        # Hunter.io — highest-trust source when API key is configured
+        if vd and _HUNTER_API_KEY:
+            try:
+                from app.email_finder import hunter_domain_search
+                _h_results, _ = await asyncio.wait_for(
+                    hunter_domain_search(vd, _HUNTER_API_KEY), timeout=12.0
+                )
+                for _he in _h_results[:15]:
+                    _he_email = _he.get("email", "")
+                    if not _he_email:
+                        continue
+                    _hs = _email_quality(_he_email, org=org, title=_he.get("position", ""), verified_domain=vd)
+                    _hs = min(100, _hs + 20)  # Hunter verified — trust boost
+                    if _hs > 0:
+                        candidates.append((_hs, _he_email))
+            except Exception:
+                pass
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
                 e = e.strip()
                 if not e:
                     continue
-                s = _email_quality(e, org=org)
+                s = _email_quality(e, org=org, verified_domain=vd)
                 if s > 0:
                     candidates.append((s, e))
         # Dedup, sort
@@ -592,8 +673,10 @@ async def scrub_rows(
         # ── Lab intelligence scoring (rule_intercept) ──────────────────
         lab_intel = score_lab_lead(org, lab_type=tax, state=state)
 
-        # Best decision-maker contact
-        top_dm = named_contacts[0] if named_contacts else {}
+        # Decision-maker contacts — top 3
+        top_dm = named_contacts[0] if len(named_contacts) > 0 else {}
+        dm2    = named_contacts[1] if len(named_contacts) > 1 else {}
+        dm3    = named_contacts[2] if len(named_contacts) > 2 else {}
         dm_email = top_dm.get("email", "")
 
         # Fit score = lab quality score + contact-info richness bonuses
@@ -606,6 +689,8 @@ async def scrub_rows(
             fit = min(100, fit + 3)
         if top_dm.get("dm_score", 0) >= 60:
             fit = min(100, fit + 5)  # bonus for finding a real decision-maker
+        if dm2:
+            fit = min(100, fit + 3)  # bonus for multiple DM contacts
 
         return {
             "Lead Score": lab_intel["score"],
@@ -621,16 +706,26 @@ async def scrub_rows(
             "ZIP": zipc,
             "Phone": phone,
             "Direct Line": direct_line,
-            # Decision-maker contact (best named person found on site)
+            # Decision-maker contacts (up to 3 named people found on site)
             "Decision Maker": top_dm.get("name", ""),
-            "DM Title": top_dm.get("title", ""),
-            "DM Email": dm_email,
+            "DM Title":       top_dm.get("title", ""),
+            "DM Email":       dm_email,
+            "DM 2":           dm2.get("name", ""),
+            "DM 2 Title":     dm2.get("title", ""),
+            "DM 2 Email":     dm2.get("email", ""),
+            "DM 3":           dm3.get("name", ""),
+            "DM 3 Title":     dm3.get("title", ""),
+            "DM 3 Email":     dm3.get("email", ""),
             "Email 1": ranked[0][1] if len(ranked) >= 1 else "",
             "Email 1 Score": ranked[0][0] if len(ranked) >= 1 else "",
             "Email 2": ranked[1][1] if len(ranked) >= 2 else "",
             "Email 2 Score": ranked[1][0] if len(ranked) >= 2 else "",
             "Email 3": ranked[2][1] if len(ranked) >= 3 else "",
             "Email 3 Score": ranked[2][0] if len(ranked) >= 3 else "",
+            "Email 4": ranked[3][1] if len(ranked) >= 4 else "",
+            "Email 4 Score": ranked[3][0] if len(ranked) >= 4 else "",
+            "Email 5": ranked[4][1] if len(ranked) >= 5 else "",
+            "Email 5 Score": ranked[4][0] if len(ranked) >= 5 else "",
             "Existing Email (input)": existing_email,
             "Original Website": web,
             "Verified Domain": verified_domain or "",
@@ -663,6 +758,11 @@ async def scrub_rows(
         "output_rows": len(out),
         "verified_domains": sum(1 for r in out if r.get("Verified Domain")),
         "rows_with_email": sum(1 for r in out if r.get("Email 1")),
+        "rows_with_dm": sum(1 for r in out if r.get("Decision Maker") or r.get("DM Email")),
+        "total_emails_found": sum(
+            sum(1 for f in ("Email 1", "Email 2", "Email 3", "Email 4", "Email 5") if r.get(f))
+            for r in out
+        ),
         "errors": error_count,
         "detected_columns": cols,
     }
@@ -680,9 +780,13 @@ OUTPUT_FIELDS = [
     # ── Contact ──────────────────────────────────────────────────────
     "Phone", "Direct Line",
     "Decision Maker", "DM Title", "DM Email",
+    "DM 2", "DM 2 Title", "DM 2 Email",
+    "DM 3", "DM 3 Title", "DM 3 Email",
     "Email 1", "Email 1 Score",
     "Email 2", "Email 2 Score",
     "Email 3", "Email 3 Score",
+    "Email 4", "Email 4 Score",
+    "Email 5", "Email 5 Score",
     "Existing Email (input)",
     # ── Web ───────────────────────────────────────────────────────────
     "Original Website", "Verified Domain",
