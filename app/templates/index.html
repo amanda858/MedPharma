@@ -772,9 +772,7 @@
 
     <!-- ─── Tabs ─── -->
     <div class="tab-bar">
-        <div class="tab active" data-tab="search" onclick="switchTab('search')">Search Leads</div>
-        <div class="tab" data-tab="bulk" onclick="switchTab('bulk')">Multi-State Search</div>
-        <div class="tab" data-tab="scrub" onclick="switchTab('scrub')">Scrub CSV / Excel</div>
+        <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Lab Intelligence Scrubber</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
         <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
@@ -782,113 +780,10 @@
 
     <div class="container">
 
-        <!-- ═══════════════════ SEARCH PANEL ═══════════════════ -->
-        <div class="panel active" id="panel-search">
-            <div class="card">
-                <div class="card-title">Search NPI Registry for Lead Types</div>
-                <div class="search-form" id="searchForm">
-                    <div class="form-group">
-                        <label>State</label>
-                        <select id="searchState">
-                            <option value="">All States</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>City</label>
-                        <input type="text" id="searchCity" placeholder="e.g., Houston">
-                    </div>
-                    <div class="form-group">
-                        <label>Organization Name</label>
-                        <input type="text" id="searchName" placeholder="e.g., Quest">
-                    </div>
-                    <div class="form-group">
-                        <label>Specialty / Type</label>
-                        <select id="searchTaxonomy">
-                            <option value="">All Lead Types</option>
-                            <option value="urgent care">Urgent Care</option>
-                            <option value="ambulatory surgery">ASC (Ambulatory Surgery Center)</option>
-                            <option value="family medicine">Family Practice</option>
-                            <option value="primary care">Primary Care</option>
-                            <option value="internal medicine">Internal Medicine</option>
-                            <option value="Clinical Medical Laboratory">Clinical Medical Laboratory</option>
-                            <option value="Dental Laboratory">Dental Laboratory</option>
-                            <option value="Physiological Laboratory">Physiological Laboratory</option>
-                            <option value="Pathology">Pathology Lab</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>ZIP Code</label>
-                        <input type="text" id="searchZip" placeholder="e.g., 77001">
-                    </div>
-                    <div class="form-group">
-                        <label>Results</label>
-                        <select id="searchLimit">
-                            <option value="25">25</option>
-                            <option value="50" selected>50</option>
-                            <option value="100">100</option>
-                            <option value="200">200</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>&nbsp;</label>
-                        <button class="btn btn-primary" onclick="runSearch()">Search Leads</button>
-                    </div>
-                </div>
-                <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--gray-200);">
-                    <div
-                        style="font-size:12px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
-                        AI Lead Finder</div>
-                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
-                        <div class="form-group" style="flex:1;min-width:320px;">
-                            <label>Client Need</label>
-                            <textarea id="aiNeeds" rows="2"
-                                placeholder="e.g., Find labs likely needing revenue cycle services, credentialing, and compliance workflow support"
-                                style="resize:vertical;min-height:62px;">Find leads for clients looking for revenue cycle services, credentialing and compliance workflow support.</textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>&nbsp;</label>
-                            <button class="btn btn-success" onclick="runAISearch()">🤖 AI Find Leads</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Results -->
-            <div id="searchResults"></div>
-        </div>
-
-        <!-- ═══════════════════ BULK SEARCH PANEL ═══════════════════ -->
-        <div class="panel" id="panel-bulk">
-            <div class="card">
-                <div class="card-title">Multi-State Lab Search</div>
-                <p style="font-size:13px;color:var(--gray-500);margin-bottom:16px;">
-                    Select multiple states to search for labs across regions at once.
-                    Great for building territory-based prospect lists.
-                </p>
-                <div class="multi-state-select" id="bulkStateSelect"></div>
-                <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
-                    <div class="form-group" style="width:120px;">
-                        <label>Per State</label>
-                        <select id="bulkLimit">
-                            <option value="25">25</option>
-                            <option value="50" selected>50</option>
-                            <option value="100">100</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-primary" onclick="runBulkSearch()" style="margin-top:18px;">
-                        Search Selected States
-                    </button>
-                    <span id="bulkSelectedCount" style="font-size:13px;color:var(--gray-500);margin-top:18px;">0 states
-                        selected</span>
-                </div>
-            </div>
-            <div id="bulkResults"></div>
-        </div>
-
         <!-- ═══════════════════ SCRUB CSV PANEL ═══════════════════ -->
-        <div class="panel" id="panel-scrub">
+        <div class="panel active" id="panel-scrub">
             <div class="card">
-                <div class="card-title">Scrub CSV / Excel — Verify Domains & Find Emails</div>
+                <div class="card-title">Lab Intelligence Scrubber — Verify Domains & Find Emails</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
                     Upload any CSV/XLSX of companies. We auto-detect Org, Phone, City, State, Website columns,
                     verify each org against its real website (using phone + city match), scrape contact pages
@@ -951,14 +846,7 @@
                     </div>
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <button class="btn btn-primary btn-sm" onclick="runDailyPollNow()">⏱ Run Poll Now</button>
-                    <label
-                        style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-600);cursor:pointer;">
-                        <input type="checkbox" id="showExploratoryLeads" onchange="loadSavedLeads()">
-                        Show exploratory leads (relax strict filters)
-                    </label>
-                    <span style="font-size:12px;color:var(--gray-500);">Auto-runs every 4 hours and updates
-                        urgency ranking.</span>
+                    <span style="font-size:12px;color:var(--gray-500);">Leads saved from scrubber results. Upload leads via the Lab Intelligence Scrubber to generate email-enriched contacts.</span>
                 </div>
                 <div id="savedFilterSummary" style="margin-top:8px;font-size:12px;color:var(--gray-500);"></div>
             </div>
@@ -1117,37 +1005,23 @@
         // Init
         // ──────────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', async () => {
-            // Load states
+            // Load states for the saved leads filter dropdown
             const statesResp = await fetch('/api/ref/states');
             const states = await statesResp.json();
             Object.assign(US_STATES, states);
 
-            // Populate state dropdowns
-            const stateDropdowns = ['searchState', 'savedFilterState'];
-            stateDropdowns.forEach(id => {
-                const el = document.getElementById(id);
+            const el = document.getElementById('savedFilterState');
+            if (el) {
                 Object.entries(states).forEach(([code, name]) => {
                     const opt = document.createElement('option');
                     opt.value = code;
                     opt.textContent = `${code} - ${name}`;
                     el.appendChild(opt);
                 });
-            });
+            }
 
-            // Populate bulk state chips
-            const bulkContainer = document.getElementById('bulkStateSelect');
-            Object.entries(states).forEach(([code, name]) => {
-                const chip = document.createElement('span');
-                chip.className = 'state-chip';
-                chip.textContent = code;
-                chip.title = name;
-                chip.onclick = () => toggleBulkState(code, chip);
-                bulkContainer.appendChild(chip);
-            });
-
-            // Start on quality leads view, not raw NPI search.
-            switchTab('saved');
-            loadSavedLeads();
+            // Start on the scrubber tab.
+            switchTab('scrub');
         });
 
         // ──────────────────────────────────────────────────────────────
@@ -1165,81 +1039,8 @@
         }
 
         // ──────────────────────────────────────────────────────────────
-        // Search
+        // Search results rendering (legacy — kept for saved leads save flow)
         // ──────────────────────────────────────────────────────────────
-        async function runSearch() {
-            const params = new URLSearchParams();
-            const state = document.getElementById('searchState').value;
-            const city = document.getElementById('searchCity').value;
-            const name = document.getElementById('searchName').value;
-            const taxonomy = document.getElementById('searchTaxonomy').value;
-            const zip = document.getElementById('searchZip').value;
-            const limit = document.getElementById('searchLimit').value;
-
-            if (state) params.set('state', state);
-            if (city) params.set('city', city);
-            if (name) params.set('name', name);
-            if (taxonomy) params.set('taxonomy', taxonomy);
-            if (zip) params.set('zip_code', zip);
-            params.set('limit', limit);
-
-            const container = document.getElementById('searchResults');
-            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Searching NPI Registry...</p></div>';
-
-            try {
-                const resp = await fetch(`/api/search/labs?${params}`);
-                const data = await resp.json();
-
-                if (!resp.ok) throw new Error(data.detail || 'Search failed');
-
-                currentSearchResults = data.results || [];
-                currentRequestedServices = [];
-                selectedSearchResults.clear();
-                renderSearchResults(currentSearchResults, data.result_count, container);
-            } catch (err) {
-                container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
-            }
-        }
-
-        async function runAISearch() {
-            const needs = document.getElementById('aiNeeds')?.value?.trim() ||
-                'Find leads for clients looking for revenue cycle services, credentialing and compliance workflow support.';
-            const state = document.getElementById('searchState').value;
-            const city = document.getElementById('searchCity').value;
-            const limit = parseInt(document.getElementById('searchLimit').value || '50', 10);
-
-            const container = document.getElementById('searchResults');
-            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>AI is finding service-fit lab leads...</p></div>';
-
-            try {
-                const resp = await fetch('/api/leads/ai-find', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        needs,
-                        state: state || null,
-                        city: city || null,
-                        limit,
-                        strict: true,
-                        min_ai_match_score: 55,
-                        require_multi_service: true,
-                    }),
-                });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'AI lead search failed');
-
-                currentSearchResults = data.leads || [];
-                currentRequestedServices = Array.isArray(data.requested_services) ? data.requested_services : [];
-                selectedSearchResults.clear();
-                renderSearchResults(currentSearchResults, data.count || currentSearchResults.length, container);
-
-                const services = (data.requested_services || []).join(', ');
-                showToast(`AI lead finder: ${data.qualified_count || 0} qualified / ${currentSearchResults.length} total (${services})`, 'success');
-            } catch (err) {
-                container.innerHTML = `<div class="card" style="color:var(--danger)">Error: ${err.message}</div>`;
-            }
-        }
-
         // Track whether "emails only" filter is on
         let emailsOnlyFilter = false;
 
@@ -1696,161 +1497,37 @@
             const status = document.getElementById('savedFilterStatus')?.value;
             const state = document.getElementById('savedFilterState')?.value;
             const score = document.getElementById('savedFilterScore')?.value;
-            const exploratory = document.getElementById('showExploratoryLeads')?.checked;
 
             if (status) params.set('status', status);
             if (state) params.set('state', state);
             if (score) params.set('min_score', score);
-
-            // Default strict mode: actionable + need signal + contactable.
-            if (!exploratory) {
-                params.set('quality_only', 'true');
-                params.set('need_signal_only', 'true');
-                params.set('need_signal_source', 'direct');
-                params.set('require_email', 'true');
-            }
 
             const container = document.getElementById('savedResults');
             if (!container) return;
 
             try {
                 let effectiveData = null;
-                let usedReviewFallback = false;
 
-                if (!exploratory) {
-                    const strictParams = new URLSearchParams(params);
-                    strictParams.set('quality_tier', 'strict');
-                    const strictResp = await fetch(`/api/leads?${strictParams}`);
-                    const strictData = await strictResp.json();
-
-                    if ((strictData.leads || []).length > 0) {
-                        effectiveData = strictData;
-                    } else {
-                        const reviewParams = new URLSearchParams(params);
-                        reviewParams.set('quality_tier', 'review');
-                        const reviewResp = await fetch(`/api/leads?${reviewParams}`);
-                        const reviewData = await reviewResp.json();
-                        effectiveData = reviewData;
-                        usedReviewFallback = (reviewData.leads || []).length > 0;
-
-                        if (!usedReviewFallback && !emailRecoveryAttempted) {
-                            emailRecoveryAttempted = true;
-                            showToast('No emailed leads found. Running email recovery...', 'success');
-                            try {
-                                await fetch('/api/admin/enrich-emails', { method: 'POST' });
-                            } catch (_) {
-                                // Ignore and continue to relaxed fallback.
-                            }
-
-                            const relaxedReviewParams = new URLSearchParams(reviewParams);
-                            relaxedReviewParams.set('require_email', 'false');
-                            const relaxedReviewResp = await fetch(`/api/leads?${relaxedReviewParams}`);
-                            const relaxedReviewData = await relaxedReviewResp.json();
-                            effectiveData = relaxedReviewData;
-                            usedReviewFallback = (relaxedReviewData.leads || []).length > 0;
-                        }
-                    }
-                } else {
-                    const resp = await fetch(`/api/leads?${params}`);
-                    effectiveData = await resp.json();
-                }
+                const resp = await fetch(`/api/leads?${params}`);
+                effectiveData = await resp.json();
 
                 renderSavedLeads((effectiveData && effectiveData.leads) || [], container);
 
                 const summary = document.getElementById('savedFilterSummary');
                 if (summary) {
-                    summary.textContent = exploratory
-                        ? 'Exploratory mode: showing broader leads (may include missing email or weaker signal).'
-                        : (usedReviewFallback
-                            ? 'Strict pool is temporarily empty. Showing top review-quality leads with direct need evidence and at least one email.'
-                            : 'Strict mode: showing actionable leads with direct need evidence and at least one email.');
-                }
-
-                if (!autoPollAttempted && (!effectiveData?.leads || effectiveData.leads.length === 0)) {
-                    autoPollAttempted = true;
-                    showToast('No quality leads with emails yet. Running poll now...', 'success');
-                    await runDailyPollNow();
-                    await loadSavedLeads();
+                    summary.textContent = 'Showing saved leads. Upload a spreadsheet via Lab Intelligence Scrubber to generate new email-enriched contacts.';
                 }
             } catch (err) {
                 container.innerHTML = `<div class="card" style="color:var(--danger)">Error loading leads</div>`;
             }
         }
 
-        async function runDailyPollNow() {
-            const pollBtn = document.querySelector('button[onclick="runDailyPollNow()"]');
-            try {
-                if (pollBtn) {
-                    pollBtn.disabled = true;
-                    pollBtn.textContent = '⏱ Running Poll...';
-                }
-                showToast('Running daily lead poll...', 'success');
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 15000);
-                const resp = await fetch(withBase('/api/leads/poll-daily?segment=all&fast=true'), {
-                    method: 'POST',
-                    signal: controller.signal,
-                    credentials: 'include',
-                });
-                clearTimeout(timeout);
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'Daily poll failed');
-
-                if (data.running && data.started) {
-                    showToast('Poll started. Waiting for completion...', 'success');
-                    await waitForPollCompletionAndReload();
-                    return;
-                }
-
-                showToast(`Poll complete: ${data.saved || 0} leads refreshed, ${data.urgency_updated || 0} urgency updates, ${data.emails_found || 0} emails found`, 'success');
-                loadSavedLeads();
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    showToast('Poll started. Waiting for completion...', 'success');
-                    await waitForPollCompletionAndReload();
-                } else {
-                    showToast(`Poll error: ${err.message}`, 'error');
-                }
-            } finally {
-                if (pollBtn) {
-                    pollBtn.disabled = false;
-                    pollBtn.textContent = '⏱ Run Poll Now';
-                }
-            }
-        }
-
-        async function waitForPollCompletionAndReload() {
-            const maxChecks = 30; // ~3 minutes at 6s intervals
-            for (let i = 0; i < maxChecks; i++) {
-                try {
-                    const statusResp = await fetch(withBase('/api/leads/poll-status'), { credentials: 'include' });
-                    const statusData = await statusResp.json();
-                    const running = !!statusData?.status?.running;
-                    if (!running) {
-                        const last = statusData?.status?.last_result || {};
-                        if (last && typeof last === 'object' && (last.saved !== undefined || last.strict_saved !== undefined)) {
-                            showToast(`Poll finished: ${last.strict_saved || 0} strict, ${last.review_saved || 0} review, ${last.emails_found || 0} emails`, 'success');
-                        }
-                        await loadSavedLeads();
-                        return;
-                    }
-                } catch (_) {
-                    // Keep polling; transient network failures should not break the loop.
-                }
-                await new Promise(resolve => setTimeout(resolve, 6000));
-            }
-
-            showToast('Poll is still running. We will keep existing leads visible and you can refresh shortly.', 'success');
-            await loadSavedLeads();
-        }
-
         function renderSavedLeads(leads, container) {
             if (!leads.length) {
-                const exploratory = document.getElementById('showExploratoryLeads')?.checked;
                 container.innerHTML = `
             <div class="card empty-state">
-                <p style="font-size:18px;margin-bottom:8px;">${exploratory ? 'No leads found for current filters' : 'No strict quality leads with emails yet'}</p>
-                <p>${exploratory ? 'Try lowering score filter or clearing status/state filters.' : 'Run Poll Now to pull healthcare orgs actively signaling billing/credentialing/workflow pain.'}</p>
+                <p style="font-size:18px;margin-bottom:8px;">No saved leads yet</p>
+                <p>Upload your lab spreadsheet via the Lab Intelligence Scrubber tab to generate email-enriched leads.</p>
             </div>`;
                 return;
             }

@@ -11,9 +11,6 @@ from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-import pytz
 
 from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY, HUNTER_API_KEY
 from app.database import (
@@ -29,12 +26,8 @@ except ImportError:
     def update_enrichment_urgency(npi: str, urgency_score: int, urgency_level: str, urgency_reason: str):
         return None
 
-from app.npi_client import (
-    search_npi, search_npi_by_taxonomy, get_npi_detail, bulk_search_labs,
-)
 from app.email_finder import find_emails_for_lab, _is_quality_email
 from app.enrichment import enrich_lead, enrich_leads_bulk
-from app.lead_scraper import run_national_lead_pull
 from app.build_info import BUILD_MARKER
 from rule_intercept import intercept_request
 from app.scrubber import (
@@ -56,10 +49,8 @@ app = FastAPI(
 )
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and seed demo data on startup."""
+    """Initialize database on startup."""
     init_db()
-    from app.database import seed_demo_leads
-    seed_demo_leads()
 
 
 @app.get("/healthz")
@@ -1005,56 +996,6 @@ def _start_daily_poll_scheduler():
     _scheduler_started = True
 
 
-# ─── Search ──────────────────────────────────────────────────────────
-
-@app.get("/api/search/labs")
-async def search_labs(
-    state: Optional[str] = Query(None),
-    city: Optional[str] = Query(None),
-    name: Optional[str] = Query(None),
-    taxonomy: Optional[str] = Query(None),
-    zip_code: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    skip: int = Query(0, ge=0),
-):
-    try:
-        results = await search_npi(
-            state=state, city=city, organization_name=name,
-            taxonomy_description=taxonomy or "laboratory",
-            postal_code=zip_code, limit=limit, skip=skip,
-        )
-        log_search("npi_search", json.dumps({"state": state, "city": city, "name": name}), results["result_count"])
-        return results
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/search/bulk")
-async def bulk_search(
-    states: str = Query(...),
-    limit_per_state: int = Query(50, ge=1, le=200),
-):
-    state_list = [s.strip().upper() for s in states.split(",") if s.strip()]
-    if len(state_list) > 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 states")
-    try:
-        results = await bulk_search_labs(state_list, limit_per_state)
-        log_search("bulk_search", json.dumps({"states": state_list}), results["result_count"])
-        return results
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class AILeadFindRequest(BaseModel):
-    needs: str
-    state: Optional[str] = None
-    city: Optional[str] = None
-    limit: int = 50
-    strict: bool = True
-    min_ai_match_score: int = 55
-    require_multi_service: bool = True
-
-
 class ContactFormRequest(BaseModel):
     organization_name: str
     contact_name: str
@@ -1169,118 +1110,6 @@ def _service_matches(enrichment: dict, requested_services: list[str]) -> tuple[i
 
     return score, matched, reasons, overall_service_score, priority
 
-
-@app.post("/api/leads/ai-find")
-async def ai_find_leads(req: AILeadFindRequest):
-    """
-    AI-guided lead finder for service-specific prospecting.
-    Uses intent parsing + enrichment scoring to return leads likely needing:
-    revenue cycle, credentialing, and compliance workflow support.
-    """
-    limit = max(1, min(int(req.limit or 50), 100))
-    intent = _parse_ai_intent(req.needs)
-    requested_services = intent.get("requested_services", ["billing", "credentialing", "compliance_workflow"])
-
-    try:
-        search = await search_npi(
-            state=(req.state or None),
-            city=(req.city or None),
-            organization_name=None,
-            taxonomy_description="laboratory",
-            postal_code=None,
-            limit=limit,
-            skip=0,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI lead search failed: {e}")
-
-    results = search.get("results", [])
-    if not results:
-        return {
-            "leads": [],
-            "count": 0,
-            "requested_services": requested_services,
-            "intent_source": intent.get("notes", "fallback"),
-            "message": "No labs found for the selected geography.",
-        }
-
-    enrich_items = [
-        {
-            "npi": row.get("npi", ""),
-            "org_name": row.get("organization_name", ""),
-            "state": row.get("state", ""),
-            "city": row.get("city", ""),
-        }
-        for row in results
-        if row.get("npi")
-    ]
-
-    enriched = await enrich_leads_bulk(enrich_items)
-    enrich_map = {e.get("npi"): e for e in enriched if isinstance(e, dict) and e.get("npi")}
-
-    ranked = []
-    for row in results:
-        npi = row.get("npi")
-        enrichment = enrich_map.get(npi, {})
-        match_score, matched_services, match_reasons, overall_service_score, priority = _service_matches(enrichment, requested_services)
-        if not matched_services:
-            continue
-
-        phone = (row.get("phone") or "").strip()
-        has_phone = bool(phone and phone not in {"—", "N/A", "na"})
-        has_reason_evidence = len(match_reasons) >= 2
-
-
-        multi_service_match = len(matched_services) >= 2
-
-        is_qualified = (
-            match_score >= max(0, min(100, int(req.min_ai_match_score or 55)))
-            and has_reason_evidence
-            and has_phone
-            and (multi_service_match if req.require_multi_service else True)
-        )
-
-        if req.strict and not is_qualified:
-            continue
-
-        merged = dict(row)
-        merged["ai_match_score"] = match_score
-        merged["ai_matched_services"] = matched_services
-        merged["ai_match_reasons"] = match_reasons
-        merged["ai_priority"] = priority
-        merged["ai_overall_service_score"] = overall_service_score
-        merged["ai_has_phone"] = has_phone
-        merged["ai_qualified"] = is_qualified
-        merged["ai_pipeline_reason"] = (
-            "Qualified: strong pain signals and outreach-ready contact"
-            if is_qualified else
-            "Not qualified: weak score or insufficient evidence/contactability"
-        )
-        merged["enrichment"] = enrichment
-        ranked.append(merged)
-
-    ranked.sort(
-        key=lambda x: (
-            1 if x.get("ai_qualified") else 0,
-            x.get("ai_match_score", 0),
-            x.get("ai_overall_service_score", 0),
-            x.get("lead_score", 0),
-        ),
-        reverse=True,
-    )
-
-    total = ranked[:limit]
-    qualified_count = sum(1 for row in total if row.get("ai_qualified"))
-
-    return {
-        "leads": total,
-        "count": len(total),
-        "qualified_count": qualified_count,
-        "requested_services": requested_services,
-        "intent_source": intent.get("notes", "fallback"),
-        "strict_mode": bool(req.strict),
-        "message": "No qualified buyer-intent leads found; broaden geography or disable strict mode." if not ranked else "OK",
-    }
 
 
 @app.post("/api/intercept/request")
@@ -1413,31 +1242,6 @@ async def scrub_download_xlsx(job_id: str):
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
 
-
-@app.get("/api/search/taxonomy")
-async def search_by_taxonomy(
-    code: str = Query(...),
-    state: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    skip: int = Query(0, ge=0),
-):
-    try:
-        return await search_npi_by_taxonomy(code, state, limit, skip)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/npi/{npi}")
-async def npi_detail(npi: str):
-    try:
-        result = await get_npi_detail(npi)
-        if not result:
-            raise HTTPException(status_code=404, detail="NPI not found")
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─── Lead Management ─────────────────────────────────────────────────
@@ -1591,69 +1395,6 @@ async def list_leads(
         reverse=True,
     )
     return {"leads": leads, "count": len(leads)}
-
-
-@app.post("/api/leads/poll-daily")
-async def poll_leads_now(
-    segment: str = Query("all", description="all|laboratory|urgent_care|primary_care|asc"),
-    wait: bool = Query(False, description="If true, wait for poll completion; otherwise run in background"),
-    fast: bool = Query(True, description="If true, run a faster reduced-scope poll"),
-):
-    """Manual trigger for daily polling and urgency updates (same logic as 9 AM scheduler)."""
-    _recover_stale_poll_status()
-
-    async def _run_poll(seg: str, fast_mode: bool):
-        _poll_status["running"] = True
-        _poll_status["started_at"] = datetime.now().isoformat()
-        _poll_status["finished_at"] = ""
-        _poll_status["last_error"] = ""
-        try:
-            result = await asyncio.wait_for(
-                run_daily_lead_poll(segment=seg, fast=fast_mode),
-                timeout=POLL_MAX_SECONDS,
-            )
-            _poll_status["last_result"] = result
-            return result
-        except asyncio.TimeoutError:
-            _poll_status["last_error"] = f"Poll timed out after {POLL_MAX_SECONDS}s"
-            raise HTTPException(status_code=504, detail=_poll_status["last_error"])
-        except Exception as e:
-            _poll_status["last_error"] = str(e)
-            raise
-        finally:
-            _poll_status["running"] = False
-            _poll_status["finished_at"] = datetime.now().isoformat()
-
-    if _poll_status.get("running"):
-        return {
-            "ok": True,
-            "running": True,
-            "message": "A lead poll is already running",
-            "status": _poll_status,
-        }
-
-    try:
-        if wait:
-            return await _run_poll(segment, fast)
-
-        asyncio.create_task(_run_poll(segment, fast))
-        return {
-            "ok": True,
-            "running": True,
-            "started": True,
-            "segment": segment,
-            "fast": fast,
-            "message": "Lead poll started in background",
-            "status": _poll_status,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Daily poll failed: {e}")
-
-
-@app.get("/api/leads/poll-status")
-async def poll_status():
-    _recover_stale_poll_status()
-    return {"ok": True, "status": _poll_status}
 
 
 @app.put("/api/leads/{lead_id}")
