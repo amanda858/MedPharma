@@ -1966,7 +1966,7 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                 # Pick single sheet with most rows
                 best = max(sheet_results, key=lambda x: len(x[2]))
                 rows = best[2]
-            wb.close()
+        wb.close()
     return rows
 
 
