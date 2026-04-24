@@ -3482,16 +3482,9 @@
     }
 
     async function doLogout() {
-      await fetch('/hub/api/logout', { method: 'POST' }).catch(() => { });
-      currentUser = null; activeClientId = null; activeSubProfile = null; activeClientPracticeType = '';
-      document.getElementById('appShell').style.display = 'none';
-      document.getElementById('accountSelect').style.display = 'none';
-      document.getElementById('loginScreen').style.display = 'block';
-      // Reset login form state
-      const btn = document.getElementById('btnLogin');
-      btn.disabled = false; btn.textContent = 'Sign In →';
-      document.getElementById('loginError').style.display = 'none';
-      document.getElementById('loginStatus').style.display = 'none';
+      try { await fetch('/hub/api/logout', { method: 'POST' }); } catch (_) { }
+      // Full page reload to /hub guarantees clean auth state — no stale cookie can auto-login
+      window.location.href = '/hub';
     }
 
     // ═══════════════════════════════════════
@@ -3551,7 +3544,7 @@
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = 'block';
+      document.getElementById('adminNav').style.display = currentUser.role === 'admin' ? 'block' : 'none';
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');

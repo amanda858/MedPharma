@@ -6,6 +6,7 @@ import re
 import logging
 import shutil
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, date, timedelta
 from typing import Optional
@@ -174,13 +175,22 @@ def login(body: LoginIn, response: Response):
 
 @router.post("/logout")
 def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
-    # Flush daily activity summary before destroying session
+    # Capture user info BEFORE deleting session
     user = _get_user(hub_session) if hub_session else None
-    if user:
-        flush_and_notify(user["username"])
+    # Always delete session + cookie first — this must succeed unconditionally
     if hub_session:
-        logout_session(hub_session)
+        try:
+            logout_session(hub_session)
+        except Exception as exc:
+            log.error(f"logout_session error (continuing): {exc}")
     response.delete_cookie("hub_session", path="/")
+    # Fire progress report in a background thread — non-blocking, non-critical
+    if user:
+        threading.Thread(
+            target=flush_and_notify,
+            args=(user["username"],),
+            daemon=True,
+        ).start()
     return {"ok": True}
 
 

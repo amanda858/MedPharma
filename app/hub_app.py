@@ -176,12 +176,6 @@ async def portal(request: Request):
     return _serve_hub()
 
 
-@app.get("/hub", response_class=HTMLResponse)
-async def serve_client_hub(request: Request):
-    """Main client access point - consolidated from multiple routes."""
-    return _serve_hub()
-
-
 @app.get("/medpharma", response_class=HTMLResponse)
 async def medpharma_redirect(request: Request):
     """Legacy redirect - consolidate to /hub."""
