@@ -223,7 +223,9 @@ def _candidate_domains(name: str, hint: str = "") -> list[str]:
 
     toks = _tokens(name)
     if toks:
-        # Deterministic priority: simplest org-like bases first.
+        # Deterministic priority: multi-token org-like bases FIRST so we don't
+        # collide with unrelated short-name companies (e.g. "Genova Diagnostics"
+        # → genovadiagnostics.com before genova.com which is a different firm).
         preferred_tlds = (".com", ".org", ".net", ".co", ".us", ".io", ".health", ".bio")
 
         ordered_bases: list[str] = []
@@ -233,17 +235,19 @@ def _candidate_domains(name: str, hint: str = "") -> list[str]:
             if b and b not in ordered_bases and 3 <= len(b) <= 40:
                 ordered_bases.append(b)
 
-        push_base(toks[0])
-        if len(toks) >= 2:
-            push_base(toks[0] + toks[1])
-            push_base("-".join(toks[:2]))
+        # Multi-token first — these are far more likely to be the real domain
         if len(toks) >= 3:
             push_base("".join(toks[:3]))
             push_base("-".join(toks[:3]))
-
+        if len(toks) >= 2:
+            push_base(toks[0] + toks[1])
+            push_base("-".join(toks[:2]))
+        # Healthcare-suffix variants on the multi-token base
         base_root = "".join(toks[:2]) if len(toks) >= 2 else toks[0]
         for suf in ("lab", "labs", "diagnostics", "health", "medical", "rx", "group"):
             push_base(base_root + suf)
+        # Single-token base last (most likely to be wrong for common words)
+        push_base(toks[0])
 
         for b in ordered_bases:
             for tld in preferred_tlds:
@@ -683,13 +687,28 @@ async def scrub_rows(
         # Blind role patterns — always generate against the best known domain
         # (verified domain if we got one, otherwise org-derived candidates) so
         # every row has usable outreach addresses even when scrape finds nothing.
+        # CRITICAL: only use fallback domains that actually have MX records,
+        # otherwise we generate emails for unrelated companies.
         if org:
             if verified_domain:
                 _blind_doms = [verified_domain]
                 _blind_score = 35  # verified domain → higher trust
             else:
-                _blind_doms = _candidate_domains(org, web)[:3]
-                _blind_score = 18
+                # MX-filter the candidate list. Domains without mail servers
+                # are useless and frequently belong to unrelated companies.
+                from app.email_verifier import lookup_mx
+                _raw_doms = _candidate_domains(org, web)[:8]
+                _blind_doms = []
+                for _d in _raw_doms:
+                    try:
+                        _mx = await asyncio.wait_for(lookup_mx(_d), timeout=4.0)
+                    except Exception:
+                        _mx = []
+                    if _mx:
+                        _blind_doms.append(_d)
+                    if len(_blind_doms) >= 2:
+                        break
+                _blind_score = 22  # MX-confirmed but org-match unproven
             _seen_blind: set[str] = {e for _, e in candidates}
             for _bd in _blind_doms:
                 for _pfx in ("billing", "credentialing", "rcm", "lab", "director", "admin", "office", "info"):
