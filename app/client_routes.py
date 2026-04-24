@@ -10,7 +10,7 @@ import threading
 import uuid
 from datetime import datetime, date, timedelta
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Cookie, Response, Request, UploadFile, File as FastAPIFile, Form
+from fastapi import APIRouter, HTTPException, Cookie, Response, Request, UploadFile, File as FastAPIFile, Form, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -981,7 +981,7 @@ def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)
 
 @router.post("/production/import")
 async def import_production_excel(
-    client_id: Optional[int] = None,
+    client_id: Optional[int] = Query(None),
     file: UploadFile = FastAPIFile(...),
     hub_session: Optional[str] = Cookie(None),
 ):
@@ -995,27 +995,69 @@ async def import_production_excel(
         raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, or .csv")
 
     content = await file.read()
-    rows = _parse_excel_rows(content, ext)
+    try:
+        rows = _parse_excel_rows(content, f".{ext}")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
     if not rows:
         raise HTTPException(status_code=422, detail="No data rows found in file")
 
-    # Column name normaliser — case / whitespace insensitive
+    # ── Tiered column finder: exact > starts-with > contains ────────────────
     def _find_col(headers: list[str], *candidates: str) -> Optional[str]:
         hl = [h.lower().strip() for h in headers]
+        # Tier 1: exact match
         for c in candidates:
+            cl = c.lower()
             for i, h in enumerate(hl):
-                if c.lower() in h:
+                if h == cl:
+                    return headers[i]
+        # Tier 2: starts with
+        for c in candidates:
+            cl = c.lower()
+            for i, h in enumerate(hl):
+                if h.startswith(cl):
+                    return headers[i]
+        # Tier 3: contains
+        for c in candidates:
+            cl = c.lower()
+            for i, h in enumerate(hl):
+                if cl in h:
                     return headers[i]
         return None
 
     headers = list(rows[0].keys()) if rows else []
-    col_date     = _find_col(headers, "date", "work_date", "day")
-    col_username = _find_col(headers, "username", "user", "agent", "rep", "employee", "staff", "name")
-    col_category = _find_col(headers, "category", "type", "task type", "activity")
-    col_task     = _find_col(headers, "task", "description", "work", "notes", "detail")
+    # Specific candidates first — broad/conflicting keywords removed
+    col_date     = _find_col(headers, "work date", "work_date", "date", "day")
+    col_username = _find_col(headers, "username", "user name", "user", "agent", "rep", "employee", "staff", "technician", "tech")
+    col_category = _find_col(headers, "category", "task type", "activity type", "work type", "type")
+    col_task     = _find_col(headers, "task description", "task", "description", "work performed", "work done", "activity", "detail")
     col_qty      = _find_col(headers, "quantity", "qty", "count", "units", "items")
-    col_hours    = _find_col(headers, "hours", "time", "duration", "hrs")
-    col_notes    = _find_col(headers, "notes", "comment", "additional")
+    col_hours    = _find_col(headers, "hours", "time spent", "duration", "hrs")
+    col_notes    = _find_col(headers, "notes", "comments", "comment", "additional", "remarks")
+
+    # ── Conflict resolution: prevent two fields grabbing the same column ────
+    used: set[str] = set()
+    def _claim(col: Optional[str]) -> Optional[str]:
+        if col is None or col in used:
+            return None
+        used.add(col)
+        return col
+
+    col_date     = _claim(col_date)
+    col_task     = _claim(col_task)
+    # Remaining optional columns — skip if already claimed
+    col_username = col_username if col_username not in used else None
+    col_category = col_category if col_category not in used else None
+    col_qty      = col_qty      if col_qty      not in used else None
+    col_hours    = col_hours    if col_hours    not in used else None
+    col_notes    = col_notes    if col_notes    not in used else None
+
+    # If col_task wasn't found after conflict resolution, try remaining headers
+    if not col_task:
+        remaining = [h for h in headers if h not in used]
+        col_task = _find_col(remaining, "task", "description", "work", "notes", "detail", "activity")
+        if col_task:
+            used.add(col_task)
 
     if not col_date or not col_task:
         missing = []
@@ -1026,15 +1068,25 @@ async def import_production_excel(
             detail=f"Cannot find required column(s): {', '.join(missing)}. Headers found: {headers}"
         )
 
-    DATE_FMTS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d"]
+    DATE_FMTS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"]
 
     def _parse_date(val) -> Optional[str]:
-        if not val:
+        if val is None or str(val).strip() in ("", "None"):
             return None
-        s = str(val).strip()
-        # openpyxl may return datetime objects when reading xlsx
+        # openpyxl / xlrd return Python datetime or date objects for date cells
         if hasattr(val, "strftime"):
             return val.strftime("%Y-%m-%d")
+        # Excel serial numbers stored as float/int (rare, but happens with .xls edge cases)
+        if isinstance(val, (int, float)):
+            try:
+                from datetime import datetime as _dt, timedelta as _td
+                dt = _dt(1899, 12, 30) + _td(days=float(val))
+                if 1970 <= dt.year <= 2100:  # sanity check
+                    return dt.strftime("%Y-%m-%d")
+            except (ValueError, OverflowError):
+                pass
+            return None
+        s = str(val).strip()
         for fmt in DATE_FMTS:
             try:
                 from datetime import datetime
@@ -1106,6 +1158,171 @@ def production_report(client_id: Optional[int] = None,
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
+
+
+@router.get("/production/report/download")
+def download_production_report(
+    client_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Return a branded, printable HTML production report with MedPharma logo."""
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    data = get_production_report(scope, start_date, end_date)
+    if user.get("role") == "admin" and client_id is not None and not (data.get("details") or []):
+        data = get_production_report(None, start_date, end_date)
+
+    from html import escape as _esc
+
+    period_label = f"{start_date or 'All time'} — {end_date or 'today'}"
+    by_user  = data.get("by_user", [])
+    by_cat   = data.get("by_category", [])
+    details  = data.get("details", [])
+    flags    = data.get("time_management_flags", [])
+
+    # ── Team summary rows ──────────────────────────────────────────────
+    def _user_rows():
+        if not by_user:
+            return "<tr><td colspan='6' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+        return "".join(
+            f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
+            f"<td>{u.get('days_worked',0)}</td>"
+            f"<td>{u.get('total_entries',0)}</td>"
+            f"<td>{u.get('total_quantity',0)}</td>"
+            f"<td>{u.get('total_hours',0)}h</td>"
+            f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
+            for u in by_user
+        )
+
+    def _cat_rows():
+        if not by_cat:
+            return "<tr><td colspan='4' style='text-align:center;color:#9ca3af'>No data</td></tr>"
+        return "".join(
+            f"<tr><td>{_esc(str(c.get('category','Uncategorized')))}</td>"
+            f"<td>{c.get('total_entries',0)}</td>"
+            f"<td>{c.get('total_quantity',0)}</td>"
+            f"<td>{c.get('total_hours',0)}h</td></tr>"
+            for c in by_cat
+        )
+
+    def _detail_rows():
+        if not details:
+            return "<tr><td colspan='7' style='text-align:center;color:#9ca3af'>No entries in this period</td></tr>"
+        return "".join(
+            f"<tr><td>{_esc(str(d.get('work_date','')))}</td>"
+            f"<td>{_esc(str(d.get('username','')))}</td>"
+            f"<td>{_esc(str(d.get('category','')))}</td>"
+            f"<td>{_esc(str(d.get('task_description','')))}</td>"
+            f"<td style='text-align:center'>{d.get('quantity',0)}</td>"
+            f"<td style='text-align:center'>{d.get('time_spent',0)}h</td>"
+            f"<td style='font-size:12px;color:#6b7280'>{_esc(str(d.get('notes','') or ''))}</td></tr>"
+            for d in details
+        )
+
+    def _flag_section():
+        if not flags:
+            return ""
+        rows = "".join(
+            f"<tr><td>{_esc(str(f.get('username','')))}</td>"
+            f"<td>{f.get('avg_hours_per_day',0)}h/day</td>"
+            f"<td>{f.get('days_worked',0)}</td>"
+            f"<td style='color:#dc2626'>{_esc(str(f.get('recommendation','')))}</td></tr>"
+            for f in flags
+        )
+        return f"""
+        <section class="section">
+          <h2 style="color:#dc2626">⚠️ Time Management Alerts</h2>
+          <table><thead><tr><th>Team Member</th><th>Avg Hrs/Day</th><th>Days Worked</th><th>Recommendation</th></tr></thead>
+          <tbody>{rows}</tbody></table>
+        </section>"""
+
+    from datetime import date as _date
+    generated = _date.today().strftime("%B %d, %Y")
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MedPharma Production Report — {_esc(period_label)}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:'Segoe UI',Arial,sans-serif; font-size:13px; color:#1f2937; background:#fff; padding:0; }}
+  .page {{ max-width:960px; margin:0 auto; padding:32px 24px; }}
+  .header {{ display:flex; align-items:center; gap:20px; border-bottom:3px solid #1d4ed8; padding-bottom:20px; margin-bottom:28px; }}
+  .logo-img {{ height:64px; width:auto; object-fit:contain; }}
+  .header-text h1 {{ font-size:22px; font-weight:800; color:#1d4ed8; letter-spacing:-0.5px; }}
+  .header-text p {{ font-size:13px; color:#6b7280; margin-top:4px; }}
+  .meta-bar {{ display:flex; gap:28px; background:#f0f4ff; border-radius:8px; padding:12px 18px; margin-bottom:24px; font-size:13px; }}
+  .meta-bar b {{ color:#1d4ed8; }}
+  .section {{ margin-bottom:28px; }}
+  .section h2 {{ font-size:15px; font-weight:700; color:#374151; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid #e5e7eb; }}
+  table {{ width:100%; border-collapse:collapse; font-size:12.5px; }}
+  th {{ background:#1d4ed8; color:#fff; text-align:left; padding:8px 10px; font-weight:600; font-size:12px; }}
+  td {{ padding:7px 10px; border-bottom:1px solid #f3f4f6; }}
+  tr:nth-child(even) td {{ background:#f9fafb; }}
+  .footer {{ margin-top:36px; padding-top:14px; border-top:1px solid #e5e7eb; font-size:11px; color:#9ca3af; display:flex; justify-content:space-between; }}
+  @media print {{
+    body {{ padding:0; }}
+    .page {{ padding:20px 16px; }}
+    .no-print {{ display:none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <img class="logo-img" src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma Logo" crossorigin="anonymous">
+    <div class="header-text">
+      <h1>MedPharma Internal Hub</h1>
+      <p>Team Production Report &nbsp;|&nbsp; {_esc(period_label)}</p>
+    </div>
+  </div>
+
+  <div class="meta-bar">
+    <span><b>Period:</b> {_esc(period_label)}</span>
+    <span><b>Total Entries:</b> {len(details)}</span>
+    <span><b>Team Members:</b> {len(by_user)}</span>
+    <span><b>Generated:</b> {generated}</span>
+  </div>
+
+  {_flag_section()}
+
+  <section class="section">
+    <h2>👥 Team Summary</h2>
+    <table>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Pace</th></tr></thead>
+      <tbody>{_user_rows()}</tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>📊 Work by Category</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Entries</th><th>Items</th><th>Hours</th></tr></thead>
+      <tbody>{_cat_rows()}</tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>📋 Detailed Daily Log</h2>
+    <table>
+      <thead><tr><th>Date</th><th>User</th><th>Category</th><th>Task Description</th><th>Qty</th><th>Hours</th><th>Notes</th></tr></thead>
+      <tbody>{_detail_rows()}</tbody>
+    </table>
+  </section>
+
+  <div class="footer">
+    <span>MedPharma Internal Hub &nbsp;|&nbsp; <a href="https://medpharmasc.com">medpharmasc.com</a></span>
+    <span class="no-print"><button onclick="window.print()" style="background:#1d4ed8;color:#fff;border:none;padding:6px 18px;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Print / Save PDF</button></span>
+    <span>Generated {generated}</span>
+  </div>
+</div>
+</body>
+</html>"""
+
+    return Response(content=html, media_type="text/html")
 
 
 @router.get("/notifications/status")
@@ -1631,15 +1848,73 @@ async def import_excel(
 def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     """Parse Excel/CSV bytes into list of dict rows with smart header detection.
     If combine_sheets=True and multiple sheets share the same header structure,
-    rows from all matching sheets are combined (useful for multi-tab claim files)."""
+    rows from all matching sheets are combined (useful for multi-tab claim files).
+    Supports .xlsx (openpyxl), .xls (xlrd), and .csv."""
     import csv, io
     rows = []
     if ext == ".csv":
         reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
         rows = list(reader)
+    elif ext == ".xls":
+        # Legacy Excel (BIFF) — use xlrd
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=content)
+        sheet_results = []
+        for sidx in range(wb.nsheets):
+            ws = wb.sheet_by_index(sidx)
+            if ws.nrows < 2:
+                continue
+            # Smart header detection: best row in first 10 rows
+            header_row_idx = 0
+            best_score = 0
+            for ri in range(min(10, ws.nrows)):
+                row_vals = [ws.cell_value(ri, ci) for ci in range(ws.ncols)]
+                non_empty = sum(1 for v in row_vals if v is not None and str(v).strip())
+                text = sum(1 for v in row_vals if isinstance(v, str) and str(v).strip())
+                score = text * 2 + non_empty
+                if score > best_score and non_empty >= 3:
+                    best_score = score
+                    header_row_idx = ri
+            hdrs = [str(ws.cell_value(header_row_idx, ci)).strip() for ci in range(ws.ncols)]
+            valid_cols = [i for i, h in enumerate(hdrs) if h]
+            if len(valid_cols) < 2:
+                continue
+            sheet_rows = []
+            for ri in range(header_row_idx + 1, ws.nrows):
+                row_vals = []
+                for ci in range(ws.ncols):
+                    cell = ws.cell(ri, ci)
+                    # Convert xlrd date serial to Python datetime
+                    if cell.ctype == xlrd.XL_CELL_DATE:
+                        try:
+                            import datetime as _dt
+                            dt = xlrd.xldate_as_datetime(cell.value, wb.datemode)
+                            row_vals.append(dt)
+                        except Exception:
+                            row_vals.append(cell.value)
+                    else:
+                        row_vals.append(cell.value)
+                if any(v is not None and str(v).strip() for v in row_vals):
+                    sheet_rows.append(dict(zip(hdrs, row_vals)))
+            if sheet_rows:
+                hdr_key = tuple(sorted(h.lower() for h in hdrs if h))
+                sheet_results.append((hdr_key, hdrs, sheet_rows))
+        if sheet_results:
+            if combine_sheets:
+                from collections import defaultdict
+                groups = defaultdict(list)
+                for hdr_key, hdrs, srows in sheet_results:
+                    groups[hdr_key].extend(srows)
+                rows = max(groups.values(), key=len)
+            else:
+                rows = max(sheet_results, key=lambda x: len(x[2]))[2]
     else:
+        # .xlsx — use openpyxl
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            raise ValueError(f"Cannot read Excel file: {exc}. If this is a .xls file, rename to .xls extension.") from exc
         # Collect parsed rows per sheet with their headers
         sheet_results = []  # list of (headers_tuple, rows_list)
         for sheet_name in wb.sheetnames:
@@ -1691,7 +1966,7 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                 # Pick single sheet with most rows
                 best = max(sheet_results, key=lambda x: len(x[2]))
                 rows = best[2]
-        wb.close()
+            wb.close()
     return rows
 
 
