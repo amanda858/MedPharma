@@ -1305,7 +1305,7 @@ async def scrub_upload(
     file: UploadFile = File(...),
     max_rows: int = Query(500, ge=1, le=2000),
 ):
-    """Upload any CSV/XLSX of orgs/companies and run the scrub pipeline."""
+    """Upload any CSV/XLSX of orgs/companies. Returns a job_id immediately; poll /api/scrub/status/{job_id}."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="file required")
     name = file.filename.lower()
@@ -1325,22 +1325,61 @@ async def scrub_upload(
         raise HTTPException(status_code=400, detail=f"could not parse file: {e}")
     if not headers or not rows:
         raise HTTPException(status_code=400, detail="no data rows detected")
-    try:
-        scrub = await _scrub_rows(headers, rows, max_rows=max_rows)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"scrub failed: {e}")
+
     job_id = _uuid.uuid4().hex
-    _scrub_remember(job_id, {
+    total = min(len(rows), max_rows)
+    _SCRUB_JOBS[job_id] = {
+        "status": "running",
         "filename": file.filename,
-        "summary": scrub["summary"],
-        "rows": scrub["rows"],
-        "created_at": datetime.now().isoformat(),
-    })
+        "total_rows": total,
+        "done_rows": 0,
+        "summary": None,
+        "rows": [],
+        "error": None,
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+    }
+
+    async def _run():
+        try:
+            scrub = await _scrub_rows(headers, rows, max_rows=max_rows)
+            _SCRUB_JOBS[job_id].update({
+                "status": "done",
+                "summary": scrub["summary"],
+                "rows": scrub["rows"],
+                "done_rows": len(scrub["rows"]),
+                "finished_at": datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            _SCRUB_JOBS[job_id].update({
+                "status": "error",
+                "error": str(exc)[:400],
+                "finished_at": datetime.now().isoformat(),
+            })
+
+    asyncio.create_task(_run())
+    return {"ok": True, "job_id": job_id, "status": "running", "total_rows": total}
+
+
+@app.get("/api/scrub/status/{job_id}")
+async def scrub_status(job_id: str):
+    """Poll a scrub job. Returns status=running|done|error plus results when done."""
+    job = _SCRUB_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    if job["status"] != "done":
+        return {
+            "job_id": job_id,
+            "status": job["status"],
+            "total_rows": job.get("total_rows", 0),
+            "done_rows": job.get("done_rows", 0),
+            "error": job.get("error"),
+        }
     return {
-        "ok": True,
         "job_id": job_id,
-        "summary": scrub["summary"],
-        "preview": scrub["rows"][:25],
+        "status": "done",
+        "summary": job["summary"],
+        "preview": job["rows"][:25],
         "download": {
             "csv": f"/api/scrub/download/{job_id}.csv",
             "xlsx": f"/api/scrub/download/{job_id}.xlsx",

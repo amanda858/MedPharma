@@ -1425,56 +1425,96 @@
             }
             const file = fileInput.files[0];
             const maxRows = document.getElementById('scrubMaxRows').value;
-            status.textContent = `Uploading ${file.name}… this can take a few minutes for large files.`;
-            results.innerHTML = '<div class="loading"><div class="spinner"></div><p>Verifying domains and scraping emails…</p></div>';
+            status.textContent = `Uploading ${file.name}…`;
+            results.innerHTML = '<div class="loading"><div class="spinner"></div><p id="scrubProgressMsg">Uploading file…</p></div>';
             const fd = new FormData();
             fd.append('file', file);
+            let jobId = null;
             try {
                 const resp = await fetch(withBase(`/api/scrub/upload?max_rows=${maxRows}`), { method: 'POST', body: fd });
                 const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'Scrub failed');
-                status.textContent = `Scrubbed ${data.summary.output_rows} rows.`;
-                const s = data.summary;
-                summary.innerHTML = `
-                    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;">
-                      <div><b>${s.input_rows}</b> input rows</div>
-                      <div><b>${s.verified_domains}</b> verified domains</div>
-                      <div><b>${s.rows_with_email}</b> with email</div>
-                      <div><b>${s.errors}</b> errors</div>
-                    </div>
-                    <div style="font-size:12px;color:var(--gray-500);margin-top:6px;">Detected columns: ${Object.entries(s.detected_columns).filter(([,v])=>v).map(([k,v])=>k+'→'+v).join(' · ') || 'auto'}</div>
-                `;
-                downloads.innerHTML = `
-                    <a class="btn btn-success" href="${withBase(data.download.xlsx)}" download>Download Excel (.xlsx)</a>
-                    <a class="btn btn-primary" href="${withBase(data.download.csv)}" download style="margin-left:8px;">Download CSV</a>
-                `;
-                const rows = data.preview || [];
-                if (!rows.length) { results.innerHTML = '<p style="padding:14px;">No rows returned.</p>'; return; }
-                let html = '<div class="card" style="margin-top:14px;"><div class="card-title">Preview (top 25 by Fit Score)</div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
-                ['Fit', 'Org Name', 'State', 'Phone', 'Verified Domain', 'Email 1', 'Email 2', 'Email 3', 'Status'].forEach(h => {
-                    html += `<th style="text-align:left;padding:6px;border-bottom:1px solid var(--gray-200);">${h}</th>`;
-                });
-                html += '</tr></thead><tbody>';
-                rows.forEach(r => {
-                    html += `<tr>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);"><b>${r['Fit Score']||0}</b></td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${(r['Org Name']||'').replace(/</g,'&lt;')}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['State']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Phone']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Verified Domain']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 1']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 2']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Email 3']||''}</td>
-                        <td style="padding:6px;border-bottom:1px solid var(--gray-100);">${r['Scrub Status']||''}</td>
-                    </tr>`;
-                });
-                html += '</tbody></table></div></div>';
-                results.innerHTML = html;
+                if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+                jobId = data.job_id;
             } catch (e) {
                 status.textContent = '';
-                results.innerHTML = `<div class="card" style="color:#b91c1c;">Scrub failed: ${e.message}</div>`;
+                results.innerHTML = `<div class="card" style="color:#b91c1c;">Upload failed: ${e.message}</div>`;
                 showToast(e.message, 'error');
+                return;
             }
+
+            // Poll for completion
+            status.textContent = 'Processing…';
+            let elapsed = 0;
+            const maxWait = 600; // 10 minutes
+            while (elapsed < maxWait) {
+                await new Promise(r => setTimeout(r, 4000));
+                elapsed += 4;
+                try {
+                    const pollResp = await fetch(withBase(`/api/scrub/status/${jobId}`));
+                    const pollData = await pollResp.json();
+                    if (pollData.status === 'running') {
+                        const pct = pollData.total_rows > 0
+                            ? Math.round((elapsed / maxWait) * 100) : '…';
+                        const msg = document.getElementById('scrubProgressMsg');
+                        if (msg) msg.textContent = `Scrubbing ${pollData.total_rows} rows… (${elapsed}s elapsed — verifying domains & scraping contact pages)`;
+                        continue;
+                    }
+                    if (pollData.status === 'error') {
+                        status.textContent = '';
+                        results.innerHTML = `<div class="card" style="color:#b91c1c;">Scrub failed: ${pollData.error || 'unknown error'}</div>`;
+                        showToast('Scrub failed', 'error');
+                        return;
+                    }
+                    // done
+                    status.textContent = `Done — ${pollData.summary.output_rows} rows scrubbed.`;
+                    const s = pollData.summary;
+                    summary.innerHTML = `
+                        <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;">
+                          <div><b>${s.input_rows}</b> input rows</div>
+                          <div><b>${s.verified_domains}</b> verified domains</div>
+                          <div><b>${s.rows_with_email}</b> with email</div>
+                          <div><b>${s.total_emails_found || 0}</b> total emails found</div>
+                          <div><b>${s.rows_with_dm || 0}</b> decision makers found</div>
+                          <div><b>${s.errors}</b> errors</div>
+                        </div>
+                        <div style="font-size:12px;color:var(--gray-500);margin-top:6px;">Detected columns: ${Object.entries(s.detected_columns).filter(([,v])=>v).map(([k,v])=>k+'→'+v).join(' · ') || 'auto'}</div>
+                    `;
+                    downloads.innerHTML = `
+                        <a class="btn btn-success" href="${withBase(pollData.download.xlsx)}" download>Download Excel (.xlsx)</a>
+                        <a class="btn btn-primary" href="${withBase(pollData.download.csv)}" download style="margin-left:8px;">Download CSV</a>
+                    `;
+                    const rows = pollData.preview || [];
+                    if (!rows.length) { results.innerHTML = '<p style="padding:14px;">No rows returned.</p>'; return; }
+                    let html = '<div class="card" style="margin-top:14px;"><div class="card-title">Preview — top 25 by Fit Score</div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                    ['Fit', 'Org', 'St', 'Phone', 'Domain', 'Decision Maker', 'DM Title', 'Email 1', 'Email 2', 'Email 3', 'Status'].forEach(h => {
+                        html += `<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--gray-200);background:#f8faff;">${h}</th>`;
+                    });
+                    html += '</tr></thead><tbody>';
+                    rows.forEach((r, i) => {
+                        const bg = i % 2 === 0 ? '' : 'background:#f8f9fc;';
+                        html += `<tr style="${bg}">
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-weight:700;color:${r['Fit Score']>=70?'#1d4ed8':r['Fit Score']>=50?'#92400e':'#374151'};">${r['Fit Score']||0}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(r['Org Name']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${r['State']||''}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);white-space:nowrap;">${r['Phone']||''}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);color:#1d4ed8;">${r['Verified Domain']||''}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-weight:500;">${escHtml(r['Decision Maker']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-size:11px;color:#6b7280;">${escHtml(r['DM Title']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${escHtml(r['Email 1']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${escHtml(r['Email 2']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${escHtml(r['Email 3']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-size:11px;">${r['Scrub Status']||''}</td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div></div>';
+                    results.innerHTML = html;
+                    return;
+                } catch (_) {
+                    // transient poll failure — keep waiting
+                }
+            }
+            status.textContent = '';
+            results.innerHTML = `<div class="card" style="color:#b91c1c;">Scrub timed out after ${maxWait}s. Try fewer rows.</div>`;
         }
 
         async function runBulkSearch() {
