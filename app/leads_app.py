@@ -1179,6 +1179,39 @@ async def scrub_upload(
     return {"ok": True, "job_id": job_id, "status": "running", "total_rows": total}
 
 
+@app.get("/api/verify/email")
+async def verify_email_endpoint(addr: str, smtp: bool = True):
+    """Verify a single email address using the in-house verifier.
+    Returns syntax/MX/SMTP/catch-all/score/verdict.
+    """
+    from app.email_verifier import verify_email as _verify
+    try:
+        result = await asyncio.wait_for(_verify(addr, do_smtp=smtp), timeout=20.0)
+        return result
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="verification timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"verify error: {e}")
+
+
+@app.post("/api/verify/batch")
+async def verify_batch_endpoint(payload: dict):
+    """Verify many emails. Body: {emails: [...], smtp: true}."""
+    from app.email_verifier import verify_batch
+    emails = payload.get("emails") or []
+    if not isinstance(emails, list) or not emails:
+        raise HTTPException(status_code=400, detail="emails list required")
+    smtp = bool(payload.get("smtp", True))
+    try:
+        results = await asyncio.wait_for(
+            verify_batch([str(e) for e in emails[:50]], do_smtp=smtp, concurrency=6),
+            timeout=60.0,
+        )
+        return {"ok": True, "results": results}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="batch verification timed out")
+
+
 @app.get("/api/scrub/status/{job_id}")
 async def scrub_status(job_id: str):
     """Poll a scrub job. Returns status=running|done|error plus results when done."""

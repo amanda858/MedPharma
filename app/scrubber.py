@@ -715,6 +715,43 @@ async def scrub_rows(
             seen.add(e)
             ranked.append((s, e))
 
+        # ── Real-deliverability verification (in-house verifier) ─────────
+        # Run MX + SMTP RCPT probe on top candidates. Drop confirmed-bad,
+        # boost confirmed-good, leave catch-all/inconclusive in middle.
+        verify_results: dict[str, dict] = {}
+        if ranked:
+            try:
+                from app.email_verifier import verify_batch
+                top_emails = [e for _, e in ranked[:8]]
+                _vr = await asyncio.wait_for(
+                    verify_batch(top_emails, do_smtp=True, concurrency=4),
+                    timeout=25.0,
+                )
+                for r in _vr:
+                    verify_results[r.get("email", "")] = r
+            except Exception:
+                pass
+
+        if verify_results:
+            adjusted: list[tuple[int, str]] = []
+            for s, e in ranked:
+                vr = verify_results.get(e)
+                if not vr:
+                    adjusted.append((s, e))
+                    continue
+                v = vr.get("verdict")
+                if v == "undeliverable":
+                    continue  # drop
+                if v == "deliverable":
+                    s = min(100, max(s, 85))
+                elif v == "catch-all":
+                    s = min(100, max(s, 50))
+                elif v == "risky":
+                    s = min(100, max(s, 40))
+                adjusted.append((s, e))
+            adjusted.sort(key=lambda x: -x[0])
+            ranked = adjusted
+
         # ── Lab intelligence scoring (rule_intercept) ──────────────────
         lab_intel = score_lab_lead(org, lab_type=tax, state=state)
 
