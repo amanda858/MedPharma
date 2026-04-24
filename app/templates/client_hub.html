@@ -2829,7 +2829,9 @@
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
             <div class="page-title">⏱️ Team Production</div>
-            <div class="page-actions" style="display:flex;gap:8px;align-items:center">
+            <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('prodExcelInput').click()">📥 Import Excel</button>
+              <input type="file" id="prodExcelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importProductionExcel(this)">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
@@ -2931,12 +2933,18 @@
           <!-- Weekly Report View -->
           <div id="prodReportView" style="display:none">
             <div class="card" style="margin-bottom:18px">
-              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                 <label style="font-weight:600;font-size:13px">Report period:</label>
                 <input class="form-control" type="date" id="prodRptStart" style="width:170px">
                 <span style="font-size:13px;color:var(--gray-400)">to</span>
                 <input class="form-control" type="date" id="prodRptEnd" style="width:170px">
                 <button class="btn btn-primary btn-sm" onclick="loadProductionReport()">Generate Report</button>
+                <div style="display:flex;gap:6px;margin-left:4px">
+                  <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('thisweek')">This Week</button>
+                  <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('lastweek')">Last Week</button>
+                  <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('mtd')">MTD</button>
+                </div>
+                <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="downloadProductionReport()">⬇️ Download CSV</button>
               </div>
             </div>
 
@@ -6585,6 +6593,61 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    async function importProductionExcel(input) {
+      if (!activeClientId) { toast('Select a client first', 'error'); input.value = ''; return; }
+      const file = input.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      const url = `/hub/api/production/import?client_id=${activeClientId}`;
+      try {
+        const r = await fetch(url, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Import failed');
+        toast(`✅ Imported ${d.imported} entries${d.skipped ? `, skipped ${d.skipped}` : ''}`, 'success');
+        if (d.errors && d.errors.length) console.warn('Import row errors:', d.errors);
+        input.value = '';
+        loadProduction();
+      } catch (e) { toast(e.message, 'error'); input.value = ''; }
+    }
+
+    function setProdDatePreset(preset) {
+      const today = new Date();
+      let start, end;
+      if (preset === 'thisweek') {
+        const day = today.getDay(); // 0=Sun
+        const mon = new Date(today); mon.setDate(today.getDate() - ((day + 6) % 7));
+        const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+        start = mon; end = sun;
+      } else if (preset === 'lastweek') {
+        const day = today.getDay();
+        const mon = new Date(today); mon.setDate(today.getDate() - ((day + 6) % 7) - 7);
+        const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+        start = mon; end = sun;
+      } else if (preset === 'mtd') {
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+        end = today;
+      }
+      const fmt = d => d.toISOString().split('T')[0];
+      document.getElementById('prodRptStart').value = fmt(start);
+      document.getElementById('prodRptEnd').value   = fmt(end);
+      loadProductionReport();
+    }
+
+    function downloadProductionReport() {
+      const start = document.getElementById('prodRptStart').value;
+      const end   = document.getElementById('prodRptEnd').value;
+      if (!start || !end) { toast('Set a date range first', 'error'); return; }
+      const rows = window._prodReportRows || [];
+      if (!rows.length) { toast('Generate a report first', 'error'); return; }
+      const cols = Object.keys(rows[0]);
+      const csv  = [cols.join(','), ...rows.map(r => cols.map(c => JSON.stringify(r[c] ?? '')).join(','))].join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = `production_report_${start}_${end}.csv`;
+      a.click();
+    }
+
     async function loadProductionReport() {
       const start = document.getElementById('prodRptStart').value;
       const end = document.getElementById('prodRptEnd').value;
@@ -6607,6 +6670,8 @@
       const byCat = data.by_category || [];
       const details = data.details || [];
       const flags = data.time_management_flags || [];
+      // Store for CSV download
+      window._prodReportRows = details;
 
       let html = '';
 

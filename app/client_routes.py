@@ -979,6 +979,117 @@ def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)
     return {"ok": True}
 
 
+@router.post("/production/import")
+async def import_production_excel(
+    client_id: Optional[int] = None,
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Import production log entries from an Excel / CSV file."""
+    user = _require_user(hub_session)
+    if not client_id:
+        raise HTTPException(status_code=422, detail="client_id is required")
+
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in {"xlsx", "xls", "csv"}:
+        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, or .csv")
+
+    content = await file.read()
+    rows = _parse_excel_rows(content, ext)
+    if not rows:
+        raise HTTPException(status_code=422, detail="No data rows found in file")
+
+    # Column name normaliser — case / whitespace insensitive
+    def _find_col(headers: list[str], *candidates: str) -> Optional[str]:
+        hl = [h.lower().strip() for h in headers]
+        for c in candidates:
+            for i, h in enumerate(hl):
+                if c.lower() in h:
+                    return headers[i]
+        return None
+
+    headers = list(rows[0].keys()) if rows else []
+    col_date     = _find_col(headers, "date", "work_date", "day")
+    col_username = _find_col(headers, "username", "user", "agent", "rep", "employee", "staff", "name")
+    col_category = _find_col(headers, "category", "type", "task type", "activity")
+    col_task     = _find_col(headers, "task", "description", "work", "notes", "detail")
+    col_qty      = _find_col(headers, "quantity", "qty", "count", "units", "items")
+    col_hours    = _find_col(headers, "hours", "time", "duration", "hrs")
+    col_notes    = _find_col(headers, "notes", "comment", "additional")
+
+    if not col_date or not col_task:
+        missing = []
+        if not col_date: missing.append("Date")
+        if not col_task: missing.append("Task/Description")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot find required column(s): {', '.join(missing)}. Headers found: {headers}"
+        )
+
+    DATE_FMTS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d"]
+
+    def _parse_date(val) -> Optional[str]:
+        if not val:
+            return None
+        s = str(val).strip()
+        # openpyxl may return datetime objects when reading xlsx
+        if hasattr(val, "strftime"):
+            return val.strftime("%Y-%m-%d")
+        for fmt in DATE_FMTS:
+            try:
+                from datetime import datetime
+                return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return None
+
+    imported = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for i, row in enumerate(rows, start=2):  # row 2 = first data row (1 = header)
+        try:
+            work_date = _parse_date(row.get(col_date, ""))
+            task_desc = str(row.get(col_task, "")).strip()
+            if not work_date or not task_desc:
+                skipped += 1
+                continue
+
+            username = str(row.get(col_username, "") or user["username"]).strip() or user["username"]
+            category = str(row.get(col_category, "") or "General").strip() or "General"
+            notes    = str(row.get(col_notes, "") or "").strip()
+
+            raw_qty = row.get(col_qty, "")
+            try:
+                quantity = int(float(str(raw_qty))) if raw_qty not in (None, "") else 1
+            except (ValueError, TypeError):
+                quantity = 1
+
+            raw_hrs = row.get(col_hours, "")
+            try:
+                time_spent = float(str(raw_hrs)) if raw_hrs not in (None, "") else 0.0
+            except (ValueError, TypeError):
+                time_spent = 0.0
+
+            add_production_log({
+                "client_id":       client_id,
+                "work_date":       work_date,
+                "username":        username,
+                "category":        category,
+                "task_description": task_desc,
+                "quantity":        quantity,
+                "time_spent":      time_spent,
+                "notes":           notes,
+            })
+            imported += 1
+        except Exception as exc:
+            errors.append(f"Row {i}: {str(exc)[:120]}")
+
+    notify_activity(user["username"], "imported", "Time Tracking",
+                    f"{imported} entries for client #{client_id}")
+    return {"ok": True, "imported": imported, "skipped": skipped, "errors": errors}
+
+
 @router.get("/production/report")
 def production_report(client_id: Optional[int] = None,
                       start_date: Optional[str] = None,

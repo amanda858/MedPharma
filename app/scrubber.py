@@ -136,6 +136,30 @@ _STOP_WORDS = {
 }
 _PLACEHOLDER_LOCALS = {"user", "example", "yourname", "firstname", "lastname", "test", "demo"}
 
+# Decision-maker title taxonomy — score 0-100
+_DM_TITLES: dict[str, int] = {
+    "chief executive officer": 100, "ceo": 100,
+    "chief operating officer": 92, "coo": 92,
+    "chief financial officer": 88, "cfo": 88,
+    "chief medical officer": 92, "cmo": 92,
+    "president": 88, "owner": 88, "founder": 86, "co-founder": 84,
+    "vice president": 82, " vp,": 82, " vp ": 82,
+    "medical director": 86, "lab director": 86, "laboratory director": 86,
+    "director of": 78, "director,": 78, "director ": 76,
+    "general manager": 74, "practice manager": 72, "office manager": 66,
+    "billing manager": 74, "rcm manager": 76, "revenue cycle manager": 74,
+    "credentialing manager": 72, "enrollment manager": 70, "compliance officer": 74,
+    "operations manager": 70, "quality manager": 68,
+    "manager": 60, "supervisor": 52, "administrator": 50,
+    "coordinator": 44, "specialist": 36,
+}
+
+# Contact roles that indicate non-decision-makers
+_SKIP_CONTACT_ROLES = {
+    "customer service", "customer care", "receptionist", "front desk",
+    "call center", "help desk", "technical support",
+}
+
 
 def _digits(s: str) -> str:
     return PHONE_DIGITS.sub("", s or "")
@@ -144,6 +168,34 @@ def _digits(s: str) -> str:
 def _tokens(name: str) -> list[str]:
     toks = re.findall(r"[a-z][a-z0-9]{2,}", (name or "").lower())
     return [t for t in toks if t not in _STOP_WORDS and len(t) >= 3]
+
+
+def _is_personal_local(local: str) -> bool:
+    """Return True if the email local part looks like a real person\'s name (not a generic role)."""
+    local = local.lower()
+    if local in _GENERIC_LOCAL:
+        return False
+    # firstname.lastname, f.lastname, first_last patterns
+    if "." in local or "_" in local:
+        parts = re.split(r"[._]", local)
+        return len(parts) >= 2 and all(p.isalpha() and 1 <= len(p) <= 20 for p in parts)
+    # Likely concatenated name like jsmith, johnsmith — alpha only, 4-18 chars
+    return local.isalpha() and 4 <= len(local) <= 18
+
+
+def _dm_title_score(title: str) -> int:
+    """Score a job title for decision-maker value (0-100)."""
+    if not title:
+        return 0
+    tl = title.lower()
+    best = 0
+    for key, sc in _DM_TITLES.items():
+        if key in tl:
+            best = max(best, sc)
+    for role in _SKIP_CONTACT_ROLES:
+        if role in tl:
+            return max(0, best - 35)
+    return best
 
 
 def _candidate_domains(name: str, hint: str = "") -> list[str]:
@@ -197,7 +249,7 @@ def _candidate_domains(name: str, hint: str = "") -> list[str]:
 
 
 def _email_quality(email: str, name: str = "", title: str = "", org: str = "") -> int:
-    """Score 0-100. <30 = junk, drop."""
+    """Score 0-100. <30 = junk, drop. Personal decision-maker emails score highest."""
     if not email or "@" not in email:
         return 0
     email = email.lower().strip()
@@ -224,25 +276,103 @@ def _email_quality(email: str, name: str = "", title: str = "", org: str = "") -
             return 0
 
     score = 0
+    # Domain quality
     if domain not in _PUBLIC_MAIL:
-        score += 30
-    else:
-        score += 10
-    if local not in _GENERIC_LOCAL and ("." in local or "_" in local or re.match(r"^[a-z]{3,}$", local)):
-        score += 35
-    elif local in _GENERIC_LOCAL:
-        score += 10
-    tlow = (title or "").lower()
-    if any(h in tlow for h in (
-        "director", "manager", "officer", "president", "ceo", "coo", "cfo",
-        "vp", "owner", "principal", "chief", "billing", "rcm", "compliance",
-        "enrollment", "credential", "operations", "quality", "qa",
-        "administrator", "controller", "supervisor",
-    )):
         score += 25
-    if name and len(name.strip()) > 2:
-        score += 10
-    return min(100, score)
+    else:
+        score += 5
+
+    # Email local part: personal names score much higher than generic roles
+    if _is_personal_local(local):
+        score += 48  # firstname.lastname — almost certainly a real decision maker
+    elif local in _GENERIC_LOCAL:
+        score += 5   # generic role address — low actionability
+    else:
+        score += 22  # ambiguous but not generic
+
+    # Title-based DM boost
+    ts = _dm_title_score(title)
+    if ts >= 75:
+        score += 22
+    elif ts >= 50:
+        score += 14
+    elif ts >= 30:
+        score += 7
+    elif title and any(r in title.lower() for r in _SKIP_CONTACT_ROLES):
+        score -= 15  # Customer-service penalty
+
+    # Known name provides a small trust boost
+    if name and len(name.strip()) >= 4:
+        score += 5
+
+    return min(100, max(0, score))
+
+
+def _extract_named_contacts(html: str, domain: str) -> list[dict]:
+    """
+    Parse HTML to extract (name, title, email) contacts.
+    Returns contacts sorted by decision-maker relevance — personal named emails first.
+    """
+    clean = re.sub(r"<(?:script|style)[^>]*>.*?</(?:script|style)>", " ", html, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", clean)
+    text = re.sub(r"\s+", " ", text)
+
+    EMAIL_FIND = re.compile(r"([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
+    NAME_RE = re.compile(r"\b([A-Z][a-z]{2,20}(?:\s+[A-Z][a-z]{2,25}){1,2})\b")
+    _HEADING_SKIP = {
+        "contact us", "about us", "our team", "meet the", "learn more", "read more",
+        "click here", "copyright", "all rights", "privacy policy", "terms of",
+        "united states", "new york", "los angeles",
+    }
+
+    contacts: dict[str, dict] = {}
+    for m in EMAIL_FIND.finditer(text):
+        local, dom = m.group(1), m.group(2)
+        if dom.lower() != domain:
+            continue
+        email = f"{local.lower()}@{dom.lower()}"
+        if email in contacts or local.lower() in _PLACEHOLDER_LOCALS:
+            continue
+
+        # Context window: 600 chars before, 100 after
+        ctx = text[max(0, m.start() - 600): m.end() + 100]
+
+        # Find the closest capitalized name phrase before the email
+        name = ""
+        for nm in NAME_RE.finditer(ctx):
+            candidate = nm.group(0).strip()
+            if candidate.lower() not in _HEADING_SKIP and len(candidate.split()) >= 2:
+                name = candidate  # keep updating — last one wins (closest to email)
+
+        # Best DM title in the same context window
+        title, best_ts = "", 0
+        ctx_lower = ctx.lower()
+        for key, sc in _DM_TITLES.items():
+            if key in ctx_lower and sc > best_ts:
+                title = key.title()
+                best_ts = sc
+
+        is_personal = _is_personal_local(local)
+        is_skip_role = any(r in ctx_lower for r in _SKIP_CONTACT_ROLES)
+
+        contacts[email] = {
+            "email": email,
+            "name": name,
+            "title": title,
+            "dm_score": best_ts,
+            "is_personal": is_personal,
+            "is_skip_role": is_skip_role,
+        }
+
+    # Sort: personal named contacts first, then by DM score, generics last
+    return sorted(
+        contacts.values(),
+        key=lambda c: (
+            not c["is_personal"],
+            -c["dm_score"],
+            c["email"].split("@")[0] in _GENERIC_LOCAL,
+        ),
+    )
 
 
 # ─── Async fetching / scraping ──────────────────────────────────────────
@@ -273,8 +403,8 @@ async def _verify_and_scrape(
     city: str = "",
     state: str = "",
     website_hint: str = "",
-) -> tuple[Optional[str], list[str], str]:
-    """Find a verified domain, scrape on-domain emails, and extract a direct line."""
+) -> dict:
+    """Find a verified domain, scrape on-domain emails, extract a direct line, and find named decision-maker contacts."""
     phone_d = _digits(phone)[-10:]
     city_l = (city or "").lower().strip()
     state_l = (state or "").lower().strip()
@@ -282,10 +412,6 @@ async def _verify_and_scrape(
     candidates = _candidate_domains(org, website_hint)
     chosen: Optional[str] = None
 
-    # Adaptive threshold:
-    #   phone available  → strict  (phone match alone = 50 pts, very reliable)
-    #   city available   → medium  (city + 1 token = 23 pts)
-    #   name-only (lab)  → lenient (2 name tokens = 16 pts, sufficient for labs)
     if phone_d:
         min_score = 30
     elif city_l:
@@ -316,11 +442,12 @@ async def _verify_and_scrape(
             break
 
     if not chosen:
-        return None, [], ""
+        return {"domain": None, "emails": [], "direct_line": "", "named_contacts": []}
 
-    # Scrape pages for emails + phone numbers
+    # Scrape pages for emails, phone numbers, and full HTML for contact extraction
     emails: set[str] = set()
     raw_phones: list[str] = []
+    html_pages: list[str] = []
 
     async def _pull(url: str) -> None:
         html = await _fetch(client, url)
@@ -329,6 +456,7 @@ async def _verify_and_scrape(
                 emails.add(e.lower())
             for p in PHONE_RE.findall(html):
                 raw_phones.append(p)
+            html_pages.append(html)
 
     await asyncio.gather(*[_pull("https://" + chosen + p) for p in _PAGES])
 
@@ -345,7 +473,7 @@ async def _verify_and_scrape(
         good.append(e)
     good.sort(key=lambda e: (e.split("@")[0] in _GENERIC_LOCAL, e))
 
-    # Extract best direct line — prefer non-toll-free, not the same as caller-provided phone
+    # Extract best direct line
     direct_line = ""
     seen_digits: set[str] = set()
     _TOLL_FREE = {"800", "888", "877", "866", "855", "844", "833"}
@@ -357,17 +485,25 @@ async def _verify_and_scrape(
         if d[:3] in _TOLL_FREE:
             continue
         if phone_d and d == phone_d:
-            continue  # already known — not a new direct line
+            continue
         direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
         break
-    # Fallback: any number (including toll-free) if nothing non-toll-free found
     if not direct_line:
         for d in seen_digits:
             if len(d) == 10 and (not phone_d or d != phone_d):
                 direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
                 break
 
-    return chosen, good[:5], direct_line
+    # Extract named decision-maker contacts from all scraped pages
+    combined_html = "\n".join(html_pages)
+    named_contacts = _extract_named_contacts(combined_html, chosen) if combined_html else []
+
+    return {
+        "domain": chosen,
+        "emails": good[:5],
+        "direct_line": direct_line,
+        "named_contacts": named_contacts,
+    }
 
 
 # ─── Public scrub API ───────────────────────────────────────────────────
@@ -407,14 +543,19 @@ async def scrub_rows(
         direct_line: str = ""
         scrub_status = "ok"
         scrub_error = ""
+        named_contacts: list[dict] = []
 
         if org:
             try:
                 async with sem:
-                    verified_domain, scraped_emails, direct_line = await asyncio.wait_for(
+                    _scrape = await asyncio.wait_for(
                         _verify_and_scrape(client, org, phone=phone, city=city, state=state, website_hint=web),
                         timeout=per_row_timeout,
                     )
+                    verified_domain  = _scrape.get("domain")
+                    scraped_emails   = _scrape.get("emails", [])
+                    direct_line      = _scrape.get("direct_line", "")
+                    named_contacts   = _scrape.get("named_contacts", [])
             except asyncio.TimeoutError:
                 scrub_status = "timeout"
                 scrub_error = f"row scrape exceeded {per_row_timeout}s"
@@ -451,6 +592,10 @@ async def scrub_rows(
         # ── Lab intelligence scoring (rule_intercept) ──────────────────
         lab_intel = score_lab_lead(org, lab_type=tax, state=state)
 
+        # Best decision-maker contact
+        top_dm = named_contacts[0] if named_contacts else {}
+        dm_email = top_dm.get("email", "")
+
         # Fit score = lab quality score + contact-info richness bonuses
         fit = lab_intel["score"]
         if verified_domain:
@@ -459,6 +604,8 @@ async def scrub_rows(
             fit = min(100, fit + 8)
         if direct_line:
             fit = min(100, fit + 3)
+        if top_dm.get("dm_score", 0) >= 60:
+            fit = min(100, fit + 5)  # bonus for finding a real decision-maker
 
         return {
             "Lead Score": lab_intel["score"],
@@ -474,6 +621,10 @@ async def scrub_rows(
             "ZIP": zipc,
             "Phone": phone,
             "Direct Line": direct_line,
+            # Decision-maker contact (best named person found on site)
+            "Decision Maker": top_dm.get("name", ""),
+            "DM Title": top_dm.get("title", ""),
+            "DM Email": dm_email,
             "Email 1": ranked[0][1] if len(ranked) >= 1 else "",
             "Email 1 Score": ranked[0][0] if len(ranked) >= 1 else "",
             "Email 2": ranked[1][1] if len(ranked) >= 2 else "",
@@ -528,6 +679,7 @@ OUTPUT_FIELDS = [
     "NPI", "Address", "City", "State", "ZIP",
     # ── Contact ──────────────────────────────────────────────────────
     "Phone", "Direct Line",
+    "Decision Maker", "DM Title", "DM Email",
     "Email 1", "Email 1 Score",
     "Email 2", "Email 2 Score",
     "Email 3", "Email 3 Score",

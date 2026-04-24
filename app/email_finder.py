@@ -229,25 +229,10 @@ def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     return unique_candidates
 
 
-def generate_pattern_emails(first_name: str, last_name: str, domain: str) -> list[dict]:
-    """Generate common email patterns from name and domain."""
-    if not first_name or not last_name or not domain:
-        return []
-    
-    fn = first_name.lower().replace(' ', '').replace('-', '')
-    ln = last_name.lower().replace(' ', '').replace('-', '')
-    domain = domain.lower()
-    
-    patterns = [
-        f"{fn}.{ln}@{domain}",
-        f"{fn}{ln}@{domain}",
-        f"{fn}@{domain}",
-        f"{ln}@{domain}",
-        f"{fn[0]}{ln}@{domain}",
-        f"{fn}{ln[0]}@{domain}",
-    ]
-    
     emails = []
+
+
+# NOTE: duplicate generate_pattern_emails removed — see definition above.
 
 
 async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
