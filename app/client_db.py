@@ -394,14 +394,25 @@ def init_client_hub_db():
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
                 ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
             )
-        # Ensure TruPath client exists (separate from rcm user)
-        cur.execute("SELECT COUNT(*) FROM clients WHERE company='TruPath' AND role='client'")
-        if cur.fetchone()[0] == 0:
-            tpsalt = secrets.token_hex(16)
+        # ── Deactivate seeded placeholder clients (Luminary / TruPath) ──────────
+        # These were demo accounts. Hide them from the account selector unless
+        # they have real claim data attached — in that case leave them alone.
+        for _placeholder in (
+            ("eric",    "Luminary (OMT/MHP)"),
+            ("trupath", "TruPath"),
+        ):
+            _uname, _company = _placeholder
             cur.execute(
-                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("trupath", _hash_pw("trupath123", tpsalt), tpsalt, "TruPath", "TruPath", "", "client")
+                "SELECT id FROM clients WHERE username=? AND company=? AND role='client'",
+                (_uname, _company),
             )
+            _row = cur.fetchone()
+            if _row:
+                _cid = _row[0]
+                # Only deactivate if no real claim data exists for this client
+                cur.execute("SELECT COUNT(*) FROM claims_master WHERE client_id=?", (_cid,))
+                if cur.fetchone()[0] == 0:
+                    cur.execute("UPDATE clients SET is_active=0 WHERE id=?", (_cid,))
         # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
         cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
                        ptan_group='', ptan_individual='', specialty=''
@@ -424,21 +435,22 @@ def _seed_data(conn):
     )
 
     # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
-    # NOTE: Luminary has NO own profile fields — all profile data lives in sub-profiles (MHP/OMT)
+    # Luminary and TruPath are legacy placeholder clients — seeded as inactive
+    # so they don't appear in the account selector for new installs.
     s1 = secrets.token_hex(16)
     cur.execute(
         """INSERT INTO clients
-           (username,password,salt,company,contact_name,email,role,practice_type)
-           VALUES (?,?,?,?,?,?,?,?)""",
+           (username,password,salt,company,contact_name,email,role,practice_type,is_active)
+           VALUES (?,?,?,?,?,?,?,?,0)""",
         ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
          "MHP+OMT")
     )
     luminary_id = cur.lastrowid
 
-    # Client 2 — TruPath
+    # TruPath — inactive placeholder
     s2 = secrets.token_hex(16)
     cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO clients (username,password,salt,company,contact_name,email,role,is_active) VALUES (?,?,?,?,?,?,?,0)",
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
     )
 
