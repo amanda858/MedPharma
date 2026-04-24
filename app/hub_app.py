@@ -125,6 +125,9 @@ async def admin_only_leads_guard(request: Request, call_next):
             or path.startswith("/admin/leads/api/export/")
             or path.startswith("/admin/leads/api/leads/poll-daily")
             or path.startswith("/admin/leads/api/leads/poll-status")
+            # Scrub status/download — job_id is a UUID secret, no need for re-auth
+            or path.startswith("/admin/leads/api/scrub/status/")
+            or path.startswith("/admin/leads/api/scrub/download/")
         ):
             return await call_next(request)
 

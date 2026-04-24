@@ -1431,14 +1431,34 @@
             fd.append('file', file);
             let jobId = null;
             try {
-                const resp = await fetch(withBase(`/api/scrub/upload?max_rows=${maxRows}`), { method: 'POST', body: fd });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+                let uploadResp;
+                try {
+                    uploadResp = await fetch(withBase(`/api/scrub/upload?max_rows=${maxRows}`), {
+                        method: 'POST', body: fd, credentials: 'include'
+                    });
+                } catch (netErr) {
+                    status.textContent = '';
+                    results.innerHTML = `<div class="card" style="color:#b91c1c;">Network error — check your connection and try again.</div>`;
+                    return;
+                }
+                if (uploadResp.status === 401) {
+                    status.textContent = '';
+                    results.innerHTML = `<div class="card" style="padding:20px;">
+                        <b style="color:#b91c1c;">Session expired.</b>
+                        <span style="margin-left:8px;">Please <a href="/hub" target="_blank" style="color:#1d4ed8;">log in again at /hub</a>, then return here and try again.</span>
+                    </div>`;
+                    return;
+                }
+                const data = await uploadResp.json();
+                if (!uploadResp.ok) {
+                    status.textContent = '';
+                    results.innerHTML = `<div class="card" style="color:#b91c1c;">Upload failed: ${data.detail || 'Unknown error'}</div>`;
+                    return;
+                }
                 jobId = data.job_id;
             } catch (e) {
                 status.textContent = '';
                 results.innerHTML = `<div class="card" style="color:#b91c1c;">Upload failed: ${e.message}</div>`;
-                showToast(e.message, 'error');
                 return;
             }
 
@@ -1450,7 +1470,7 @@
                 await new Promise(r => setTimeout(r, 4000));
                 elapsed += 4;
                 try {
-                    const pollResp = await fetch(withBase(`/api/scrub/status/${jobId}`));
+                    const pollResp = await fetch(withBase(`/api/scrub/status/${jobId}`), { credentials: 'include' });
                     const pollData = await pollResp.json();
                     if (pollData.status === 'running') {
                         const pct = pollData.total_rows > 0
