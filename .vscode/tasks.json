@@ -2,9 +2,29 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "check-live-ui-now",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/check_live_ui.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "diag-scrub-now",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_scrub.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "release-push-main",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py render.yaml requirements.txt .vscode/tasks.json && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py render.yaml requirements.txt .vscode/tasks.json && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

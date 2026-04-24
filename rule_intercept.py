@@ -186,7 +186,7 @@ def score_lab_lead(org_name: str, lab_type: str = "", state: str = "") -> dict:
         {
           "tier": "A"|"B"|"C"|"Unknown",
           "score": int 0-100,
-          "category": "Lab Lead",
+          "category": "Lead",
           "lab_type_detected": str,
           "signals": list[str],
           "priority": "High"|"Medium"|"Low",
@@ -251,7 +251,7 @@ def score_lab_lead(org_name: str, lab_type: str = "", state: str = "") -> dict:
     return {
         "tier": tier,
         "score": score,
-        "category": "Lab Lead",
+        "category": "Lead",
         "lab_type_detected": matched_type,
         "signals": signals,
         "priority": priority,

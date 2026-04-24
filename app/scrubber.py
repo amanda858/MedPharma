@@ -732,11 +732,11 @@ async def scrub_rows(
 
         return {
             "Lead Score": lab_intel["score"],
-            "Lab Tier": lab_intel["tier"],
+            "Tier": lab_intel["tier"],
             "Priority": lab_intel["priority"],
             "Org Name": org,
             "Taxonomy / Type": tax,
-            "Lab Type Detected": lab_intel.get("lab_type_detected", ""),
+            "Type Detected": lab_intel.get("lab_type_detected", ""),
             "NPI": npi,
             "Address": addr,
             "City": city,
@@ -811,9 +811,9 @@ async def scrub_rows(
 
 OUTPUT_FIELDS = [
     # ── Prioritization ───────────────────────────────────────────────
-    "Lead Score", "Lab Tier", "Priority",
+    "Lead Score", "Tier", "Priority",
     # ── Organization ─────────────────────────────────────────────────
-    "Org Name", "Taxonomy / Type", "Lab Type Detected",
+    "Org Name", "Taxonomy / Type", "Type Detected",
     "NPI", "Address", "City", "State", "ZIP",
     # ── Contact ──────────────────────────────────────────────────────
     "Phone", "Direct Line",
@@ -863,8 +863,8 @@ def to_xlsx_bytes(rows: Iterable[dict]) -> bytes:
         ws.append([r.get(k, "") for k in OUTPUT_FIELDS])
     # Reasonable column widths
     widths = {
-        "Lead Score": 12, "Lab Tier": 10, "Priority": 12,
-        "Org Name": 38, "Taxonomy / Type": 28, "Lab Type Detected": 24,
+        "Lead Score": 12, "Tier": 10, "Priority": 12,
+        "Org Name": 38, "Taxonomy / Type": 28, "Type Detected": 24,
         "NPI": 12, "Address": 28, "City": 16, "State": 8, "ZIP": 10,
         "Phone": 18, "Direct Line": 18,
         "Email 1": 34, "Email 1 Score": 12,
