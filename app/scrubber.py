@@ -313,6 +313,33 @@ def _email_quality(email: str, name: str = "", title: str = "", org: str = "", v
     return min(100, max(0, score))
 
 
+def _input_email_score(email: str) -> int:
+    """Score 0-100 for user-supplied emails from spreadsheet.
+    No org-domain matching — user already sourced these. Only junk-filter."""
+    if not email or "@" not in email:
+        return 0
+    email = email.lower().strip()
+    local, _, domain = email.partition("@")
+    if ASSET_RE.search(email):
+        return 0
+    if domain in _BLOCKED_DOMAINS:
+        return 0
+    if local in _PLACEHOLDER_LOCALS:
+        return 0
+    if not re.match(r"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$", email):
+        return 0
+    score = 30  # base — user-sourced, trust it
+    if domain not in _PUBLIC_MAIL:
+        score += 20  # corporate domain bonus
+    if _is_personal_local(local):
+        score += 25  # firstname.lastname pattern
+    elif local in _GENERIC_LOCAL:
+        score += 0   # generic role address, still keep it
+    else:
+        score += 12  # ambiguous but not generic
+    return min(100, score)
+
+
 def _extract_named_contacts(html: str, domain: str) -> list[dict]:
     """
     Parse HTML to extract (name, title, email) contacts.
@@ -653,12 +680,23 @@ async def scrub_rows(
                         candidates.append((_hs, _he_email))
             except Exception:
                 pass
+        # Blind role patterns from org-derived domains when site couldn't be verified
+        if not verified_domain and org:
+            _blind_doms = _candidate_domains(org, web)[:3]
+            _seen_blind: set[str] = {e for _, e in candidates}
+            for _bd in _blind_doms:
+                for _pfx in ("billing", "credentialing", "rcm", "lab", "director", "admin", "office", "info"):
+                    _ba = f"{_pfx}@{_bd}"
+                    if _ba not in _seen_blind:
+                        _seen_blind.add(_ba)
+                        candidates.append((18, _ba))
+        # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
                 e = e.strip()
                 if not e:
                     continue
-                s = _email_quality(e, org=org, verified_domain=vd)
+                s = _input_email_score(e)
                 if s > 0:
                     candidates.append((s, e))
         # Dedup, sort
