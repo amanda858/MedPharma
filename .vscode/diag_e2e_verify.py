@@ -10,11 +10,11 @@ op.open(req, timeout=60).read()
 
 # Real-ish test set: a mix of orgs we expect to have working email vs not
 csv_input = (
-    b"organization_name,city,state,website\n"
-    b"Quest Diagnostics,Secaucus,NJ,questdiagnostics.com\n"
-    b"LabCorp,Burlington,NC,labcorp.com\n"
-    b"Mayo Clinic Laboratories,Rochester,MN,mayocliniclabs.com\n"
-    b"GitHub Inc,San Francisco,CA,github.com\n"
+    b"organization_name,city,state\n"
+    b"Genova Diagnostics,Asheville,NC\n"
+    b"Atherotech Inc,Birmingham,AL\n"
+    b"Boston Heart Diagnostics,Framingham,MA\n"
+    b"Spectra Laboratories,Milpitas,CA\n"
 )
 boundary = "----X"
 body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"t.csv\"\r\nContent-Type: text/csv\r\n\r\n").encode() + csv_input + f"\r\n--{boundary}--\r\n".encode()

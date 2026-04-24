@@ -12,6 +12,16 @@
             "problemMatcher": []
         },
         {
+            "label": "diag-npi-local",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_npi_local.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "diag-e2e-verify",
             "type": "shell",
             "command": "python3",
@@ -54,7 +64,7 @@
         {
             "label": "release-push-main",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py && git push origin main",
+            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py .vscode/diag_npi_local.py && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py .vscode/diag_npi_local.py && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },

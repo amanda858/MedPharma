@@ -697,6 +697,48 @@ async def scrub_rows(
                     if _ba not in _seen_blind:
                         _seen_blind.add(_ba)
                         candidates.append((_blind_score, _ba))
+
+        # ── Real-human enrichment via NPI registry ─────────────────────
+        # If the org is a US healthcare provider, NPPES exposes the
+        # authorized official's name + title for free. Use that to
+        # generate person-specific email patterns (firstname.lastname@,
+        # flastname@, …) which beat role-account guessing.
+        npi_official = None
+        if org:
+            try:
+                from app.npi_client import find_org_official, person_email_patterns
+                npi_official = await asyncio.wait_for(
+                    find_org_official(org, state=state, city=city), timeout=10.0
+                )
+            except Exception:
+                npi_official = None
+
+            if npi_official and (verified_domain or _blind_doms):
+                _person_doms = [verified_domain] if verified_domain else _blind_doms[:1]
+                _person_score = 60 if verified_domain else 38
+                from app.npi_client import person_email_patterns as _ppat
+                _seen_p: set[str] = {e for _, e in candidates}
+                for _pd in _person_doms:
+                    for _pa in _ppat(npi_official["first"], npi_official["last"], _pd):
+                        if _pa not in _seen_p:
+                            _seen_p.add(_pa)
+                            candidates.append((_person_score, _pa))
+
+                # Promote the NPI official into the named-contact list so it
+                # appears in the Decision Maker columns when the scraper
+                # didn't find one on-site.
+                if not named_contacts:
+                    full_name = f"{npi_official['first']} {npi_official['last']}".strip()
+                    named_contacts = [{
+                        "name": full_name,
+                        "title": npi_official.get("title", ""),
+                        "email": "",
+                        "dm_score": 80,  # NPI authorized official = real DM
+                        "source": "NPI registry",
+                    }]
+                if not direct_line and npi_official.get("phone"):
+                    direct_line = npi_official["phone"]
+
         # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
@@ -754,6 +796,19 @@ async def scrub_rows(
 
         # ── Lab intelligence scoring (rule_intercept) ──────────────────
         lab_intel = score_lab_lead(org, lab_type=tax, state=state)
+
+        # If we have an NPI authorized official AND a verified-deliverable
+        # person-pattern email made it through, attach that as the DM email.
+        if npi_official and not named_contacts:
+            named_contacts = []
+        if npi_official and named_contacts and not named_contacts[0].get("email"):
+            _of_first = npi_official["first"].lower()
+            _of_last = npi_official["last"].lower()
+            for s, e in ranked:
+                local = e.split("@")[0].lower()
+                if (_of_first in local or _of_last in local) and s >= 50:
+                    named_contacts[0]["email"] = e
+                    break
 
         # Decision-maker contacts — top 3
         top_dm = named_contacts[0] if len(named_contacts) > 0 else {}
