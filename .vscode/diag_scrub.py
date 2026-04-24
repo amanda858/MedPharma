@@ -9,7 +9,7 @@ except Exception as e:
     print("login err:", e); sys.exit(1)
 print("cookies:", [c.name for c in cj])
 
-csv = b"organization_name,city,state\nAdvanced Clinical Diagnostics LLC,Dallas,TX\nAcme Pathology Group,Austin,TX\n"
+csv = b"organization_name,city,state,website\nQuest Diagnostics,Secaucus,NJ,questdiagnostics.com\nLabCorp,Burlington,NC,labcorp.com\nMayo Clinic Laboratories,Rochester,MN,mayocliniclabs.com\n"
 boundary = "----DiagBoundary"
 body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"t.csv\"\r\nContent-Type: text/csv\r\n\r\n").encode() + csv + f"\r\n--{boundary}--\r\n".encode()
 req = urllib.request.Request(base+"/admin/leads/api/scrub/upload?max_rows=5", data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})

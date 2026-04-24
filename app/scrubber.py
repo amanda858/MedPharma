@@ -680,16 +680,23 @@ async def scrub_rows(
                         candidates.append((_hs, _he_email))
             except Exception:
                 pass
-        # Blind role patterns from org-derived domains when site couldn't be verified
-        if not verified_domain and org:
-            _blind_doms = _candidate_domains(org, web)[:3]
+        # Blind role patterns — always generate against the best known domain
+        # (verified domain if we got one, otherwise org-derived candidates) so
+        # every row has usable outreach addresses even when scrape finds nothing.
+        if org:
+            if verified_domain:
+                _blind_doms = [verified_domain]
+                _blind_score = 35  # verified domain → higher trust
+            else:
+                _blind_doms = _candidate_domains(org, web)[:3]
+                _blind_score = 18
             _seen_blind: set[str] = {e for _, e in candidates}
             for _bd in _blind_doms:
                 for _pfx in ("billing", "credentialing", "rcm", "lab", "director", "admin", "office", "info"):
                     _ba = f"{_pfx}@{_bd}"
                     if _ba not in _seen_blind:
                         _seen_blind.add(_ba)
-                        candidates.append((18, _ba))
+                        candidates.append((_blind_score, _ba))
         # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
