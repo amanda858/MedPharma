@@ -758,40 +758,67 @@ async def scrub_rows(
                 if not direct_line and npi_official.get("phone"):
                     direct_line = npi_official["phone"]
 
-        # ── LinkedIn outreach links (no scraping; user clicks in browser) ─
-        # We generate pre-filled LinkedIn / Google search URLs that open in
-        # the user's already-logged-in LinkedIn session — they see real
-        # verified profiles, pick the right one, paste our DM template.
-        # Fully ToS-compliant. Zero risk to the user's LinkedIn account.
-        linkedin_url = ""
-        linkedin_sales_url = ""
-        linkedin_google_url = ""
-        linkedin_dm_note = ""
-        linkedin_dm_msg = ""
-        linkedin_followup = ""
-        if npi_official:
-            try:
-                from app.linkedin_finder import (
-                    find_linkedin_profile, linkedin_outreach_template,
-                )
-                _li = await find_linkedin_profile(
+        # ── Multi-platform social DM links (no scraping; user clicks in browser) ─
+        # Spam filters kill cold email. DMs land. We build clickable
+        # search URLs for LinkedIn / Facebook / Instagram / X plus the
+        # company's own pages — user clicks a URL, lands on the platform
+        # already logged in, picks the right account, pastes our DM.
+        # Fully ToS-compliant. Zero account-ban risk.
+        social_li_url = ""
+        social_li_sales = ""
+        social_fb_url = ""
+        social_ig_url = ""
+        social_x_url = ""
+        social_google_li = ""
+        social_google_all = ""
+        social_li_company = ""
+        social_fb_page = ""
+        social_ig_company = ""
+        msg_li_note = ""
+        msg_li_first = ""
+        msg_li_followup = ""
+        msg_fb = ""
+        msg_ig = ""
+        msg_x = ""
+        msg_sms = ""
+        try:
+            from app.social_finder import find_social_profiles, social_outreach_templates
+            if npi_official:
+                _sp = await find_social_profiles(
                     npi_official["first"],
                     npi_official["last"],
                     org=org,
                     title=npi_official.get("title", ""),
                 )
-                if _li:
-                    linkedin_url = _li.get("url", "")
-                    linkedin_sales_url = _li.get("sales_nav_url", "")
-                    linkedin_google_url = _li.get("google_url", "")
-                _tmpl = linkedin_outreach_template(
-                    npi_official["first"], org,
-                )
-                linkedin_dm_note = _tmpl["connection_note"]
-                linkedin_dm_msg = _tmpl["first_message"]
-                linkedin_followup = _tmpl["follow_up"]
-            except Exception:
-                pass
+                _tmpl = social_outreach_templates(npi_official["first"], org)
+            elif org:
+                # No named DM — still give them company-page DM URLs.
+                _sp = await find_social_profiles("", "", org=org)
+                _tmpl = social_outreach_templates("", org)
+            else:
+                _sp = None
+                _tmpl = None
+            if _sp:
+                social_li_url      = _sp.get("linkedin_url", "")
+                social_li_sales    = _sp.get("linkedin_sales_nav", "")
+                social_fb_url      = _sp.get("facebook_url", "")
+                social_ig_url      = _sp.get("instagram_url", "")
+                social_x_url       = _sp.get("x_url", "")
+                social_google_li   = _sp.get("google_linkedin", "")
+                social_google_all  = _sp.get("google_social", "")
+                social_li_company  = _sp.get("linkedin_company_url", "")
+                social_fb_page     = _sp.get("facebook_page_url", "")
+                social_ig_company  = _sp.get("instagram_company_url", "")
+            if _tmpl:
+                msg_li_note     = _tmpl["linkedin_connection_note"]
+                msg_li_first    = _tmpl["linkedin_first_message"]
+                msg_li_followup = _tmpl["linkedin_follow_up"]
+                msg_fb          = _tmpl["facebook_dm"]
+                msg_ig          = _tmpl["instagram_dm"]
+                msg_x           = _tmpl["x_dm"]
+                msg_sms         = _tmpl["sms"]
+        except Exception:
+            pass
 
         # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
@@ -920,12 +947,25 @@ async def scrub_rows(
             "Existing Email (input)": existing_email,
             "Original Website": web,
             "Verified Domain": verified_domain or "",
-            "LinkedIn URL": linkedin_url,
-            "LinkedIn Sales Nav URL": linkedin_sales_url,
-            "LinkedIn Google Search": linkedin_google_url,
-            "LinkedIn Connection Note": linkedin_dm_note,
-            "LinkedIn First Message": linkedin_dm_msg,
-            "LinkedIn Follow-up": linkedin_followup,
+            # ── Social DM channels (preferred outreach — DMs beat email) ──
+            "LinkedIn URL":            social_li_url,
+            "LinkedIn Sales Nav URL":  social_li_sales,
+            "Facebook URL":            social_fb_url,
+            "Instagram URL":           social_ig_url,
+            "X / Twitter URL":         social_x_url,
+            "Google LinkedIn Search":  social_google_li,
+            "Google Social Search":    social_google_all,
+            "LinkedIn Company Page":   social_li_company,
+            "Facebook Company Page":   social_fb_page,
+            "Instagram Company":       social_ig_company,
+            # ── Pre-written DM messages (paste-ready) ──
+            "LinkedIn Connection Note": msg_li_note,
+            "LinkedIn First Message":   msg_li_first,
+            "LinkedIn Follow-up":       msg_li_followup,
+            "Facebook DM":              msg_fb,
+            "Instagram DM":             msg_ig,
+            "X / Twitter DM":           msg_x,
+            "SMS Template":             msg_sms,
             "Lead Signals": "; ".join(lab_intel.get("signals", [])),
             "Fit Score": fit,
             "Intercept Category": lab_intel["category"],
@@ -957,6 +997,10 @@ async def scrub_rows(
         "rows_with_email": sum(1 for r in out if r.get("Email 1")),
         "rows_with_dm": sum(1 for r in out if r.get("Decision Maker") or r.get("DM Email")),
         "rows_with_linkedin": sum(1 for r in out if r.get("LinkedIn URL")),
+        "rows_with_social_dm": sum(
+            1 for r in out
+            if any(r.get(k) for k in ("LinkedIn URL", "Facebook URL", "Instagram URL", "X / Twitter URL"))
+        ),
         "total_emails_found": sum(
             sum(1 for f in ("Email 1", "Email 2", "Email 3", "Email 4", "Email 5") if r.get(f))
             for r in out
@@ -980,6 +1024,26 @@ OUTPUT_FIELDS = [
     "Decision Maker", "DM Title", "DM Email",
     "DM 2", "DM 2 Title", "DM 2 Email",
     "DM 3", "DM 3 Title", "DM 3 Email",
+    # ── PRIMARY OUTREACH: Social DM channels (paste-ready) ────────────
+    # Spam blocks email; DMs land. These are the preferred channels.
+    "LinkedIn URL",
+    "LinkedIn Sales Nav URL",
+    "Facebook URL",
+    "Instagram URL",
+    "X / Twitter URL",
+    "Google Social Search",
+    "Google LinkedIn Search",
+    "LinkedIn Company Page",
+    "Facebook Company Page",
+    "Instagram Company",
+    "LinkedIn Connection Note",
+    "LinkedIn First Message",
+    "LinkedIn Follow-up",
+    "Facebook DM",
+    "Instagram DM",
+    "X / Twitter DM",
+    "SMS Template",
+    # ── SECONDARY: Email (kept but de-prioritized) ───────────────────
     "Email 1", "Email 1 Score",
     "Email 2", "Email 2 Score",
     "Email 3", "Email 3 Score",
@@ -988,13 +1052,6 @@ OUTPUT_FIELDS = [
     "Existing Email (input)",
     # ── Web ───────────────────────────────────────────────────────────
     "Original Website", "Verified Domain",
-    # ── LinkedIn outreach (manual, ToS-compliant) ─────────────────────
-    "LinkedIn URL",
-    "LinkedIn Sales Nav URL",
-    "LinkedIn Google Search",
-    "LinkedIn Connection Note",
-    "LinkedIn First Message",
-    "LinkedIn Follow-up",
     # ── Intelligence ──────────────────────────────────────────────────
     "Lead Signals",
     # ── Metadata ─────────────────────────────────────────────────────
