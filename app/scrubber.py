@@ -758,6 +758,41 @@ async def scrub_rows(
                 if not direct_line and npi_official.get("phone"):
                     direct_line = npi_official["phone"]
 
+        # ── LinkedIn outreach links (no scraping; user clicks in browser) ─
+        # We generate pre-filled LinkedIn / Google search URLs that open in
+        # the user's already-logged-in LinkedIn session — they see real
+        # verified profiles, pick the right one, paste our DM template.
+        # Fully ToS-compliant. Zero risk to the user's LinkedIn account.
+        linkedin_url = ""
+        linkedin_sales_url = ""
+        linkedin_google_url = ""
+        linkedin_dm_note = ""
+        linkedin_dm_msg = ""
+        linkedin_followup = ""
+        if npi_official:
+            try:
+                from app.linkedin_finder import (
+                    find_linkedin_profile, linkedin_outreach_template,
+                )
+                _li = await find_linkedin_profile(
+                    npi_official["first"],
+                    npi_official["last"],
+                    org=org,
+                    title=npi_official.get("title", ""),
+                )
+                if _li:
+                    linkedin_url = _li.get("url", "")
+                    linkedin_sales_url = _li.get("sales_nav_url", "")
+                    linkedin_google_url = _li.get("google_url", "")
+                _tmpl = linkedin_outreach_template(
+                    npi_official["first"], org,
+                )
+                linkedin_dm_note = _tmpl["connection_note"]
+                linkedin_dm_msg = _tmpl["first_message"]
+                linkedin_followup = _tmpl["follow_up"]
+            except Exception:
+                pass
+
         # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
@@ -885,6 +920,12 @@ async def scrub_rows(
             "Existing Email (input)": existing_email,
             "Original Website": web,
             "Verified Domain": verified_domain or "",
+            "LinkedIn URL": linkedin_url,
+            "LinkedIn Sales Nav URL": linkedin_sales_url,
+            "LinkedIn Google Search": linkedin_google_url,
+            "LinkedIn Connection Note": linkedin_dm_note,
+            "LinkedIn First Message": linkedin_dm_msg,
+            "LinkedIn Follow-up": linkedin_followup,
             "Lead Signals": "; ".join(lab_intel.get("signals", [])),
             "Fit Score": fit,
             "Intercept Category": lab_intel["category"],
@@ -915,6 +956,7 @@ async def scrub_rows(
         "verified_domains": sum(1 for r in out if r.get("Verified Domain")),
         "rows_with_email": sum(1 for r in out if r.get("Email 1")),
         "rows_with_dm": sum(1 for r in out if r.get("Decision Maker") or r.get("DM Email")),
+        "rows_with_linkedin": sum(1 for r in out if r.get("LinkedIn URL")),
         "total_emails_found": sum(
             sum(1 for f in ("Email 1", "Email 2", "Email 3", "Email 4", "Email 5") if r.get(f))
             for r in out
@@ -946,6 +988,13 @@ OUTPUT_FIELDS = [
     "Existing Email (input)",
     # ── Web ───────────────────────────────────────────────────────────
     "Original Website", "Verified Domain",
+    # ── LinkedIn outreach (manual, ToS-compliant) ─────────────────────
+    "LinkedIn URL",
+    "LinkedIn Sales Nav URL",
+    "LinkedIn Google Search",
+    "LinkedIn Connection Note",
+    "LinkedIn First Message",
+    "LinkedIn Follow-up",
     # ── Intelligence ──────────────────────────────────────────────────
     "Lead Signals",
     # ── Metadata ─────────────────────────────────────────────────────
