@@ -360,6 +360,37 @@ def _extract_named_contacts(html: str, domain: str) -> list[dict]:
         "click here", "copyright", "all rights", "privacy policy", "terms of",
         "united states", "new york", "los angeles",
     }
+    # Any word in a candidate "name" matching one of these is a geographic
+    # token, not a human name. Rejects matches like "Clairsville Ohio",
+    # "Fort Lauderdale", "Panama City".
+    _GEO_NAME_TOKENS = {
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+        "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+        "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+        "maine", "maryland", "massachusetts", "michigan", "minnesota",
+        "mississippi", "missouri", "montana", "nebraska", "nevada",
+        "ohio", "oklahoma", "oregon", "pennsylvania", "tennessee", "texas",
+        "utah", "vermont", "virginia", "washington", "wisconsin", "wyoming",
+        "city", "county", "avenue", "street", "road", "boulevard", "drive",
+        "lane", "parkway", "highway", "suite", "building", "floor", "plaza",
+        "north", "south", "east", "west", "fort", "saint", "port", "mount",
+        "lake", "river", "valley", "hills", "heights", "park", "beach",
+        "clairsville", "lauderdale", "angeles", "diego", "francisco",
+        "vegas", "orleans", "york", "jersey", "hampshire", "carolina",
+        "dakota", "rica",
+        # Common non-name nouns caught by the capitalized regex
+        "main", "campus", "office", "department", "center", "centre",
+        "team", "service", "services", "group", "staff", "clinic",
+        "hospital", "laboratory", "laboratories", "medical", "health",
+        "healthcare", "company", "corp", "corporation", "inc", "llc",
+        "phone", "fax", "email", "contact", "customer", "support",
+        "location", "locations", "patient", "patients", "provider",
+        "hours", "monday", "tuesday", "wednesday", "thursday", "friday",
+        "saturday", "sunday", "weekdays", "billing", "appointment",
+        "schedule", "welcome", "home", "about", "mission", "vision",
+        "history", "leadership", "management", "careers", "privacy",
+        "terms", "policy", "rights", "reserved",
+    }
 
     contacts: dict[str, dict] = {}
     for m in EMAIL_FIND.finditer(text):
@@ -377,8 +408,16 @@ def _extract_named_contacts(html: str, domain: str) -> list[dict]:
         name = ""
         for nm in NAME_RE.finditer(ctx):
             candidate = nm.group(0).strip()
-            if candidate.lower() not in _HEADING_SKIP and len(candidate.split()) >= 2:
-                name = candidate  # keep updating — last one wins (closest to email)
+            if candidate.lower() in _HEADING_SKIP:
+                continue
+            parts = candidate.split()
+            if len(parts) < 2:
+                continue
+            # Reject if ANY token in the candidate is a geographic word —
+            # avoids matches like "Clairsville Ohio", "Fort Lauderdale".
+            if any(p.lower() in _GEO_NAME_TOKENS for p in parts):
+                continue
+            name = candidate  # keep updating — last one wins (closest to email)
 
         # Best DM title in the same context window
         title, best_ts = "", 0
@@ -537,6 +576,19 @@ async def _verify_and_scrape(
     direct_line = ""
     seen_digits: set[str] = set()
     _TOLL_FREE = {"800", "888", "877", "866", "855", "844", "833"}
+    # Placeholder/fake phones commonly used as website filler
+    _PLACEHOLDER_PHONES = {
+        "9009009009", "0000000000", "1111111111", "1234567890",
+        "9999999999", "5555555555", "1231231234", "8008008000",
+        "0123456789",
+    }
+    def _is_placeholder(d: str) -> bool:
+        if d in _PLACEHOLDER_PHONES:
+            return True
+        # repeat-digit or sequential-digit patterns
+        if len(set(d)) <= 2:
+            return True
+        return False
     for raw in raw_phones:
         d = _digits(raw)[-10:]
         if len(d) != 10 or d in seen_digits:
@@ -544,13 +596,15 @@ async def _verify_and_scrape(
         seen_digits.add(d)
         if d[:3] in _TOLL_FREE:
             continue
+        if _is_placeholder(d):
+            continue
         if phone_d and d == phone_d:
             continue
         direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
         break
     if not direct_line:
         for d in seen_digits:
-            if len(d) == 10 and (not phone_d or d != phone_d):
+            if len(d) == 10 and (not phone_d or d != phone_d) and not _is_placeholder(d):
                 direct_line = f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
                 break
 
@@ -743,18 +797,27 @@ async def scrub_rows(
                             _seen_p.add(_pa)
                             candidates.append((_person_score, _pa))
 
-                # Promote the NPI official into the named-contact list so it
-                # appears in the Decision Maker columns when the scraper
-                # didn't find one on-site.
+                # Promote the NPI official into the named-contact list.
+                # The authorized official is a legally-registered signer —
+                # higher trust than scraped page text. If the scraper's
+                # current top_dm doesn't have a personal email tied to it,
+                # put the NPI official in front.
+                full_name = f"{npi_official['first']} {npi_official['last']}".strip()
+                npi_contact = {
+                    "name": full_name,
+                    "title": npi_official.get("title", ""),
+                    "email": "",
+                    "dm_score": 80,  # NPI authorized official = real DM
+                    "source": "NPI registry",
+                }
                 if not named_contacts:
-                    full_name = f"{npi_official['first']} {npi_official['last']}".strip()
-                    named_contacts = [{
-                        "name": full_name,
-                        "title": npi_official.get("title", ""),
-                        "email": "",
-                        "dm_score": 80,  # NPI authorized official = real DM
-                        "source": "NPI registry",
-                    }]
+                    named_contacts = [npi_contact]
+                else:
+                    _top = named_contacts[0]
+                    _top_has_personal_email = bool(_top.get("email")) and _top.get("is_personal")
+                    if not _top_has_personal_email:
+                        # Prefer the verified NPI official over a scraped phrase
+                        named_contacts = [npi_contact] + named_contacts
                 if not direct_line and npi_official.get("phone"):
                     direct_line = npi_official["phone"]
 

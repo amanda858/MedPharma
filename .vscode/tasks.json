@@ -32,6 +32,16 @@
             "problemMatcher": []
         },
         {
+            "label": "diag-prospector",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_prospector.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "diag-playbook",
             "type": "shell",
             "command": "python3",

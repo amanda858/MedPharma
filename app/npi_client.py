@@ -326,10 +326,51 @@ async def find_org_official(
     if not best:
         return None
 
+    # Reject low-quality matches — fuzzy match can return totally
+    # unrelated orgs if nothing in the result set is close.
+    if best_score < 5:
+        return None
+
     basic = best.get("basic") or {}
     first = (basic.get("authorized_official_first_name") or "").strip()
     last = (basic.get("authorized_official_last_name") or "").strip()
     if not first and not last:
+        return None
+
+    # Reject obviously-not-a-name values that NPPES sometimes stores
+    # in the authorized_official fields (city names, state names, etc.).
+    _US_STATE_NAMES = {
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+        "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+        "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+        "maine", "maryland", "massachusetts", "michigan", "minnesota",
+        "mississippi", "missouri", "montana", "nebraska", "nevada",
+        "newhampshire", "newjersey", "newmexico", "newyork", "northcarolina",
+        "northdakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+        "rhodeisland", "southcarolina", "southdakota", "tennessee", "texas",
+        "utah", "vermont", "virginia", "washington", "westvirginia",
+        "wisconsin", "wyoming",
+    }
+    _BAD_NAME_TOKENS = _US_STATE_NAMES | {
+        "new", "city", "county", "avenue", "street", "road", "boulevard",
+        "llc", "inc", "corp", "corporation", "company", "services",
+        "healthcare", "medical", "clinic", "hospital", "laboratory",
+        "lab", "labs", "diagnostic", "diagnostics", "group", "center",
+        "associates", "holdings", "partners",
+    }
+    _first_lc = first.lower().replace(" ", "").replace(".", "")
+    _last_lc = last.lower().replace(" ", "").replace(".", "")
+    if _first_lc in _BAD_NAME_TOKENS or _last_lc in _BAD_NAME_TOKENS:
+        return None
+    # Names should contain at least one vowel and be alpha-ish
+    if first and not any(c.isalpha() for c in first):
+        return None
+    if last and not any(c.isalpha() for c in last):
+        return None
+    # Must have vowels — real names do
+    if first and not any(c.lower() in "aeiouy" for c in first):
+        return None
+    if last and not any(c.lower() in "aeiouy" for c in last):
         return None
 
     # Extract practice address + primary taxonomy for context
@@ -338,6 +379,31 @@ async def find_org_official(
         (a for a in addresses if a.get("address_purpose") == "LOCATION"),
         addresses[0] if addresses else {},
     )
+
+    # Geographic sanity: if first or last name is the same as the
+    # practice city or state, NPPES has city/state mis-filed as a
+    # person name (classic data-entry bug). Reject.
+    _addr_city = (practice.get("city") or "").strip().lower().replace(" ", "")
+    _addr_state_full = (practice.get("state") or "").strip().lower()
+    if _first_lc and _first_lc == _addr_city:
+        return None
+    if _last_lc and _last_lc == _addr_city:
+        return None
+    if _first_lc in {_addr_state_full, _addr_state_full.replace(" ", "")}:
+        return None
+    if _last_lc in {_addr_state_full, _addr_state_full.replace(" ", "")}:
+        return None
+
+    # Reject placeholder phones like (900) 900-9009, (000) 000-0000, 123-456-7890
+    _raw_phone = (basic.get("authorized_official_telephone_number") or "")
+    _digits = "".join(c for c in _raw_phone if c.isdigit())
+    _placeholder_phones = {
+        "9009009009", "0000000000", "1111111111", "1234567890",
+        "9999999999", "5555555555",
+    }
+    if _digits in _placeholder_phones:
+        # Clear the phone but keep the record — still usable via other channels
+        basic["authorized_official_telephone_number"] = ""
     taxonomies = best.get("taxonomies") or []
     primary_tax = next((t for t in taxonomies if t.get("primary")), taxonomies[0] if taxonomies else {})
 

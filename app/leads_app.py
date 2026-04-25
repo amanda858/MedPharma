@@ -1283,6 +1283,99 @@ async def scrub_download_top10(job_id: str):
     )
 
 
+# ─── Bulk Prospector: "hunt mode" — generate leads without a CSV ───────
+
+class ProspectRequest(BaseModel):
+    state: str
+    specialty: str = "all_labs"
+    limit: int = 50
+    new_only: bool = False
+
+
+@app.post("/api/prospect/bulk")
+async def prospect_bulk(req: ProspectRequest):
+    """Pull fresh lab leads from NPPES for a state + specialty.
+
+    Runs the full scrubber pipeline on every prospect so each lead
+    returns with DM URLs, personalized hook, heat score, etc.
+
+    Set new_only=true to get only labs enumerated in the last 90 days
+    (brand-new, no vendor yet = highest intent).
+    """
+    from app.bulk_prospector import prospect_and_scrub, SPECIALTY_KEYWORDS
+
+    if not req.state or len(req.state) != 2:
+        raise HTTPException(status_code=400, detail="state must be a 2-letter code")
+    if req.specialty not in SPECIALTY_KEYWORDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"specialty must be one of: {sorted(SPECIALTY_KEYWORDS.keys())}",
+        )
+    if req.limit < 1 or req.limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be 1..200")
+
+    job_id = _uuid.uuid4().hex
+    _SCRUB_JOBS[job_id] = {
+        "status":   "running",
+        "kind":     "prospect",
+        "state":    req.state.upper(),
+        "specialty": req.specialty,
+        "new_only": req.new_only,
+        "total_rows": req.limit,
+        "done_rows": 0,
+        "summary":  {},
+        "rows":     [],
+        "error":    None,
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+    }
+    # Enforce max-jobs budget
+    if len(_SCRUB_JOBS) > _SCRUB_JOBS_MAX:
+        for k in list(_SCRUB_JOBS.keys())[:-_SCRUB_JOBS_MAX]:
+            _SCRUB_JOBS.pop(k, None)
+
+    async def _run():
+        try:
+            result = await prospect_and_scrub(
+                state=req.state,
+                specialty=req.specialty,
+                limit=req.limit,
+                new_only=req.new_only,
+            )
+            _SCRUB_JOBS[job_id].update({
+                "status":  "done",
+                "summary": result["summary"],
+                "rows":    result["rows"],
+                "daily_top_10": result.get("daily_top_10", []),
+                "prospect_source": result.get("prospect_source", {}),
+                "done_rows": len(result["rows"]),
+                "finished_at": datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            _SCRUB_JOBS[job_id].update({
+                "status": "error",
+                "error":  str(exc)[:400],
+                "finished_at": datetime.now().isoformat(),
+            })
+
+    asyncio.create_task(_run())
+    return {
+        "ok": True, "job_id": job_id, "status": "running",
+        "state": req.state.upper(), "specialty": req.specialty,
+        "new_only": req.new_only, "target": req.limit,
+        "poll": f"/api/scrub/status/{job_id}",
+        "download_csv": f"/api/scrub/download/{job_id}.csv",
+        "download_top10": f"/api/scrub/download/{job_id}-top10.csv",
+    }
+
+
+@app.get("/api/prospect/specialties")
+async def prospect_specialties():
+    """List all supported specialty filters."""
+    from app.bulk_prospector import SPECIALTY_KEYWORDS
+    return {"specialties": sorted(SPECIALTY_KEYWORDS.keys())}
+
+
 
 # ─── Lead Management ─────────────────────────────────────────────────
 
