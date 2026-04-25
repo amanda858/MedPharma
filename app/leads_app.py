@@ -1290,6 +1290,7 @@ class ProspectRequest(BaseModel):
     specialty: str = "all_labs"
     limit: int = 50
     new_only: bool = False
+    dm_only: bool = True   # default: DMs over email — spam blocks email
 
 
 @app.post("/api/prospect/bulk")
@@ -1341,6 +1342,7 @@ async def prospect_bulk(req: ProspectRequest):
                 specialty=req.specialty,
                 limit=req.limit,
                 new_only=req.new_only,
+                dm_only=req.dm_only,
             )
             _SCRUB_JOBS[job_id].update({
                 "status":  "done",
