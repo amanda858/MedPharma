@@ -32,6 +32,16 @@
             "problemMatcher": []
         },
         {
+            "label": "diag-playbook",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_playbook.py"],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "diag-full-local",
             "type": "shell",
             "command": "python3",

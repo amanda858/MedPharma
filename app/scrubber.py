@@ -820,6 +820,61 @@ async def scrub_rows(
         except Exception:
             pass
 
+        # ── Playbook: personalized hook + objection handlers + heat score ─
+        # The personalized hook makes every DM feel custom-written.
+        # Objection handlers are paste-ready replies for the 5 most common
+        # pushbacks (already-have-biller, send-info, what-cost, etc.).
+        # Heat score combines lab-fit + contact richness + NPI recency
+        # to drive the "Daily Top 10" prioritization.
+        hook_line = ""
+        objection_lib: dict[str, str] = {}
+        heat = 0
+        heat_reasons: list[str] = []
+        recency_label = ""
+        npi_last_updated = ""
+        try:
+            from app.playbook import (
+                personalized_hook, objection_handlers, heat_score,
+                enrich_templates_with_hook, _recency_signal,
+            )
+            _first_for_hook = (npi_official or {}).get("first", "")
+            _tax_for_hook = (npi_official or {}).get("taxonomy_desc", "") or tax
+            _state_for_hook = (npi_official or {}).get("state", "") or state
+            npi_last_updated = (npi_official or {}).get("last_updated", "")
+            recency_label, _ = _recency_signal(npi_last_updated)
+
+            hook_line = personalized_hook(
+                first=_first_for_hook,
+                org=org,
+                taxonomy_desc=_tax_for_hook,
+                lab_type_detected=lab_intel.get("lab_type_detected", "") if False else "",
+                state=_state_for_hook,
+                last_updated=npi_last_updated,
+            )
+
+            # Objection handlers
+            objection_lib = objection_handlers(
+                first=_first_for_hook,
+                org=org,
+            )
+
+            # Inject hook + Calendly into the social templates
+            if hook_line:
+                _enriched = enrich_templates_with_hook({
+                    "linkedin_first_message": msg_li_first,
+                    "facebook_dm": msg_fb,
+                    "instagram_dm": msg_ig,
+                    "x_dm": msg_x,
+                    "sms": msg_sms,
+                }, hook_line)
+                msg_li_first = _enriched.get("linkedin_first_message", msg_li_first)
+                msg_fb = _enriched.get("facebook_dm", msg_fb)
+                msg_ig = _enriched.get("instagram_dm", msg_ig)
+                msg_x = _enriched.get("x_dm", msg_x)
+                msg_sms = _enriched.get("sms", msg_sms)
+        except Exception:
+            pass
+
         # Existing input emails — user already sourced these; skip org-domain matching
         if existing_email:
             for e in re.split(r"[;,\s]+", existing_email):
@@ -910,8 +965,56 @@ async def scrub_rows(
         if dm2:
             fit = min(100, fit + 3)  # bonus for multiple DM contacts
 
+        # Re-personalize hook now that lab_intel is available (lab_type_detected
+        # gives us a better signal than the raw taxonomy string).
+        try:
+            from app.playbook import (
+                personalized_hook as _ph, heat_score as _hs,
+                enrich_templates_with_hook as _eth,
+            )
+            _better_hook = _ph(
+                first=(npi_official or {}).get("first", ""),
+                org=org,
+                taxonomy_desc=(npi_official or {}).get("taxonomy_desc", "") or tax,
+                lab_type_detected=lab_intel.get("lab_type_detected", ""),
+                state=(npi_official or {}).get("state", "") or state,
+                last_updated=npi_last_updated,
+            )
+            if _better_hook:
+                hook_line = _better_hook
+                _enriched = _eth({
+                    "linkedin_first_message": msg_li_first,
+                    "facebook_dm": msg_fb,
+                    "instagram_dm": msg_ig,
+                    "x_dm": msg_x,
+                    "sms": msg_sms,
+                }, hook_line)
+                msg_li_first = _enriched.get("linkedin_first_message", msg_li_first)
+                msg_fb = _enriched.get("facebook_dm", msg_fb)
+                msg_ig = _enriched.get("instagram_dm", msg_ig)
+                msg_x = _enriched.get("x_dm", msg_x)
+                msg_sms = _enriched.get("sms", msg_sms)
+
+            heat, heat_reasons = _hs(
+                lead_score=lab_intel["score"],
+                fit_score=fit,
+                has_dm=bool(top_dm.get("name")),
+                has_direct_line=bool(direct_line),
+                has_verified_domain=bool(verified_domain),
+                has_social=bool(social_li_url or social_fb_url or social_ig_url or social_x_url),
+                last_updated=npi_last_updated,
+                state=state,
+            )
+        except Exception:
+            pass
+
         return {
             "Lead Score": lab_intel["score"],
+            "Heat Score": heat,
+            "Heat Reasons": "; ".join(heat_reasons),
+            "NPI Last Updated": npi_last_updated,
+            "Recency Signal": recency_label,
+            "Personalized Hook": hook_line,
             "Tier": lab_intel["tier"],
             "Priority": lab_intel["priority"],
             "Org Name": org,
@@ -966,6 +1069,13 @@ async def scrub_rows(
             "Instagram DM":             msg_ig,
             "X / Twitter DM":           msg_x,
             "SMS Template":             msg_sms,
+            # ── Objection handlers (paste-ready replies) ──
+            "Reply: Already Have Biller":  objection_lib.get("objection_already_have_biller", ""),
+            "Reply: Send Info First":      objection_lib.get("objection_send_info_first", ""),
+            "Reply: What Does It Cost":    objection_lib.get("objection_what_does_it_cost", ""),
+            "Reply: Not Interested":       objection_lib.get("objection_not_interested", ""),
+            "Reply: Busy Now":             objection_lib.get("objection_busy_now", ""),
+            "Reply: Who Are You":          objection_lib.get("objection_who_are_you", ""),
             "Lead Signals": "; ".join(lab_intel.get("signals", [])),
             "Fit Score": fit,
             "Intercept Category": lab_intel["category"],
@@ -988,7 +1098,15 @@ async def scrub_rows(
         else:
             out.append(r)
 
-    out.sort(key=lambda r: (-int(r.get("Lead Score", 0) or 0), -int(r.get("Fit Score", 0) or 0)))
+    # Sort by Heat Score (true buyability ranking) → Lead Score → Fit
+    out.sort(key=lambda r: (
+        -int(r.get("Heat Score", 0) or 0),
+        -int(r.get("Lead Score", 0) or 0),
+        -int(r.get("Fit Score", 0) or 0),
+    ))
+
+    # Daily Top 10 — the leads to hit RIGHT NOW
+    daily_top_10 = [r for r in out if r.get("Heat Score", 0)][:10]
 
     summary = {
         "input_rows": len(rows),
@@ -1001,6 +1119,8 @@ async def scrub_rows(
             1 for r in out
             if any(r.get(k) for k in ("LinkedIn URL", "Facebook URL", "Instagram URL", "X / Twitter URL"))
         ),
+        "rows_hot_npi_recent": sum(1 for r in out if (r.get("Recency Signal") or "").startswith("HOT")),
+        "rows_top_heat": sum(1 for r in out if int(r.get("Heat Score", 0) or 0) >= 70),
         "total_emails_found": sum(
             sum(1 for f in ("Email 1", "Email 2", "Email 3", "Email 4", "Email 5") if r.get(f))
             for r in out
@@ -1008,14 +1128,17 @@ async def scrub_rows(
         "errors": error_count,
         "detected_columns": cols,
     }
-    return {"summary": summary, "rows": out}
+    return {"summary": summary, "rows": out, "daily_top_10": daily_top_10}
 
 
 # ─── Output writers ─────────────────────────────────────────────────────
 
 OUTPUT_FIELDS = [
-    # ── Prioritization ───────────────────────────────────────────────
+    # ── Prioritization (heat score drives Daily Top 10) ──────────────
+    "Heat Score", "Heat Reasons", "Recency Signal", "NPI Last Updated",
     "Lead Score", "Tier", "Priority",
+    # ── Personalized opener ──────────────────────────────────────────
+    "Personalized Hook",
     # ── Organization ─────────────────────────────────────────────────
     "Org Name", "Taxonomy / Type", "Type Detected",
     "NPI", "Address", "City", "State", "ZIP",
@@ -1043,6 +1166,13 @@ OUTPUT_FIELDS = [
     "Instagram DM",
     "X / Twitter DM",
     "SMS Template",
+    # ── Objection handlers (paste-ready replies) ─────────────────────
+    "Reply: Already Have Biller",
+    "Reply: Send Info First",
+    "Reply: What Does It Cost",
+    "Reply: Not Interested",
+    "Reply: Busy Now",
+    "Reply: Who Are You",
     # ── SECONDARY: Email (kept but de-prioritized) ───────────────────
     "Email 1", "Email 1 Score",
     "Email 2", "Email 2 Score",

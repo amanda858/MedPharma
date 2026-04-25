@@ -355,6 +355,8 @@ async def find_org_official(
         "city": practice.get("city", ""),
         "state": practice.get("state", ""),
         "zip": practice.get("postal_code", ""),
+        "last_updated": (basic.get("last_updated") or "").strip(),
+        "enumeration_date": (basic.get("enumeration_date") or "").strip(),
         "match_score": best_score,
     }
 
