@@ -1241,6 +1241,21 @@ async def scrub_status(job_id: str):
     }
 
 
+@app.get("/api/scrub/download/{job_id}-top10.csv")
+async def scrub_download_top10(job_id: str):
+    """Daily Top 10 — the leads to hit RIGHT NOW, ranked by heat score."""
+    job = _SCRUB_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    top = job.get("daily_top_10") or (job.get("rows") or [])[:10]
+    body = _scrub_to_csv(top)
+    fn = f"daily_top10_{job_id[:8]}.csv"
+    return Response(
+        content=body, media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
 @app.get("/api/scrub/download/{job_id}.csv")
 async def scrub_download_csv(job_id: str):
     job = _SCRUB_JOBS.get(job_id)
@@ -1264,21 +1279,6 @@ async def scrub_download_xlsx(job_id: str):
     return Response(
         content=body,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
-    )
-
-
-@app.get("/api/scrub/download/{job_id}-top10.csv")
-async def scrub_download_top10(job_id: str):
-    """Daily Top 10 — the leads to hit RIGHT NOW, ranked by heat score."""
-    job = _SCRUB_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job not found or expired")
-    top = job.get("daily_top_10") or []
-    body = _scrub_to_csv(top)
-    fn = f"daily_top10_{job_id[:8]}.csv"
-    return Response(
-        content=body, media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
 

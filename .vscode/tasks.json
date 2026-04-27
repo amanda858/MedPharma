@@ -2,6 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "verify-live-e2e",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py 2>&1 | tee /tmp/verify_live_e2e.log",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "wait-90",
             "type": "shell",
             "command": "sleep 90 && echo done",
