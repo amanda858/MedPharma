@@ -43,19 +43,40 @@ def linkedin_sales_nav_url(first: str, last: str, org: str = "") -> str:
 
 
 def facebook_people_search_url(first: str, last: str, org: str = "") -> str:
-    """Facebook people search."""
-    q = f"{first} {last}"
+    """Facebook public-profile lookup.
+
+    FB's `/search/people/?q=` endpoint now 404s for anonymous traffic.
+    The `/public/{Name}` slug page still works without login and lists
+    every public profile matching that name. Org/state isn't part of the
+    URL but FB shows location on each result card so the user can pick
+    the right person visually.
+    """
+    name = f"{first} {last}".strip()
+    slug = name.replace(" ", "-")
+    return f"https://www.facebook.com/public/{quote(slug, safe='-')}"
+
+
+def facebook_google_search_url(first: str, last: str, org: str = "") -> str:
+    """Google fallback when FB's own search is rate-limited."""
+    q = f'"{first} {last}"'
     if org:
-        q = f"{q} {org}"
-    return "https://www.facebook.com/search/people/?" + urlencode({"q": q})
+        q += f' "{org}"'
+    q += " site:facebook.com"
+    return f"https://www.google.com/search?q={quote(q)}"
 
 
 def instagram_search_url(first: str, last: str, org: str = "") -> str:
-    """Instagram search (handles individuals + business accounts)."""
-    q = f"{first} {last}".strip()
+    """Instagram profile lookup via Google.
+
+    IG's `/explore/search/keyword/` redirects anonymous traffic to the
+    login wall (HTTP 429). Google `site:instagram.com` reliably returns
+    a list of matching profile pages the user can open.
+    """
+    q = f'"{first} {last}"'
     if org:
-        q = f"{q} {org}"
-    return f"https://www.instagram.com/explore/search/keyword/?q={quote(q)}"
+        q += f' "{org}"'
+    q += " site:instagram.com"
+    return f"https://www.google.com/search?q={quote(q)}"
 
 
 def x_twitter_search_url(first: str, last: str, org: str = "") -> str:
@@ -95,13 +116,15 @@ def linkedin_company_search_url(org: str) -> str:
 
 
 def facebook_page_search_url(org: str) -> str:
-    """Facebook page search — many healthcare orgs accept page DMs."""
-    return "https://www.facebook.com/search/pages/?" + urlencode({"q": org})
+    """Find the company's Facebook page via Google site-search
+    (FB's own page-search endpoint 404s for anonymous traffic)."""
+    return f"https://www.google.com/search?q={quote(f'"{org}" site:facebook.com')}"
 
 
 def instagram_company_search_url(org: str) -> str:
-    """Instagram search for a brand handle."""
-    return f"https://www.instagram.com/explore/search/keyword/?q={quote(org)}"
+    """Find the company's IG handle via Google site-search
+    (IG explore endpoint redirects to login)."""
+    return f"https://www.google.com/search?q={quote(f'"{org}" site:instagram.com')}"
 
 
 def google_company_social_url(org: str) -> str:
