@@ -404,7 +404,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # Personalized hook + inject into templates
         hook = personalized_hook(
             first, org, taxonomy_desc=tax, lab_type_detected=type_detected,
-            state=state, last_updated=last_updated,
+            state=state, last_updated=last_updated, city=city,
         )
         templates = enrich_templates_with_hook(templates, hook)
 

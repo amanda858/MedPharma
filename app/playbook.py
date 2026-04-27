@@ -142,18 +142,41 @@ def personalized_hook(
     lab_type_detected: str = "",
     state: str = "",
     last_updated: str = "",
+    city: str = "",
 ) -> str:
     """One tailored opening line per lead. Drops into LinkedIn/FB/SMS."""
     first = (first or "").split()[0].strip().title() or "there"
+    org_clean = (org or "").strip()
+    # Strip noisy corporate suffixes for a cleaner hook
+    for suf in (" LLC", " INC", " CORP", " CO", " PLLC", " LP", " PA", " PC"):
+        if org_clean.upper().endswith(suf):
+            org_clean = org_clean[: -len(suf)].strip().rstrip(",")
+    org_label = org_clean.title() if org_clean.isupper() else org_clean
+    org_label = org_label or "your lab"
+
     pain = _lab_pain_for(taxonomy_desc, lab_type_detected)
     state_bit = _state_signal(state)
     recency, _ = _recency_signal(last_updated)
 
-    hook = f"Hi {first} — quick one specific to {org or 'your lab'}: {pain}."
+    location_phrase = ""
+    city_clean = (city or "").strip().title()
+    state_up = (state or "").upper()
+    if city_clean and state_up:
+        location_phrase = f" running out of {city_clean}, {state_up}"
+    elif state_up:
+        location_phrase = f" in {state_up}"
+
+    hook = (
+        f"Hi {first} \u2014 reaching out about {org_label}{location_phrase}: "
+        f"{pain}."
+    )
     if state_bit:
         hook += f" {state_bit}."
     if recency.startswith("HOT"):
-        hook += " (And I noticed your NPI was updated recently — usually means the org is in transition, which is the best time to fix this stuff.)"
+        hook += (
+            " (Noticed your NPI was updated recently \u2014 usually means the org "
+            "is in transition, which is the best time to fix this stuff.)"
+        )
     return hook
 
 

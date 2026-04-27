@@ -17,10 +17,20 @@ from typing import Optional
 
 
 def linkedin_people_search_url(first: str, last: str, org: str = "") -> str:
-    """LinkedIn people-search URL pre-filtered by name + company.
+    """Profile lookup via Google site-search — works for everyone (no Premium needed).
 
-    Opens in the user's logged-in LinkedIn session. Works for everyone.
+    LinkedIn's own /search/results/people page is gated for non-Premium accounts;
+    Google site:linkedin.com/in returns the actual profile URLs directly.
     """
+    q = f'"{first} {last}"'
+    if org:
+        q += f' "{org}"'
+    q += " site:linkedin.com/in"
+    return f"https://www.google.com/search?q={quote(q)}"
+
+
+def linkedin_native_search_url(first: str, last: str, org: str = "") -> str:
+    """Native LinkedIn URL — only useful if user has Premium / Sales Nav."""
     keywords = f"{first} {last}".strip()
     if org:
         keywords = f"{keywords} {org}".strip()

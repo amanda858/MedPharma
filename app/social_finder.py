@@ -24,7 +24,22 @@ from typing import Optional
 # ─── Person-level search URLs ──────────────────────────────────────────
 
 def linkedin_people_search_url(first: str, last: str, org: str = "") -> str:
-    """LinkedIn people-search pre-filtered by name + company."""
+    """LinkedIn profile lookup via Google site-search.
+
+    LinkedIn's own `/search/results/people/` page is gated for non-Premium
+    accounts and shows nothing without login. Google `site:linkedin.com/in`
+    returns the actual profile pages directly clickable for everyone, no
+    LinkedIn account required.
+    """
+    q = f'"{first} {last}"'
+    if org:
+        q += f' "{org}"'
+    q += " site:linkedin.com/in"
+    return f"https://www.google.com/search?q={quote(q)}"
+
+
+def linkedin_native_search_url(first: str, last: str, org: str = "") -> str:
+    """Native LinkedIn people-search URL (works for Premium / Sales Nav users)."""
     keywords = f"{first} {last}".strip()
     if org:
         keywords = f"{keywords} {org}".strip()
@@ -108,11 +123,13 @@ def google_social_url(first: str, last: str, org: str = "") -> str:
 # ─── Company-level URLs (when person can't be found) ──────────────────
 
 def linkedin_company_search_url(org: str) -> str:
-    """LinkedIn company-page search."""
-    return (
-        "https://www.linkedin.com/search/results/companies/?"
-        + urlencode({"keywords": org, "origin": "GLOBAL_SEARCH_HEADER"})
-    )
+    """Find the company's LinkedIn page via Google site-search.
+
+    LinkedIn's own `/search/results/companies/` page is gated. Google
+    `site:linkedin.com/company` returns the page directly for everyone.
+    """
+    q = f'"{org}" site:linkedin.com/company'
+    return f"https://www.google.com/search?q={quote(q)}"
 
 
 def facebook_page_search_url(org: str) -> str:
