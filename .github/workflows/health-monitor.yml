@@ -1,0 +1,37 @@
+name: Health Monitor
+
+# Runs the deep sweep every hour against the live service.
+# Fails (visible in GH Actions UI + email) if anything is degraded.
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # top of every hour
+  workflow_dispatch: {}    # manual trigger button
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "render.yaml"
+      - "requirements.txt"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install httpx
+        run: pip install httpx
+      - name: Wake server
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://medpharma-hub.onrender.com/healthz || echo 000)
+            echo "wake attempt $i: $CODE"
+            [ "$CODE" = "200" ] && break
+            sleep 6
+          done
+      - name: Run deep sweep
+        run: python3 .vscode/deep_sweep.py

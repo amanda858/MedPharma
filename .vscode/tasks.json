@@ -9,6 +9,41 @@
             "problemMatcher": []
         },
         {
+            "label": "deep-sweep",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/deep_sweep.py 2>&1 | tee /tmp/deep_sweep.log",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-optimization",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add -f app/bulk_prospector.py .github/workflows/health-monitor.yml .vscode/deep_sweep.py .vscode/verify_live_e2e.py .vscode/tasks.json && git commit -m 'fix: broaden specialty taxonomy + add hourly health monitor' --allow-empty && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-keepalive",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add -f .github/workflows/keep-alive.yml app/templates/client_hub.html && git status --short && git commit -m 'fix: keep service warm via GH Actions cron + 60s login retry' --allow-empty && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "wake-server-now",
+            "type": "shell",
+            "command": "echo 'Waking medpharma-hub...' && for i in 1 2 3 4 5 6 7 8 9 10 11 12; do CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://medpharma-hub.onrender.com/healthz || echo 000); echo \"Attempt $i: HTTP $CODE\"; if [ \"$CODE\" = \"200\" ]; then echo 'Server is awake'; exit 0; fi; sleep 6; done; echo 'Still warming...'",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "trigger-keepalive-workflow",
+            "type": "shell",
+            "command": "gh workflow run keep-alive.yml --repo amanda858/MedPharma 2>&1 || echo 'gh CLI not authed - workflow will run on 10-min schedule'",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "wait-90",
             "type": "shell",
             "command": "sleep 90 && echo done",

@@ -33,18 +33,29 @@ from app.config import NPI_API_BASE, NPI_API_VERSION, LAB_TAXONOMY_CODES
 # Using the `taxonomy_description` query param against NPPES (free-text).
 SPECIALTY_KEYWORDS: dict[str, list[str]] = {
     "clinical":        ["clinical medical laboratory"],
-    "toxicology":      ["toxicology"],
+    "toxicology":      ["clinical medical laboratory/toxicology",
+                        "toxicology",
+                        "clinical medical laboratory"],   # fallback widens net
     "pathology":       ["pathology"],
-    "molecular":       ["molecular", "genetic"],
-    "genetic":         ["genetic"],
-    "blood_bank":      ["blood bank"],
-    "cytopathology":   ["cytopathology", "cytology"],
-    "histology":       ["histology"],
-    "microbiology":    ["microbiology"],
+    "molecular":       ["clinical medical laboratory/molecular",
+                        "molecular", "genetic"],
+    "genetic":         ["clinical medical laboratory/molecular",
+                        "genetic", "genomic"],
+    "blood_bank":      ["clinical medical laboratory/blood banking",
+                        "blood bank"],
+    "cytopathology":   ["pathology/cytopathology", "cytopathology", "cytology"],
+    "histology":       ["pathology/histology", "histology"],
+    "microbiology":    ["clinical medical laboratory/microbiology",
+                        "microbiology",
+                        "clinical medical laboratory"],   # fallback widens net
     "physiological":   ["physiological laboratory"],
-    "physician_office":["physician office"],
+    "physician_office":["clinical medical laboratory/clinical chemistry",
+                        "clinical medical laboratory",     # POL is usually here
+                        "physician office"],
     "urgent_care":     ["urgent care"],
-    "all_labs":        ["laboratory"],  # broadest net
+    "all_labs":        ["clinical medical laboratory",
+                        "pathology",
+                        "laboratory"],  # broadest net
 }
 
 
