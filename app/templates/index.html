@@ -772,6 +772,7 @@
     <!-- ─── Tabs ─── -->
     <div class="tab-bar">
         <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Intelligence Scrubber</div>
+        <div class="tab" data-tab="hunt" onclick="switchTab('hunt')">🎯 Hunt Mode</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
         <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
@@ -807,6 +808,77 @@
                 <div id="scrubDownloads" style="margin-top:10px;"></div>
             </div>
             <div id="scrubResults"></div>
+        </div>
+
+        <!-- ═══════════════════ HUNT MODE PANEL ═══════════════════ -->
+        <div class="panel" id="panel-hunt">
+            <div class="card">
+                <div class="card-title">🎯 Hunt Mode — Find Decision Makers to DM</div>
+                <p style="font-size:13px;color:var(--gray-500);margin-bottom:14px;">
+                    Pulls fresh lab leads straight from the federal NPPES registry — no CSV upload needed.
+                    Every prospect comes back with a real human DM (authorized official), direct phone,
+                    LinkedIn / Facebook / Instagram / X URLs, paste-ready DMs, and a personalized hook.
+                    <b>Spam blocks email — DMs land.</b> No emails generated in this mode.
+                </p>
+                <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+                    <div class="form-group" style="width:90px;margin:0;">
+                        <label style="font-size:11px;font-weight:600;">State</label>
+                        <select id="huntState">
+                            <option>FL</option><option>TX</option><option>CA</option><option>NY</option>
+                            <option>NC</option><option>GA</option><option>OH</option><option>PA</option>
+                            <option>IL</option><option>NJ</option><option>VA</option><option>TN</option>
+                            <option>AZ</option><option>MI</option><option>WA</option><option>CO</option>
+                            <option>MA</option><option>MD</option><option>WI</option><option>MN</option>
+                            <option>SC</option><option>AL</option><option>LA</option><option>KY</option>
+                            <option>OR</option><option>OK</option><option>CT</option><option>UT</option>
+                            <option>IA</option><option>NV</option><option>AR</option><option>MS</option>
+                            <option>KS</option><option>NM</option><option>NE</option><option>WV</option>
+                            <option>ID</option><option>HI</option><option>NH</option><option>ME</option>
+                            <option>MT</option><option>RI</option><option>DE</option><option>SD</option>
+                            <option>ND</option><option>AK</option><option>VT</option><option>WY</option>
+                            <option>DC</option><option>MO</option><option>IN</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="width:170px;margin:0;">
+                        <label style="font-size:11px;font-weight:600;">Specialty</label>
+                        <select id="huntSpecialty">
+                            <option value="all_labs">All labs</option>
+                            <option value="clinical" selected>Clinical labs</option>
+                            <option value="pathology">Pathology</option>
+                            <option value="toxicology">Toxicology</option>
+                            <option value="molecular">Molecular</option>
+                            <option value="genetic">Genetic</option>
+                            <option value="histology">Histology</option>
+                            <option value="cytopathology">Cytopathology</option>
+                            <option value="microbiology">Microbiology</option>
+                            <option value="blood_bank">Blood bank</option>
+                            <option value="physiological">Physiological</option>
+                            <option value="physician_office">Physician office labs</option>
+                            <option value="urgent_care">Urgent care</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="width:100px;margin:0;">
+                        <label style="font-size:11px;font-weight:600;">Limit</label>
+                        <select id="huntLimit">
+                            <option>10</option><option>25</option><option selected>50</option>
+                            <option>100</option><option>200</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="huntNewOnly" style="margin:0;">
+                            New enrollments only (last 90 days)
+                        </label>
+                        <div style="font-size:11px;color:var(--gray-500);">High-intent: brand-new orgs that haven't picked a vendor yet.</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="runHunt()" id="huntBtn"
+                        style="padding:10px 20px;font-weight:600;">🎯 Hunt Now</button>
+                </div>
+                <div id="huntStatus" style="margin-top:12px;color:var(--gray-500);font-size:13px;"></div>
+                <div id="huntSummary" style="margin-top:14px;"></div>
+                <div id="huntDownloads" style="margin-top:10px;"></div>
+            </div>
+            <div id="huntResults"></div>
         </div>
 
         <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
@@ -1335,6 +1407,124 @@
             }
             status.textContent = '';
             results.innerHTML = `<div class="card" style="color:#b91c1c;">Scrub timed out after ${maxWait}s. Try fewer rows.</div>`;
+        }
+
+        // ═══════════════════ HUNT MODE ═══════════════════
+        async function runHunt() {
+            const state = document.getElementById('huntState').value;
+            const specialty = document.getElementById('huntSpecialty').value;
+            const limit = parseInt(document.getElementById('huntLimit').value, 10) || 50;
+            const newOnly = document.getElementById('huntNewOnly').checked;
+            const btn = document.getElementById('huntBtn');
+            const status = document.getElementById('huntStatus');
+            const summary = document.getElementById('huntSummary');
+            const downloads = document.getElementById('huntDownloads');
+            const results = document.getElementById('huntResults');
+            summary.innerHTML = ''; downloads.innerHTML = ''; results.innerHTML = '';
+            btn.disabled = true; btn.textContent = 'Hunting…';
+            status.textContent = `Querying NPPES for ${limit} ${specialty.replace('_',' ')} labs in ${state}…`;
+            results.innerHTML = '<div class="loading"><div class="spinner"></div><p>Pulling fresh leads from federal registry…</p></div>';
+
+            let jobId = null;
+            try {
+                const resp = await fetch(withBase('/api/prospect/bulk'), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
+                    body: JSON.stringify({state, specialty, limit, new_only: newOnly, dm_only: true})
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(data.detail || `HTTP ${resp.status}`);
+                }
+                jobId = data.job_id;
+            } catch (e) {
+                status.textContent = '';
+                results.innerHTML = `<div class="card" style="color:#b91c1c;">Hunt failed: ${e.message}</div>`;
+                btn.disabled = false; btn.textContent = '🎯 Hunt Now';
+                return;
+            }
+
+            // Poll — hunt is fast (typically <2s)
+            let elapsed = 0;
+            const maxWait = 180;
+            while (elapsed < maxWait) {
+                await new Promise(r => setTimeout(r, 2000));
+                elapsed += 2;
+                try {
+                    const pollResp = await fetch(withBase(`/api/scrub/status/${jobId}`), { credentials: 'include' });
+                    const pd = await pollResp.json();
+                    if (pd.status === 'running') {
+                        status.textContent = `Enriching DMs… (${elapsed}s)`;
+                        continue;
+                    }
+                    if (pd.status === 'error') {
+                        status.textContent = '';
+                        results.innerHTML = `<div class="card" style="color:#b91c1c;">Hunt failed: ${pd.error || 'unknown error'}</div>`;
+                        btn.disabled = false; btn.textContent = '🎯 Hunt Now';
+                        return;
+                    }
+                    // Done
+                    const rows = pd.preview || pd.daily_top_10 || [];
+                    const s = pd.summary || {};
+                    status.textContent = `Done — ${rows.length} decision makers ready to DM.`;
+                    summary.innerHTML = `
+                        <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;">
+                          <div><b>${rows.length}</b> prospects</div>
+                          <div><b>${s.rows_with_dm || rows.length}</b> with DM</div>
+                          <div><b>${state}</b> · ${specialty.replace('_',' ')}</div>
+                          ${newOnly ? '<div style="color:#92400e;"><b>NEW enrollments only</b></div>' : ''}
+                        </div>`;
+                    const dl = pd.download || {};
+                    let dlHtml = '';
+                    if (dl.xlsx) dlHtml += `<a class="btn btn-success" href="${withBase(dl.xlsx)}" download>Download Excel</a>`;
+                    if (dl.csv) dlHtml += `<a class="btn btn-primary" href="${withBase(dl.csv)}" download style="margin-left:8px;">Download CSV</a>`;
+                    if (dl.top10_csv) dlHtml += `<a class="btn" href="${withBase(dl.top10_csv)}" download style="margin-left:8px;">Top 10 CSV</a>`;
+                    downloads.innerHTML = dlHtml;
+
+                    if (!rows.length) {
+                        results.innerHTML = '<div class="card" style="padding:14px;">No leads returned. Try a different state, broader specialty, or uncheck "New enrollments only".</div>';
+                        btn.disabled = false; btn.textContent = '🎯 Hunt Now';
+                        return;
+                    }
+                    const linkCell = (url, label) => url
+                        ? `<a href="${url}" target="_blank" rel="noopener" style="color:#1d4ed8;text-decoration:none;">${label} 🔗</a>`
+                        : '<span style="color:#cbd5e1;">—</span>';
+                    let html = '<div class="card" style="margin-top:14px;"><div class="card-title">Decision Makers — paste-ready DMs</div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                    ['Heat','Org','St','Decision Maker','Title','Phone','LinkedIn','Facebook','Instagram','X','Hook'].forEach(h=>{
+                        html += `<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--gray-200);background:#f8faff;">${h}</th>`;
+                    });
+                    html += '</tr></thead><tbody>';
+                    rows.forEach((r,i)=>{
+                        const bg = i%2===0?'':'background:#f8f9fc;';
+                        const heat = r['Heat Score'] ?? r['Fit Score'] ?? '';
+                        const heatColor = heat>=70?'#b91c1c':heat>=50?'#92400e':'#374151';
+                        const hook = (r['Hook'] || r['Personalized Hook'] || '').toString();
+                        const hookShort = hook.length>120 ? hook.slice(0,117)+'…' : hook;
+                        html += `<tr style="${bg}">
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-weight:700;color:${heatColor};">${heat}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(r['Org Name']||r['Organization']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${r['State']||''}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-weight:500;">${escHtml(r['Decision Maker']||r['DM Name']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);font-size:11px;color:#6b7280;">${escHtml(r['DM Title']||r['Title']||'')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);white-space:nowrap;">${r['Phone']||r['DM Phone']||''}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${linkCell(r['LinkedIn']||r['LinkedIn URL'],'LI')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${linkCell(r['Facebook']||r['Facebook URL'],'FB')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${linkCell(r['Instagram']||r['Instagram URL'],'IG')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);">${linkCell(r['X']||r['Twitter']||r['X URL'],'X')}</td>
+                            <td style="padding:5px 8px;border-bottom:1px solid var(--gray-100);max-width:280px;font-size:11px;color:#374151;" title="${escHtml(hook)}">${escHtml(hookShort)}</td>
+                        </tr>`;
+                    });
+                    html += '</tbody></table></div></div>';
+                    results.innerHTML = html;
+                    btn.disabled = false; btn.textContent = '🎯 Hunt Now';
+                    showToast(`Found ${rows.length} decision makers`, 'success');
+                    return;
+                } catch (_) { /* transient — keep polling */ }
+            }
+            status.textContent = '';
+            results.innerHTML = `<div class="card" style="color:#b91c1c;">Hunt timed out after ${maxWait}s.</div>`;
+            btn.disabled = false; btn.textContent = '🎯 Hunt Now';
         }
 
         async function runBulkSearch() {

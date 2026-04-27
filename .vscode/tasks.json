@@ -2,6 +2,20 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "wait-90",
+            "type": "shell",
+            "command": "sleep 90 && echo done",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "git-push-hub-fix",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/hub_app.py && git diff --cached --stat && git commit -m 'feat(hunt): allow /api/prospect/* without auth (read-only public NPPES)' -- app/hub_app.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "diag-hunt-e2e",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/diag_hunt_e2e.py 2>&1 | tee /tmp/hunt_e2e.log",
