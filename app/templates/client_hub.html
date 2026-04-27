@@ -1902,7 +1902,7 @@
       <!-- Sidebar -->
       <div class="sidebar">
         <div class="nav-section">Overview</div>
-        <div class="nav-item" data-panel="dashboard" onclick="navTo('dashboard')">
+        <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">
           <span class="ni">📊</span> Dashboard
         </div>
         <div class="nav-section">Operations</div>
@@ -1936,9 +1936,9 @@
         <div class="nav-item" data-panel="production" onclick="navTo('production')">
           <span class="ni">⏱️</span> Team Production
         </div>
-        <div class="nav-section">Leads</div>
-        <div class="nav-item active" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">
-          <span class="ni">🔬</span> Leads
+        <div class="nav-section">Lead Generation</div>
+        <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">
+          <span class="ni">🎯</span> Lead Source
         </div>
         <div id="adminNav" style="display:none">
           <div class="nav-section">Admin</div>
@@ -1964,7 +1964,7 @@
       <div class="main-content">
 
         <!-- ═══ DASHBOARD ═══ -->
-        <div class="hub-panel" id="panel-dashboard">
+        <div class="hub-panel active" id="panel-dashboard">
           <!-- Hero Welcome Banner -->
           <div
             style="background:linear-gradient(135deg,#0d47a1 0%,#1565c0 40%,#1e88e5 100%);border-radius:16px;padding:28px 32px;margin-bottom:20px;position:relative;overflow:hidden">
@@ -2972,8 +2972,8 @@
           </div>
         </div>
 
-        <!-- ═══ LAB LEADS (embedded, default panel) ═══ -->
-        <div class="hub-panel active" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
+        <!-- ═══ LEAD SOURCE (embedded scrubber + hunt mode) ═══ -->
+        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
           <iframe
             id="leadsIframe"
             src="/admin/leads/"

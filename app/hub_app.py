@@ -163,8 +163,8 @@ def _serve_hub():
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    # Canonical single-link entry point: always route to leads.
-    return RedirectResponse(url="/admin/leads/", status_code=307)
+    # Canonical single-link entry point: unified hub dashboard.
+    return RedirectResponse(url="/hub", status_code=307)
 
 
 @app.get("/hub", response_class=HTMLResponse)
