@@ -3448,18 +3448,19 @@
       btn.textContent = 'Signing in…';
       statusEl.style.display = 'block';
 
-      // Retry logic for cold-start servers
+      // Retry logic for cold-start servers (Render free tier ~50s wake)
       let lastErr = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      const MAX_ATTEMPTS = 6;       // 6 × 10s = up to 60s of patience
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           if (attempt > 1) {
-            statusEl.textContent = `Server waking up… retrying (attempt ${attempt}/3)`;
-            await new Promise(r => setTimeout(r, 3000));
+            statusEl.textContent = `Waking up server… (${(attempt-1)*10}s) — please wait`;
+            await new Promise(r => setTimeout(r, 10000));
           } else {
             statusEl.textContent = 'Connecting to server…';
           }
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 45000);
+          const tid = setTimeout(() => controller.abort(), 60000);
           const r = await fetch('/hub/api/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -3483,7 +3484,7 @@
         } catch (e) {
           lastErr = e;
           if (e.message === 'Invalid credentials') break; // Don't retry wrong passwords
-          if (attempt === 3) break;
+          if (attempt === MAX_ATTEMPTS) break;
         }
       }
       statusEl.style.display = 'none';

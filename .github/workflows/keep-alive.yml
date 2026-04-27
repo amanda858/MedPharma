@@ -1,0 +1,34 @@
+name: Keep Render Awake
+
+# Pings the Render free-tier service every 10 minutes so it never cold-starts
+# (Render free plan sleeps after 15 min idle → ~50s wake time on next visit).
+# GitHub Actions cron is free and runs in the cloud, so it works while the
+# service is asleep (unlike an internal self-ping).
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch: {}       # manual trigger button
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Hit /healthz to keep service warm
+        run: |
+          set -e
+          URL="https://medpharma-hub.onrender.com/healthz"
+          for i in 1 2 3; do
+            CODE=$(curl -s -o /tmp/r.txt -w "%{http_code}" --max-time 60 "$URL" || echo "000")
+            echo "Attempt $i: $URL -> HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "✅ Service is awake"
+              cat /tmp/r.txt
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "⚠️ Service did not respond 200 after 3 attempts (last: $CODE)"
+          # Don't fail the job — Render may briefly redeploy etc.
+          exit 0
