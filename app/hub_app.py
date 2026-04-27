@@ -128,6 +128,8 @@ async def admin_only_leads_guard(request: Request, call_next):
             # Scrub status/download — job_id is a UUID secret, no need for re-auth
             or path.startswith("/admin/leads/api/scrub/status/")
             or path.startswith("/admin/leads/api/scrub/download/")
+            # Hunt mode (prospect bulk): read-only NPPES queries on public data
+            or path.startswith("/admin/leads/api/prospect/")
         ):
             return await call_next(request)
 
