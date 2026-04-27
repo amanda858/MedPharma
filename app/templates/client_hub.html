@@ -3651,6 +3651,13 @@
       // Close sidebar on mobile after navigation
       closeMobileSidebar();
 
+      // Update URL hash so panels are bookmarkable / shareable
+      try {
+        if (window.location.hash !== '#' + panel) {
+          history.replaceState(null, '', '#' + panel);
+        }
+      } catch (_) {}
+
       if (panel === 'dashboard') loadDashboard();
       if (panel === 'claims') loadClaims();
       if (panel === 'credentialing') loadCred();
@@ -3666,6 +3673,24 @@
       if (panel === 'audit') loadAuditLog();
       if (panel === 'leads') loadLeadsPanel();
     }
+
+    // Open the panel referenced by URL hash on first load (e.g. /hub#production)
+    (function() {
+      function openFromHash() {
+        const h = (window.location.hash || '').replace('#', '').trim();
+        if (!h) return;
+        const valid = ['dashboard','claims','credentialing','enrollment','edi',
+                       'providers','clients','files','profile','reporting',
+                       'production','alerts','audit','leads'];
+        if (valid.includes(h)) navTo(h);
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', openFromHash);
+      } else {
+        setTimeout(openFromHash, 50);
+      }
+      window.addEventListener('hashchange', openFromHash);
+    })();
 
     function toggleMobileSidebar() {
       const sb = document.querySelector('.sidebar');
