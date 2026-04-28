@@ -1693,15 +1693,15 @@
                 }
                 const cols = [
                     ['Heat Score', 'Heat'],
-                    ['Organization Name', 'Organization'],
+                    ['Org Name', 'Organization'],
                     ['State', 'ST'],
                     ['City', 'City'],
-                    ['Specialty', 'Specialty'],
-                    ['Authorized Official Name', 'Decision Maker'],
+                    ['Taxonomy / Type', 'Specialty'],
+                    ['Decision Maker', 'Decision Maker'],
                     ['DM Email', 'DM Email'],
                     ['Company Email', 'Company Email'],
                     ['Phone', 'Phone'],
-                    ['Website', 'Website'],
+                    ['Org Domain', 'Domain'],
                     ['Verified LinkedIn URL', 'LinkedIn'],
                 ];
                 let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
@@ -1711,7 +1711,7 @@
                     html += '<tr>';
                     cols.forEach(([key]) => {
                         let v = r[key] || '';
-                        if (key === 'Website' && v) v = `<a href="${_nsEsc(v.startsWith('http') ? v : 'https://' + v)}" target="_blank">${_nsEsc(v)}</a>`;
+                        if (key === 'Org Domain' && v) v = `<a href="${_nsEsc(v.startsWith('http') ? v : 'https://' + v)}" target="_blank">${_nsEsc(v)}</a>`;
                         else if (key === 'Verified LinkedIn URL' && v) v = `<a href="${_nsEsc(v)}" target="_blank">profile</a>`;
                         else if ((key === 'DM Email' || key === 'Company Email') && v) v = `<a href="mailto:${_nsEsc(v)}">${_nsEsc(v)}</a>`;
                         else v = _nsEsc(v);

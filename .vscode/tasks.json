@@ -23,51 +23,9 @@
             "problemMatcher": []
         },
         {
-            "label": "push-search-fallback",
+            "label": "push-search-fix-v2",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py .vscode/tasks.json && git commit -m 'fix: search loader falls back to /data glob; add /debug endpoint' -- app/leads_app.py .vscode/tasks.json && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-debug-enhance",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py .vscode/tasks.json .vscode/poll_debug.sh .vscode/wait_for_debug.py .vscode/wait_for_search_endpoint.py .vscode/check_national_search.py .vscode/trigger_national_pull.py && git commit -m 'diag: enhance national-pull debug endpoint with /data listing + tables' && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-data-dir-fallback",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/config.py app/national_pull.py app/leads_app.py .vscode/tasks.json .vscode/poll_debug2.sh && git commit -m 'fix: auto-fallback to writable data dir when /data is not mounted (free-tier support)' && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "check-national-debug",
-            "type": "shell",
-            "command": "curl -s https://medpharma-hub.onrender.com/admin/leads/api/national-pull/debug | python3 -m json.tool",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "wait-for-debug-endpoint",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_debug.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "poll-debug-endpoint",
-            "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/poll_debug.sh",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "poll-debug-v2",
-            "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/poll_debug2.sh",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/national_pull.py app/templates/index.html .vscode/tasks.json .vscode/check_national_search.py .vscode/trigger_national_pull.py .vscode/wait_for_search_endpoint.py .vscode/push_search_ui.sh && git commit -m 'fix: per-state CSV checkpoint + disk-fallback search + correct column names' && git push origin main",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },

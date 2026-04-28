@@ -19,10 +19,6 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# Import config first so DATA_DIR / DB_PATH env vars are resolved to a writable path
-# (handles Render free-tier, where /data is not mounted).
-from app.config import DATA_DIR as _DATA_DIR, DATABASE_PATH as _DB_PATH
-
 US_STATES_PLUS = [
     "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
     "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
@@ -32,12 +28,12 @@ US_STATES_PLUS = [
     "DC","PR",
 ]
 
-OUT_DIR = os.environ.get("NATIONAL_PULL_DIR") or os.path.join(_DATA_DIR, "national_pulls")
+OUT_DIR = os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
 SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
 PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "50"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
-DB_PATH = _DB_PATH
+DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")
 
 # Daily national pull defaults to high-quality, email-required output.
 # Override these env vars at the platform level if a wider net is desired.
@@ -79,39 +75,63 @@ async def _run_pull_async() -> dict[str, Any]:
 
     t0 = time.time()
     log.info(f"[national-pull] start specialty={SPECIALTY} per_state={PER_STATE} states={len(US_STATES_PLUS)}")
-
-    prospects = await prospect_multi_state(
-        states=US_STATES_PLUS, specialty=SPECIALTY,
-        per_state=PER_STATE, new_only=NEW_ONLY, new_days=NEW_DAYS,
-    )
-    log.info(f"[national-pull] NPPES returned {len(prospects)} unique prospects in {time.time()-t0:.1f}s")
-    if not prospects:
-        return {"ok": False, "reason": "no prospects"}
-
-    t1 = time.time()
-    result = await _enrich_dm_only(prospects)
-    rows = result.get("rows") or []
-    summary = result.get("summary") or {}
-    log.info(f"[national-pull] enriched {len(rows)} rows in {time.time()-t1:.1f}s — {summary}")
-    if not rows:
-        return {"ok": False, "reason": "no enriched rows", "summary": summary}
-
-    rows.sort(key=lambda r: -int(r.get("Heat Score") or 0))
-
     _ensure_dir(OUT_DIR)
     date_str = datetime.now().strftime("%Y%m%d")
     csv_path = os.path.join(OUT_DIR, f"leads_national_{SPECIALTY}_{date_str}.csv")
 
-    headers = list(rows[0].keys())
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=headers)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    all_rows: list[dict] = []
+    headers: list[str] = []
+    summary_total: dict[str, Any] = {}
+    states_done: list[str] = []
 
-    _record_pull(date_str, csv_path, len(rows), summary)
-    log.info(f"[national-pull] wrote {len(rows)} rows -> {csv_path}  total {time.time()-t0:.1f}s")
-    return {"ok": True, "csv_path": csv_path, "row_count": len(rows), "summary": summary}
+    for st in US_STATES_PLUS:
+        try:
+            ts = time.time()
+            prospects = await prospect_multi_state(
+                states=[st], specialty=SPECIALTY,
+                per_state=PER_STATE, new_only=NEW_ONLY, new_days=NEW_DAYS,
+            )
+            if not prospects:
+                log.info(f"[national-pull] {st}: 0 prospects")
+                states_done.append(st)
+                continue
+            res = await _enrich_dm_only(prospects)
+            rows = res.get("rows") or []
+            summ = res.get("summary") or {}
+            log.info(f"[national-pull] {st}: {len(prospects)} prospects -> {len(rows)} rows in {time.time()-ts:.1f}s")
+            if rows:
+                all_rows.extend(rows)
+                if not headers:
+                    headers = list(rows[0].keys())
+                # Checkpoint: rewrite CSV + record after every state
+                all_rows.sort(key=lambda r: -int(r.get("Heat Score") or 0))
+                # Ensure consistent header set (union)
+                hset = list(headers)
+                for r in all_rows:
+                    for k in r.keys():
+                        if k not in hset:
+                            hset.append(k)
+                headers = hset
+                with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+                    w.writeheader()
+                    for r in all_rows:
+                        w.writerow(r)
+                # Merge summary counters
+                for k, v in summ.items():
+                    if isinstance(v, (int, float)):
+                        summary_total[k] = summary_total.get(k, 0) + v
+                _record_pull(date_str, csv_path, len(all_rows), summary_total)
+            states_done.append(st)
+        except Exception as e:
+            log.exception(f"[national-pull] state {st} failed: {e}")
+
+    log.info(f"[national-pull] DONE {len(states_done)}/{len(US_STATES_PLUS)} states, "
+             f"{len(all_rows)} rows -> {csv_path} total {time.time()-t0:.1f}s")
+    if not all_rows:
+        return {"ok": False, "reason": "no enriched rows", "states_done": states_done}
+    return {"ok": True, "csv_path": csv_path, "row_count": len(all_rows),
+            "summary": summary_total, "states_done": states_done}
 
 
 def run_national_pull_job() -> None:

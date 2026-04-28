@@ -1787,10 +1787,66 @@ async def trigger_national_pull():
     return {"ok": True, "started": True, "started_at": _national_pull_running["started_at"]}
 
 
+def _np_out_dir() -> str:
+    return os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
+
+
+def _np_scan_disk() -> dict | None:
+    """Find newest national-pull CSV on disk (fallback when DB has no record)."""
+    out = _np_out_dir()
+    try:
+        if not os.path.isdir(out):
+            return None
+        cands = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".csv")]
+        if not cands:
+            return None
+        newest = max(cands, key=lambda p: os.path.getmtime(p))
+        return {
+            "csv_path": newest,
+            "created_at": int(os.path.getmtime(newest)),
+            "size": os.path.getsize(newest),
+            "source": "disk_scan",
+        }
+    except Exception:
+        return None
+
+
+def _np_ensure_table() -> None:
+    import sqlite3 as _sql
+    try:
+        with _sql.connect(os.environ.get("DB_PATH", "/data/leads.db"), timeout=10) as c:
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS national_pulls("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "pull_date TEXT, specialty TEXT, csv_path TEXT,"
+                "row_count INTEGER, summary_json TEXT, created_at INTEGER)"
+            )
+    except Exception:
+        pass
+
+
+def _np_latest_csv_path() -> str:
+    """Return path to newest CSV — prefers DB record, falls back to disk scan."""
+    import sqlite3 as _sql
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    try:
+        with _sql.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT csv_path FROM national_pulls ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row and row[0] and os.path.exists(row[0]):
+                return row[0]
+    except Exception:
+        pass
+    disk = _np_scan_disk()
+    return disk["csv_path"] if disk else ""
+
+
 @app.get("/api/national-pull/status")
 async def national_pull_status():
     """Return current run status + most recent CSV metadata."""
     import sqlite3 as _sql
+    _np_ensure_table()
     db_path = os.environ.get("DB_PATH", "/data/leads.db")
     latest = None
     try:
@@ -1807,6 +1863,10 @@ async def national_pull_status():
                 }
     except Exception as e:
         latest = {"error": str(e)}
+    if not latest or not latest.get("csv_exists"):
+        disk = _np_scan_disk()
+        if disk:
+            latest = disk
 
     return {
         "running": _national_pull_running["flag"],
@@ -1819,22 +1879,10 @@ async def national_pull_status():
 @app.get("/api/national-pull/download")
 async def download_national_pull():
     """Stream the most recent national-pull CSV."""
-    import sqlite3 as _sql
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
-    try:
-        with _sql.connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT csv_path, pull_date, specialty FROM national_pulls "
-                "ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if not row or not row[0] or not os.path.exists(row[0]):
+    csv_path = _np_latest_csv_path()
+    if not csv_path or not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="No national pull CSV available yet.")
-
-    csv_path, pull_date, specialty = row[0], row[1], row[2]
-    fname = f"medpharma_national_{specialty}_{pull_date}.csv"
+    fname = os.path.basename(csv_path) or "medpharma_national.csv"
 
     def _iter():
         with open(csv_path, "rb") as f:
@@ -1858,53 +1906,10 @@ import time as _time_np
 _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
 
 
-def _find_latest_national_csv() -> str:
-    """Locate the freshest national-pull CSV.
-
-    Resolution order:
-      1) `national_pulls.csv_path` from SQLite (newest row that exists on disk).
-      2) Glob common data dirs for `national_pull_*.csv`.
-    """
-    import sqlite3 as _sql
-    import glob as _glob
-    candidates: list[str] = []
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
-    try:
-        with _sql.connect(db_path) as conn:
-            for (p,) in conn.execute(
-                "SELECT csv_path FROM national_pulls ORDER BY id DESC LIMIT 25"
-            ).fetchall():
-                if p and os.path.exists(p):
-                    candidates.append(p)
-    except Exception:
-        pass
-    data_dir_env = os.environ.get("DATA_DIR", "")
-    search_dirs: list[str] = []
-    for d in [data_dir_env, "/data", "/tmp/medpharma_data", "./data", "data"]:
-        if not d:
-            continue
-        search_dirs.append(d)
-        search_dirs.append(os.path.join(d, "national_pulls"))
-    for d in search_dirs:
-        try:
-            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")):
-                if os.path.exists(p):
-                    candidates.append(p)
-        except Exception:
-            pass
-    if not candidates:
-        return ""
-    try:
-        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    except Exception:
-        pass
-    return candidates[0]
-
-
 def _load_latest_national_rows() -> list[dict]:
     """Read most recent national-pull CSV into memory (cached by mtime)."""
-    csv_path = _find_latest_national_csv()
-    if not csv_path:
+    csv_path = _np_latest_csv_path()
+    if not csv_path or not os.path.exists(csv_path):
         return []
     try:
         mtime = os.path.getmtime(csv_path)
@@ -1953,7 +1958,7 @@ async def search_national_pull(
         if st and (r.get("State", "").upper() != st):
             return False
         if sp:
-            tax = (r.get("Taxonomy", "") + " " + r.get("Specialty", "")).lower()
+            tax = (r.get("Taxonomy / Type", "") + " " + r.get("Type Detected", "")).lower()
             if sp not in tax:
                 return False
         if has_email and not (
@@ -1973,7 +1978,7 @@ async def search_national_pull(
                 r.get("Org Name", ""), r.get("City", ""),
                 r.get("Decision Maker", ""), r.get("DM Email", ""),
                 r.get("Company Email", ""), r.get("Phone", ""),
-                r.get("Org Domain", ""),
+                r.get("Org Domain", ""), r.get("Taxonomy / Type", ""),
             ]).lower()
             if qq not in blob:
                 return False
@@ -1998,107 +2003,13 @@ async def list_national_specialties():
     rows = _load_latest_national_rows()
     counts: dict[str, int] = {}
     for r in rows:
-        sp = (r.get("Specialty") or r.get("Taxonomy") or "").strip()
+        sp = (r.get("Taxonomy / Type") or r.get("Type Detected") or "").strip()
         if not sp:
             continue
         counts[sp] = counts.get(sp, 0) + 1
     items = sorted(counts.items(), key=lambda x: -x[1])
-    return {"specialties": [{"name": k, "count": v} for k, v in items]}
+    return {"specialties": [{"name": k, "count": v} for k, v in items], "csv_path": _np_latest_csv_path()}
 
-
-@app.get("/api/national-pull/debug")
-async def national_pull_debug():
-    """Inspect what CSVs/DB rows are visible to the search endpoint.
-
-    Use this to diagnose 'no data' errors — shows DB rows, on-disk CSVs,
-    file sizes, mtimes, and the resolved 'latest' path.
-    """
-    import sqlite3 as _sql
-    import glob as _glob
-    import datetime as _dt
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
-    db_rows: list[dict] = []
-    db_tables: list[str] = []
-    db_exists = os.path.exists(db_path)
-    db_size = os.path.getsize(db_path) if db_exists else 0
-    try:
-        with _sql.connect(db_path, timeout=5) as conn:
-            try:
-                db_tables = [r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-                ).fetchall()]
-            except Exception as e:
-                db_tables = [f"(tables list error: {e})"]
-            try:
-                for rid, csv_path, started, finished in conn.execute(
-                    "SELECT id, csv_path, pull_date, created_at FROM national_pulls ORDER BY id DESC LIMIT 10"
-                ).fetchall():
-                    exists = bool(csv_path) and os.path.exists(csv_path)
-                    size = os.path.getsize(csv_path) if exists else 0
-                    db_rows.append({
-                        "id": rid, "csv_path": csv_path, "exists": exists, "size_bytes": size,
-                        "pull_date": started, "created_at": finished,
-                    })
-            except Exception as e:
-                db_rows = [{"national_pulls_query_error": str(e)}]
-    except Exception as e:
-        db_rows = [{"db_open_error": str(e)}]
-    # List /data directory
-    data_listing: list[dict] = []
-    for d in ["/data", "/data/national_pulls", os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")]:
-        try:
-            if os.path.isdir(d):
-                entries = []
-                for name in os.listdir(d)[:50]:
-                    full = os.path.join(d, name)
-                    try:
-                        st = os.stat(full)
-                        entries.append({
-                            "name": name,
-                            "size": st.st_size,
-                            "mtime": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
-                            "is_dir": os.path.isdir(full),
-                        })
-                    except Exception as e:
-                        entries.append({"name": name, "error": str(e)})
-                data_listing.append({"dir": d, "exists": True, "entries": entries})
-            else:
-                data_listing.append({"dir": d, "exists": False})
-        except Exception as e:
-            data_listing.append({"dir": d, "error": str(e)})
-    files: list[dict] = []
-    seen: set[str] = set()
-    for d in ["/data", "/data/national_pulls", os.environ.get("DATA_DIR", ""), "./data", "data"]:
-        if not d:
-            continue
-        try:
-            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")) + _glob.glob(os.path.join(d, "**/national_pull_*.csv"), recursive=True):
-                if p in seen:
-                    continue
-                seen.add(p)
-                try:
-                    st = os.stat(p)
-                    files.append({
-                        "path": p, "size_bytes": st.st_size,
-                        "mtime": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
-                    })
-                except Exception as e:
-                    files.append({"path": p, "error": str(e)})
-        except Exception:
-            pass
-    files.sort(key=lambda x: x.get("mtime", ""), reverse=True)
-    latest = _find_latest_national_csv()
-    return {
-        "db_path": db_path,
-        "db_exists": db_exists,
-        "db_size": db_size,
-        "db_tables": db_tables,
-        "db_rows": db_rows,
-        "data_listing": data_listing,
-        "csv_files": files,
-        "resolved_latest_csv": latest,
-        "loader_row_count": len(_load_latest_national_rows()),
-    }
 
 
 class BulkEnrichItem(BaseModel):
