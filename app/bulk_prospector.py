@@ -552,6 +552,28 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             except Exception:
                 pass
 
+        # ── Directory fallback (Yellow Pages / BBB / Manta / Healthgrades) ──
+        # Run ONLY when we have nothing — saves time and rate-limit budget.
+        # Returns real emails listed on public business directories.
+        directory_email = ""
+        directory_source = ""
+        if (not dm_email and not company_email and not pubmed_email
+                and ENABLE_EMAIL_ENRICHMENT):
+            try:
+                from app.directory_emails import find_directory_emails
+                dir_hits = await find_directory_emails(
+                    org_name=org, city=city, state=state,
+                )
+                if dir_hits:
+                    directory_email = dir_hits[0].get("email", "")
+                    directory_source = dir_hits[0].get("source", "")
+                    # Promote to Company Email when missing
+                    if directory_email and not company_email:
+                        company_email = directory_email
+                        company_email_source = directory_source
+            except Exception:
+                pass
+
         # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
         # When LIVE_LINKEDIN_LOOKUP=1 we'll try to resolve direct slugs.
         # Otherwise we skip straight to guaranteed-clickable search URLs.
@@ -681,6 +703,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "PubMed Author": pubmed_author_name,
             "PubMed Email": pubmed_email,
             "PubMed Year": pubmed_source_year,
+            "Directory Email": directory_email,
+            "Directory Source": directory_source,
             # CLIA enrichment (CMS public dataset, real, no auth)
             "CLIA Number": clia.get("clia_number", ""),
             "CLIA Test Volume": clia.get("clia_test_volume", "") or "",
@@ -736,7 +760,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
-        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email"))
+        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email"))
         has_fax = bool(r.get("CLIA Fax"))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
@@ -747,13 +771,61 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     rows = [r for r in rows if _has_reach(r)]
     dropped = pre_filter - len(rows)
 
+    # QUALITY_FIRST mode: drop rows that have no real digital footprint.
+    # Reachable phone alone is not enough to clear this bar.
+    # A row clears quality-first only if it has at least one of:
+    #   - a real email (DM, Company, PubMed, or Directory)
+    #   - a confirmed live website (Org Domain)
+    #   - CLIA accreditation (CAP, JCAHO, COLA, A2LA, AOA, AABB, ASHI)
+    #   - PubMed publication match
+    # This is the only honest path to high email-coverage percentages: stop
+    # counting unreachable orgs in the denominator.
+    import os as _os2
+    quality_dropped = 0
+    if _os2.getenv("QUALITY_FIRST", "0") == "1":
+        def _is_quality(r: dict) -> bool:
+            if r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email"):
+                return True
+            if r.get("Org Domain"):
+                return True
+            if r.get("CLIA Accreditations"):
+                return True
+            if r.get("PubMed Author"):
+                return True
+            return False
+        before_q = len(rows)
+        rows = [r for r in rows if _is_quality(r)]
+        quality_dropped = before_q - len(rows)
+
+    # REQUIRE_EMAIL mode: drop any row that didn't yield a real email after
+    # enrichment. This is the strict outreach-ready cut — every output row
+    # has at least one confirmed-real email channel.
+    email_dropped = 0
+    if _os2.getenv("REQUIRE_EMAIL", "0") == "1":
+        def _has_email(r: dict) -> bool:
+            return bool(
+                r.get("DM Email") or r.get("Company Email")
+                or r.get("PubMed Email") or r.get("Directory Email")
+            )
+        before_e = len(rows)
+        rows = [r for r in rows if _has_email(r)]
+        email_dropped = before_e - len(rows)
+
     rows.sort(key=lambda r: -int(r.get("Heat Score") or 0))
+
+    # QUALITY_FIRST cap: limit to top N by heat after filtering.
+    quality_cap = int(_os2.getenv("QUALITY_FIRST_TOP", "0") or "0")
+    if quality_cap > 0:
+        rows = rows[:quality_cap]
+
     daily_top_10 = rows[:10]
 
     summary = {
         "input_rows": len(prospects),
         "output_rows": len(rows),
         "rows_dropped_no_reach": dropped,
+        "rows_dropped_low_quality": quality_dropped,
+        "rows_dropped_no_email": email_dropped,
         "rows_with_dm": sum(1 for r in rows if r.get("Decision Maker")),
         "rows_with_direct_line": sum(1 for r in rows if r.get("Direct Line")),
         "rows_with_backup": sum(1 for r in rows if r.get("Backup Contact")),

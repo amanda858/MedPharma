@@ -63,12 +63,24 @@ async def scrape_emails_from_website(url: str) -> list[str]:
                 if resp.status_code != 200:
                     continue
                 html = resp.text
+                # Decode HTML entities (&#64; = @, &commat;, &period; etc.)
+                # and common JS obfuscation (" [at] ", "(at)", " at ").
+                import html as _html_mod
+                decoded = _html_mod.unescape(html)
+                # Reverse common email obfuscation patterns
+                deob = re.sub(r'\s*\[\s*at\s*\]\s*', '@', decoded, flags=re.IGNORECASE)
+                deob = re.sub(r'\s*\(\s*at\s*\)\s*', '@', deob, flags=re.IGNORECASE)
+                deob = re.sub(r'\s*\{\s*at\s*\}\s*', '@', deob, flags=re.IGNORECASE)
+                deob = re.sub(r'\s+at\s+', '@', deob, flags=re.IGNORECASE)
+                deob = re.sub(r'\s*\[\s*dot\s*\]\s*', '.', deob, flags=re.IGNORECASE)
+                deob = re.sub(r'\s*\(\s*dot\s*\)\s*', '.', deob, flags=re.IGNORECASE)
+                deob = re.sub(r'\s+dot\s+', '.', deob, flags=re.IGNORECASE)
 
                 # Enhanced email regex patterns
                 email_patterns = [
                     # Standard email pattern
                     r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-                    # Mailto links
+                    # Mailto links (high confidence)
                     r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
                     # Emails with spaces around @
                     r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
@@ -76,18 +88,24 @@ async def scrape_emails_from_website(url: str) -> list[str]:
                     r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
                     # Emails after "Email:" or similar labels
                     r'(?:email|contact|e-mail)[\s:]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+                    # JS string concatenation: "user" + "@" + "domain.com"
+                    r'["\']([A-Za-z0-9._%+-]+)["\']\s*\+\s*["\']@["\']\s*\+\s*["\']([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
                 ]
 
                 for pattern in email_patterns:
-                    found = re.findall(pattern, html, re.IGNORECASE)
+                    found = re.findall(pattern, deob, re.IGNORECASE)
                     for email in found:
+                        # JS concatenation match returns tuple
+                        if isinstance(email, tuple):
+                            email = "@".join(email)
                         email = email.strip().lower().strip('"\'')
+                        email = re.sub(r'\s+', '', email)  # remove any residual whitespace
                         # Enhanced validation
                         if _is_basic_email_format(email):
                             emails.add(email)
 
                 # Small delay to be respectful
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
             except Exception:
                 continue
