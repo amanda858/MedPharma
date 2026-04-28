@@ -1751,6 +1751,106 @@ async def national_lead_pull(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ─── National NPPES Pull (daily 5 AM EST + manual trigger) ───────────
+
+_national_pull_lock = asyncio.Lock() if False else None  # placeholder
+import asyncio as _asyncio_np
+_national_pull_running = {"flag": False, "started_at": None, "last_result": None}
+
+
+@app.post("/api/national-pull/run")
+async def trigger_national_pull():
+    """Kick off the full 52-state NPPES pull immediately. Runs in background."""
+    if _national_pull_running["flag"]:
+        return {
+            "ok": False,
+            "running": True,
+            "started_at": _national_pull_running["started_at"],
+            "message": "A national pull is already in progress.",
+        }
+
+    from app.national_pull import _run_pull_async
+
+    async def _bg():
+        _national_pull_running["flag"] = True
+        _national_pull_running["started_at"] = datetime.now().isoformat()
+        try:
+            res = await _run_pull_async()
+            _national_pull_running["last_result"] = res
+        except Exception as e:
+            _national_pull_running["last_result"] = {"ok": False, "error": str(e)}
+        finally:
+            _national_pull_running["flag"] = False
+
+    _asyncio_np.create_task(_bg())
+    return {"ok": True, "started": True, "started_at": _national_pull_running["started_at"]}
+
+
+@app.get("/api/national-pull/status")
+async def national_pull_status():
+    """Return current run status + most recent CSV metadata."""
+    import sqlite3 as _sql
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    latest = None
+    try:
+        with _sql.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT pull_date, specialty, csv_path, row_count, summary_json, created_at "
+                "FROM national_pulls ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                latest = {
+                    "pull_date": row[0], "specialty": row[1], "csv_path": row[2],
+                    "row_count": row[3], "summary_json": row[4], "created_at": row[5],
+                    "csv_exists": os.path.exists(row[2]) if row[2] else False,
+                }
+    except Exception as e:
+        latest = {"error": str(e)}
+
+    return {
+        "running": _national_pull_running["flag"],
+        "started_at": _national_pull_running["started_at"],
+        "last_result": _national_pull_running["last_result"],
+        "latest": latest,
+    }
+
+
+@app.get("/api/national-pull/download")
+async def download_national_pull():
+    """Stream the most recent national-pull CSV."""
+    import sqlite3 as _sql
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    try:
+        with _sql.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT csv_path, pull_date, specialty FROM national_pulls "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not row or not row[0] or not os.path.exists(row[0]):
+        raise HTTPException(status_code=404, detail="No national pull CSV available yet.")
+
+    csv_path, pull_date, specialty = row[0], row[1], row[2]
+    fname = f"medpharma_national_{specialty}_{pull_date}.csv"
+
+    def _iter():
+        with open(csv_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        _iter(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 class EnrichRequest(BaseModel):
     npi: str
     org_name: Optional[str] = ""

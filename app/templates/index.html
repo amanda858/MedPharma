@@ -812,6 +812,20 @@
 
         <!-- ═══════════════════ HUNT MODE PANEL ═══════════════════ -->
         <div class="panel" id="panel-hunt">
+            <div class="card" style="background:linear-gradient(135deg,#0a3d62,#1e5f8e);color:#fff;">
+                <div class="card-title" style="color:#fff;">🇺🇸 National Daily Pull — High-Quality Email-Ready Leads</div>
+                <p style="font-size:13px;color:#cfe3f7;margin-bottom:14px;">
+                    Sweeps all 52 states from the NPPES registry, drops orgs with no website / no CLIA accreditation / no PubMed footprint,
+                    enriches with real scraped emails, and only keeps rows with a confirmed email.
+                    Runs automatically at 5 AM EST daily — or trigger manually below.
+                </p>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="triggerNationalPull()" id="btnNationalPull">🚀 Run National Pull Now</button>
+                    <button class="btn" style="background:#fff;color:#0a3d62;" onclick="downloadNationalPull()">⬇️ Download Latest CSV</button>
+                    <button class="btn" style="background:transparent;color:#fff;border:1px solid #fff;" onclick="refreshNationalStatus()">↻ Refresh Status</button>
+                </div>
+                <div id="nationalStatus" style="margin-top:12px;font-size:13px;color:#cfe3f7;"></div>
+            </div>
             <div class="card">
                 <div class="card-title">🎯 Hunt Mode — Find Decision Makers to DM</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:14px;">
@@ -1526,6 +1540,62 @@
             results.innerHTML = `<div class="card" style="color:#b91c1c;">Hunt timed out after ${maxWait}s.</div>`;
             btn.disabled = false; btn.textContent = '🎯 Hunt Now';
         }
+
+        // ─── National Daily Pull controls ──────────────────────────
+        async function triggerNationalPull() {
+            const btn = document.getElementById('btnNationalPull');
+            const status = document.getElementById('nationalStatus');
+            btn.disabled = true; btn.textContent = '⏳ Starting...';
+            try {
+                const resp = await fetch(withBase('/api/national-pull/run'), { method: 'POST', credentials: 'include' });
+                const data = await resp.json();
+                if (data.running && !data.started) {
+                    status.innerHTML = `⏳ Already running since ${data.started_at}. Refresh status to check progress.`;
+                } else {
+                    status.innerHTML = `✅ Started at ${data.started_at}. This takes 30-45 min on the free tier. Click "Refresh Status" to check progress.`;
+                }
+            } catch (e) {
+                status.innerHTML = `❌ Failed to start: ${e.message}`;
+            } finally {
+                btn.disabled = false; btn.textContent = '🚀 Run National Pull Now';
+            }
+            setTimeout(refreshNationalStatus, 2000);
+        }
+
+        async function refreshNationalStatus() {
+            const status = document.getElementById('nationalStatus');
+            status.innerHTML = '↻ Checking...';
+            try {
+                const resp = await fetch(withBase('/api/national-pull/status'), { credentials: 'include' });
+                const data = await resp.json();
+                let html = '';
+                if (data.running) {
+                    html += `⏳ <b>Pull running</b> since ${data.started_at}<br>`;
+                } else if (data.last_result && data.last_result.ok) {
+                    html += `✅ Last run completed: ${data.last_result.row_count} rows<br>`;
+                } else if (data.last_result && data.last_result.error) {
+                    html += `⚠️ Last run failed: ${data.last_result.error}<br>`;
+                }
+                if (data.latest && data.latest.row_count) {
+                    const exists = data.latest.csv_exists ? '✅ on disk' : '❌ missing';
+                    html += `📄 Latest CSV: <b>${data.latest.row_count}</b> rows · ${data.latest.pull_date} · ${exists}`;
+                } else {
+                    html += '📄 No CSV produced yet.';
+                }
+                status.innerHTML = html;
+            } catch (e) {
+                status.innerHTML = `❌ Status fetch failed: ${e.message}`;
+            }
+        }
+
+        async function downloadNationalPull() {
+            window.open(withBase('/api/national-pull/download'), '_blank');
+        }
+
+        // Auto-load status on first hunt-panel view
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(refreshNationalStatus, 1500);
+        });
 
         async function runBulkSearch() {
             if (bulkSelectedStates.size === 0) {
