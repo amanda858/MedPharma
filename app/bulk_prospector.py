@@ -684,7 +684,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # Treats 5xx as bounce, accept-all providers as 'unknown'.
         email_status_dm = ""
         email_status_company = ""
-        if os.environ.get("VERIFY_DELIVERABILITY", "1") == "1":
+        if _os.environ.get("VERIFY_DELIVERABILITY", "1") == "1":
             try:
                 from app.email_deliverability import check_deliverability
                 if dm_email:
