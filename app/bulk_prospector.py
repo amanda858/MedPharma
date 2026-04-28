@@ -27,6 +27,12 @@ from typing import Optional
 import httpx
 
 from app.config import NPI_API_BASE, NPI_API_VERSION, LAB_TAXONOMY_CODES
+from app.linkedin_resolver import (
+    resolve_linkedin_profile,
+    resolve_facebook_profile,
+    resolve_instagram_profile,
+    reset_run_budget,
+)
 
 
 # Convenient specialty groups — each maps to one or more taxonomy keywords.
@@ -363,6 +369,9 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     )
     from rule_intercept import score_lab_lead
 
+    # Reset the per-run live-lookup budget so each hunt gets a fresh quota
+    reset_run_budget()
+
     rows: list[dict] = []
     for p in prospects:
         org = (p.get("organization_name") or "").strip()
@@ -401,6 +410,17 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         social = await find_social_profiles(first, last, org=org, title=title) or {}
         templates = social_outreach_templates(first or "there", org)
 
+        # ── Real-profile resolver ───────────────────────────────────────────
+        # Replace the speculative "search URL" with the actual
+        # linkedin.com/in/<slug> URL when we can verify one exists. If we
+        # can't, leave the column blank (don't ship a dead search link).
+        if first and last:
+            real_li = resolve_linkedin_profile(first, last, org)
+            real_fb = resolve_facebook_profile(first, last, org)
+            real_ig = resolve_instagram_profile(first, last, org)
+        else:
+            real_li = real_fb = real_ig = ""
+
         # Personalized hook + inject into templates
         hook = personalized_hook(
             first, org, taxonomy_desc=tax, lab_type_detected=type_detected,
@@ -414,7 +434,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # Heat score
         has_dm = bool(first and last)
         has_direct_line = bool(ao_phone)
-        has_social = bool(social.get("linkedin_url"))
+        has_social = bool(real_li or real_fb or real_ig)
         score, reasons = heat_score(
             lead_score=lead_score,
             fit_score=lab_intel.get("fit_score", 0),
@@ -448,17 +468,17 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Decision Maker": full_name,
             "DM Title": title,
             "DM Email": "",  # DM-only mode — no email
-            # Social DM URLs
-            "LinkedIn URL": social.get("linkedin_url", ""),
-            "LinkedIn Sales Nav URL": social.get("linkedin_sales_nav", ""),
-            "Facebook URL": social.get("facebook_url", ""),
-            "Instagram URL": social.get("instagram_url", ""),
-            "X / Twitter URL": social.get("x_url", ""),
-            "Google Social Search": social.get("google_social", ""),
-            "Google LinkedIn Search": social.get("google_linkedin", ""),
-            "LinkedIn Company Page": social.get("linkedin_company_url", ""),
-            "Facebook Company Page": social.get("facebook_page_url", ""),
-            "Instagram Company": social.get("instagram_company_url", ""),
+            # Social DM URLs (blank if no real profile found)
+            "LinkedIn URL": real_li,
+            "LinkedIn Sales Nav URL": social.get("linkedin_sales_nav", "") if real_li else "",
+            "Facebook URL": real_fb,
+            "Instagram URL": real_ig,
+            "X / Twitter URL": "",  # Don't speculate
+            "Google Social Search": "",
+            "Google LinkedIn Search": "",
+            "LinkedIn Company Page": "",
+            "Facebook Company Page": "",
+            "Instagram Company": "",
             # Paste-ready DM templates
             "LinkedIn Connection Note": templates.get("linkedin_connection_note", ""),
             "LinkedIn First Message": templates.get("linkedin_first_message", ""),
