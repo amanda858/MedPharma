@@ -40,12 +40,17 @@ from app.linkedin_resolver import (
 )
 from app.backup_people import find_backup_people
 
+import os as _os
+
+# CLIA + PubMed enrichment toggles
+ENABLE_CLIA = _os.environ.get("ENABLE_CLIA_ENRICHMENT", "1") == "1"
+ENABLE_PUBMED = _os.environ.get("ENABLE_PUBMED_LOOKUP", "1") == "1"
+
 # Live LinkedIn slug resolution is unreliable from cloud IPs (search engines
 # block scrapers). When this flag is False we skip live lookups entirely
 # and rely on guaranteed-clickable Bing search URLs (pre-filtered to the
 # exact person + org on linkedin.com/in). Result: 100% of rows get a
 # one-click path to the LinkedIn profile, in seconds, no rate-limit risk.
-import os as _os
 LIVE_LINKEDIN_LOOKUP = _os.environ.get("LIVE_LINKEDIN_LOOKUP", "0") == "1"
 
 # Email enrichment (Hunter.io + pattern). On by default — this is the
@@ -496,6 +501,57 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             except Exception:
                 pass
 
+        # ── CLIA enrichment (test volume + accreditation + fax) ────────────
+        # Free CMS public dataset. Adds qualification signal + a fax line.
+        clia: dict = {}
+        if ENABLE_CLIA:
+            try:
+                from app.clia_enrich import enrich_with_clia
+                clia = await enrich_with_clia(
+                    state=state,
+                    street=p.get("address", ""),
+                    zip_code=p.get("zip", ""),
+                ) or {}
+            except Exception:
+                clia = {}
+
+        # ── PubMed corresponding-author email lookup ───────────────────────
+        # Lab directors publish. Their institutional email is in the paper
+        # metadata. This is REAL data, scraped from NCBI's public API.
+        # Runs ONLY when we don't already have a person-level email
+        # (saves 1-2 NCBI calls per row, well under rate limit).
+        pubmed_email = ""
+        pubmed_source_year = ""
+        pubmed_author_name = ""
+        if ENABLE_PUBMED and not dm_email:
+            try:
+                from app.pubmed_lookup import find_pubmed_emails, find_pubmed_emails_for_person
+                # Try DM-specific match first
+                hit = None
+                if first and last:
+                    hit = await find_pubmed_emails_for_person(
+                        org_name=org, first_name=first, last_name=last,
+                        city=city, state=state,
+                    )
+                # Fallback: any author at this org
+                if not hit:
+                    candidates = await find_pubmed_emails(
+                        org_name=org, city=city, state=state,
+                    )
+                    if candidates:
+                        hit = candidates[0]
+                if hit:
+                    pubmed_email = hit.get("email", "")
+                    pubmed_source_year = hit.get("year", "")
+                    pubmed_author_name = hit.get("full_name", "")
+                    # Promote PubMed email to DM Email if we don't have one
+                    if pubmed_email and not dm_email:
+                        dm_email = pubmed_email
+                        dm_email_confidence = int(hit.get("confidence") or 90)
+                        dm_email_source = "pubmed"
+            except Exception:
+                pass
+
         # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
         # When LIVE_LINKEDIN_LOOKUP=1 we'll try to resolve direct slugs.
         # Otherwise we skip straight to guaranteed-clickable search URLs.
@@ -570,11 +626,28 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             fit_score=lab_intel.get("fit_score", 0),
             has_dm=has_dm,
             has_direct_line=has_direct_line,
-            has_verified_domain=False,  # we don't probe domains in DM-only
+            has_verified_domain=bool(org_domain),
             has_social=has_social,
             last_updated=last_updated,
             state=state,
         )
+        # CLIA boost — real qualification signal (test volume + accreditation)
+        if clia:
+            try:
+                from app.clia_enrich import clia_score_boost
+                _boost = clia_score_boost(clia)
+                if _boost:
+                    score = min(100, int(score) + _boost)
+                    if clia.get("clia_test_volume"):
+                        reasons.append(f"CLIA vol {clia['clia_test_volume']:,}")
+                    if clia.get("clia_accreditations"):
+                        reasons.append("Accred: " + "/".join(clia["clia_accreditations"]))
+            except Exception:
+                pass
+        # Real-email boost — having a verified email matters for outreach
+        if dm_email or company_email:
+            score = min(100, int(score) + 5)
+            reasons.append("Real email")
 
         full_name = f"{first} {last}".strip().upper() if (first and last) else ""
         rows.append({
@@ -604,6 +677,17 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Company Email Source": company_email_source,
             "Org Domain": org_domain,
             "Org Emails Found": "; ".join(e.get("email","") for e in org_emails[:5]),
+            # PubMed-sourced data (real, from published paper metadata)
+            "PubMed Author": pubmed_author_name,
+            "PubMed Email": pubmed_email,
+            "PubMed Year": pubmed_source_year,
+            # CLIA enrichment (CMS public dataset, real, no auth)
+            "CLIA Number": clia.get("clia_number", ""),
+            "CLIA Test Volume": clia.get("clia_test_volume", "") or "",
+            "CLIA Accreditations": ", ".join(clia.get("clia_accreditations") or []),
+            "CLIA Cert Type": clia.get("clia_certificate_type", ""),
+            "CLIA Active": "Y" if clia.get("clia_active") else ("N" if clia else ""),
+            "CLIA Fax": clia.get("clia_fax", ""),
             # Social DM URLs (real_li only when verified; otherwise blank)
             "LinkedIn URL": real_li,
             "LinkedIn Match Type": li_label if real_li else "",
@@ -652,11 +736,12 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
-        has_email = bool(r.get("DM Email") or r.get("Company Email"))
+        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email"))
+        has_fax = bool(r.get("CLIA Fax"))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
                           or r.get("LinkedIn Search URL") or r.get("Backup LinkedIn Search URL"))
-        return has_dm_reach or has_email or has_backup_reach or has_social
+        return has_dm_reach or has_email or has_fax or has_backup_reach or has_social
 
     pre_filter = len(rows)
     rows = [r for r in rows if _has_reach(r)]

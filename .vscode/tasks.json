@@ -9,6 +9,27 @@
             "problemMatcher": []
         },
         {
+            "label": "probe-clia",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_clia.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-clia2",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_clia2.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-pubmed",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_pubmed.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "verify-live-e2e",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py 2>&1 | tee /tmp/verify_live_e2e.log",
