@@ -826,6 +826,46 @@
                 </div>
                 <div id="nationalStatus" style="margin-top:12px;font-size:13px;color:#cfe3f7;"></div>
             </div>
+
+            <!-- ═══════════════ NATIONAL LEAD SEARCH ═══════════════ -->
+            <div class="card" id="cardNationalSearch">
+                <div class="card-title">🔎 Search Latest National Pull — Filter Quality Leads by Specialty / State</div>
+                <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
+                    Live search over the most recent national pull CSV. Only rows that passed QUALITY_FIRST + REQUIRE_EMAIL filters are returned.
+                </p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;align-items:end;">
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-size:11px;font-weight:600;">State</label>
+                        <select id="nsState"><option value="">All</option></select>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-size:11px;font-weight:600;">Specialty</label>
+                        <select id="nsSpecialty"><option value="">All</option></select>
+                    </div>
+                    <div class="form-group" style="margin:0;flex:2;min-width:200px;">
+                        <label style="font-size:11px;font-weight:600;">Search (org / DM / city / email / phone)</label>
+                        <input type="text" id="nsQuery" placeholder="e.g. cardiology, smith, miami…" />
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-size:11px;font-weight:600;">Min Heat</label>
+                        <input type="number" id="nsMinHeat" min="0" max="100" value="0" />
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <label style="font-size:11px;font-weight:600;">Limit</label>
+                        <input type="number" id="nsLimit" min="1" max="2000" value="100" />
+                    </div>
+                    <div class="form-group" style="margin:0;display:flex;align-items:center;gap:6px;">
+                        <input type="checkbox" id="nsHasEmail" checked />
+                        <label for="nsHasEmail" style="font-size:12px;font-weight:600;margin:0;">Has email</label>
+                    </div>
+                    <div class="form-group" style="margin:0;">
+                        <button class="btn btn-primary" onclick="runNationalSearch()" id="btnNsSearch">Search</button>
+                    </div>
+                </div>
+                <div id="nsSummary" style="margin-top:12px;font-size:12px;color:var(--gray-600);"></div>
+                <div id="nsResults" style="margin-top:10px;overflow-x:auto;"></div>
+            </div>
+
             <div class="card">
                 <div class="card-title">🎯 Hunt Mode — Find Decision Makers to DM</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:14px;">
@@ -1592,9 +1632,106 @@
             window.open(withBase('/api/national-pull/download'), '_blank');
         }
 
+        // ─────────── National Pull Search ───────────
+        function _nsEsc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        async function loadNationalSearchFilters() {
+            // States
+            const stSel = document.getElementById('nsState');
+            if (stSel && stSel.options.length <= 1) {
+                Object.entries(US_STATES).forEach(([code, name]) => {
+                    const o = document.createElement('option');
+                    o.value = code; o.textContent = `${code} - ${name}`;
+                    stSel.appendChild(o);
+                });
+            }
+            // Specialties from latest CSV
+            try {
+                const r = await fetch(withBase('/api/national-pull/specialties'), { credentials: 'include' });
+                if (!r.ok) return;
+                const data = await r.json();
+                const sp = document.getElementById('nsSpecialty');
+                if (sp) {
+                    sp.innerHTML = '<option value="">All</option>';
+                    (data.specialties || []).forEach(item => {
+                        const o = document.createElement('option');
+                        o.value = item.name;
+                        o.textContent = `${item.name} (${item.count})`;
+                        sp.appendChild(o);
+                    });
+                }
+            } catch (e) {}
+        }
+        async function runNationalSearch() {
+            const btn = document.getElementById('btnNsSearch');
+            const summary = document.getElementById('nsSummary');
+            const out = document.getElementById('nsResults');
+            btn.disabled = true; btn.textContent = '⏳';
+            try {
+                const params = new URLSearchParams({
+                    state: document.getElementById('nsState').value || '',
+                    specialty: document.getElementById('nsSpecialty').value || '',
+                    q: document.getElementById('nsQuery').value || '',
+                    has_email: document.getElementById('nsHasEmail').checked ? 'true' : 'false',
+                    min_heat: document.getElementById('nsMinHeat').value || '0',
+                    limit: document.getElementById('nsLimit').value || '100',
+                    offset: '0',
+                });
+                const resp = await fetch(withBase('/api/national-pull/search?') + params.toString(), { credentials: 'include' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    summary.innerHTML = `<span style="color:#c00;">❌ ${_nsEsc(err.detail || resp.statusText)}</span>`;
+                    out.innerHTML = '';
+                    return;
+                }
+                const data = await resp.json();
+                summary.innerHTML = `Showing <b>${data.rows.length}</b> of <b>${data.matched}</b> matches (total in CSV: ${data.total}).`;
+                if (!data.rows.length) {
+                    out.innerHTML = '<div style="padding:14px;color:var(--gray-500);font-size:13px;">No matches.</div>';
+                    return;
+                }
+                const cols = [
+                    ['Heat Score', 'Heat'],
+                    ['Organization Name', 'Organization'],
+                    ['State', 'ST'],
+                    ['City', 'City'],
+                    ['Specialty', 'Specialty'],
+                    ['Authorized Official Name', 'Decision Maker'],
+                    ['DM Email', 'DM Email'],
+                    ['Company Email', 'Company Email'],
+                    ['Phone', 'Phone'],
+                    ['Website', 'Website'],
+                    ['Verified LinkedIn URL', 'LinkedIn'],
+                ];
+                let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                cols.forEach(([_, label]) => { html += `<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--gray-300);background:var(--gray-100);">${_nsEsc(label)}</th>`; });
+                html += '</tr></thead><tbody>';
+                data.rows.forEach(r => {
+                    html += '<tr>';
+                    cols.forEach(([key]) => {
+                        let v = r[key] || '';
+                        if (key === 'Website' && v) v = `<a href="${_nsEsc(v.startsWith('http') ? v : 'https://' + v)}" target="_blank">${_nsEsc(v)}</a>`;
+                        else if (key === 'Verified LinkedIn URL' && v) v = `<a href="${_nsEsc(v)}" target="_blank">profile</a>`;
+                        else if ((key === 'DM Email' || key === 'Company Email') && v) v = `<a href="mailto:${_nsEsc(v)}">${_nsEsc(v)}</a>`;
+                        else v = _nsEsc(v);
+                        html += `<td style="padding:6px 8px;border-bottom:1px solid var(--gray-200);vertical-align:top;">${v}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                out.innerHTML = html;
+            } catch (e) {
+                summary.innerHTML = `<span style="color:#c00;">❌ ${_nsEsc(e.message)}</span>`;
+            } finally {
+                btn.disabled = false; btn.textContent = 'Search';
+            }
+        }
+
         // Auto-load status on first hunt-panel view
         document.addEventListener('DOMContentLoaded', () => {
             setTimeout(refreshNationalStatus, 1500);
+            setTimeout(loadNationalSearchFilters, 1800);
         });
 
         async function runBulkSearch() {

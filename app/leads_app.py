@@ -1851,11 +1851,128 @@ async def download_national_pull():
     )
 
 
-class EnrichRequest(BaseModel):
-    npi: str
-    org_name: Optional[str] = ""
-    state: Optional[str] = ""
-    city: Optional[str] = ""
+# ─── National pull SEARCH (specialty / state / free-text) ────────────
+import csv as _csv_np
+import time as _time_np
+
+_national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
+
+
+def _load_latest_national_rows() -> list[dict]:
+    """Read most recent national-pull CSV into memory (cached by mtime)."""
+    import sqlite3 as _sql
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    csv_path = ""
+    try:
+        with _sql.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT csv_path FROM national_pulls ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                csv_path = row[0] or ""
+    except Exception:
+        return []
+    if not csv_path or not os.path.exists(csv_path):
+        return []
+    try:
+        mtime = os.path.getmtime(csv_path)
+    except Exception:
+        return []
+    if (_national_csv_cache["path"] == csv_path
+            and _national_csv_cache["mtime"] == mtime
+            and _national_csv_cache["rows"]):
+        return _national_csv_cache["rows"]
+    rows: list[dict] = []
+    try:
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            for r in _csv_np.DictReader(f):
+                rows.append(r)
+    except Exception:
+        return []
+    _national_csv_cache.update({"path": csv_path, "mtime": mtime, "rows": rows})
+    return rows
+
+
+@app.get("/api/national-pull/search")
+async def search_national_pull(
+    state: str = Query("", description="2-letter state code, optional"),
+    specialty: str = Query("", description="laboratory|urgent_care|primary_care|... optional"),
+    q: str = Query("", description="free text — matches org name, city, DM name, email"),
+    has_email: bool = Query(True, description="only rows with at least one real email"),
+    min_heat: int = Query(0, ge=0, le=100),
+    limit: int = Query(100, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+):
+    """Filter the latest national-pull CSV server-side and return JSON.
+
+    Use this as the searchable front-end of the hub. Data comes from
+    the daily 5 AM EST pull and any manual triggers. Always real,
+    scraped/registered/verified — no synthetic emails.
+    """
+    rows = _load_latest_national_rows()
+    if not rows:
+        return {"rows": [], "total": 0, "matched": 0, "message": "No national pull CSV yet."}
+
+    st = (state or "").upper().strip()
+    sp = (specialty or "").lower().strip()
+    qq = (q or "").lower().strip()
+
+    def _is_match(r: dict) -> bool:
+        if st and (r.get("State", "").upper() != st):
+            return False
+        if sp:
+            tax = (r.get("Taxonomy", "") + " " + r.get("Specialty", "")).lower()
+            if sp not in tax:
+                return False
+        if has_email and not (
+            r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
+            or r.get("Directory Email") or r.get("Site-Search Email")
+            or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email")
+        ):
+            return False
+        try:
+            heat = int(r.get("Heat Score") or 0)
+        except Exception:
+            heat = 0
+        if heat < min_heat:
+            return False
+        if qq:
+            blob = " ".join([
+                r.get("Org Name", ""), r.get("City", ""),
+                r.get("Decision Maker", ""), r.get("DM Email", ""),
+                r.get("Company Email", ""), r.get("Phone", ""),
+                r.get("Org Domain", ""),
+            ]).lower()
+            if qq not in blob:
+                return False
+        return True
+
+    matched = [r for r in rows if _is_match(r)]
+    matched.sort(key=lambda r: -int(r.get("Heat Score") or 0))
+    page = matched[offset:offset + limit]
+    return {
+        "total": len(rows),
+        "matched": len(matched),
+        "limit": limit,
+        "offset": offset,
+        "rows": page,
+        "csv_path": _national_csv_cache.get("path", ""),
+    }
+
+
+@app.get("/api/national-pull/specialties")
+async def list_national_specialties():
+    """Distinct specialty values present in the latest pull, with counts."""
+    rows = _load_latest_national_rows()
+    counts: dict[str, int] = {}
+    for r in rows:
+        sp = (r.get("Specialty") or r.get("Taxonomy") or "").strip()
+        if not sp:
+            continue
+        counts[sp] = counts.get(sp, 0) + 1
+    items = sorted(counts.items(), key=lambda x: -x[1])
+    return {"specialties": [{"name": k, "count": v} for k, v in items]}
+
 
 
 class BulkEnrichItem(BaseModel):
