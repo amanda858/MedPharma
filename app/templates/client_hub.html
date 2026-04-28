@@ -3553,6 +3553,7 @@
           <div style="font-size:18px;font-weight:600;color:#0f172a;margin-bottom:8px;">No client accounts yet</div>
           <div style="color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Click <strong>+ New Client</strong> above to create your first client workspace, or jump straight to admin tools.</div>
           <button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>
+          ${currentUser && currentUser.role === 'admin' ? `<button onclick="enterAsAdmin()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#eef2ff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">Enter as Admin →</button>` : ''}
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
       } else {
@@ -3589,6 +3590,26 @@
       activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
       updateSubProfileBar();
+      navTo('leads');
+    }
+
+    // Admin shortcut: enter the app shell without picking a client (Lead Source,
+    // Manage Clients, Audit Log, etc. are all available without a selected client).
+    function enterAsAdmin() {
+      activeClientId = null;
+      activeSubProfile = null;
+      document.getElementById('accountSelect').style.display = 'none';
+      document.getElementById('appShell').style.display = 'block';
+      document.getElementById('topAccount').innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> Admin Workspace <span style="opacity:.5;font-size:10px">▼ switch</span>`;
+      document.getElementById('topUser').textContent = currentUser.username;
+      const rolePill = document.getElementById('topRole');
+      rolePill.textContent = 'Admin';
+      rolePill.style.display = '';
+      document.getElementById('adminNav').style.display = 'block';
+      activeClientPracticeType = '';
+      updateNavForPracticeType('');
+      const bar = document.getElementById('subProfileBar');
+      if (bar) bar.style.display = 'none';
       navTo('leads');
     }
 
