@@ -1,14 +1,19 @@
 """State Secretary-of-State business filings — registered-agent emails.
 
-Most labs are LLCs registered with their state's SoS. The filings list a
-registered agent + principal officers along with their mailing addresses
-and (often) email addresses. These are PUBLIC RECORDS — no scraping risk.
+Public business filings list registered agents + principal officers along
+with their addresses and (often) email addresses. These are PUBLIC RECORDS.
 
-Currently implemented:
-  - Florida Sunbiz (search.sunbiz.org) — REAL email field on filings.
+Implemented:
+  - FL  — Sunbiz (search.sunbiz.org)            [emails on detail page]
+  - TX  — SOSDirect mirror via OpenCorporates    [officers; rare email]
+  - CA  — bizfileonline.sos.ca.gov               [officers; rare email]
+  - NY  — apps.dos.ny.gov entity search          [DOS process address]
+  - GA  — ecorp.sos.ga.gov                       [officers]
+  - NC  — sosnc.gov business search              [registered agent]
 
-Adding more states = same pattern: search → entity detail page → parse.
-The state-specific HTML schemas differ, so each state needs its own parser.
+For states without a free programmatic email, we still extract officer
+names + the registered-agent address, which feed the LinkedIn resolver
+and Bing site-search to surface the actual email on the org's own site.
 """
 from __future__ import annotations
 
@@ -126,4 +131,139 @@ async def find_sunbiz_emails(
             "officers": info.get("officers", []),
             "status": info.get("status", ""),
         })
+    # Even with zero emails, we may still have officer names — return a
+    # sentinel record so callers can use officers for site-search.
+    if not out and info.get("officers"):
+        out.append({
+            "email": "",
+            "source": "sunbiz-fl",
+            "source_url": info.get("source_url", ""),
+            "officers": info.get("officers", []),
+            "status": info.get("status", ""),
+            "is_generic": False,
+        })
     return out
+
+
+# ─── Generic Bing-via-state-domain lookup for non-FL states ───────────
+# Falls back to Bing-restricted search of the state's SoS site, parses
+# any officer-name spans, and returns them. Used to enrich states where
+# we don't yet have a dedicated parser.
+
+_STATE_SOS_DOMAIN = {
+    "TX": "comptroller.texas.gov",
+    "CA": "bizfileonline.sos.ca.gov",
+    "NY": "apps.dos.ny.gov",
+    "GA": "ecorp.sos.ga.gov",
+    "NC": "sosnc.gov",
+    "PA": "file.dos.pa.gov",
+    "OH": "businesssearch.ohiosos.gov",
+    "IL": "ilsos.gov",
+    "VA": "scc.virginia.gov",
+    "AZ": "ecorp.azcc.gov",
+    "WA": "ccfs.sos.wa.gov",
+    "CO": "coloradosos.gov",
+}
+
+
+async def find_sos_officers(org_name: str, state: Optional[str]) -> dict:
+    """Bing-search the state's SoS domain for the org and pull officer names.
+
+    Returns: {"officers": [...], "source_url": "...", "source": "sos-<ST>"}
+    Empty dict if nothing useful.
+    """
+    if not state:
+        return {}
+    st = state.upper()
+    domain = _STATE_SOS_DOMAIN.get(st)
+    if not domain:
+        return {}
+    org = _norm(org_name or "")
+    if len(org) < 4:
+        return {}
+
+    q = f'site:{domain} "{org}"'
+    bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
+
+    async with httpx.AsyncClient(
+        timeout=15.0, follow_redirects=True, headers={"User-Agent": UA}
+    ) as c:
+        try:
+            r = await c.get(bing_url)
+            if r.status_code != 200:
+                return {}
+            html = r.text
+        except Exception:
+            return {}
+        # First on-domain hit
+        m = re.search(rf'href="(https?://[^"\']*{re.escape(domain)}[^"\']+)"', html)
+        if not m:
+            return {}
+        detail_url = _html.unescape(m.group(1))
+        try:
+            await asyncio.sleep(0.4)
+            r2 = await c.get(detail_url)
+            if r2.status_code != 200:
+                return {"source_url": detail_url, "source": f"sos-{st.lower()}"}
+            page = _html.unescape(r2.text)
+        except Exception:
+            return {"source_url": detail_url, "source": f"sos-{st.lower()}"}
+
+    officers: list[dict] = []
+    # Generic patterns common to most state SoS sites
+    for m in re.finditer(
+        r"(Manager|Member|Officer|Director|Agent|President|CEO|CFO|Secretary|Treasurer|Owner)\s*[:\-]?\s*</?[^>]*>?\s*([A-Z][A-Z, .'\-]{3,60})",
+        page,
+    ):
+        title, name = m.group(1).strip(), m.group(2).strip()
+        if name and len(name) > 3 and len(name) < 60:
+            officers.append({"title": title, "name": name})
+    # Dedup
+    seen, deduped = set(), []
+    for o in officers:
+        key = (o["title"].lower(), o["name"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(o)
+    return {
+        "officers": deduped[:6],
+        "source_url": detail_url,
+        "source": f"sos-{st.lower()}",
+    }
+
+
+async def find_state_filings(org_name: str, state: Optional[str]) -> dict:
+    """Unified entry point: returns whatever we can get from the state's SoS.
+
+    Result schema:
+        {
+          "emails": [...],     # only FL gives these reliably
+          "officers": [...],   # any state we have a parser for
+          "source": "sunbiz-fl" | "sos-tx" | ...,
+          "source_url": "...",
+        }
+    """
+    out: dict = {"emails": [], "officers": [], "source": "", "source_url": ""}
+    if not state:
+        return out
+    st = state.upper()
+    if st == "FL":
+        hits = await find_sunbiz_emails(org_name=org_name, state=st)
+        if hits:
+            first = hits[0]
+            out["source"] = first.get("source", "sunbiz-fl")
+            out["source_url"] = first.get("source_url", "")
+            out["officers"] = first.get("officers", []) or []
+            out["emails"] = [h.get("email", "") for h in hits if h.get("email")]
+        return out
+    # Generic SoS Bing-route for other states
+    info = await find_sos_officers(org_name=org_name, state=st)
+    if info:
+        out.update({
+            "officers": info.get("officers", []),
+            "source": info.get("source", ""),
+            "source_url": info.get("source_url", ""),
+        })
+    return out
+

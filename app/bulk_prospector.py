@@ -581,18 +581,21 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         sos_email = ""
         sos_source = ""
         sos_officer = ""
+        sos_officers_all: list[dict] = []
         if (not dm_email and not company_email and not pubmed_email
                 and ENABLE_EMAIL_ENRICHMENT):
             try:
-                from app.sos_lookup import find_sunbiz_emails
-                sos_hits = await find_sunbiz_emails(org_name=org, state=state)
-                if sos_hits:
-                    chosen = sos_hits[0]
-                    sos_email = chosen.get("email", "")
-                    sos_source = chosen.get("source", "")
-                    officers = chosen.get("officers") or []
-                    if officers:
-                        sos_officer = f"{officers[0].get('title','')} {officers[0].get('name','')}".strip()
+                from app.sos_lookup import find_state_filings
+                filings = await find_state_filings(org_name=org, state=state)
+                emails_list = filings.get("emails") or []
+                officers = filings.get("officers") or []
+                sos_officers_all = officers
+                if officers:
+                    o0 = officers[0]
+                    sos_officer = f"{o0.get('title','')} {o0.get('name','')}".strip()
+                if emails_list:
+                    sos_email = emails_list[0]
+                    sos_source = filings.get("source", "")
                     if sos_email and not company_email:
                         company_email = sos_email
                         company_email_source = sos_source
@@ -618,6 +621,86 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                     if directory_email and not company_email:
                         company_email = directory_email
                         company_email_source = directory_source
+            except Exception:
+                pass
+
+        # ── Person-targeted site-search (find DM's personal email) ─────────
+        # If we have a DM name AND the org's domain, ask Bing for pages
+        # on the domain that mention that person — usually their bio page
+        # with a personal email. This is the highest-ROI "DM email" source.
+        person_email = ""
+        person_email_source = ""
+        if (not dm_email and first and last and org_domain
+                and ENABLE_EMAIL_ENRICHMENT):
+            try:
+                from app.last_resort import find_email_for_person_on_site
+                hits = await find_email_for_person_on_site(
+                    domain=org_domain, first=first, last=last, max_pages=4,
+                )
+                if hits:
+                    # Prefer personal-match emails
+                    pers = [h for h in hits if h.get("is_personal_match")]
+                    chosen = (pers[0] if pers else hits[0])
+                    person_email = chosen.get("email", "")
+                    person_email_source = chosen.get("source", "person-site-search")
+                    if person_email:
+                        dm_email = person_email
+                        dm_email_confidence = int(chosen.get("confidence") or 80)
+                        dm_email_source = person_email_source
+            except Exception:
+                pass
+
+        # ── Wayback Machine (dead-domain rescue) ──────────────────────────
+        # When the org's site doesn't resolve today, an archived snapshot
+        # often does. ~30% of dead domains have a usable recent snapshot.
+        wayback_email = ""
+        wayback_source = ""
+        if (not dm_email and not company_email and not pubmed_email
+                and not directory_email and org_domain
+                and ENABLE_EMAIL_ENRICHMENT):
+            try:
+                from app.last_resort import find_wayback_emails
+                wb = await find_wayback_emails(domain=org_domain, max_pages=4)
+                if wb:
+                    wayback_email = wb[0].get("email", "")
+                    wayback_source = wb[0].get("source", "wayback")
+                    if wayback_email and not company_email:
+                        company_email = wayback_email
+                        company_email_source = wayback_source
+            except Exception:
+                pass
+
+        # ── Verified LinkedIn URL (real slug, not search) ─────────────────
+        verified_li_url = ""
+        if first and last and org and ENABLE_EMAIL_ENRICHMENT:
+            try:
+                from app.last_resort import resolve_linkedin_url
+                verified_li_url = await resolve_linkedin_url(first, last, org)
+            except Exception:
+                pass
+
+        # ── SMTP+MX deliverability check (drop hard bounces) ──────────────
+        # Only verify when we actually got an email — keeps cost bounded.
+        # Treats 5xx as bounce, accept-all providers as 'unknown'.
+        email_status_dm = ""
+        email_status_company = ""
+        if os.environ.get("VERIFY_DELIVERABILITY", "1") == "1":
+            try:
+                from app.email_deliverability import check_deliverability
+                if dm_email:
+                    s = await check_deliverability(dm_email)
+                    email_status_dm = s
+                    if s == "bounce":
+                        # drop the bounce — keep the row, just don't email
+                        dm_email = ""
+                        dm_email_source = ""
+                        dm_email_confidence = 0
+                if company_email:
+                    s = await check_deliverability(company_email)
+                    email_status_company = s
+                    if s == "bounce":
+                        company_email = ""
+                        company_email_source = ""
             except Exception:
                 pass
 
@@ -757,6 +840,16 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Sunbiz Email": sos_email,
             "Sunbiz Source": sos_source,
             "Sunbiz Officer": sos_officer,
+            "SOS Officers (all)": "; ".join(
+                f"{o.get('title','')}:{o.get('name','')}" for o in (sos_officers_all or [])[:5]
+            ),
+            "Person-Site Email": person_email,
+            "Person-Site Source": person_email_source,
+            "Wayback Email": wayback_email,
+            "Wayback Source": wayback_source,
+            "Verified LinkedIn URL": verified_li_url,
+            "DM Email Deliverability": email_status_dm,
+            "Company Email Deliverability": email_status_company,
             # CLIA enrichment (CMS public dataset, real, no auth)
             "CLIA Number": clia.get("clia_number", ""),
             "CLIA Test Volume": clia.get("clia_test_volume", "") or "",
@@ -812,7 +905,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
-        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email"))
+        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email"))
         has_fax = bool(r.get("CLIA Fax"))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
@@ -837,7 +930,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     if _os2.getenv("QUALITY_FIRST", "0") == "1":
         def _is_quality(r: dict) -> bool:
             if (r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
-                    or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email")):
+                    or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email")
+                    or r.get("Person-Site Email") or r.get("Wayback Email")):
                 return True
             if r.get("Org Domain"):
                 return True
@@ -860,6 +954,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                 r.get("DM Email") or r.get("Company Email")
                 or r.get("PubMed Email") or r.get("Directory Email")
                 or r.get("Site-Search Email") or r.get("Sunbiz Email")
+                or r.get("Person-Site Email") or r.get("Wayback Email")
             )
         before_e = len(rows)
         rows = [r for r in rows if _has_email(r)]
