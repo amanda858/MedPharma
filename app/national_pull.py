@@ -19,6 +19,10 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# Import config first so DATA_DIR / DB_PATH env vars are resolved to a writable path
+# (handles Render free-tier, where /data is not mounted).
+from app.config import DATA_DIR as _DATA_DIR, DATABASE_PATH as _DB_PATH
+
 US_STATES_PLUS = [
     "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
     "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
@@ -28,12 +32,12 @@ US_STATES_PLUS = [
     "DC","PR",
 ]
 
-OUT_DIR = os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
+OUT_DIR = os.environ.get("NATIONAL_PULL_DIR") or os.path.join(_DATA_DIR, "national_pulls")
 SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
 PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "50"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
-DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")
+DB_PATH = _DB_PATH
 
 # Daily national pull defaults to high-quality, email-required output.
 # Override these env vars at the platform level if a wider net is desired.

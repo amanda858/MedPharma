@@ -1863,8 +1863,7 @@ def _find_latest_national_csv() -> str:
 
     Resolution order:
       1) `national_pulls.csv_path` from SQLite (newest row that exists on disk).
-      2) Glob `/data/national_pull_*.csv` and pick the newest by mtime.
-      3) Glob `<DATA_DIR>/national_pull_*.csv` and `./data/national_pull_*.csv`.
+      2) Glob common data dirs for `national_pull_*.csv`.
     """
     import sqlite3 as _sql
     import glob as _glob
@@ -1879,10 +1878,14 @@ def _find_latest_national_csv() -> str:
                     candidates.append(p)
     except Exception:
         pass
-    search_dirs = ["/data", os.environ.get("DATA_DIR", ""), "./data", "data"]
-    for d in search_dirs:
+    data_dir_env = os.environ.get("DATA_DIR", "")
+    search_dirs: list[str] = []
+    for d in [data_dir_env, "/data", "/tmp/medpharma_data", "./data", "data"]:
         if not d:
             continue
+        search_dirs.append(d)
+        search_dirs.append(os.path.join(d, "national_pulls"))
+    for d in search_dirs:
         try:
             for p in _glob.glob(os.path.join(d, "national_pull_*.csv")):
                 if os.path.exists(p):
@@ -1891,7 +1894,6 @@ def _find_latest_national_csv() -> str:
             pass
     if not candidates:
         return ""
-    # newest by mtime
     try:
         candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     except Exception:

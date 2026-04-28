@@ -2,6 +2,39 @@
 
 import os
 
+
+def _resolve_writable_data_dir() -> str:
+    """Pick a writable data directory.
+
+    Priority:
+      1) Honor explicit DATA_DIR env var if it's writable.
+      2) `/data` if it exists and is writable (Render paid disk).
+      3) `/tmp/medpharma_data` (Render free-tier ephemeral fallback).
+      4) Local `./data` for dev.
+    """
+    candidates = []
+    explicit = os.getenv("DATA_DIR", "").strip()
+    if explicit:
+        candidates.append(explicit)
+    candidates += ["/data", "/tmp/medpharma_data", "data"]
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            probe = os.path.join(d, ".write_test")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            return d
+        except Exception:
+            continue
+    # Last resort: cwd
+    return "."
+
+
+DATA_DIR = _resolve_writable_data_dir()
+# Surface the resolved dir back into the env so subprocesses + other modules see it.
+os.environ["DATA_DIR"] = DATA_DIR
+
 # NPI Registry API (free, no key required)
 NPI_API_BASE = "https://npiregistry.cms.hhs.gov/api/"
 NPI_API_VERSION = "2.1"
@@ -17,7 +50,26 @@ APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
 LAB_PORT = int(os.getenv("LAB_PORT", "8000"))    # Lab Lead Generator
 HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
 
-DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
+# DB lives inside the resolved data dir. Honor explicit DB_PATH if the user/operator
+# set one and its parent dir is writable; otherwise auto-route to DATA_DIR/leads.db.
+def _resolve_db_path() -> str:
+    explicit = os.getenv("DB_PATH", "").strip()
+    if explicit:
+        parent = os.path.dirname(explicit) or "."
+        try:
+            os.makedirs(parent, exist_ok=True)
+            probe = os.path.join(parent, ".db_write_test")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            return explicit
+        except Exception:
+            pass
+    return os.path.join(DATA_DIR, "leads.db")
+
+
+DATABASE_PATH = _resolve_db_path()
+os.environ["DB_PATH"] = DATABASE_PATH
 
 # Hunter.io API key (set via environment variable)
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
