@@ -552,6 +552,53 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             except Exception:
                 pass
 
+        # ── Site-restricted Bing crawl on the org's own domain ────────────
+        # Direct path crawling missed it? Ask Bing to surface email-bearing
+        # pages on this domain (deeply nested provider/location/press pages).
+        site_email = ""
+        site_source = ""
+        if (not dm_email and not company_email and not pubmed_email
+                and org_domain and ENABLE_EMAIL_ENRICHMENT):
+            try:
+                from app.site_search import find_emails_via_site_search
+                hits = await find_emails_via_site_search(
+                    domain=org_domain, org_name=org, max_pages=5,
+                )
+                if hits:
+                    # Prefer on-domain hits
+                    on_dom = [h for h in hits if h.get("is_on_domain")]
+                    chosen = (on_dom[0] if on_dom else hits[0])
+                    site_email = chosen.get("email", "")
+                    site_source = chosen.get("source", "")
+                    if site_email and not company_email:
+                        company_email = site_email
+                        company_email_source = site_source
+            except Exception:
+                pass
+
+        # ── State Secretary-of-State filings (FL Sunbiz first) ────────────
+        # Public business filings list registered-agent + officer emails.
+        sos_email = ""
+        sos_source = ""
+        sos_officer = ""
+        if (not dm_email and not company_email and not pubmed_email
+                and ENABLE_EMAIL_ENRICHMENT):
+            try:
+                from app.sos_lookup import find_sunbiz_emails
+                sos_hits = await find_sunbiz_emails(org_name=org, state=state)
+                if sos_hits:
+                    chosen = sos_hits[0]
+                    sos_email = chosen.get("email", "")
+                    sos_source = chosen.get("source", "")
+                    officers = chosen.get("officers") or []
+                    if officers:
+                        sos_officer = f"{officers[0].get('title','')} {officers[0].get('name','')}".strip()
+                    if sos_email and not company_email:
+                        company_email = sos_email
+                        company_email_source = sos_source
+            except Exception:
+                pass
+
         # ── Directory fallback (Yellow Pages / BBB / Manta / Healthgrades) ──
         # Run ONLY when we have nothing — saves time and rate-limit budget.
         # Returns real emails listed on public business directories.
@@ -705,6 +752,11 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "PubMed Year": pubmed_source_year,
             "Directory Email": directory_email,
             "Directory Source": directory_source,
+            "Site-Search Email": site_email,
+            "Site-Search Source": site_source,
+            "Sunbiz Email": sos_email,
+            "Sunbiz Source": sos_source,
+            "Sunbiz Officer": sos_officer,
             # CLIA enrichment (CMS public dataset, real, no auth)
             "CLIA Number": clia.get("clia_number", ""),
             "CLIA Test Volume": clia.get("clia_test_volume", "") or "",
@@ -760,7 +812,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
-        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email"))
+        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email"))
         has_fax = bool(r.get("CLIA Fax"))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
@@ -784,7 +836,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     quality_dropped = 0
     if _os2.getenv("QUALITY_FIRST", "0") == "1":
         def _is_quality(r: dict) -> bool:
-            if r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email"):
+            if (r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
+                    or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email")):
                 return True
             if r.get("Org Domain"):
                 return True
@@ -806,6 +859,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             return bool(
                 r.get("DM Email") or r.get("Company Email")
                 or r.get("PubMed Email") or r.get("Directory Email")
+                or r.get("Site-Search Email") or r.get("Sunbiz Email")
             )
         before_e = len(rows)
         rows = [r for r in rows if _has_email(r)]
