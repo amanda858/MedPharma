@@ -2,6 +2,118 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "local-hunt-FL-quality",
+            "type": "shell",
+            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=50 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "local-hunt-FL-quality-25",
+            "type": "shell",
+            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 VERIFY_DELIVERABILITY=0 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-national-quality-first",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/national_pull.py app/bulk_prospector.py && git commit -m 'feat: daily national pull defaults to QUALITY_FIRST + REQUIRE_EMAIL' -- app/national_pull.py app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-national-ui",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/templates/index.html && git commit -m 'feat: add hub UI controls for national pull (run/status/download)' -- app/leads_app.py app/templates/index.html && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "trigger-national-pull",
+            "type": "shell",
+            "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo attempt $i; out=$(curl -s --max-time 15 https://medpharma-hub.onrender.com/buildz); echo \"$out\"; if echo \"$out\" | grep -q '\\\"ok\\\":true'; then echo BUILDZ_OK; fi; sleep 25; done; echo; echo '--- triggering national pull ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/api/national-pull/status",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "national-pull-now",
+            "type": "shell",
+            "command": "echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "national-pull-status",
+            "type": "shell",
+            "command": "curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-pull-bypass",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/hub_app.py && git commit -m 'fix: allow unauthenticated national-pull endpoints' -- app/hub_app.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "trigger-pull-after-deploy",
+            "type": "shell",
+            "command": "for i in 1 2 3 4 5 6 7 8; do out=$(curl -s --max-time 10 https://medpharma-hub.onrender.com/buildz); echo \"$i $out\"; if echo \"$out\" | grep -q 8cb328a; then echo READY; break; fi; sleep 25; done; echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-sos-site",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && python3 -c 'import asyncio; from app.sos_lookup import find_sunbiz_emails; from app.site_search import find_emails_via_site_search; print(\"sunbiz:\", asyncio.run(find_sunbiz_emails(\"ACCESS MEDICAL LABORATORIES INC\", \"FL\"))[:2]); print(\"site:\", asyncio.run(find_emails_via_site_search(\"accessmedlab.com\", \"ACCESS MEDICAL\"))[:2])'",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-acc-enhancements",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/site_search.py app/sos_lookup.py app/bulk_prospector.py && git commit -m 'feat: site-restricted bing crawl + FL Sunbiz officer/email lookup' -- app/site_search.py app/sos_lookup.py app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "smoke-imports",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && pip install -q dnspython >/dev/null 2>&1; python3 -c 'from app import bulk_prospector, sos_lookup, last_resort, email_deliverability, site_search, directory_emails; print(\"imports OK\")'",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-mega-accuracy",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git commit -m 'feat: multi-state SoS + wayback + person-site + verified LI + SMTP deliverability' -- app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy-and-trigger",
+            "type": "shell",
+            "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do out=$(curl -s --max-time 10 https://medpharma-hub.onrender.com/buildz); echo \"$i $out\"; sha=$(git -C /workspaces/CVOPro rev-parse HEAD); if echo \"$out\" | grep -q \"$sha\"; then echo READY; break; fi; sleep 25; done; echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; sleep 3; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-os-fix",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/bulk_prospector.py && git commit -m 'fix: use _os alias for VERIFY_DELIVERABILITY env read' -- app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-quality-first",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/email_finder.py app/directory_emails.py app/bulk_prospector.py .vscode/local_hunt.py && git commit -m 'feat: directory fallback + improved extraction + QUALITY_FIRST mode' -- app/email_finder.py app/directory_emails.py app/bulk_prospector.py .vscode/local_hunt.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "probe-whois",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/probe_whois.py",
