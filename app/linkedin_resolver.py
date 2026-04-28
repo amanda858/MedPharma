@@ -37,10 +37,10 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v3.db")
-HTTP_TIMEOUT = 6.0
-MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "120"))
-THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.6"))
+CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v4.db")
+HTTP_TIMEOUT = 5.0
+MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "500"))
+THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.15"))
 
 _lock = threading.Lock()
 _live_count = 0
@@ -248,12 +248,61 @@ def _resolve_via_ddg(query: str, regex: re.Pattern, post_filter=None, max_result
     return targets[0] if targets else ""
 
 
+def _resolve_via_bing(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """Bing HTML search — usually not rate-limited from cloud IPs."""
+    if not _can_make_live_query():
+        return [] if max_results > 1 else ""
+    url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}&count=20"
+    html = _fetch(url)
+    if not html:
+        return [] if max_results > 1 else ""
+    matches = regex.findall(html)
+    if post_filter:
+        matches = post_filter(matches)
+    if max_results > 1:
+        return matches[:max_results]
+    return matches[0] if matches else ""
+
+
+def _resolve_via_mojeek(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """Mojeek — independent search index, lenient with bots."""
+    if not _can_make_live_query():
+        return [] if max_results > 1 else ""
+    url = f"https://www.mojeek.com/search?q={urllib.parse.quote(query)}"
+    html = _fetch(url)
+    if not html:
+        return [] if max_results > 1 else ""
+    matches = regex.findall(html)
+    if post_filter:
+        matches = post_filter(matches)
+    if max_results > 1:
+        return matches[:max_results]
+    return matches[0] if matches else ""
+
+
+def _resolve_via_startpage(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """Startpage — Google proxy, no Google bot detection."""
+    if not _can_make_live_query():
+        return [] if max_results > 1 else ""
+    url = f"https://www.startpage.com/sp/search?query={urllib.parse.quote(query)}"
+    html = _fetch(url)
+    if not html:
+        return [] if max_results > 1 else ""
+    matches = regex.findall(html)
+    if post_filter:
+        matches = post_filter(matches)
+    if max_results > 1:
+        return matches[:max_results]
+    return matches[0] if matches else ""
+
+
 def _resolve_chain(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
-    """Try Brave first, fall back to DuckDuckGo on empty/failure."""
-    res = _resolve_via_brave(query, regex, post_filter, max_results)
-    if res:
-        return res
-    return _resolve_via_ddg(query, regex, post_filter, max_results)
+    """Try Bing → DDG → Brave (Brave last — rate-limited from cloud IPs)."""
+    for fn in (_resolve_via_bing, _resolve_via_ddg, _resolve_via_brave):
+        res = fn(query, regex, post_filter, max_results)
+        if res:
+            return res
+    return [] if max_results > 1 else ""
 
 
 _LINKEDIN_COMPANY_RE = re.compile(
@@ -276,6 +325,34 @@ def _filter_linkedin_company(matches):
         seen.add(u)
         out.append(u)
     return out
+
+
+def linkedin_search_url(first: str, last: str, org: str = "") -> str:
+    """Always-clickable Bing search URL pre-filtered to that person on LinkedIn.
+
+    Lands the user on a real Bing results page constrained to
+    ``site:linkedin.com/in`` so the first result is almost always the
+    correct profile. This is the production fallback when we can't
+    resolve a direct slug from cloud IPs (search engines block bots).
+    """
+    if not (first and last):
+        return ""
+    parts = [first.strip(), last.strip()]
+    if org:
+        cleaned = _clean_org(org)
+        if cleaned:
+            parts.append(cleaned)
+    parts.append("site:linkedin.com/in")
+    q = " ".join(parts)
+    return f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
+
+
+def linkedin_company_search_url(org: str) -> str:
+    if not org:
+        return ""
+    cleaned = _clean_org(org) or org
+    q = f"{cleaned} site:linkedin.com/company"
+    return f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
 
 
 def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:

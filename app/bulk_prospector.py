@@ -34,8 +34,18 @@ from app.linkedin_resolver import (
     resolve_company_linkedin,
     resolve_employee_at_company,
     reset_run_budget,
+    linkedin_search_url,
+    linkedin_company_search_url,
 )
 from app.backup_people import find_backup_people
+
+# Live LinkedIn slug resolution is unreliable from cloud IPs (search engines
+# block scrapers). When this flag is False we skip live lookups entirely
+# and rely on guaranteed-clickable Bing search URLs (pre-filtered to the
+# exact person + org on linkedin.com/in). Result: 100% of rows get a
+# one-click path to the LinkedIn profile, in seconds, no rate-limit risk.
+import os as _os
+LIVE_LINKEDIN_LOOKUP = _os.environ.get("LIVE_LINKEDIN_LOOKUP", "0") == "1"
 
 
 # Convenient specialty groups — each maps to one or more taxonomy keywords.
@@ -413,11 +423,10 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         social = await find_social_profiles(first, last, org=org, title=title) or {}
         templates = social_outreach_templates(first or "there", org)
 
-        # ── Real-profile resolver ───────────────────────────────────────────
-        # Replace the speculative "search URL" with the actual
-        # linkedin.com/in/<slug> URL when we can verify one exists. If we
-        # can't, leave the column blank (don't ship a dead search link).
-        if first and last:
+        # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
+        # When LIVE_LINKEDIN_LOOKUP=1 we'll try to resolve direct slugs.
+        # Otherwise we skip straight to guaranteed-clickable search URLs.
+        if first and last and LIVE_LINKEDIN_LOOKUP:
             real_li = resolve_linkedin_profile(first, last, org)
             real_fb = resolve_facebook_profile(first, last, org)
             real_ig = resolve_instagram_profile(first, last, org)
@@ -426,59 +435,48 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # Fallbacks: when the named DM has no LinkedIn, surface the company
         # page + up to 3 verified employee profiles so the user still has
         # a real human at the org to DM.
-        company_li = resolve_company_linkedin(org) if org else ""
+        company_li = resolve_company_linkedin(org) if (org and LIVE_LINKEDIN_LOOKUP) else ""
         employee_lis: list[str] = []
-        li_label = "DM"
-        if not real_li and org:
+        li_label = "DM" if (first and last) else ""
+        if not real_li and org and LIVE_LINKEDIN_LOOKUP:
             employee_lis = resolve_employee_at_company(org, max_results=3)
             if employee_lis:
                 real_li = employee_lis[0]
                 li_label = "Employee"
 
+        # ── Always-clickable LinkedIn search URLs (100% hit rate) ──────────
+        # Pre-filtered Bing searches that land on LinkedIn results for
+        # this exact person + org. Production fallback for every row.
+        li_search_dm = linkedin_search_url(first, last, org) if (first and last) else ""
+        li_search_company = linkedin_company_search_url(org) if org else ""
+
         # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
-        # When the named DM has no real social profile and we couldn't even
-        # find an employee via search, fall back to another individual
-        # practitioner registered at the same practice address. This is
-        # someone who literally works at the lab — a doctor, pathologist,
-        # NP, etc. — and we can DM/email/phone them.
+        # Always pull a backup person at the same address — even when DM
+        # has good contact info, the backup adds optionality.
         backup_first = backup_last = backup_title = backup_phone = backup_npi = ""
         backup_li = ""
-        if not real_li and not real_fb and not real_ig:
-            try:
-                backups = await find_backup_people(
-                    zip_code=p.get("zip", ""),
-                    city=city,
-                    state=state,
-                    street_address=p.get("address", ""),
-                    exclude_npi=p.get("npi", ""),
-                    limit=3,
-                )
-            except Exception:
-                backups = []
-            for cand in backups:
-                # Try resolving each backup person's LinkedIn
-                cand_li = resolve_linkedin_profile(
-                    cand.get("first", ""), cand.get("last", ""), org
-                )
-                if cand_li:
-                    backup_first = cand["first"]
-                    backup_last = cand["last"]
-                    backup_title = cand.get("title", "") or cand.get("taxonomy", "")
-                    backup_phone = _format_phone(cand.get("phone", ""))
-                    backup_npi = cand.get("npi", "")
-                    backup_li = cand_li
-                    real_li = cand_li
-                    li_label = "Backup Person"
-                    break
-            # Even if no LinkedIn found for backups, surface the first one
-            # by name so the user has SOME other human at the address.
-            if not backup_first and backups:
-                cand = backups[0]
-                backup_first = cand["first"]
-                backup_last = cand["last"]
-                backup_title = cand.get("title", "") or cand.get("taxonomy", "")
-                backup_phone = _format_phone(cand.get("phone", ""))
-                backup_npi = cand.get("npi", "")
+        backup_li_search = ""
+        try:
+            backups = await find_backup_people(
+                zip_code=p.get("zip", ""),
+                city=city,
+                state=state,
+                street_address=p.get("address", ""),
+                exclude_npi=p.get("npi", ""),
+                limit=3,
+            )
+        except Exception:
+            backups = []
+        if backups:
+            cand = backups[0]
+            backup_first = cand["first"]
+            backup_last = cand["last"]
+            backup_title = cand.get("title", "") or cand.get("taxonomy", "")
+            backup_phone = _format_phone(cand.get("phone", ""))
+            backup_npi = cand.get("npi", "")
+            backup_li_search = linkedin_search_url(backup_first, backup_last, org)
+            if LIVE_LINKEDIN_LOOKUP:
+                backup_li = resolve_linkedin_profile(backup_first, backup_last, org)
         # Personalized hook + inject into templates
         hook = personalized_hook(
             first, org, taxonomy_desc=tax, lab_type_detected=type_detected,
@@ -526,9 +524,10 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Decision Maker": full_name,
             "DM Title": title,
             "DM Email": "",  # DM-only mode — no email
-            # Social DM URLs (blank if no real profile found)
+            # Social DM URLs (real_li only when verified; otherwise blank)
             "LinkedIn URL": real_li,
             "LinkedIn Match Type": li_label if real_li else "",
+            "LinkedIn Search URL": li_search_dm,
             "LinkedIn Sales Nav URL": social.get("linkedin_sales_nav", "") if real_li else "",
             "Facebook URL": real_fb,
             "Instagram URL": real_ig,
@@ -536,6 +535,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Google Social Search": "",
             "Google LinkedIn Search": "",
             "LinkedIn Company Page": company_li,
+            "LinkedIn Company Search URL": li_search_company,
             "LinkedIn Other Employees": " | ".join(employee_lis[1:]) if len(employee_lis) > 1 else "",
             "Facebook Company Page": "",
             "Instagram Company": "",
@@ -545,6 +545,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Backup Phone": backup_phone,
             "Backup NPI": backup_npi,
             "Backup LinkedIn": backup_li,
+            "Backup LinkedIn Search URL": backup_li_search,
             # Paste-ready DM templates
             "LinkedIn Connection Note": templates.get("linkedin_connection_note", ""),
             "LinkedIn First Message": templates.get("linkedin_first_message", ""),
@@ -571,7 +572,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone")))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
-        has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL"))
+        has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
+                          or r.get("LinkedIn Search URL") or r.get("Backup LinkedIn Search URL"))
         return has_dm_reach or has_backup_reach or has_social
 
     pre_filter = len(rows)

@@ -65,6 +65,20 @@
             "problemMatcher": []
         },
         {
+            "label": "local-hunt-FL-clinical",
+            "type": "shell",
+            "command": "HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "local-hunt-FL-pathology",
+            "type": "shell",
+            "command": "HUNT_STATE=FL HUNT_SPECIALTY=pathology HUNT_LIMIT=25 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "git-log-recent",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git log --oneline -10 && echo --- && git ls-remote origin main",
