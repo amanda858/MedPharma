@@ -563,14 +563,31 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Enumeration Date": enum_date,
         })
 
+    # Production filter: drop rows with no reachable human at all.
+    # A row needs at least ONE of:
+    #   - a real DM name (from NPPES authorized official) AND any phone, OR
+    #   - a qualified backup person (NPPES NPI-1 with phone)
+    # Otherwise it's noise and wastes the user's outreach time.
+    def _has_reach(r: dict) -> bool:
+        has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone")))
+        has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
+        has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL"))
+        return has_dm_reach or has_backup_reach or has_social
+
+    pre_filter = len(rows)
+    rows = [r for r in rows if _has_reach(r)]
+    dropped = pre_filter - len(rows)
+
     rows.sort(key=lambda r: -int(r.get("Heat Score") or 0))
     daily_top_10 = rows[:10]
 
     summary = {
         "input_rows": len(prospects),
         "output_rows": len(rows),
+        "rows_dropped_no_reach": dropped,
         "rows_with_dm": sum(1 for r in rows if r.get("Decision Maker")),
         "rows_with_direct_line": sum(1 for r in rows if r.get("Direct Line")),
+        "rows_with_backup": sum(1 for r in rows if r.get("Backup Contact")),
         "rows_with_social_dm": sum(1 for r in rows if r.get("LinkedIn URL")),
         "rows_top_heat": sum(1 for r in rows if int(r.get("Heat Score") or 0) >= 70),
         "mode": "dm_only",

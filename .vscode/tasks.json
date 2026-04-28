@@ -58,6 +58,20 @@
             "problemMatcher": []
         },
         {
+            "label": "wait-for-deploy",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_deploy.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "git-log-recent",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git log --oneline -10 && echo --- && git ls-remote origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "test-resolver",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/test_resolver.py",
