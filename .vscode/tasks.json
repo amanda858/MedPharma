@@ -51,6 +51,13 @@
             "problemMatcher": []
         },
         {
+            "label": "test-backup-people",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/test_backup_people.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "test-resolver",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/test_resolver.py",

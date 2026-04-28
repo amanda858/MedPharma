@@ -449,6 +449,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                     zip_code=p.get("zip", ""),
                     city=city,
                     state=state,
+                    street_address=p.get("address", ""),
                     exclude_npi=p.get("npi", ""),
                     limit=3,
                 )
