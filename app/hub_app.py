@@ -130,6 +130,8 @@ async def admin_only_leads_guard(request: Request, call_next):
             or path.startswith("/admin/leads/api/scrub/download/")
             # Hunt mode (prospect bulk): read-only NPPES queries on public data
             or path.startswith("/admin/leads/api/prospect/")
+            # National pull: idempotent run trigger + status + download (public data)
+            or path.startswith("/admin/leads/api/national-pull/")
         ):
             return await call_next(request)
 
