@@ -24,18 +24,27 @@ from typing import Optional
 # ─── Person-level search URLs ──────────────────────────────────────────
 
 def linkedin_people_search_url(first: str, last: str, org: str = "") -> str:
-    """LinkedIn profile lookup via Google site-search.
+    """LinkedIn profile lookup via Bing site-search.
 
-    LinkedIn's own `/search/results/people/` page is gated for non-Premium
-    accounts and shows nothing without login. Google `site:linkedin.com/in`
-    returns the actual profile pages directly clickable for everyone, no
-    LinkedIn account required.
+    Why Bing instead of Google or LinkedIn's own search:
+      * LinkedIn's `/search/results/people/` requires login (Premium gated
+        for full results) and shows nothing for anonymous visitors.
+      * Google often serves a cookie-consent interstitial that blocks the
+        result list until the user clicks through, and is more aggressive
+        about CAPTCHA from cloud regions.
+      * Bing returns site-restricted results immediately, no consent wall.
+
+    The query intentionally drops the strict quoting on the full name so
+    Bing surfaces partial matches — important because small lab owners
+    often appear on LinkedIn under a slightly different first-name spelling
+    (Bob/Robert, Mike/Michael, etc.).
     """
-    q = f'"{first} {last}"'
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
-    q += " site:linkedin.com/in"
-    return f"https://www.google.com/search?q={quote(q)}"
+        parts.append(org)
+    parts.append("site:linkedin.com/in")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def linkedin_native_search_url(first: str, last: str, org: str = "") -> str:
@@ -58,40 +67,39 @@ def linkedin_sales_nav_url(first: str, last: str, org: str = "") -> str:
 
 
 def facebook_people_search_url(first: str, last: str, org: str = "") -> str:
-    """Facebook public-profile lookup.
+    """Facebook profile lookup via Bing site-search.
 
-    FB's `/search/people/?q=` endpoint now 404s for anonymous traffic.
-    The `/public/{Name}` slug page still works without login and lists
-    every public profile matching that name. Org/state isn't part of the
-    URL but FB shows location on each result card so the user can pick
-    the right person visually.
+    FB's `/public/{Name}` page works but only shows ~5 results and skips
+    profiles whose privacy excludes them from public listing. A Bing
+    `site:facebook.com` query surfaces business pages, public posts, and
+    profile fragments that FB's own slug page hides.
     """
-    name = f"{first} {last}".strip()
-    slug = name.replace(" ", "-")
-    return f"https://www.facebook.com/public/{quote(slug, safe='-')}"
+    parts = [first, last]
+    if org:
+        parts.append(org)
+    parts.append("site:facebook.com")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def facebook_google_search_url(first: str, last: str, org: str = "") -> str:
-    """Google fallback when FB's own search is rate-limited."""
-    q = f'"{first} {last}"'
+    """Bing fallback when FB's own search is rate-limited."""
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
-    q += " site:facebook.com"
-    return f"https://www.google.com/search?q={quote(q)}"
+        parts.append(org)
+    parts.append("site:facebook.com")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def instagram_search_url(first: str, last: str, org: str = "") -> str:
-    """Instagram profile lookup via Google.
-
-    IG's `/explore/search/keyword/` redirects anonymous traffic to the
-    login wall (HTTP 429). Google `site:instagram.com` reliably returns
-    a list of matching profile pages the user can open.
-    """
-    q = f'"{first} {last}"'
+    """Instagram profile lookup via Bing site-search (no consent wall)."""
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
-    q += " site:instagram.com"
-    return f"https://www.google.com/search?q={quote(q)}"
+        parts.append(org)
+    parts.append("site:instagram.com")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def x_twitter_search_url(first: str, last: str, org: str = "") -> str:
@@ -103,51 +111,55 @@ def x_twitter_search_url(first: str, last: str, org: str = "") -> str:
 
 
 def google_linkedin_url(first: str, last: str, org: str = "") -> str:
-    """Google constrained to linkedin.com/in/."""
-    q = f'"{first} {last}"'
+    """Bing constrained to linkedin.com/in/."""
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
-    q += " site:linkedin.com/in"
-    return f"https://www.google.com/search?q={quote(q)}"
+        parts.append(org)
+    parts.append("site:linkedin.com/in")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def google_social_url(first: str, last: str, org: str = "") -> str:
-    """Google search across LinkedIn + Facebook + Instagram + X for a person."""
-    q = f'"{first} {last}"'
+    """Bing search across LinkedIn + Facebook + Instagram + X for a person."""
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
+        parts.append(org)
+    q = " ".join(p for p in parts if p)
     q += " (site:linkedin.com OR site:facebook.com OR site:instagram.com OR site:x.com OR site:twitter.com)"
-    return f"https://www.google.com/search?q={quote(q)}"
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 # ─── Company-level URLs (when person can't be found) ──────────────────
 
 def linkedin_company_search_url(org: str) -> str:
-    """Find the company's LinkedIn page via Google site-search.
-
-    LinkedIn's own `/search/results/companies/` page is gated. Google
-    `site:linkedin.com/company` returns the page directly for everyone.
-    """
-    q = f'"{org}" site:linkedin.com/company'
-    return f"https://www.google.com/search?q={quote(q)}"
+    """Find the company's LinkedIn page via Bing site-search."""
+    if not org:
+        return ""
+    q = f"{org} site:linkedin.com/company"
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def facebook_page_search_url(org: str) -> str:
-    """Find the company's Facebook page via Google site-search
-    (FB's own page-search endpoint 404s for anonymous traffic)."""
-    return f"https://www.google.com/search?q={quote(f'"{org}" site:facebook.com')}"
+    """Find the company's Facebook page via Bing site-search."""
+    if not org:
+        return ""
+    return f"https://www.bing.com/search?q={quote(f'{org} site:facebook.com')}"
 
 
 def instagram_company_search_url(org: str) -> str:
-    """Find the company's IG handle via Google site-search
-    (IG explore endpoint redirects to login)."""
-    return f"https://www.google.com/search?q={quote(f'"{org}" site:instagram.com')}"
+    """Find the company's IG handle via Bing site-search."""
+    if not org:
+        return ""
+    return f"https://www.bing.com/search?q={quote(f'{org} site:instagram.com')}"
 
 
 def google_company_social_url(org: str) -> str:
-    """Find the company's social presence across platforms."""
-    q = f'"{org}" (site:linkedin.com/company OR site:facebook.com OR site:instagram.com OR site:x.com OR site:twitter.com)'
-    return f"https://www.google.com/search?q={quote(q)}"
+    """Find the company's social presence across platforms (via Bing)."""
+    if not org:
+        return ""
+    q = f"{org} (site:linkedin.com/company OR site:facebook.com OR site:instagram.com OR site:x.com OR site:twitter.com)"
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 # ─── Message templates ─────────────────────────────────────────────────

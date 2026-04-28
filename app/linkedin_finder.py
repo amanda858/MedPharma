@@ -17,16 +17,13 @@ from typing import Optional
 
 
 def linkedin_people_search_url(first: str, last: str, org: str = "") -> str:
-    """Profile lookup via Google site-search — works for everyone (no Premium needed).
-
-    LinkedIn's own /search/results/people page is gated for non-Premium accounts;
-    Google site:linkedin.com/in returns the actual profile URLs directly.
-    """
-    q = f'"{first} {last}"'
+    """Profile lookup via Bing site-search — no consent wall, no login."""
+    parts = [first, last]
     if org:
-        q += f' "{org}"'
-    q += " site:linkedin.com/in"
-    return f"https://www.google.com/search?q={quote(q)}"
+        parts.append(org)
+    parts.append("site:linkedin.com/in")
+    q = " ".join(p for p in parts if p)
+    return f"https://www.bing.com/search?q={quote(q)}"
 
 
 def linkedin_native_search_url(first: str, last: str, org: str = "") -> str:
