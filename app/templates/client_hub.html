@@ -3524,6 +3524,7 @@
       document.getElementById('accountSelect').style.display = 'block';
 
       // All users see all client accounts — with error handling for cold starts
+      let loadError = null;
       try {
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), 30000);
@@ -3535,14 +3536,23 @@
       } catch (e) {
         console.error('showAccountSelector error:', e);
         clientsList = [];
+        loadError = e;
       }
 
       const grid = document.getElementById('accountGrid');
-      if (clientsList.length === 0) {
+      if (loadError) {
         grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px 20px;">
           <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
           <div style="color:#64748b;margin-bottom:16px;">Could not load accounts. The server may still be waking up.</div>
           <button onclick="showAccountSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">Retry</button>
+          <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
+        </div>`;
+      } else if (clientsList.length === 0) {
+        grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px 20px;">
+          <div style="font-size:40px;margin-bottom:12px;">🏥</div>
+          <div style="font-size:18px;font-weight:600;color:#0f172a;margin-bottom:8px;">No client accounts yet</div>
+          <div style="color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Click <strong>+ New Client</strong> above to create your first client workspace, or jump straight to admin tools.</div>
+          <button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
       } else {
