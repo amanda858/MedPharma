@@ -355,6 +355,20 @@ def linkedin_company_search_url(org: str) -> str:
     return f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
 
 
+def linkedin_company_people_url(org: str) -> str:
+    """Bing search URL pre-filtered to the company's LinkedIn /people roster.
+
+    Pattern ``site:linkedin.com/company "<org>" people`` lands the user
+    on the company's employee roster page in 1 click. This is the
+    closest we can get to "find the company roster" without a paid API.
+    """
+    if not org:
+        return ""
+    cleaned = _clean_org(org) or org
+    q = f'"{cleaned}" site:linkedin.com/company people employees'
+    return f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
+
+
 def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
     """Return a direct linkedin.com/in/<slug> URL, or '' if unresolvable.
 

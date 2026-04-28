@@ -2,6 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "probe-whois",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_whois.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "verify-live-e2e",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py 2>&1 | tee /tmp/verify_live_e2e.log",

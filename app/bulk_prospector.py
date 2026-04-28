@@ -36,6 +36,7 @@ from app.linkedin_resolver import (
     reset_run_budget,
     linkedin_search_url,
     linkedin_company_search_url,
+    linkedin_company_people_url,
 )
 from app.backup_people import find_backup_people
 
@@ -428,44 +429,71 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         social = await find_social_profiles(first, last, org=org, title=title) or {}
         templates = social_outreach_templates(first or "there", org)
 
-        # ── Email enrichment (Hunter.io + pattern fallback) ────────────────
-        # This is the #1 thing salespeople need. We try to find a real
-        # verified email from Hunter.io, and if that fails we generate
-        # pattern emails from the discovered domain (first.last@domain etc).
+        # ── REAL Email enrichment (website scraping + Hunter only) ─────────
+        # NO pattern guesses. We only emit emails actually scraped from
+        # the company's live website or returned by Hunter.io.
+        # Person-level emails (matched to DM by name) → DM Email.
+        # Generic mailboxes (info@, contact@, sales@) → Company Email.
         dm_email = ""
         dm_email_confidence = 0
+        dm_email_source = ""
+        company_email = ""
+        company_email_source = ""
         org_domain = ""
-        domain_candidates = ""
         org_emails: list[dict] = []
-        if first and last and ENABLE_EMAIL_ENRICHMENT:
+        if ENABLE_EMAIL_ENRICHMENT:
             try:
                 from app.email_finder import find_emails_for_lab
                 em = await find_emails_for_lab(
                     org_name=org, first_name=first, last_name=last,
                 )
                 org_domain = em.get("live_domain", "") or ""
-                domain_candidates = ", ".join(em.get("domain_candidates") or [])
                 org_emails = em.get("emails") or []
-                # Pick best email for this DM:
-                # 1) exact name match in returned emails
-                # 2) first decision-maker email
-                # 3) first email
-                tgt_first = first.lower(); tgt_last = last.lower()
-                best = None
-                for e in org_emails:
-                    if (e.get("first_name", "").lower() == tgt_first
-                            and e.get("last_name", "").lower() == tgt_last):
-                        best = e; break
-                if not best:
-                    for e in org_emails:
-                        if e.get("is_decision_maker"):
-                            best = e; break
-                if not best and org_emails:
-                    best = org_emails[0]
-                if best:
-                    dm_email = best.get("email", "")
-                    dm_email_confidence = int(best.get("confidence", 0) or 0)
-            except Exception as _e:
+                # Drop any pattern-generated emails defensively (belt & suspenders).
+                org_emails = [
+                    e for e in org_emails
+                    if (e.get("source") or "") != "pattern_generated"
+                ]
+                tgt_first = (first or "").lower()
+                tgt_last = (last or "").lower()
+                # Person-level: match name OR (named, decision-maker, not generic)
+                person_pool = [e for e in org_emails if not e.get("is_generic")]
+                best_person = None
+                if tgt_first and tgt_last:
+                    for e in person_pool:
+                        if (e.get("first_name", "").lower() == tgt_first
+                                and e.get("last_name", "").lower() == tgt_last):
+                            best_person = e
+                            break
+                if not best_person:
+                    for e in person_pool:
+                        if e.get("is_decision_maker") and e.get("first_name"):
+                            best_person = e
+                            break
+                if not best_person and person_pool:
+                    # Take a named person if available
+                    for e in person_pool:
+                        if e.get("first_name") or e.get("last_name"):
+                            best_person = e
+                            break
+                if not best_person and person_pool:
+                    # Last resort: any real non-generic scraped email at this domain
+                    best_person = person_pool[0]
+                if best_person:
+                    dm_email = best_person.get("email", "")
+                    dm_email_confidence = int(best_person.get("confidence", 0) or 0)
+                    dm_email_source = best_person.get("source", "")
+                # Company-level mailbox (info@/contact@/sales@)
+                generic_pool = [e for e in org_emails if e.get("is_generic")]
+                # Prefer info@ > contact@ > sales@ > rest
+                pref_order = ["info", "contact", "sales", "office", "admin", "hello"]
+                generic_pool.sort(key=lambda e: pref_order.index(
+                    (e.get("email", "").split("@", 1)[0] or "").lower()
+                ) if (e.get("email", "").split("@", 1)[0] or "").lower() in pref_order else 99)
+                if generic_pool:
+                    company_email = generic_pool[0].get("email", "")
+                    company_email_source = generic_pool[0].get("source", "")
+            except Exception:
                 pass
 
         # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
@@ -494,6 +522,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # this exact person + org. Production fallback for every row.
         li_search_dm = linkedin_search_url(first, last, org) if (first and last) else ""
         li_search_company = linkedin_company_search_url(org) if org else ""
+        li_company_people = linkedin_company_people_url(org) if org else ""
 
         # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
         # Always pull a backup person at the same address — even when DM
@@ -570,8 +599,10 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "DM Title": title,
             "DM Email": dm_email,
             "DM Email Confidence": dm_email_confidence,
+            "DM Email Source": dm_email_source,
+            "Company Email": company_email,
+            "Company Email Source": company_email_source,
             "Org Domain": org_domain,
-            "Domain Candidates": domain_candidates,
             "Org Emails Found": "; ".join(e.get("email","") for e in org_emails[:5]),
             # Social DM URLs (real_li only when verified; otherwise blank)
             "LinkedIn URL": real_li,
@@ -585,6 +616,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Google LinkedIn Search": "",
             "LinkedIn Company Page": company_li,
             "LinkedIn Company Search URL": li_search_company,
+            "LinkedIn Company Roster URL": li_company_people,
             "LinkedIn Other Employees": " | ".join(employee_lis[1:]) if len(employee_lis) > 1 else "",
             "Facebook Company Page": "",
             "Instagram Company": "",
@@ -620,10 +652,11 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
         has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
+        has_email = bool(r.get("DM Email") or r.get("Company Email"))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
                           or r.get("LinkedIn Search URL") or r.get("Backup LinkedIn Search URL"))
-        return has_dm_reach or has_backup_reach or has_social
+        return has_dm_reach or has_email or has_backup_reach or has_social
 
     pre_filter = len(rows)
     rows = [r for r in rows if _has_reach(r)]

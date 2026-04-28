@@ -41,6 +41,13 @@ async def scrape_emails_from_website(url: str) -> list[str]:
         url.rstrip('/') + '/meet-the-team',
         url.rstrip('/') + '/leadership-team',
         url.rstrip('/') + '/medical-staff',
+        url.rstrip('/') + '/privacy',
+        url.rstrip('/') + '/privacy-policy',
+        url.rstrip('/') + '/legal',
+        url.rstrip('/') + '/terms',
+        url.rstrip('/') + '/hipaa',
+        url.rstrip('/') + '/patient-privacy',
+        url.rstrip('/') + '/locations',
     ]
 
     async with httpx.AsyncClient(
@@ -50,7 +57,7 @@ async def scrape_emails_from_website(url: str) -> list[str]:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
     ) as client:
-        for page_url in pages_to_try[:8]:  # Try more pages but limit to 8
+        for page_url in pages_to_try[:14]:  # Try 14 pages
             try:
                 resp = await client.get(page_url)
                 if resp.status_code != 200:
@@ -85,23 +92,24 @@ async def scrape_emails_from_website(url: str) -> list[str]:
             except Exception:
                 continue
 
-    # Enhanced filtering - more restrictive than before
+    # Keep REAL emails including generic company mailboxes (info@/contact@)
     professional_emails = []
     for email in emails:
-        # Skip obvious non-professional emails
+        # Skip placeholder/example domains
         if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
-                                   'yourcompany.com', 'company.com', 'website.com']):
+                                   'yourcompany.com', 'company.com', 'website.com',
+                                   'sentry.io', 'wixpress.com']):
             continue
 
-        # Skip emails that look like templates
+        # Skip emails that look like literal templates (exact match only)
         username = email.split('@')[0]
-        if any(template in username for template in ['yourname', 'firstname', 'lastname',
-                                                    'email', 'contact', 'info']):
+        if any(template == username for template in ['yourname', 'firstname', 'lastname',
+                                                    'youremail', 'name']):
             continue
 
         professional_emails.append(email)
 
-    return professional_emails[:10]  # Return up to 10 high-quality emails
+    return professional_emails[:15]  # Return up to 15 real emails
 
 
 def _is_basic_email_format(email: str) -> bool:
@@ -304,23 +312,24 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
             except Exception:
                 continue
 
-    # Enhanced filtering - more restrictive than before
+    # Keep REAL emails including generic company mailboxes (info@/contact@)
     professional_emails = []
     for email in emails:
-        # Skip obvious non-professional emails
+        # Skip placeholder/example domains
         if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
-                                   'yourcompany.com', 'company.com', 'website.com']):
+                                   'yourcompany.com', 'company.com', 'website.com',
+                                   'sentry.io', 'wixpress.com']):
             continue
 
-        # Skip emails that look like templates
+        # Skip emails that look like literal templates (exact match only)
         username = email.split('@')[0]
-        if any(template in username for template in ['yourname', 'firstname', 'lastname',
-                                                    'email', 'contact', 'info']):
+        if any(template == username for template in ['yourname', 'firstname', 'lastname',
+                                                    'youremail', 'name']):
             continue
 
         professional_emails.append(email)
 
-    return professional_emails[:10]  # Return up to 10 high-quality emails
+    return professional_emails[:15]  # Return up to 15 real emails
 
 
 async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, api_key: str) -> list:
@@ -689,15 +698,7 @@ async def find_emails_for_lab(
 
     if not live_domain:
         result["error"] = "Could not confirm a live website for this organization."
-        # Still try pattern generation if names provided
-        if first_name and last_name and candidates:
-            guessed_domain = candidates[0]
-            pattern_emails = _generate_professional_patterns(first_name, last_name, guessed_domain)
-            if pattern_emails:
-                result["emails"] = pattern_emails
-                result["error"] = f"Used guessed domain {guessed_domain} for pattern generation"
-                print(f"Generated {len(pattern_emails)} pattern emails for {guessed_domain}")
-                return result
+        # NO PATTERN FALLBACK. Real emails only.
         return result
 
     def _normalize_email_records(raw_emails: list, fallback_domain: str) -> list[dict]:
@@ -705,15 +706,17 @@ async def find_emails_for_lab(
         for item in raw_emails or []:
             if isinstance(item, dict):
                 email = str(item.get("email", "") or "").strip()
-                if not email or not _is_quality_email(email):
+                is_generic = bool(item.get("is_generic")) or _is_generic_company_mailbox(email)
+                if not email or (not _is_quality_email(email) and not is_generic):
                     continue
                 rec = {
                     "email": email,
                     "first_name": item.get("first_name", "") or "",
                     "last_name": item.get("last_name", "") or "",
                     "full_name": item.get("full_name"),
-                    "position": item.get("position", "") or "",
+                    "position": item.get("position", "") or ("Company Mailbox" if is_generic else ""),
                     "is_decision_maker": bool(item.get("is_decision_maker", False)),
+                    "is_generic": is_generic,
                     "confidence": int(item.get("confidence", 50) or 50),
                     "verified": bool(item.get("verified", False)),
                     "source": item.get("source", "normalized") or "normalized",
@@ -724,16 +727,18 @@ async def find_emails_for_lab(
 
             if isinstance(item, str):
                 email = item.strip().lower()
-                if not email or not _is_quality_email(email):
+                is_generic = _is_generic_company_mailbox(email)
+                if not email or (not _is_quality_email(email) and not is_generic):
                     continue
                 normalized.append({
                     "email": email,
                     "first_name": "",
                     "last_name": "",
                     "full_name": None,
-                    "position": "",
+                    "position": "Company Mailbox" if is_generic else "",
                     "is_decision_maker": False,
-                    "confidence": 62,
+                    "is_generic": is_generic,
+                    "confidence": 50 if is_generic else 62,
                     "verified": False,
                     "source": "website_scrape",
                     "domain": fallback_domain,
@@ -772,19 +777,8 @@ async def find_emails_for_lab(
             print(f"Found {len(normalized_scraped)} emails via scraping")
             return result
 
-    # Final fallback: professional patterns
-    if first_name and last_name:
-        pattern_emails = _generate_professional_patterns(first_name, last_name, live_domain)
-        if pattern_emails:
-            normalized_patterns = _normalize_email_records(pattern_emails, live_domain)
-            if normalized_patterns:
-                result["emails"] = normalized_patterns
-                result["total_at_domain"] = len(normalized_patterns)
-                result["error"] = f"Generated professional email patterns for {live_domain}"
-                print(f"Generated {len(normalized_patterns)} pattern emails as final fallback")
-                return result
-
-    result["error"] = f"Live domain found: {live_domain} — No emails found via any method"
+    # NO PATTERN FALLBACK. Real emails only.
+    result["error"] = f"Live domain found: {live_domain} — No real emails could be scraped/verified"
     return result
 
 
@@ -854,7 +848,12 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
 
 
 async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
-    """Try enhanced website scraping with quality filtering and verification."""
+    """Try enhanced website scraping with quality filtering and verification.
+
+    Returns BOTH person-level emails AND real generic company mailboxes
+    (info@/contact@/sales@). All emails are real (scraped from the live site).
+    Generic mailboxes are tagged with `is_generic=True` and lower confidence.
+    """
     try:
         scraped_emails = await scrape_emails_from_website(f"https://{domain}")
         print(f"Scraped {len(scraped_emails)} emails from {domain}")
@@ -865,7 +864,8 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
         # Comprehensive quality filtering and verification
         verified_emails = []
         for email in scraped_emails:
-            if not _is_quality_email(email):
+            is_generic = _is_generic_company_mailbox(email)
+            if not _is_quality_email(email) and not is_generic:
                 continue
 
             # Attempt SMTP verification
@@ -883,9 +883,10 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
                 "first_name": "",
                 "last_name": "",
                 "full_name": None,
-                "position": "",
+                "position": "Company Mailbox" if is_generic else "",
                 "is_decision_maker": False,
-                "confidence": confidence,
+                "is_generic": is_generic,
+                "confidence": (confidence - 15) if is_generic else confidence,
                 "verified": smtp_result.get("valid", False) if 'smtp_result' in locals() else False,
                 "source": "website_scrape_verified",
                 "domain": domain,
@@ -900,8 +901,27 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
         return []
 
 
+def _is_generic_company_mailbox(email: str) -> bool:
+    """True if email looks like a real company mailbox that's generic (info@, contact@, etc).
+
+    These are REAL emails — someone reads them — they're just not personal.
+    We keep them as a fallback when no person-level email is found.
+    """
+    u = email.split('@', 1)[0].lower() if '@' in email else ''
+    return u in {
+        'info', 'contact', 'sales', 'admin', 'office', 'hello', 'inquiry',
+        'inquiries', 'reception', 'frontdesk', 'mail', 'team', 'general',
+        'support', 'help', 'service', 'customerservice', 'ar', 'billing',
+    }
+
+
 def _is_quality_email(email: str) -> bool:
-    """Check if an email passes quality filters."""
+    """Check if an email passes quality filters (PERSON-level only).
+
+    Generic company mailboxes (info@/contact@/sales@) are filtered HERE
+    but rescued separately by `_is_generic_company_mailbox` — so they
+    can still be emitted as a fallback Company Email column.
+    """
     email_lower = email.lower()
     username = email.split('@')[0].lower()
     domain = email.split('@')[1].lower() if '@' in email else ''
