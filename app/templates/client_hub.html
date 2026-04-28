@@ -2973,10 +2973,14 @@
         </div>
 
         <!-- ═══ LEAD SOURCE (embedded scrubber + hunt mode) ═══ -->
-        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);">
+        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);position:relative;">
+          <div style="position:absolute;top:8px;right:14px;z-index:5;">
+            <a href="/admin/leads/" target="_blank" rel="noopener"
+               style="font-size:12px;padding:6px 12px;border-radius:6px;background:#eef2ff;color:#4338ca;text-decoration:none;border:1px solid #c7d2fe;font-weight:600;">↗ Open Full Page</a>
+          </div>
           <iframe
             id="leadsIframe"
-            src="/admin/leads/"
+            src="about:blank"
             style="width:100%;height:100%;border:none;display:block;"
             allow="same-origin"
           ></iframe>
@@ -7015,10 +7019,11 @@
     function loadLeadsPanel() {
       const iframe = document.getElementById('leadsIframe');
       if (!iframe) return;
-      // Only load once; subsequent navTo('leads') reuses the loaded page
-      if (!iframe.src || iframe.src === window.location.href) {
-        iframe.src = '/admin/leads/';
-      }
+      // Force-reload every time the panel is opened so the iframe always uses
+      // the latest authenticated session (the iframe may have first loaded
+      // /admin/leads/ before login completed, which yields a stale page).
+      const target = '/admin/leads/?_=' + Date.now();
+      try { iframe.src = target; } catch (_) { iframe.setAttribute('src', target); }
     }
 
     // ═══════════════════════════════════════
