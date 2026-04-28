@@ -79,6 +79,27 @@
             "problemMatcher": []
         },
         {
+            "label": "national-daily-clinical",
+            "type": "shell",
+            "command": "SPECIALTY=clinical PER_STATE=50 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "national-daily-all-labs",
+            "type": "shell",
+            "command": "SPECIALTY=all_labs PER_STATE=40 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "national-daily-new-only",
+            "type": "shell",
+            "command": "SPECIALTY=clinical PER_STATE=80 NEW_ONLY=1 NEW_DAYS=90 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "git-log-recent",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git log --oneline -10 && echo --- && git ls-remote origin main",

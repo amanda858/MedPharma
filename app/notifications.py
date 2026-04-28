@@ -1746,8 +1746,22 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
+        # 5:00 AM EST — National lead pull (all 50 states + DC + PR)
+        try:
+            from app.national_pull import run_national_pull_job
+            scheduler.add_job(
+                run_national_pull_job,
+                CronTrigger(hour=5, minute=0, timezone=est),
+                id="national_lead_pull",
+                name="5 AM EST National Lead Pull (50 states)",
+                replace_existing=True,
+            )
+            log.info("Scheduled national lead pull job — 5:00 AM EST daily")
+        except Exception as _e:
+            log.warning(f"National lead pull job not scheduled: {_e}")
+
         scheduler.start()
-        log.info("Daily scheduler started — 5:30 reminders, 6:00 summary")
+        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")

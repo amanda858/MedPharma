@@ -145,7 +145,8 @@ def personalized_hook(
     city: str = "",
 ) -> str:
     """One tailored opening line per lead. Drops into LinkedIn/FB/SMS."""
-    first = (first or "").split()[0].strip().title() or "there"
+    parts = (first or "").split()
+    first = parts[0].strip().title() if parts else "there"
     org_clean = (org or "").strip()
     # Strip noisy corporate suffixes for a cleaner hook
     for suf in (" LLC", " INC", " CORP", " CO", " PLLC", " LP", " PA", " PC"):
@@ -189,7 +190,8 @@ def objection_handlers(
     sender_company: str = "MedPharma SC",
 ) -> dict:
     """Pre-written replies for the 5 most common pushbacks."""
-    first = (first or "").split()[0].strip().title() or "there"
+    parts = (first or "").split()
+    first = parts[0].strip().title() if parts else "there"
     org = org.strip() or "your lab"
     book = calendly_link()
     sender = sender_name.strip() or "Eric"
