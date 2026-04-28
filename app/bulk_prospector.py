@@ -35,6 +35,7 @@ from app.linkedin_resolver import (
     resolve_employee_at_company,
     reset_run_budget,
 )
+from app.backup_people import find_backup_people
 
 
 # Convenient specialty groups — each maps to one or more taxonomy keywords.
@@ -433,6 +434,50 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             if employee_lis:
                 real_li = employee_lis[0]
                 li_label = "Employee"
+
+        # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
+        # When the named DM has no real social profile and we couldn't even
+        # find an employee via search, fall back to another individual
+        # practitioner registered at the same practice address. This is
+        # someone who literally works at the lab — a doctor, pathologist,
+        # NP, etc. — and we can DM/email/phone them.
+        backup_first = backup_last = backup_title = backup_phone = backup_npi = ""
+        backup_li = ""
+        if not real_li and not real_fb and not real_ig:
+            try:
+                backups = await find_backup_people(
+                    zip_code=p.get("zip", ""),
+                    city=city,
+                    state=state,
+                    exclude_npi=p.get("npi", ""),
+                    limit=3,
+                )
+            except Exception:
+                backups = []
+            for cand in backups:
+                # Try resolving each backup person's LinkedIn
+                cand_li = resolve_linkedin_profile(
+                    cand.get("first", ""), cand.get("last", ""), org
+                )
+                if cand_li:
+                    backup_first = cand["first"]
+                    backup_last = cand["last"]
+                    backup_title = cand.get("title", "") or cand.get("taxonomy", "")
+                    backup_phone = _format_phone(cand.get("phone", ""))
+                    backup_npi = cand.get("npi", "")
+                    backup_li = cand_li
+                    real_li = cand_li
+                    li_label = "Backup Person"
+                    break
+            # Even if no LinkedIn found for backups, surface the first one
+            # by name so the user has SOME other human at the address.
+            if not backup_first and backups:
+                cand = backups[0]
+                backup_first = cand["first"]
+                backup_last = cand["last"]
+                backup_title = cand.get("title", "") or cand.get("taxonomy", "")
+                backup_phone = _format_phone(cand.get("phone", ""))
+                backup_npi = cand.get("npi", "")
         # Personalized hook + inject into templates
         hook = personalized_hook(
             first, org, taxonomy_desc=tax, lab_type_detected=type_detected,
@@ -493,6 +538,12 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "LinkedIn Other Employees": " | ".join(employee_lis[1:]) if len(employee_lis) > 1 else "",
             "Facebook Company Page": "",
             "Instagram Company": "",
+            # Backup person at same address (NPPES NPI-1 lookup)
+            "Backup Contact": f"{backup_first} {backup_last}".strip(),
+            "Backup Title": backup_title,
+            "Backup Phone": backup_phone,
+            "Backup NPI": backup_npi,
+            "Backup LinkedIn": backup_li,
             # Paste-ready DM templates
             "LinkedIn Connection Note": templates.get("linkedin_connection_note", ""),
             "LinkedIn First Message": templates.get("linkedin_first_message", ""),

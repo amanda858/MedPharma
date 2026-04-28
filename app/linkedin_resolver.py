@@ -37,7 +37,7 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v2.db")
+CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v3.db")
 HTTP_TIMEOUT = 6.0
 MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "120"))
 THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.6"))
@@ -93,6 +93,48 @@ def _cache_put(platform: str, key: str, url: str) -> None:
 
 def _norm_key(first: str, last: str, org: str) -> str:
     return f"{(first or '').strip().lower()}|{(last or '').strip().lower()}|{(org or '').strip().lower()}"
+
+
+_ORG_NOISE_SUFFIXES = (
+    " LLC", " L.L.C.", " L.L.C", " INC", " INC.", " CORP", " CORPORATION",
+    " CO", " CO.", " PLLC", " P.L.L.C.", " LP", " L.P.", " PA", " P.A.",
+    " PC", " P.C.", " LTD", " LTD.", " LIMITED", " GROUP", " SERVICES",
+    " LABORATORY", " LABORATORIES", " LAB", " LABS", " DIAGNOSTICS",
+    " MEDICAL", " CLINIC",
+)
+
+
+def _clean_org(org: str) -> str:
+    """Strip noise suffixes — ``ABC LABS LLC`` → ``ABC``."""
+    s = (org or "").strip()
+    if not s:
+        return ""
+    upper = s.upper()
+    changed = True
+    while changed:
+        changed = False
+        for suf in _ORG_NOISE_SUFFIXES:
+            if upper.endswith(suf):
+                upper = upper[: -len(suf)].rstrip(" ,")
+                changed = True
+    return upper.strip(" ,")
+
+
+def _org_query_variants(org: str) -> list[str]:
+    """Yield variants of the org name to try (full → cleaned → first-word)."""
+    seen, out = set(), []
+    for v in (org or "", _clean_org(org)):
+        v = (v or "").strip()
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    cleaned = _clean_org(org)
+    if cleaned and " " in cleaned:
+        first_word = cleaned.split()[0]
+        if first_word.lower() not in seen and len(first_word) >= 3:
+            seen.add(first_word.lower())
+            out.append(first_word)
+    return out
 
 
 def _can_make_live_query() -> bool:
@@ -237,7 +279,11 @@ def _filter_linkedin_company(matches):
 
 
 def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
-    """Return a direct linkedin.com/in/<slug> URL, or '' if unresolvable."""
+    """Return a direct linkedin.com/in/<slug> URL, or '' if unresolvable.
+
+    Tries multiple query variants — with org, with org cleaned of
+    LLC/INC/LABS suffixes, and finally without org. First hit wins.
+    """
     if not first or not last:
         return ""
     key = _norm_key(first, last, org)
@@ -245,9 +291,16 @@ def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
     if cached is not None:
         return cached  # may be '' meaning we tried and failed
 
-    q = f"{first} {last} {org} site:linkedin.com/in".strip()
-    url = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin)
-    # Save even empty results so we don't retry forever
+    queries = []
+    for variant in _org_query_variants(org):
+        queries.append(f"{first} {last} {variant} site:linkedin.com/in")
+    queries.append(f"{first} {last} site:linkedin.com/in")
+
+    url = ""
+    for q in queries:
+        url = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin)
+        if url:
+            break
     _cache_put("linkedin", key, url)
     return url
 
@@ -269,21 +322,37 @@ def resolve_company_linkedin(org: str) -> str:
 def resolve_employee_at_company(org: str, max_results: int = 3) -> list[str]:
     """Backup: find ANY employee profile linked to ``org`` on LinkedIn.
 
-    Used when the named decision-maker has no LinkedIn profile so the user
-    still gets a real human at the company they can DM.
+    Tries the full org name first, then a cleaned version (LLC/INC stripped),
+    then the first significant word. Used when the named decision-maker has
+    no LinkedIn profile so the user still gets a real human at the company.
     """
     if not org:
         return []
     key = _norm_key("", "", f"emp::{org}")
     cached = _cache_get("linkedin_employee", key)
     if cached is not None:
-        return [u for u in cached.split("|") if u]
-    q = f"{org} site:linkedin.com/in"
-    urls = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin, max_results=max_results)
-    if isinstance(urls, str):
-        urls = [urls] if urls else []
-    _cache_put("linkedin_employee", key, "|".join(urls))
-    return urls
+        urls = [u for u in cached.split("|") if u]
+        if urls:
+            return urls
+        # Negative — if expired, fall through; otherwise return []
+        return urls
+
+    accumulated: list[str] = []
+    seen: set[str] = set()
+    for variant in _org_query_variants(org):
+        q = f"{variant} site:linkedin.com/in"
+        urls = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin, max_results=max_results)
+        if isinstance(urls, str):
+            urls = [urls] if urls else []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                accumulated.append(u)
+        if len(accumulated) >= max_results:
+            break
+    accumulated = accumulated[:max_results]
+    _cache_put("linkedin_employee", key, "|".join(accumulated))
+    return accumulated
 
 
 def resolve_facebook_profile(first: str, last: str, org: str = "") -> str:

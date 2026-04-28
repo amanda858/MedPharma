@@ -9,6 +9,90 @@
             "problemMatcher": []
         },
         {
+            "label": "probe-accounts",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_accounts.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-leads",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_leads.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-hub-html",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_hub_html.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-hunt-output",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_hunt_output.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-search-engines",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_search_engines.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "probe-brave",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/probe_brave.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "test-resolver",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/test_resolver.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-resolver-chain",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: Brave+DDG chain for profile resolver, retry negatives, fresh cache' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-employee-fallback",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: company-page + employee LinkedIn fallback when DM has no profile' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-real-profile-resolver",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: only emit social URLs for verified real profiles (Brave-resolved)' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-bing-social-fix",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/social_finder.py app/linkedin_finder.py && git commit -m 'fix: switch social URLs to Bing site-search (no consent wall, broader matches)' -- app/social_finder.py app/linkedin_finder.py && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-empty-accounts-fix",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/templates/client_hub.html && git commit -m 'fix: lazy-load leads iframe + always reload on Lead Source click' -- app/templates/client_hub.html && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "deep-sweep",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/deep_sweep.py 2>&1 | tee /tmp/deep_sweep.log",
