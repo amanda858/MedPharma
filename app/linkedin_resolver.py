@@ -37,7 +37,7 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache.db")
+CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v2.db")
 HTTP_TIMEOUT = 6.0
 MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "120"))
 THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.6"))
@@ -57,14 +57,25 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
-def _cache_get(platform: str, key: str) -> Optional[str]:
+# Negative lookups (no match found) expire after this many seconds so we
+# retry them on a future hunt instead of permanently writing them off.
+NEGATIVE_TTL_SEC = 6 * 3600
+
+
+def _cache_get(platform: str, key: str):
+    """Return cached URL ('' if previously failed and still fresh) or None to retry."""
     try:
         with _conn() as c:
             row = c.execute(
-                "SELECT url FROM profile_cache WHERE platform=? AND key=?",
+                "SELECT url, fetched_at FROM profile_cache WHERE platform=? AND key=?",
                 (platform, key),
             ).fetchone()
-            return row[0] if row else None
+            if not row:
+                return None
+            url, ts = row
+            if not url and (time.time() - (ts or 0)) > NEGATIVE_TTL_SEC:
+                return None  # negative expired — retry
+            return url
     except Exception:
         return None
 
@@ -172,6 +183,37 @@ def _resolve_via_brave(query: str, regex: re.Pattern, post_filter=None, max_resu
     return matches[0] if matches else ""
 
 
+def _resolve_via_ddg(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """DuckDuckGo HTML endpoint — fallback when Brave returns 429."""
+    if not _can_make_live_query():
+        return [] if max_results > 1 else ""
+    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+    html = _fetch(url)
+    if not html:
+        return [] if max_results > 1 else ""
+    # DDG wraps result links in /l/?uddg=<url-encoded-target>
+    targets = []
+    for m in re.findall(r'uddg=([^"&]+)', html):
+        decoded = urllib.parse.unquote(m)
+        if regex.match(decoded):
+            targets.append(decoded)
+    # Direct matches in the page body too (some DDG variants don't wrap)
+    targets.extend(regex.findall(html))
+    if post_filter:
+        targets = post_filter(targets)
+    if max_results > 1:
+        return targets[:max_results]
+    return targets[0] if targets else ""
+
+
+def _resolve_chain(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """Try Brave first, fall back to DuckDuckGo on empty/failure."""
+    res = _resolve_via_brave(query, regex, post_filter, max_results)
+    if res:
+        return res
+    return _resolve_via_ddg(query, regex, post_filter, max_results)
+
+
 _LINKEDIN_COMPANY_RE = re.compile(
     r"https?://(?:www\.|[a-z]{2,3}\.)linkedin\.com/company/[A-Za-z0-9_%\-./]+",
     re.IGNORECASE,
@@ -204,7 +246,7 @@ def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
         return cached  # may be '' meaning we tried and failed
 
     q = f"{first} {last} {org} site:linkedin.com/in".strip()
-    url = _resolve_via_brave(q, _LINKEDIN_PROFILE_RE, _filter_linkedin)
+    url = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin)
     # Save even empty results so we don't retry forever
     _cache_put("linkedin", key, url)
     return url
@@ -219,7 +261,7 @@ def resolve_company_linkedin(org: str) -> str:
     if cached is not None:
         return cached
     q = f"{org} site:linkedin.com/company"
-    url = _resolve_via_brave(q, _LINKEDIN_COMPANY_RE, _filter_linkedin_company)
+    url = _resolve_chain(q, _LINKEDIN_COMPANY_RE, _filter_linkedin_company)
     _cache_put("linkedin_company", key, url)
     return url
 
@@ -237,7 +279,7 @@ def resolve_employee_at_company(org: str, max_results: int = 3) -> list[str]:
     if cached is not None:
         return [u for u in cached.split("|") if u]
     q = f"{org} site:linkedin.com/in"
-    urls = _resolve_via_brave(q, _LINKEDIN_PROFILE_RE, _filter_linkedin, max_results=max_results)
+    urls = _resolve_chain(q, _LINKEDIN_PROFILE_RE, _filter_linkedin, max_results=max_results)
     if isinstance(urls, str):
         urls = [urls] if urls else []
     _cache_put("linkedin_employee", key, "|".join(urls))
@@ -252,7 +294,7 @@ def resolve_facebook_profile(first: str, last: str, org: str = "") -> str:
     if cached is not None:
         return cached
     q = f"{first} {last} {org} site:facebook.com".strip()
-    url = _resolve_via_brave(q, _FB_PROFILE_RE)
+    url = _resolve_chain(q, _FB_PROFILE_RE)
     _cache_put("facebook", key, url)
     return url
 
@@ -265,7 +307,7 @@ def resolve_instagram_profile(first: str, last: str, org: str = "") -> str:
     if cached is not None:
         return cached
     q = f"{first} {last} {org} site:instagram.com".strip()
-    url = _resolve_via_brave(q, _IG_PROFILE_RE)
+    url = _resolve_chain(q, _IG_PROFILE_RE)
     _cache_put("instagram", key, url)
     return url
 
