@@ -30,9 +30,30 @@
             "problemMatcher": []
         },
         {
+            "label": "push-debug-enhance",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py .vscode/tasks.json .vscode/poll_debug.sh .vscode/wait_for_debug.py .vscode/wait_for_search_endpoint.py .vscode/check_national_search.py .vscode/trigger_national_pull.py && git commit -m 'diag: enhance national-pull debug endpoint with /data listing + tables' && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "check-national-debug",
             "type": "shell",
             "command": "curl -s https://medpharma-hub.onrender.com/admin/leads/api/national-pull/debug | python3 -m json.tool",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "wait-for-debug-endpoint",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_debug.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "poll-debug-endpoint",
+            "type": "shell",
+            "command": "bash /workspaces/CVOPro/.vscode/poll_debug.sh",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },

@@ -2016,26 +2016,61 @@ async def national_pull_debug():
     import datetime as _dt
     db_path = os.environ.get("DB_PATH", "/data/leads.db")
     db_rows: list[dict] = []
+    db_tables: list[str] = []
+    db_exists = os.path.exists(db_path)
+    db_size = os.path.getsize(db_path) if db_exists else 0
     try:
-        with _sql.connect(db_path) as conn:
-            for rid, csv_path, started, finished in conn.execute(
-                "SELECT id, csv_path, started_at, finished_at FROM national_pulls ORDER BY id DESC LIMIT 10"
-            ).fetchall():
-                exists = bool(csv_path) and os.path.exists(csv_path)
-                size = os.path.getsize(csv_path) if exists else 0
-                db_rows.append({
-                    "id": rid, "csv_path": csv_path, "exists": exists, "size_bytes": size,
-                    "started_at": started, "finished_at": finished,
-                })
+        with _sql.connect(db_path, timeout=5) as conn:
+            try:
+                db_tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                ).fetchall()]
+            except Exception as e:
+                db_tables = [f"(tables list error: {e})"]
+            try:
+                for rid, csv_path, started, finished in conn.execute(
+                    "SELECT id, csv_path, pull_date, created_at FROM national_pulls ORDER BY id DESC LIMIT 10"
+                ).fetchall():
+                    exists = bool(csv_path) and os.path.exists(csv_path)
+                    size = os.path.getsize(csv_path) if exists else 0
+                    db_rows.append({
+                        "id": rid, "csv_path": csv_path, "exists": exists, "size_bytes": size,
+                        "pull_date": started, "created_at": finished,
+                    })
+            except Exception as e:
+                db_rows = [{"national_pulls_query_error": str(e)}]
     except Exception as e:
-        db_rows = [{"db_error": str(e)}]
+        db_rows = [{"db_open_error": str(e)}]
+    # List /data directory
+    data_listing: list[dict] = []
+    for d in ["/data", "/data/national_pulls", os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")]:
+        try:
+            if os.path.isdir(d):
+                entries = []
+                for name in os.listdir(d)[:50]:
+                    full = os.path.join(d, name)
+                    try:
+                        st = os.stat(full)
+                        entries.append({
+                            "name": name,
+                            "size": st.st_size,
+                            "mtime": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
+                            "is_dir": os.path.isdir(full),
+                        })
+                    except Exception as e:
+                        entries.append({"name": name, "error": str(e)})
+                data_listing.append({"dir": d, "exists": True, "entries": entries})
+            else:
+                data_listing.append({"dir": d, "exists": False})
+        except Exception as e:
+            data_listing.append({"dir": d, "error": str(e)})
     files: list[dict] = []
     seen: set[str] = set()
-    for d in ["/data", os.environ.get("DATA_DIR", ""), "./data", "data"]:
+    for d in ["/data", "/data/national_pulls", os.environ.get("DATA_DIR", ""), "./data", "data"]:
         if not d:
             continue
         try:
-            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")):
+            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")) + _glob.glob(os.path.join(d, "**/national_pull_*.csv"), recursive=True):
                 if p in seen:
                     continue
                 seen.add(p)
@@ -2053,7 +2088,11 @@ async def national_pull_debug():
     latest = _find_latest_national_csv()
     return {
         "db_path": db_path,
+        "db_exists": db_exists,
+        "db_size": db_size,
+        "db_tables": db_tables,
         "db_rows": db_rows,
+        "data_listing": data_listing,
         "csv_files": files,
         "resolved_latest_csv": latest,
         "loader_row_count": len(_load_latest_national_rows()),
