@@ -47,6 +47,11 @@ from app.backup_people import find_backup_people
 import os as _os
 LIVE_LINKEDIN_LOOKUP = _os.environ.get("LIVE_LINKEDIN_LOOKUP", "0") == "1"
 
+# Email enrichment (Hunter.io + pattern). On by default — this is the
+# single most valuable signal for outreach. Set ENABLE_EMAIL_ENRICHMENT=0
+# to skip (e.g. for fast hunts).
+ENABLE_EMAIL_ENRICHMENT = _os.environ.get("ENABLE_EMAIL_ENRICHMENT", "1") == "1"
+
 
 # Convenient specialty groups — each maps to one or more taxonomy keywords.
 # Using the `taxonomy_description` query param against NPPES (free-text).
@@ -423,6 +428,46 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         social = await find_social_profiles(first, last, org=org, title=title) or {}
         templates = social_outreach_templates(first or "there", org)
 
+        # ── Email enrichment (Hunter.io + pattern fallback) ────────────────
+        # This is the #1 thing salespeople need. We try to find a real
+        # verified email from Hunter.io, and if that fails we generate
+        # pattern emails from the discovered domain (first.last@domain etc).
+        dm_email = ""
+        dm_email_confidence = 0
+        org_domain = ""
+        domain_candidates = ""
+        org_emails: list[dict] = []
+        if first and last and ENABLE_EMAIL_ENRICHMENT:
+            try:
+                from app.email_finder import find_emails_for_lab
+                em = await find_emails_for_lab(
+                    org_name=org, first_name=first, last_name=last,
+                )
+                org_domain = em.get("live_domain", "") or ""
+                domain_candidates = ", ".join(em.get("domain_candidates") or [])
+                org_emails = em.get("emails") or []
+                # Pick best email for this DM:
+                # 1) exact name match in returned emails
+                # 2) first decision-maker email
+                # 3) first email
+                tgt_first = first.lower(); tgt_last = last.lower()
+                best = None
+                for e in org_emails:
+                    if (e.get("first_name", "").lower() == tgt_first
+                            and e.get("last_name", "").lower() == tgt_last):
+                        best = e; break
+                if not best:
+                    for e in org_emails:
+                        if e.get("is_decision_maker"):
+                            best = e; break
+                if not best and org_emails:
+                    best = org_emails[0]
+                if best:
+                    dm_email = best.get("email", "")
+                    dm_email_confidence = int(best.get("confidence", 0) or 0)
+            except Exception as _e:
+                pass
+
         # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
         # When LIVE_LINKEDIN_LOOKUP=1 we'll try to resolve direct slugs.
         # Otherwise we skip straight to guaranteed-clickable search URLs.
@@ -523,7 +568,11 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "Direct Line": ao_phone,
             "Decision Maker": full_name,
             "DM Title": title,
-            "DM Email": "",  # DM-only mode — no email
+            "DM Email": dm_email,
+            "DM Email Confidence": dm_email_confidence,
+            "Org Domain": org_domain,
+            "Domain Candidates": domain_candidates,
+            "Org Emails Found": "; ".join(e.get("email","") for e in org_emails[:5]),
             # Social DM URLs (real_li only when verified; otherwise blank)
             "LinkedIn URL": real_li,
             "LinkedIn Match Type": li_label if real_li else "",
@@ -570,7 +619,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     #   - a qualified backup person (NPPES NPI-1 with phone)
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
-        has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone")))
+        has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
         has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
         has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
                           or r.get("LinkedIn Search URL") or r.get("Backup LinkedIn Search URL"))
