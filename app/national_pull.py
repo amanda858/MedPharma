@@ -35,6 +35,14 @@ NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
 DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")
 
+# Daily national pull defaults to high-quality, email-required output.
+# Override these env vars at the platform level if a wider net is desired.
+os.environ.setdefault("QUALITY_FIRST", "1")
+os.environ.setdefault("REQUIRE_EMAIL", "1")
+os.environ.setdefault("ENABLE_CLIA_ENRICHMENT", "1")
+os.environ.setdefault("ENABLE_PUBMED_LOOKUP", "1")
+os.environ.setdefault("ENABLE_EMAIL_ENRICHMENT", "1")
+
 
 def _ensure_dir(p: str) -> None:
     try:
