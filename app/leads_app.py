@@ -1858,21 +1858,51 @@ import time as _time_np
 _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
 
 
-def _load_latest_national_rows() -> list[dict]:
-    """Read most recent national-pull CSV into memory (cached by mtime)."""
+def _find_latest_national_csv() -> str:
+    """Locate the freshest national-pull CSV.
+
+    Resolution order:
+      1) `national_pulls.csv_path` from SQLite (newest row that exists on disk).
+      2) Glob `/data/national_pull_*.csv` and pick the newest by mtime.
+      3) Glob `<DATA_DIR>/national_pull_*.csv` and `./data/national_pull_*.csv`.
+    """
     import sqlite3 as _sql
+    import glob as _glob
+    candidates: list[str] = []
     db_path = os.environ.get("DB_PATH", "/data/leads.db")
-    csv_path = ""
     try:
         with _sql.connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT csv_path FROM national_pulls ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            if row:
-                csv_path = row[0] or ""
+            for (p,) in conn.execute(
+                "SELECT csv_path FROM national_pulls ORDER BY id DESC LIMIT 25"
+            ).fetchall():
+                if p and os.path.exists(p):
+                    candidates.append(p)
     except Exception:
-        return []
-    if not csv_path or not os.path.exists(csv_path):
+        pass
+    search_dirs = ["/data", os.environ.get("DATA_DIR", ""), "./data", "data"]
+    for d in search_dirs:
+        if not d:
+            continue
+        try:
+            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")):
+                if os.path.exists(p):
+                    candidates.append(p)
+        except Exception:
+            pass
+    if not candidates:
+        return ""
+    # newest by mtime
+    try:
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    except Exception:
+        pass
+    return candidates[0]
+
+
+def _load_latest_national_rows() -> list[dict]:
+    """Read most recent national-pull CSV into memory (cached by mtime)."""
+    csv_path = _find_latest_national_csv()
+    if not csv_path:
         return []
     try:
         mtime = os.path.getmtime(csv_path)
@@ -1973,6 +2003,61 @@ async def list_national_specialties():
     items = sorted(counts.items(), key=lambda x: -x[1])
     return {"specialties": [{"name": k, "count": v} for k, v in items]}
 
+
+@app.get("/api/national-pull/debug")
+async def national_pull_debug():
+    """Inspect what CSVs/DB rows are visible to the search endpoint.
+
+    Use this to diagnose 'no data' errors — shows DB rows, on-disk CSVs,
+    file sizes, mtimes, and the resolved 'latest' path.
+    """
+    import sqlite3 as _sql
+    import glob as _glob
+    import datetime as _dt
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    db_rows: list[dict] = []
+    try:
+        with _sql.connect(db_path) as conn:
+            for rid, csv_path, started, finished in conn.execute(
+                "SELECT id, csv_path, started_at, finished_at FROM national_pulls ORDER BY id DESC LIMIT 10"
+            ).fetchall():
+                exists = bool(csv_path) and os.path.exists(csv_path)
+                size = os.path.getsize(csv_path) if exists else 0
+                db_rows.append({
+                    "id": rid, "csv_path": csv_path, "exists": exists, "size_bytes": size,
+                    "started_at": started, "finished_at": finished,
+                })
+    except Exception as e:
+        db_rows = [{"db_error": str(e)}]
+    files: list[dict] = []
+    seen: set[str] = set()
+    for d in ["/data", os.environ.get("DATA_DIR", ""), "./data", "data"]:
+        if not d:
+            continue
+        try:
+            for p in _glob.glob(os.path.join(d, "national_pull_*.csv")):
+                if p in seen:
+                    continue
+                seen.add(p)
+                try:
+                    st = os.stat(p)
+                    files.append({
+                        "path": p, "size_bytes": st.st_size,
+                        "mtime": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
+                    })
+                except Exception as e:
+                    files.append({"path": p, "error": str(e)})
+        except Exception:
+            pass
+    files.sort(key=lambda x: x.get("mtime", ""), reverse=True)
+    latest = _find_latest_national_csv()
+    return {
+        "db_path": db_path,
+        "db_rows": db_rows,
+        "csv_files": files,
+        "resolved_latest_csv": latest,
+        "loader_row_count": len(_load_latest_national_rows()),
+    }
 
 
 class BulkEnrichItem(BaseModel):

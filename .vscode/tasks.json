@@ -2,6 +2,41 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "wait-for-search-endpoint",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_search_endpoint.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "check-national-search",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/check_national_search.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "trigger-national-pull",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/trigger_national_pull.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-search-fallback",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py .vscode/tasks.json && git commit -m 'fix: search loader falls back to /data glob; add /debug endpoint' -- app/leads_app.py .vscode/tasks.json && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "check-national-debug",
+            "type": "shell",
+            "command": "curl -s https://medpharma-hub.onrender.com/admin/leads/api/national-pull/debug | python3 -m json.tool",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "local-hunt-FL-quality",
             "type": "shell",
             "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=50 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
