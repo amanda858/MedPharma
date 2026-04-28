@@ -31,6 +31,8 @@ from app.linkedin_resolver import (
     resolve_linkedin_profile,
     resolve_facebook_profile,
     resolve_instagram_profile,
+    resolve_company_linkedin,
+    resolve_employee_at_company,
     reset_run_budget,
 )
 
@@ -420,7 +422,17 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             real_ig = resolve_instagram_profile(first, last, org)
         else:
             real_li = real_fb = real_ig = ""
-
+        # Fallbacks: when the named DM has no LinkedIn, surface the company
+        # page + up to 3 verified employee profiles so the user still has
+        # a real human at the org to DM.
+        company_li = resolve_company_linkedin(org) if org else ""
+        employee_lis: list[str] = []
+        li_label = "DM"
+        if not real_li and org:
+            employee_lis = resolve_employee_at_company(org, max_results=3)
+            if employee_lis:
+                real_li = employee_lis[0]
+                li_label = "Employee"
         # Personalized hook + inject into templates
         hook = personalized_hook(
             first, org, taxonomy_desc=tax, lab_type_detected=type_detected,
@@ -470,13 +482,15 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             "DM Email": "",  # DM-only mode — no email
             # Social DM URLs (blank if no real profile found)
             "LinkedIn URL": real_li,
+            "LinkedIn Match Type": li_label if real_li else "",
             "LinkedIn Sales Nav URL": social.get("linkedin_sales_nav", "") if real_li else "",
             "Facebook URL": real_fb,
             "Instagram URL": real_ig,
             "X / Twitter URL": "",  # Don't speculate
             "Google Social Search": "",
             "Google LinkedIn Search": "",
-            "LinkedIn Company Page": "",
+            "LinkedIn Company Page": company_li,
+            "LinkedIn Other Employees": " | ".join(employee_lis[1:]) if len(employee_lis) > 1 else "",
             "Facebook Company Page": "",
             "Instagram Company": "",
             # Paste-ready DM templates

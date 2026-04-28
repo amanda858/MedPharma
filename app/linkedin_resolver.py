@@ -39,8 +39,8 @@ UA = (
 
 CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache.db")
 HTTP_TIMEOUT = 6.0
-MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "40"))
-THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "1.2"))
+MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "120"))
+THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.6"))
 
 _lock = threading.Lock()
 _live_count = 0
@@ -156,17 +156,42 @@ def _filter_linkedin(matches):
     return out
 
 
-def _resolve_via_brave(query: str, regex: re.Pattern, post_filter=None) -> str:
+def _resolve_via_brave(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """Return up to ``max_results`` URLs matching ``regex`` from a Brave search."""
     if not _can_make_live_query():
-        return ""
+        return [] if max_results > 1 else ""
     url = f"https://search.brave.com/search?q={urllib.parse.quote(query)}"
     html = _fetch(url)
     if not html:
-        return ""
+        return [] if max_results > 1 else ""
     matches = regex.findall(html)
     if post_filter:
         matches = post_filter(matches)
+    if max_results > 1:
+        return matches[:max_results]
     return matches[0] if matches else ""
+
+
+_LINKEDIN_COMPANY_RE = re.compile(
+    r"https?://(?:www\.|[a-z]{2,3}\.)linkedin\.com/company/[A-Za-z0-9_%\-./]+",
+    re.IGNORECASE,
+)
+
+
+def _filter_linkedin_company(matches):
+    out, seen = [], set()
+    for u in matches:
+        u = _strip_garbage(u).split("?")[0].split("#")[0]
+        if "/company/" not in u:
+            continue
+        slug = u.split("/company/", 1)[1].strip("/")
+        if not slug or len(slug) < 2:
+            continue
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
 
 
 def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
@@ -183,6 +208,40 @@ def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
     # Save even empty results so we don't retry forever
     _cache_put("linkedin", key, url)
     return url
+
+
+def resolve_company_linkedin(org: str) -> str:
+    """Find the company's LinkedIn /company/ page (returns '' if none)."""
+    if not org:
+        return ""
+    key = _norm_key("", "", org)
+    cached = _cache_get("linkedin_company", key)
+    if cached is not None:
+        return cached
+    q = f"{org} site:linkedin.com/company"
+    url = _resolve_via_brave(q, _LINKEDIN_COMPANY_RE, _filter_linkedin_company)
+    _cache_put("linkedin_company", key, url)
+    return url
+
+
+def resolve_employee_at_company(org: str, max_results: int = 3) -> list[str]:
+    """Backup: find ANY employee profile linked to ``org`` on LinkedIn.
+
+    Used when the named decision-maker has no LinkedIn profile so the user
+    still gets a real human at the company they can DM.
+    """
+    if not org:
+        return []
+    key = _norm_key("", "", f"emp::{org}")
+    cached = _cache_get("linkedin_employee", key)
+    if cached is not None:
+        return [u for u in cached.split("|") if u]
+    q = f"{org} site:linkedin.com/in"
+    urls = _resolve_via_brave(q, _LINKEDIN_PROFILE_RE, _filter_linkedin, max_results=max_results)
+    if isinstance(urls, str):
+        urls = [urls] if urls else []
+    _cache_put("linkedin_employee", key, "|".join(urls))
+    return urls
 
 
 def resolve_facebook_profile(first: str, last: str, org: str = "") -> str:
