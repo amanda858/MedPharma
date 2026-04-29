@@ -51,6 +51,15 @@ app = FastAPI(
 async def startup_event():
     """Initialize database on startup."""
     init_db()
+    # Seed the national-pull table from the bundled CSV so the search UI
+    # always has data to show, even before the first scheduled pull.
+    try:
+        from app.national_pull import ensure_seed_loaded
+        res = ensure_seed_loaded()
+        if res.get("loaded"):
+            print(f"[startup] seed national-pull loaded: {res.get('row_count')} rows")
+    except Exception as e:
+        print(f"[startup] seed load skipped: {e}")
 
 
 @app.get("/healthz")
@@ -1757,6 +1766,98 @@ async def national_lead_pull(
 _national_pull_lock = asyncio.Lock() if False else None  # placeholder
 import asyncio as _asyncio_np
 _national_pull_running = {"flag": False, "started_at": None, "last_result": None}
+
+
+@app.post("/api/national-pull/import-bundled")
+async def import_bundled_routed_leads():
+    """One-shot: import the bundled output/labs_routed_full.csv into saved_leads.
+
+    Idempotent (uses INSERT OR REPLACE on NPI). No auth (matches other
+    /api/national-pull endpoints — read-only public CMS data).
+    """
+    import csv as _csv
+    from datetime import datetime as _dt
+    from app.database import init_db as _init_db, save_lead as _save_lead, get_db as _get_db
+
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", "labs_routed_full.csv")
+    if not os.path.exists(csv_path):
+        return {"ok": False, "error": f"CSV not found at {csv_path}"}
+
+    _init_db()
+    inserted = 0
+    skipped = 0
+    tier_counts = {"A": 0, "B": 0, "C": 0}
+    try:
+        with open(csv_path, encoding="utf-8") as f:
+            reader = _csv.DictReader(f)
+            for r in reader:
+                npi = (r.get("npi") or "").strip()
+                tier = (r.get("tier") or "").strip()
+                if not npi or tier not in ("A", "B", "C"):
+                    skipped += 1
+                    continue
+                try:
+                    score = int(r.get("rule_score") or 0)
+                except ValueError:
+                    score = 0
+                lead = {
+                    "npi": npi,
+                    "organization_name": r.get("org_name", ""),
+                    "first_name": "",
+                    "last_name": "",
+                    "credential": "",
+                    "taxonomy_code": "",
+                    "taxonomy_desc": r.get("lab_type", ""),
+                    "address_line1": "",
+                    "address_line2": "",
+                    "city": r.get("city", ""),
+                    "state": r.get("state", ""),
+                    "zip_code": r.get("zip", ""),
+                    "phone": "",
+                    "fax": "",
+                    "enumeration_date": "",
+                    "last_updated": _dt.now().isoformat(),
+                    "lead_score": score,
+                    "lead_status": "new",
+                    "notes": (
+                        f"Tier {tier} | RuleScore {score} | "
+                        f"Lab Type: {r.get('lab_type','')} | "
+                        f"Signals: {r.get('signals','')}"
+                    ),
+                    "tags": f"tier-{tier};lab;rule-intercept",
+                    "source": "rule-intercept",
+                }
+                try:
+                    _save_lead(lead)
+                    inserted += 1
+                    tier_counts[tier] = tier_counts.get(tier, 0) + 1
+                except Exception:
+                    skipped += 1
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "inserted": inserted}
+
+    # Verify
+    try:
+        c = _get_db()
+        cur = c.cursor()
+        cur.execute("SELECT COUNT(*) FROM saved_leads")
+        total = cur.fetchone()[0]
+        cur.execute("SELECT source, COUNT(*) FROM saved_leads GROUP BY source")
+        by_src = {row[0]: row[1] for row in cur.fetchall()}
+        c.close()
+    except Exception as exc:
+        total = -1
+        by_src = {"error": str(exc)}
+
+    return {
+        "ok": True,
+        "inserted": inserted,
+        "skipped": skipped,
+        "tier_counts": tier_counts,
+        "total_in_db": total,
+        "by_source": by_src,
+        "csv_path": csv_path,
+    }
 
 
 @app.post("/api/national-pull/run")

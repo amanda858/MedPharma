@@ -150,6 +150,9 @@ _LAB_TIER_MAP: list[tuple[str, int]] = [
     ("clinical lab", 3), ("general lab", 3), ("routine testing", 3),
     ("hospital outreach", 3), ("outreach lab", 3), ("physician office", 3),
     ("diagnostics", 3), ("diagnostic", 3), ("clinical", 3),
+    ("lab services", 3), ("mobile lab", 3), ("mobile labs", 3),
+    ("research clinic", 3), ("research study", 3), ("research lab", 3),
+    ("medical lab", 3), ("labs", 3), (" lab", 3),
 ]
 
 _HIGH_VALUE_SIGNALS: list[str] = [
@@ -162,7 +165,8 @@ _HIGH_VALUE_SIGNALS: list[str] = [
 _LOW_VALUE_SIGNALS: list[str] = [
     "hospital", "health system", "university", "academic", "county",
     "public health", "veterans", " va ", "kaiser", "quest",
-    "labcorp", "sonic", "aurora", "banner", "commonspirit",
+    "labcorp", "laboratory corporation", "sonic", "aurora", "banner", "commonspirit",
+    "neogenomics laboratories", "translational genomics research",
 ]
 
 # States with highest independent lab density and RCM billing complexity
@@ -201,10 +205,24 @@ def score_lab_lead(org_name: str, lab_type: str = "", state: str = "") -> dict:
     tier_num = 99        # 1=A  2=B  3=C  99=unknown
 
     # ── Lab-type tier — all matches, best (lowest) tier wins ──────────
+    # Use word-boundary regex on org name to avoid false positives like
+    # "ngs" matching inside "Holdings" or "dna" inside "Madonna".
+    org_tokens = set(re.findall(r"[a-z0-9]+", org_l))
     matched_type = ""
     for kw, t in _LAB_TIER_MAP:
-        if kw in type_l or kw in org_l:
+        if kw in type_l:
             if t < tier_num:
+                tier_num = t
+                matched_type = kw
+            continue
+        # For org-name match: multi-word phrases use substring;
+        # single tokens require whole-word match
+        if " " in kw.strip():
+            if kw.strip() in org_l and t < tier_num:
+                tier_num = t
+                matched_type = kw
+        else:
+            if kw.strip() in org_tokens and t < tier_num:
                 tier_num = t
                 matched_type = kw
 
@@ -220,7 +238,11 @@ def score_lab_lead(org_name: str, lab_type: str = "", state: str = "") -> dict:
 
     # ── Org name quality signals ──────────────────────────────────────
     for sig in _HIGH_VALUE_SIGNALS:
-        if sig in org_l:
+        if " " in sig.strip():
+            hit = sig.strip() in org_l
+        else:
+            hit = sig.strip() in org_tokens
+        if hit:
             score += 12
             signals.append(f"Name signal (+): {sig}")
             break
@@ -369,3 +391,151 @@ def intercept_request(text: str) -> dict:
         }
 
     return result
+
+
+# =========================
+# LAB LEAD ENGINE INTERCEPT
+# =========================
+# Wraps lab_lead_engine.py: runs the NPI/CLIA/State/CMS pipeline, then applies
+# score_lab_lead() to every row to assign Tier A/B/C and route into outreach.
+
+def intercept_lab_engine(
+    npi_source: str | None = None,
+    clia_source: str | None = None,
+    state_license_source: str | None = None,
+    cms_denials_source: str | None = None,
+    output_dir: str = "./output",
+    top_n: int = 50,
+) -> dict:
+    """Run lab_lead_engine, then route each row through score_lab_lead.
+
+    Returns a structured result with per-tier counts, top picks, and CSV paths.
+    Safe to call when source files are missing — returns an empty result.
+    """
+    started = time.time()
+    try:
+        import lab_lead_engine as engine  # local import: optional dep at runtime
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"lab_lead_engine import failed: {e}",
+            "tiers": {"A": 0, "B": 0, "C": 0, "Unknown": 0},
+            "rows": [],
+        }
+
+    # Allow caller overrides without mutating engine.CONFIG permanently.
+    cfg = dict(engine.CONFIG)
+    if npi_source:            cfg["npi_source"] = npi_source
+    if clia_source:           cfg["clia_source"] = clia_source
+    if state_license_source:  cfg["state_license_source"] = state_license_source
+    if cms_denials_source:    cfg["cms_denials_source"] = cms_denials_source
+
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    npi_df     = engine.load_npi(cfg["npi_source"])
+    clia_df    = engine.load_clia(cfg["clia_source"])
+    state_df   = engine.load_state_license(cfg["state_license_source"])
+    denials_df = engine.load_cms_denials(cfg["cms_denials_source"])
+
+    if npi_df.empty and clia_df.empty and state_df.empty:
+        return {
+            "ok": False,
+            "error": "All source datasets empty — check CONFIG paths.",
+            "tiers": {"A": 0, "B": 0, "C": 0, "Unknown": 0},
+            "rows": [],
+            "elapsed_sec": round(time.time() - started, 2),
+        }
+
+    merged = engine.merge_facilities(npi_df, clia_df, state_df, denials_df)
+    scored = engine.score_facilities(merged)
+
+    # Apply rule_intercept tiering on top of engine scoring.
+    tier_counts = {"A": 0, "B": 0, "C": 0, "Unknown": 0}
+    routed_rows: list[dict] = []
+    for _, r in scored.iterrows():
+        org   = str(r.get("org_name") or r.get("lab_name") or r.get("facility_name") or "")
+        ltype = str(r.get("taxonomy") or r.get("lab_type") or r.get("license_type") or "")
+        st    = str(r.get("state") or "")
+        rule  = score_lab_lead(org, ltype, st)
+        tier_counts[rule["tier"]] = tier_counts.get(rule["tier"], 0) + 1
+        routed_rows.append({
+            "org_name":     org,
+            "city":         str(r.get("city") or ""),
+            "state":        st,
+            "zip":          str(r.get("zip") or ""),
+            "npi":          str(r.get("npi") or ""),
+            "clia":         str(r.get("clia") or ""),
+            "license_id":   str(r.get("license_id") or ""),
+            "lab_type":     ltype,
+            "engine_score": int(r.get("total_score") or 0),
+            "money_score":  int(r.get("money_score") or 0),
+            "pain_score":   int(r.get("pain_score") or 0),
+            "fit_score":    int(r.get("fit_score") or 0),
+            "tier":         rule["tier"],
+            "rule_score":   rule["score"],
+            "priority":     rule["priority"],
+            "signals":      rule["signals"],
+        })
+
+    routed_rows.sort(
+        key=lambda x: (
+            {"A": 0, "B": 1, "C": 2, "Unknown": 3}.get(x["tier"], 9),
+            -x["rule_score"],
+            -x["engine_score"],
+        )
+    )
+
+    # Persist outputs.
+    import csv as _csv
+    full_path  = os.path.join(output_dir, "labs_routed_full.csv")
+    top_path   = os.path.join(output_dir, "labs_routed_top.csv")
+    apollo_df  = engine.build_apollo_export(scored)
+    apollo_pth = os.path.join(output_dir, "labs_apollo_companies.csv")
+    apollo_df.to_csv(apollo_pth, index=False)
+
+    fieldnames = list(routed_rows[0].keys()) if routed_rows else [
+        "org_name", "city", "state", "tier", "rule_score", "engine_score"
+    ]
+    with open(full_path, "w", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in routed_rows:
+            w.writerow({k: (";".join(v) if isinstance(v, list) else v) for k, v in row.items()})
+    with open(top_path, "w", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in routed_rows[:top_n]:
+            w.writerow({k: (";".join(v) if isinstance(v, list) else v) for k, v in row.items()})
+
+    return {
+        "ok": True,
+        "method": "rule-intercept+lab-engine",
+        "elapsed_sec": round(time.time() - started, 2),
+        "input_counts": {
+            "npi": len(npi_df),
+            "clia": len(clia_df),
+            "state_license": len(state_df),
+            "cms_denials": len(denials_df),
+            "merged": len(merged),
+            "scored": len(scored),
+        },
+        "tiers": tier_counts,
+        "top": routed_rows[:top_n],
+        "csv_paths": {
+            "full":   full_path,
+            "top":    top_path,
+            "apollo": apollo_pth,
+        },
+    }
+
+
+if __name__ == "__main__":
+    import json
+    res = intercept_lab_engine()
+    print(json.dumps({k: v for k, v in res.items() if k != "top"}, indent=2, default=str))
+    if res.get("top"):
+        print(f"\nTop {len(res['top'])} routed leads:")
+        for row in res["top"][:10]:
+            print(f"  [{row['tier']}] {row['rule_score']:>3}  "
+                  f"{row['org_name'][:50]:<50}  {row['city']}, {row['state']}")

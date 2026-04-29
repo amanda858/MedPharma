@@ -1,0 +1,51 @@
+org_name,city,state,zip,npi,clia,license_id,lab_type,engine_score,money_score,pain_score,fit_score,tier,rule_score,priority,signals
+"GULF COAST MOLECULAR LABORATORIES, LLC",SPANISH FORT,AL,36527,1780160770,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: AL
+PROTEUS MOLECULAR AND CLINICAL LAB LLC,HOMEWOOD,AL,35209,1538542196,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: AL
+INTEGRATED MOLECULAR DIAGNOSTICS LABORATORY,CHANDLER,AZ,852243665,1063106896,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular diagnostics;Name signal (+): molecular;Priority market: AZ
+TUCSON SPECIALTY LABS LLC,TUCSON,AZ,857501925,1922723899,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: specialty lab;Name signal (+): specialty;Priority market: AZ
+"ARIZONA PRECISION MEDICINE, PLLC",PHOENIX,AZ,850042364,1235759630,,,"Pathology, Molecular Genetic Pathology",3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): precision;Priority market: AZ
+PRECISION EPIGENOMICS INC.,TUSCON,AZ,857111816,1699503060,,,"Pathology, Molecular Genetic Pathology",3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): precision;Priority market: AZ
+CARIS MOLECULAR PATHOLOGY,PHOENIX,AZ,85040,1548539661,,,"Pathology, Anatomic Pathology & Clinical Pathology",3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: AZ
+CORDELL LABS LLC DBA SPECIALTY LABORATORIES,EL CAJON,CA,920200911,1801738364,,,"Spec/Tech, Pathology, Laboratory Management",3,0,0,3,A,82,High,Tier A lab type: specialty lab;Name signal (+): specialty;Priority market: CA
+"AMERICAN SPECIALTY LABORATORY , INC",CHATSWORTH,CA,913114416,1316200504,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: specialty lab;Name signal (+): specialty;Priority market: CA
+APMG MOLECULAR DIAGNOSTICS,LA MESA,CA,919423020,1720266174,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular diagnostics;Name signal (+): molecular;Priority market: CA
+"ARISTA MOLECULAR, INC.",CARLSBAD,CA,920111414,1114232006,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: CA
+"ARTEMIS DNA CA, LLC",IRVINE,CA,926184615,1639768641,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: CA
+CALIFORNIA MOLECULAR REFERENCE LABORATORIES,LAGUNA HILLS,CA,926533650,1568698512,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: CA
+DNA MOLECULAR SCIENCES LLC,IRVINE,CA,926145563,1154051977,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: CA
+"INTEGRATED MOLECULAR DIAGNOSTICS PATHOLOGY, INC.",AURORA,CO,800457335,1770977951,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular diagnostics;Name signal (+): molecular;Priority market: CO
+ADVANCED GENETICS LAB LLC,MONROE,CT,064682809,1952804080,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: genetics;Name signal (+): advanced;Priority market: CT
+"DNA GENETICS LAB, LLC",NEW HAVEN,CT,065113107,1528401544,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: genetics;Name signal (+): dna;Priority market: CT
+DNA MED TUNING,HARTFORD,CT,061062515,1174179972,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: CT
+MOLECULAR DIAGNOSTIC LABORATORY LLC,WALLINGFORD,CT,064921884,1730292822,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: CT
+"PRECISION TOXICOLOGY, LLC",WEST HARTFORD,CT,061191505,1114319563,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: toxicology;Name signal (+): precision;Priority market: CT
+ADVANCED GENETICS,MIAMI,FL,331666694,1407450760,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: genetics;Name signal (+): advanced;Priority market: FL
+ATLANTA RAPID TESTING LLC,MARIETTA,GA,300678659,1467056333,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: rapid testing;Name signal (+): rapid;Priority market: GA
+CHATTAHOOCHEE VALLEY DNA SERVICES,COLUMBUS,GA,319062944,1053115154,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: GA
+DNA MED SERVICES LLC,LOCUST GROVE,GA,30248,1639020886,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: GA
+"GEORGIA ESOTERIC & MOLECULAR LABS, LLC",AUGUSTA,GA,309120004,1487694261,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: GA
+OMEGA MOLECULAR LABORATORIES LLC,ALPHARETTA,GA,300058407,1124890934,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: GA
+PATERNITY DNA CONSULTANTS,LAWRENCEVILLE,GA,300438538,1437967312,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: GA
+"PCG MOLECULAR, LLC",ATLANTA,GA,303284277,1538625868,,,"Pathology, Anatomic Pathology & Clinical Pathology",3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: GA
+PGX PARTNERS,BUFORD,GA,305188787,1457764565,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: pgx;Name signal (+): pgx;Priority market: GA
+AMERICAN MOLECULAR LABORATORIES INC,VERNON HILLS,IL,600611590,1982142402,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: IL
+"CENTER FOR MOLECULAR CANCER DIAGNOSTICS, INC",BROADVIEW,IL,601553869,1134808033,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: IL
+"CENTER FOR MOLECULAR CANCER DIAGNOSTICS, INC",MENTOR,OH,440604806,1316378789,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: OH
+ACIES MOLECULAR LAB LLC,NEW ALBANY,IN,47150,1518600758,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: IN
+MOBILE DNA DIRECT LLC,INDIANAPOLIS,IN,462681799,1962292276,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: IN
+MOLECULAR LAB ASSOCIATES ILLINOIS,SPRINGFIELD,IL,627047433,1841999430,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: IL
+RESOLVE MOLECULAR DIAGNOSTICS LLC,METAIRIE,LA,700066626,1336814870,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular diagnostics;Name signal (+): molecular;Priority market: LA
+"SPECIALTY DRUG TESTING, LLC",MONROE,LA,712032804,1639577091,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: drug testing;Name signal (+): specialty;Priority market: LA
+COSMOSID NGS LABORATORY SERVICES,ROCKVILLE,MD,208501496,1265097745,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: ngs;Name signal (+): ngs;Priority market: MD
+FPCA MOLECULAR LABS LLC,FREDERICK,MD,217038624,1245085430,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: MD
+INTEGRATED CELLULAR AND MOLECULAR DIAGNOSTICS LLC,GREENBELT,MD,207706323,1851707186,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular diagnostics;Name signal (+): molecular;Priority market: MD
+"PRECISION TOXICOLOGY, LLC",DARTMOUTH,MA,027473303,1043737505,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: toxicology;Name signal (+): precision;Priority market: MA
+ARES NGS LLC,HOLLAND,MI,494246518,1144876277,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: ngs;Name signal (+): ngs;Priority market: MI
+FIRST CHOICE DNA,SOUTHFIELD,MI,480752865,1295428274,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: MI
+MOLECULAR MEDICAL INC,DAVISBURG,MI,483501946,1588041511,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: MI
+PRECISION DNA SOLUTIONS,CLARKSTON,MI,483462270,1710271002,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: dna;Name signal (+): dna;Priority market: MI
+"PRECISION TOXICOLOGY, LLC",MARQUETTE,MI,498553196,1871907915,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: toxicology;Name signal (+): precision;Priority market: MI
+"PRIME TOXICOLOGY, LLC",SOUTHFIELD,MI,480341659,1104365626,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: toxicology;Name signal (+): prime;Priority market: MI
+SEQUENOM CENTER FOR MOLECULAR MEDICINE LLC,GRAND RAPIDS,MI,495033314,1528205028,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: MI
+MOLECULAR AND DIAGNOSTIC TESTING LABS OF AMERICA,DALLAS,TX,752262017,1013673243,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: molecular;Name signal (+): molecular;Priority market: TX
+CORE TOXICOLOGY LLC,CREVE COEUR,MO,631417129,1538527601,,,Clinical Medical Laboratory,3,0,0,3,A,82,High,Tier A lab type: toxicology;Name signal (+): core;Priority market: MO
