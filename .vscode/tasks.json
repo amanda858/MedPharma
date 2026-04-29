@@ -703,6 +703,13 @@
             "problemMatcher": []
         },
         {
+            "label": "push-startup-autoimport",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && git add app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git commit -m \"fix: auto-import rule-intercept CSV on startup so leads survive restarts\" -- app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "bundle-seed",
             "type": "shell",
             "command": "python3",
