@@ -51,7 +51,7 @@ def _ensure_dir(p: str) -> None:
         pass
 
 
-def _record_pull(date_str: str, csv_path: str, row_count: int, summary: dict[str, Any]) -> None:
+def _record_pull(date_str: str, csv_path: str, row_count: int, summary: dict[str, Any], specialty: str = "") -> None:
     try:
         with sqlite3.connect(DB_PATH, timeout=10) as c:
             c.execute(
@@ -64,32 +64,41 @@ def _record_pull(date_str: str, csv_path: str, row_count: int, summary: dict[str
             c.execute(
                 "INSERT INTO national_pulls(pull_date, specialty, csv_path, row_count, summary_json, created_at) "
                 "VALUES (?,?,?,?,?,?)",
-                (date_str, SPECIALTY, csv_path, row_count, _j.dumps(summary), int(time.time())),
+                (date_str, specialty or SPECIALTY, csv_path, row_count, _j.dumps(summary), int(time.time())),
             )
     except Exception as e:
         log.warning(f"Could not record national pull metadata: {e}")
 
 
-async def _run_pull_async() -> dict[str, Any]:
+async def _run_pull_async(
+    *,
+    states: list[str] | None = None,
+    per_state: int | None = None,
+    specialty: str | None = None,
+) -> dict[str, Any]:
     from app.bulk_prospector import prospect_multi_state, _enrich_dm_only
 
+    use_states = [s.upper() for s in states] if states else US_STATES_PLUS
+    use_per_state = int(per_state) if per_state else PER_STATE
+    use_specialty = (specialty or SPECIALTY).strip()
+
     t0 = time.time()
-    log.info(f"[national-pull] start specialty={SPECIALTY} per_state={PER_STATE} states={len(US_STATES_PLUS)}")
+    log.info(f"[national-pull] start specialty={use_specialty} per_state={use_per_state} states={len(use_states)}")
     _ensure_dir(OUT_DIR)
     date_str = datetime.now().strftime("%Y%m%d")
-    csv_path = os.path.join(OUT_DIR, f"leads_national_{SPECIALTY}_{date_str}.csv")
+    csv_path = os.path.join(OUT_DIR, f"leads_national_{use_specialty}_{date_str}.csv")
 
     all_rows: list[dict] = []
     headers: list[str] = []
     summary_total: dict[str, Any] = {}
     states_done: list[str] = []
 
-    for st in US_STATES_PLUS:
+    for st in use_states:
         try:
             ts = time.time()
             prospects = await prospect_multi_state(
-                states=[st], specialty=SPECIALTY,
-                per_state=PER_STATE, new_only=NEW_ONLY, new_days=NEW_DAYS,
+                states=[st], specialty=use_specialty,
+                per_state=use_per_state, new_only=NEW_ONLY, new_days=NEW_DAYS,
             )
             if not prospects:
                 log.info(f"[national-pull] {st}: 0 prospects")
@@ -121,12 +130,12 @@ async def _run_pull_async() -> dict[str, Any]:
                 for k, v in summ.items():
                     if isinstance(v, (int, float)):
                         summary_total[k] = summary_total.get(k, 0) + v
-                _record_pull(date_str, csv_path, len(all_rows), summary_total)
+                _record_pull(date_str, csv_path, len(all_rows), summary_total, use_specialty)
             states_done.append(st)
         except Exception as e:
             log.exception(f"[national-pull] state {st} failed: {e}")
 
-    log.info(f"[national-pull] DONE {len(states_done)}/{len(US_STATES_PLUS)} states, "
+    log.info(f"[national-pull] DONE {len(states_done)}/{len(use_states)} states, "
              f"{len(all_rows)} rows -> {csv_path} total {time.time()-t0:.1f}s")
     if not all_rows:
         return {"ok": False, "reason": "no enriched rows", "states_done": states_done}

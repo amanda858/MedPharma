@@ -23,6 +23,55 @@
             "problemMatcher": []
         },
         {
+            "label": "diag-pull-state",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/diag_pull_state.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "wait-and-test-search",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/wait_and_test_search.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "smoke-pull-changes",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/smoke_pull_changes.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "find-enrich-request",
+            "type": "shell",
+            "command": "bash /workspaces/CVOPro/.vscode/find_enrich_request.sh",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-pull-fix",
+            "type": "shell",
+            "command": "bash /workspaces/CVOPro/.vscode/push_pull_fix.sh",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "wait-for-deploy-v2",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_deploy_v2.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "poll-csv-progress",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/poll_csv_progress.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "push-search-fix-v2",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/national_pull.py app/templates/index.html .vscode/tasks.json .vscode/check_national_search.py .vscode/trigger_national_pull.py .vscode/wait_for_search_endpoint.py .vscode/push_search_ui.sh && git commit -m 'fix: per-state CSV checkpoint + disk-fallback search + correct column names' && git push origin main",

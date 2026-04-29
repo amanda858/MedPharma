@@ -1760,8 +1760,16 @@ _national_pull_running = {"flag": False, "started_at": None, "last_result": None
 
 
 @app.post("/api/national-pull/run")
-async def trigger_national_pull():
-    """Kick off the full 52-state NPPES pull immediately. Runs in background."""
+async def trigger_national_pull(
+    states: str = Query("", description="Optional comma-separated state codes (e.g. 'FL' or 'FL,GA'). Empty = all 52."),
+    per_state: int = Query(0, ge=0, le=200, description="Optional cap per state. 0 = use server default (50)."),
+    specialty: str = Query("", description="Optional specialty override (e.g. 'laboratory', 'clinical')."),
+):
+    """Kick off the national NPPES pull immediately. Runs in background.
+
+    Optional query params let the operator scope a quick pull (1-2 states, low per_state cap)
+    so a CSV lands within minutes — useful on free-tier hosts where long pulls get killed.
+    """
     if _national_pull_running["flag"]:
         return {
             "ok": False,
@@ -1772,11 +1780,15 @@ async def trigger_national_pull():
 
     from app.national_pull import _run_pull_async
 
+    state_list = [s.strip().upper() for s in states.split(",") if s.strip()] or None
+    ps = per_state if per_state > 0 else None
+    sp = specialty.strip() or None
+
     async def _bg():
         _national_pull_running["flag"] = True
         _national_pull_running["started_at"] = datetime.now().isoformat()
         try:
-            res = await _run_pull_async()
+            res = await _run_pull_async(states=state_list, per_state=ps, specialty=sp)
             _national_pull_running["last_result"] = res
         except Exception as e:
             _national_pull_running["last_result"] = {"ok": False, "error": str(e)}
@@ -1784,7 +1796,12 @@ async def trigger_national_pull():
             _national_pull_running["flag"] = False
 
     _asyncio_np.create_task(_bg())
-    return {"ok": True, "started": True, "started_at": _national_pull_running["started_at"]}
+    return {
+        "ok": True,
+        "started": True,
+        "started_at": _national_pull_running["started_at"],
+        "scope": {"states": state_list or "ALL", "per_state": ps or "default", "specialty": sp or "default"},
+    }
 
 
 def _np_out_dir() -> str:
@@ -2013,6 +2030,13 @@ async def list_national_specialties():
 
 
 class BulkEnrichItem(BaseModel):
+    npi: str
+    org_name: Optional[str] = ""
+    state: Optional[str] = ""
+    city: Optional[str] = ""
+
+
+class EnrichRequest(BaseModel):
     npi: str
     org_name: Optional[str] = ""
     state: Optional[str] = ""
