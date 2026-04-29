@@ -51,9 +51,23 @@
             "problemMatcher": []
         },
         {
-            "label": "push-pull-fix",
+            "label": "inspect-seed",
             "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/push_pull_fix.sh",
+            "command": "bash /workspaces/CVOPro/.vscode/inspect_seed.sh",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "git-log-short-cat",
+            "type": "shell",
+            "command": "bash /workspaces/CVOPro/.vscode/git_log_short.sh",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "copy-seed-into-app",
+            "type": "shell",
+            "command": "bash /workspaces/CVOPro/.vscode/copy_seed.sh",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
@@ -598,6 +612,102 @@
             "command": "python3",
             "args": [
                 "/workspaces/CVOPro/.vscode/poll_readiness.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "count-final-leads",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/count_final.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "rescore-now",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/rescore_now.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "import-to-hub",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/import_to_hub.py"
+            ],
+            "options": {
+                "cwd": "/workspaces/CVOPro"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "check-csv-size",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/check_csv_size.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "git-check",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/git_check.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "git-push-now",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/git_push_now.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy-and-import",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/deploy_and_import.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "auth-smoke",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "auth-smoke",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "bundle-seed",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "/workspaces/CVOPro/.vscode/bundle_seed.py"
             ],
             "options": {
                 "cwd": "/workspaces/CVOPro"

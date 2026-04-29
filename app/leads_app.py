@@ -61,6 +61,72 @@ async def startup_event():
     except Exception as e:
         print(f"[startup] seed load skipped: {e}")
 
+    # Auto-import the bundled rule-intercept lab routing CSV so the saved_leads
+    # table is repopulated after every restart (Render free tier wipes /data).
+    try:
+        from app.database import get_db as _get_db, save_lead as _save_lead
+        import csv as _csv
+        from datetime import datetime as _dt
+
+        conn = _get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM saved_leads WHERE source = 'rule-intercept'")
+        existing = cur.fetchone()[0]
+        conn.close()
+
+        if existing < 1000:
+            csv_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "output", "labs_routed_full.csv",
+            )
+            if os.path.exists(csv_path):
+                inserted = 0
+                with open(csv_path, encoding="utf-8") as f:
+                    reader = _csv.DictReader(f)
+                    for r in reader:
+                        npi = (r.get("npi") or "").strip()
+                        tier = (r.get("tier") or "").strip()
+                        if not npi or tier not in ("A", "B", "C"):
+                            continue
+                        try:
+                            score = int(r.get("rule_score") or 0)
+                        except ValueError:
+                            score = 0
+                        try:
+                            _save_lead({
+                                "npi": npi,
+                                "organization_name": r.get("org_name", ""),
+                                "first_name": "",
+                                "last_name": "",
+                                "credential": "",
+                                "taxonomy_code": "",
+                                "taxonomy_desc": r.get("lab_type", ""),
+                                "address_line1": "",
+                                "address_line2": "",
+                                "city": r.get("city", ""),
+                                "state": r.get("state", ""),
+                                "zip_code": r.get("zip", ""),
+                                "phone": "",
+                                "fax": "",
+                                "enumeration_date": "",
+                                "last_updated": _dt.now().isoformat(),
+                                "lead_score": score,
+                                "lead_status": "new",
+                                "notes": (
+                                    f"Tier {tier} | RuleScore {score} | "
+                                    f"Lab Type: {r.get('lab_type','')} | "
+                                    f"Signals: {r.get('signals','')}"
+                                ),
+                                "tags": f"tier-{tier};lab;rule-intercept",
+                                "source": "rule-intercept",
+                            })
+                            inserted += 1
+                        except Exception:
+                            pass
+                print(f"[startup] auto-imported rule-intercept leads: {inserted}")
+    except Exception as e:
+        print(f"[startup] rule-intercept auto-import skipped: {e}")
+
 
 @app.get("/healthz")
 async def health_check():
