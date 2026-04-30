@@ -2398,14 +2398,47 @@ async def _bulk_enrich_labs(state: str, tier: str, limit: int) -> dict:
     tasks = [_one(npi, org) for npi, org in leads]
     results = await asyncio.gather(*tasks, return_exceptions=False)
 
+    # Junk filters — strip placeholder/website-template emails
+    _JUNK_LOCAL = {
+        "user", "your", "yourname", "yourcompany", "name", "email",
+        "test", "test1", "test2", "demo", "example", "info",  # info kept below
+        "individually", "individually.",
+    }
+    _JUNK_DOMAIN = {
+        "domain.com", "example.com", "yoursite.com", "yourdomain.com",
+        "test.com", "gmail.example.com",
+    }
+
+    def _is_junk(email: str) -> bool:
+        e = (email or "").lower().strip()
+        if "@" not in e:
+            return True
+        local, _, dom = e.partition("@")
+        local = local.strip(" .")
+        if not local or not dom:
+            return True
+        if dom in _JUNK_DOMAIN:
+            return True
+        if local in _JUNK_LOCAL and local != "info":
+            return True
+        # leading dot or period-only patterns
+        if email.lower().startswith("individually"):
+            return True
+        # personal mail providers — not org contacts
+        if dom in ("gmail.com", "yahoo.com", "hotmail.com",
+                   "aol.com", "outlook.com", "icloud.com", "live.com"):
+            return True
+        return False
+
     inserted = 0
     enriched_npis = 0
     with _sql.connect(db_path, timeout=15) as c:
         for npi, emails in results:
-            if not emails:
+            kept = [em for em in (emails or []) if not _is_junk(em.get("email", ""))]
+            if not kept:
                 continue
             enriched_npis += 1
-            for em in emails:
+            for em in kept:
                 try:
                     c.execute(
                         """INSERT OR IGNORE INTO lead_emails
@@ -2425,6 +2458,22 @@ async def _bulk_enrich_labs(state: str, tier: str, limit: int) -> dict:
                     inserted += 1
                 except Exception:
                     pass
+        # also retroactively scrub any junk that may already be in the table
+        try:
+            c.execute(
+                """DELETE FROM lead_emails
+                   WHERE LOWER(email) LIKE '%@domain.com'
+                      OR LOWER(email) LIKE '%@example.com'
+                      OR LOWER(email) LIKE 'user@%'
+                      OR LOWER(email) LIKE 'individually%'
+                      OR LOWER(email) LIKE '%@gmail.com'
+                      OR LOWER(email) LIKE '%@yahoo.com'
+                      OR LOWER(email) LIKE '%@hotmail.com'
+                      OR LOWER(email) LIKE '%@aol.com'
+                      OR LOWER(email) LIKE '%@outlook.com'"""
+            )
+        except Exception:
+            pass
         c.commit()
 
     return {
