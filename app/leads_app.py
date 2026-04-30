@@ -2106,17 +2106,84 @@ import csv as _csv_np
 import time as _time_np
 
 _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
+_saved_leads_cache = {"loaded_at": 0.0, "rows": []}
+
+
+def _load_saved_leads_as_national_rows() -> list[dict]:
+    """Fallback: read saved_leads (rule-intercept bundle) and shape rows into the
+    column dict the National Search UI expects so the panel works even before
+    the first scheduled CSV pull has run.
+    """
+    import sqlite3 as _sql
+    now = _time_np.time()
+    # cache for 60s
+    if _saved_leads_cache["rows"] and (now - _saved_leads_cache["loaded_at"]) < 60:
+        return _saved_leads_cache["rows"]
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    rows: list[dict] = []
+    try:
+        with _sql.connect(db_path, timeout=10) as conn:
+            conn.row_factory = _sql.Row
+            cur = conn.execute(
+                "SELECT npi, organization_name, first_name, last_name, "
+                "taxonomy_desc, city, state, zip_code, phone, lead_score, "
+                "tags, source, notes "
+                "FROM saved_leads "
+                "WHERE source IN ('rule-intercept','demo','scraped','national_pull')"
+            )
+            for r in cur.fetchall():
+                tags = (r["tags"] or "")
+                tier = ""
+                for t in tags.split(";"):
+                    t = t.strip().lower()
+                    if t.startswith("tier-"):
+                        tier = t.upper().replace("TIER-", "Tier ")
+                        break
+                dm_full = " ".join(x for x in [r["first_name"] or "", r["last_name"] or ""] if x).strip()
+                rows.append({
+                    "NPI": r["npi"] or "",
+                    "Org Name": r["organization_name"] or "",
+                    "State": r["state"] or "",
+                    "City": r["city"] or "",
+                    "Zip": r["zip_code"] or "",
+                    "Phone": r["phone"] or "",
+                    "Taxonomy / Type": r["taxonomy_desc"] or "",
+                    "Type Detected": tier,
+                    "Heat Score": r["lead_score"] or 0,
+                    "Decision Maker": dm_full,
+                    "DM Email": "",
+                    "Company Email": "",
+                    "PubMed Email": "",
+                    "Directory Email": "",
+                    "Site-Search Email": "",
+                    "Sunbiz Email": "",
+                    "Person-Site Email": "",
+                    "Wayback Email": "",
+                    "Org Domain": "",
+                    "Verified LinkedIn URL": "",
+                    "Tags": tags,
+                    "Source": r["source"] or "",
+                    "Notes": r["notes"] or "",
+                })
+    except Exception:
+        return _saved_leads_cache["rows"] or []
+    _saved_leads_cache.update({"loaded_at": now, "rows": rows})
+    return rows
 
 
 def _load_latest_national_rows() -> list[dict]:
-    """Read most recent national-pull CSV into memory (cached by mtime)."""
+    """Read most recent national-pull CSV into memory (cached by mtime).
+
+    Falls back to saved_leads (the bundled rule-intercept import) when no CSV
+    has been generated yet, so the search UI is never empty on a fresh deploy.
+    """
     csv_path = _np_latest_csv_path()
     if not csv_path or not os.path.exists(csv_path):
-        return []
+        return _load_saved_leads_as_national_rows()
     try:
         mtime = os.path.getmtime(csv_path)
     except Exception:
-        return []
+        return _load_saved_leads_as_national_rows()
     if (_national_csv_cache["path"] == csv_path
             and _national_csv_cache["mtime"] == mtime
             and _national_csv_cache["rows"]):
@@ -2137,7 +2204,7 @@ async def search_national_pull(
     state: str = Query("", description="2-letter state code, optional"),
     specialty: str = Query("", description="laboratory|urgent_care|primary_care|... optional"),
     q: str = Query("", description="free text — matches org name, city, DM name, email"),
-    has_email: bool = Query(True, description="only rows with at least one real email"),
+    has_email: bool = Query(False, description="only rows with at least one real email"),
     min_heat: int = Query(0, ge=0, le=100),
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),

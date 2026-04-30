@@ -831,7 +831,7 @@
             <div class="card" id="cardNationalSearch">
                 <div class="card-title">🔎 Search Latest National Pull — Filter Quality Leads by Specialty / State</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
-                    Live search over the most recent national pull CSV. Only rows that passed QUALITY_FIRST + REQUIRE_EMAIL filters are returned.
+                    Live search over the saved-leads pool. Defaults to all rule-intercept lab leads (Tier A/B/C). Toggle <b>Has email</b> to restrict to enriched rows after the daily 5 AM EST national pull runs.
                 </p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;align-items:end;">
                     <div class="form-group" style="margin:0;">
@@ -855,7 +855,7 @@
                         <input type="number" id="nsLimit" min="1" max="2000" value="100" />
                     </div>
                     <div class="form-group" style="margin:0;display:flex;align-items:center;gap:6px;">
-                        <input type="checkbox" id="nsHasEmail" checked />
+                        <input type="checkbox" id="nsHasEmail" />
                         <label for="nsHasEmail" style="font-size:12px;font-weight:600;margin:0;">Has email</label>
                     </div>
                     <div class="form-group" style="margin:0;">
