@@ -90,6 +90,85 @@ async def startup():
     except Exception as e:
         log.error(f"Startup error: leads DB init failed: {e}")
 
+    # ── Auto-restore bundled rule-intercept lab leads (free-tier safety) ──
+    # Render free-tier wipes /data on redeploys, so we re-populate saved_leads
+    # from the bundled CSV in a background thread so boot stays fast.
+    def _bulk_restore_rule_intercept():
+        import csv as _csv
+        import sqlite3 as _sql
+        from datetime import datetime as _dt
+        from app.database import get_db as _get_db
+        try:
+            conn = _get_db()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM saved_leads WHERE source = 'rule-intercept'")
+            existing = cur.fetchone()[0]
+            if existing >= 1000:
+                conn.close()
+                log.info(f"[auto-restore] rule-intercept already populated ({existing}); skipping")
+                return
+            csv_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "output", "labs_routed_full.csv",
+            )
+            if not os.path.exists(csv_path):
+                conn.close()
+                log.warning(f"[auto-restore] bundled CSV missing at {csv_path}")
+                return
+            now = _dt.now().isoformat()
+            rows = []
+            with open(csv_path, encoding="utf-8") as f:
+                for r in _csv.DictReader(f):
+                    npi = (r.get("npi") or "").strip()
+                    tier = (r.get("tier") or "").strip()
+                    if not npi or tier not in ("A", "B", "C"):
+                        continue
+                    try:
+                        score = int(r.get("rule_score") or 0)
+                    except ValueError:
+                        score = 0
+                    rows.append((
+                        npi, r.get("org_name", ""), "", "", "", "",
+                        r.get("lab_type", ""), "", "",
+                        r.get("city", ""), r.get("state", ""), r.get("zip", ""),
+                        "", "", "", now,
+                        score, "new",
+                        f"Tier {tier} | RuleScore {score} | Lab Type: {r.get('lab_type','')} | Signals: {r.get('signals','')}",
+                        f"tier-{tier};lab;rule-intercept",
+                        "rule-intercept", now,
+                    ))
+            try:
+                cur.executemany(
+                    """
+                    INSERT OR REPLACE INTO saved_leads (
+                        npi, organization_name, first_name, last_name, credential,
+                        taxonomy_code, taxonomy_desc, address_line1, address_line2,
+                        city, state, zip_code, phone, fax, enumeration_date,
+                        last_updated, lead_score, lead_status, notes, tags, source, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                conn.commit()
+                log.info(f"[auto-restore] rule-intercept leads restored: {len(rows)}")
+            except _sql.OperationalError as oe:
+                conn.rollback()
+                log.error(f"[auto-restore] bulk insert failed: {oe}")
+            finally:
+                conn.close()
+        except Exception as e:
+            log.error(f"[auto-restore] skipped: {e}")
+
+    try:
+        import threading as _threading
+        _threading.Thread(
+            target=_bulk_restore_rule_intercept,
+            name="rule-intercept-restore",
+            daemon=True,
+        ).start()
+    except Exception as e:
+        log.error(f"[auto-restore] could not spawn thread: {e}")
+
     try:
         init_client_hub_db()
         log.info("✅ Client hub database initialized")
