@@ -855,8 +855,8 @@
                         <input type="number" id="nsLimit" min="1" max="2000" value="100" />
                     </div>
                     <div class="form-group" style="margin:0;display:flex;align-items:center;gap:6px;">
-                        <input type="checkbox" id="nsHasEmail" />
-                        <label for="nsHasEmail" style="font-size:12px;font-weight:600;margin:0;">Has email</label>
+                        <input type="checkbox" id="nsHasEmailV2" />
+                        <label for="nsHasEmailV2" style="font-size:12px;font-weight:600;margin:0;" title="Requires enriched email — bundled lab dataset has none yet, so checking this returns 0">Has email</label>
                     </div>
                     <div class="form-group" style="margin:0;">
                         <button class="btn btn-primary" onclick="runNationalSearch()" id="btnNsSearch">Search</button>
@@ -1673,7 +1673,7 @@
                     state: document.getElementById('nsState').value || '',
                     specialty: document.getElementById('nsSpecialty').value || '',
                     q: document.getElementById('nsQuery').value || '',
-                    has_email: document.getElementById('nsHasEmail').checked ? 'true' : 'false',
+                    has_email: document.getElementById('nsHasEmailV2').checked ? 'true' : 'false',
                     min_heat: document.getElementById('nsMinHeat').value || '0',
                     limit: document.getElementById('nsLimit').value || '100',
                     offset: '0',
@@ -1688,7 +1688,11 @@
                 const data = await resp.json();
                 summary.innerHTML = `Showing <b>${data.rows.length}</b> of <b>${data.matched}</b> matches (total in CSV: ${data.total}).`;
                 if (!data.rows.length) {
-                    out.innerHTML = '<div style="padding:14px;color:var(--gray-500);font-size:13px;">No matches.</div>';
+                    const hadEmail = document.getElementById('nsHasEmailV2').checked;
+                    const hint = (data.total > 0 && hadEmail)
+                        ? '<div style="padding:14px;color:#c00;font-size:13px;">No matches — uncheck <b>Has email</b>. The bundled lab dataset is NPI-verified but not yet email-enriched, so requiring email returns 0. Run the daily national pull or enrichment to populate emails.</div>'
+                        : '<div style="padding:14px;color:var(--gray-500);font-size:13px;">No matches.</div>';
+                    out.innerHTML = hint;
                     return;
                 }
                 const cols = [
@@ -1732,6 +1736,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             setTimeout(refreshNationalStatus, 1500);
             setTimeout(loadNationalSearchFilters, 1800);
+            setTimeout(runNationalSearch, 2200);
         });
 
         async function runBulkSearch() {
