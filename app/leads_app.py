@@ -2109,6 +2109,55 @@ _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
 _bundled_fallback_cache = {"mtime": 0.0, "rows": []}
 
 
+def _attach_emails_to_rows(rows: list[dict]) -> list[dict]:
+    """Populate DM/Company/Phone email fields on rows by NPI from lead_emails."""
+    if not rows:
+        return rows
+    npis = [r.get("NPI") for r in rows if r.get("NPI")]
+    if not npis:
+        return rows
+    import sqlite3 as _sql
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    by_npi: dict[str, list[tuple]] = {}
+    try:
+        with _sql.connect(db_path, timeout=10) as c:
+            # Pull ALL emails for the NPIs in this page
+            placeholders = ",".join("?" * len(npis))
+            cur = c.execute(
+                f"""SELECT npi, email, first_name, last_name, position,
+                           is_decision_maker, domain
+                    FROM lead_emails WHERE npi IN ({placeholders})""",
+                npis,
+            )
+            for npi, email, fn, ln, pos, is_dm, dom in cur.fetchall():
+                by_npi.setdefault(npi, []).append((email, fn, ln, pos, is_dm, dom))
+    except Exception:
+        return rows
+    if not by_npi:
+        return rows
+    for r in rows:
+        npi = r.get("NPI", "")
+        emails = by_npi.get(npi)
+        if not emails:
+            continue
+        # Prefer DM email
+        dm = next((e for e in emails if e[4]), None)
+        if dm:
+            r["DM Email"] = r.get("DM Email") or dm[0]
+            r["Decision Maker"] = r.get("Decision Maker") or f"{dm[1]} {dm[2]}".strip()
+        # First non-DM = company email
+        co = next((e for e in emails if not e[4]), None)
+        if co:
+            r["Company Email"] = r.get("Company Email") or co[0]
+        # Domain from any record
+        if not r.get("Org Domain"):
+            for e in emails:
+                if e[5]:
+                    r["Org Domain"] = e[5]
+                    break
+    return rows
+
+
 def _load_bundled_lab_rows() -> list[dict]:
     """Map bundled rule-intercept lab CSV rows into the national-pull schema.
 
@@ -2226,6 +2275,19 @@ async def search_national_pull(
     sp = (specialty or "").lower().strip()
     qq = (q or "").lower().strip()
 
+    # Pre-compute the set of NPIs that have any enriched email so has_email
+    # filter works against the lead_emails table even when bundled rows are blank.
+    enriched_npis: set[str] = set()
+    if has_email:
+        try:
+            import sqlite3 as _sql
+            db_path = os.environ.get("DB_PATH", "/data/leads.db")
+            with _sql.connect(db_path, timeout=10) as c:
+                cur = c.execute("SELECT DISTINCT npi FROM lead_emails")
+                enriched_npis = {row[0] for row in cur.fetchall() if row[0]}
+        except Exception:
+            enriched_npis = set()
+
     def _is_match(r: dict) -> bool:
         if st and (r.get("State", "").upper() != st):
             return False
@@ -2233,12 +2295,14 @@ async def search_national_pull(
             tax = (r.get("Taxonomy / Type", "") + " " + r.get("Type Detected", "")).lower()
             if sp not in tax:
                 return False
-        if has_email and not (
-            r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
-            or r.get("Directory Email") or r.get("Site-Search Email")
-            or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email")
-        ):
-            return False
+        if has_email:
+            inline = (
+                r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
+                or r.get("Directory Email") or r.get("Site-Search Email")
+                or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email")
+            )
+            if not inline and (r.get("NPI") not in enriched_npis):
+                return False
         try:
             heat = int(r.get("Heat Score") or 0)
         except Exception:
@@ -2259,6 +2323,8 @@ async def search_national_pull(
     matched = [r for r in rows if _is_match(r)]
     matched.sort(key=lambda r: -int(r.get("Heat Score") or 0))
     page = matched[offset:offset + limit]
+    # Attach any enriched emails from lead_emails table (free, fast, indexed by NPI)
+    page = _attach_emails_to_rows([dict(r) for r in page])
     return {
         "total": len(rows),
         "matched": len(matched),
@@ -2281,6 +2347,140 @@ async def list_national_specialties():
         counts[sp] = counts.get(sp, 0) + 1
     items = sorted(counts.items(), key=lambda x: -x[1])
     return {"specialties": [{"name": k, "count": v} for k, v in items], "csv_path": _np_latest_csv_path()}
+
+
+# ─── Fast batch email enrichment for top labs ────────────────────────
+_lab_enrich_state = {"running": False, "started_at": None, "last_result": None}
+
+
+async def _bulk_enrich_labs(state: str, tier: str, limit: int) -> dict:
+    """Enrich a batch of saved_leads with real emails (lab focus).
+
+    Skips NPIs that already have any record in lead_emails. Runs in
+    bounded concurrency so we don't hammer outbound bandwidth.
+    """
+    import sqlite3 as _sql
+    from app.email_finder import find_emails_for_lab as _find
+
+    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    with _sql.connect(db_path, timeout=15) as c:
+        params: list = []
+        clauses = ["source = 'rule-intercept'"]
+        if state:
+            clauses.append("state = ?")
+            params.append(state.upper())
+        if tier:
+            clauses.append("tags LIKE ?")
+            params.append(f"%tier-{tier}%")
+        where = " AND ".join(clauses)
+        # Only NPIs without enrichment yet
+        q = (
+            f"SELECT npi, organization_name FROM saved_leads "
+            f"WHERE {where} AND npi NOT IN (SELECT DISTINCT npi FROM lead_emails) "
+            f"ORDER BY lead_score DESC LIMIT ?"
+        )
+        params.append(limit)
+        leads = c.execute(q, params).fetchall()
+
+    if not leads:
+        return {"ok": True, "enriched": 0, "skipped": 0, "message": "No leads needed enrichment"}
+
+    sem = asyncio.Semaphore(10)
+
+    async def _one(npi: str, org: str) -> tuple[str, list[dict]]:
+        async with sem:
+            try:
+                res = await _find(org)
+                return npi, res.get("emails", []) or []
+            except Exception:
+                return npi, []
+
+    tasks = [_one(npi, org) for npi, org in leads]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    inserted = 0
+    enriched_npis = 0
+    with _sql.connect(db_path, timeout=15) as c:
+        for npi, emails in results:
+            if not emails:
+                continue
+            enriched_npis += 1
+            for em in emails:
+                try:
+                    c.execute(
+                        """INSERT OR IGNORE INTO lead_emails
+                           (npi, email, first_name, last_name, position,
+                            is_decision_maker, confidence, source, domain)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            npi, em.get("email", ""),
+                            em.get("first_name", ""), em.get("last_name", ""),
+                            em.get("position", ""),
+                            1 if em.get("is_decision_maker") else 0,
+                            int(em.get("confidence", 0) or 0),
+                            em.get("source", "lab-batch"),
+                            em.get("domain", ""),
+                        ),
+                    )
+                    inserted += 1
+                except Exception:
+                    pass
+        c.commit()
+
+    return {
+        "ok": True,
+        "candidates": len(leads),
+        "enriched_orgs": enriched_npis,
+        "inserted_emails": inserted,
+    }
+
+
+@app.post("/api/admin/labs/enrich-batch")
+@app.get("/api/admin/labs/enrich-batch")
+async def enrich_labs_batch(
+    state: str = Query("", description="Optional 2-letter state filter"),
+    tier: str = Query("A", description="Tier: A | B | C"),
+    limit: int = Query(25, ge=1, le=200),
+):
+    """Run real-website email discovery on top tier labs.
+
+    Saves results to lead_emails so they appear in the search panel.
+    """
+    if _lab_enrich_state["running"]:
+        return {
+            "ok": False,
+            "running": True,
+            "started_at": _lab_enrich_state["started_at"],
+            "message": "Lab enrichment already running.",
+        }
+
+    async def _bg():
+        _lab_enrich_state["running"] = True
+        _lab_enrich_state["started_at"] = datetime.now().isoformat()
+        try:
+            res = await _bulk_enrich_labs(state, tier, limit)
+            _lab_enrich_state["last_result"] = res
+        except Exception as e:
+            _lab_enrich_state["last_result"] = {"ok": False, "error": str(e)}
+        finally:
+            _lab_enrich_state["running"] = False
+
+    _asyncio_np.create_task(_bg())
+    return {
+        "ok": True,
+        "started": True,
+        "scope": {"state": state or "ALL", "tier": tier, "limit": limit},
+        "started_at": _lab_enrich_state["started_at"],
+    }
+
+
+@app.get("/api/admin/labs/enrich-status")
+async def lab_enrich_status():
+    return {
+        "running": _lab_enrich_state["running"],
+        "started_at": _lab_enrich_state["started_at"],
+        "last_result": _lab_enrich_state["last_result"],
+    }
 
 
 
