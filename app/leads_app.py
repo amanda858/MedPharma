@@ -2106,51 +2106,54 @@ import csv as _csv_np
 import time as _time_np
 
 _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
-_saved_leads_cache = {"loaded_at": 0.0, "rows": []}
+_bundled_fallback_cache = {"mtime": 0.0, "rows": []}
 
 
-def _load_saved_leads_as_national_rows() -> list[dict]:
-    """Fallback: read saved_leads (rule-intercept bundle) and shape rows into the
-    column dict the National Search UI expects so the panel works even before
-    the first scheduled CSV pull has run.
+def _load_bundled_lab_rows() -> list[dict]:
+    """Map bundled rule-intercept lab CSV rows into the national-pull schema.
+
+    Used as a fallback when no national-pull CSV exists yet (free-tier
+    redeploys, fresh deploys, etc.) so the search panel always has data.
     """
-    import sqlite3 as _sql
-    now = _time_np.time()
-    # cache for 60s
-    if _saved_leads_cache["rows"] and (now - _saved_leads_cache["loaded_at"]) < 60:
-        return _saved_leads_cache["rows"]
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
-    rows: list[dict] = []
+    bundled_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "output", "labs_routed_full.csv",
+    )
+    if not os.path.exists(bundled_path):
+        return []
     try:
-        with _sql.connect(db_path, timeout=10) as conn:
-            conn.row_factory = _sql.Row
-            cur = conn.execute(
-                "SELECT npi, organization_name, first_name, last_name, "
-                "taxonomy_desc, city, state, zip_code, phone, lead_score, "
-                "tags, source, notes "
-                "FROM saved_leads "
-                "WHERE source IN ('rule-intercept','demo','scraped','national_pull')"
-            )
-            for r in cur.fetchall():
-                tags = (r["tags"] or "")
-                tier = ""
-                for t in tags.split(";"):
-                    t = t.strip().lower()
-                    if t.startswith("tier-"):
-                        tier = t.upper().replace("TIER-", "Tier ")
-                        break
-                dm_full = " ".join(x for x in [r["first_name"] or "", r["last_name"] or ""] if x).strip()
-                rows.append({
-                    "NPI": r["npi"] or "",
-                    "Org Name": r["organization_name"] or "",
-                    "State": r["state"] or "",
-                    "City": r["city"] or "",
-                    "Zip": r["zip_code"] or "",
-                    "Phone": r["phone"] or "",
-                    "Taxonomy / Type": r["taxonomy_desc"] or "",
-                    "Type Detected": tier,
-                    "Heat Score": r["lead_score"] or 0,
-                    "Decision Maker": dm_full,
+        mtime = os.path.getmtime(bundled_path)
+    except Exception:
+        return []
+    if (_bundled_fallback_cache["mtime"] == mtime
+            and _bundled_fallback_cache["rows"]):
+        return _bundled_fallback_cache["rows"]
+    out: list[dict] = []
+    try:
+        with open(bundled_path, "r", encoding="utf-8", newline="") as f:
+            for r in _csv_np.DictReader(f):
+                tier = (r.get("tier") or "").strip()
+                if tier not in ("A", "B", "C"):
+                    continue
+                try:
+                    score = int(r.get("rule_score") or 0)
+                except Exception:
+                    score = 0
+                # Heat boost so tier A rises in default sort
+                heat = score + (40 if tier == "A" else 20 if tier == "B" else 0)
+                out.append({
+                    "Org Name": r.get("org_name", ""),
+                    "City": r.get("city", ""),
+                    "State": (r.get("state") or "").upper(),
+                    "Zip": r.get("zip", ""),
+                    "NPI": r.get("npi", ""),
+                    "Taxonomy / Type": r.get("lab_type", ""),
+                    "Type Detected": "laboratory",
+                    "Heat Score": str(heat),
+                    "Tier": tier,
+                    "Rule Score": str(score),
+                    "Signals": r.get("signals", ""),
+                    "Decision Maker": "",
                     "DM Email": "",
                     "Company Email": "",
                     "PubMed Email": "",
@@ -2159,31 +2162,29 @@ def _load_saved_leads_as_national_rows() -> list[dict]:
                     "Sunbiz Email": "",
                     "Person-Site Email": "",
                     "Wayback Email": "",
+                    "Phone": "",
                     "Org Domain": "",
-                    "Verified LinkedIn URL": "",
-                    "Tags": tags,
-                    "Source": r["source"] or "",
-                    "Notes": r["notes"] or "",
+                    "Source": "rule-intercept",
                 })
     except Exception:
-        return _saved_leads_cache["rows"] or []
-    _saved_leads_cache.update({"loaded_at": now, "rows": rows})
-    return rows
+        return []
+    _bundled_fallback_cache.update({"mtime": mtime, "rows": out})
+    return out
 
 
 def _load_latest_national_rows() -> list[dict]:
     """Read most recent national-pull CSV into memory (cached by mtime).
 
-    Falls back to saved_leads (the bundled rule-intercept import) when no CSV
-    has been generated yet, so the search UI is never empty on a fresh deploy.
+    Falls back to the bundled rule-intercept lab CSV so the search panel
+    always returns results even before the first scheduled pull runs.
     """
     csv_path = _np_latest_csv_path()
     if not csv_path or not os.path.exists(csv_path):
-        return _load_saved_leads_as_national_rows()
+        return _load_bundled_lab_rows()
     try:
         mtime = os.path.getmtime(csv_path)
     except Exception:
-        return _load_saved_leads_as_national_rows()
+        return _load_bundled_lab_rows()
     if (_national_csv_cache["path"] == csv_path
             and _national_csv_cache["mtime"] == mtime
             and _national_csv_cache["rows"]):
@@ -2194,7 +2195,9 @@ def _load_latest_national_rows() -> list[dict]:
             for r in _csv_np.DictReader(f):
                 rows.append(r)
     except Exception:
-        return []
+        return _load_bundled_lab_rows()
+    if not rows:
+        return _load_bundled_lab_rows()
     _national_csv_cache.update({"path": csv_path, "mtime": mtime, "rows": rows})
     return rows
 
