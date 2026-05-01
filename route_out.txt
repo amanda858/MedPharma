@@ -1,0 +1,11 @@
+Source : app/seed/seed_national_pull.csv
+Output : output/seed_routed.csv
+Total  : 4
+Tiers  : A=0  B=0  C=4  Unknown=0
+
+Tier  Score  Org                                              City               ST  DM Email
+----------------------------------------------------------------------------------------------------------------------------------
+C     37     PA HEALTH & RESEARCH CLINIC LLC                  MIAMI              FL  bingwen.eugene.fan@nhghealth.com.sg
+C     37     AT HOME LAB SERVICES LLC                         CAPE CORAL         FL  
+C     37     CYM MOBILE LABS                                  NORTH PORT         FL  
+C     37     SUNSHINE LAB SERVICES LLC                        MIRAMAR            FL  

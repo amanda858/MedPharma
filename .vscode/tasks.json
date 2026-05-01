@@ -2,6 +2,139 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "lineby-audit",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/lineby_audit.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "wait-full-tally",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/wait_full_tally.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "patient-enrich",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/patient_enrich.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "enrich-top-states",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/enrich_top_states.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "poll-enrich",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/poll_enrich.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "push-lab-enrich",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/push_lab_enrich.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "final-audit",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/final_audit.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "push-search-v2",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/push_search_v2.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "check-live-html",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/check_live_html.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "push-search-fix",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/push_search_fix.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "full-admin-smoke",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/full_admin_smoke.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "verify-a262869",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/verify_a262869.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "push-autorestore",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/push_autorestore.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "verify-autoimport",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/verify_autoimport.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "push-and-verify-autoimport",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/push_and_verify_autoimport.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "state-check",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/state_check.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "trigger-import",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/trigger_import.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "auth-smoke",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
+            "label": "list-routes",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/list_routes.py"],
+            "options": {"cwd": "/workspaces/CVOPro"}
+        },
+        {
             "label": "wait-for-search-endpoint",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/wait_for_search_endpoint.py",
@@ -706,6 +839,14 @@
             "label": "push-startup-autoimport",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git add app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git commit -m \"fix: auto-import rule-intercept CSV on startup so leads survive restarts\" -- app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "wait-and-smoke",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/wait_and_smoke.py"],
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },

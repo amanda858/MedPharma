@@ -1,0 +1,20 @@
+[LOAD] data/npi_registry.csv
+[WARN] Failed to read data/npi_registry.csv: [Errno 2] No such file or directory: 'data/npi_registry.csv'
+[LOAD] data/clia_labs.csv
+[WARN] Failed to read data/clia_labs.csv: [Errno 2] No such file or directory: 'data/clia_labs.csv'
+[LOAD] data/state_labs.csv
+[WARN] Failed to read data/state_labs.csv: [Errno 2] No such file or directory: 'data/state_labs.csv'
+[LOAD] data/cms_denials.csv
+[WARN] Failed to read data/cms_denials.csv: [Errno 2] No such file or directory: 'data/cms_denials.csv'
+{
+  "ok": false,
+  "error": "All source datasets empty \u2014 check CONFIG paths.",
+  "tiers": {
+    "A": 0,
+    "B": 0,
+    "C": 0,
+    "Unknown": 0
+  },
+  "rows": [],
+  "elapsed_sec": 0.33
+}

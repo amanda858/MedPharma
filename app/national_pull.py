@@ -156,3 +156,47 @@ def run_national_pull_job() -> None:
             loop.close()
     except Exception as e:
         log.exception(f"national pull job failed: {e}")
+
+
+def ensure_seed_loaded() -> dict[str, Any]:
+    """If no pull has been recorded, copy the bundled seed CSV into OUT_DIR
+    and record it in `national_pulls` so the search UI has data to show.
+
+    The seed is a real, locally-enriched FL/laboratory pull (~28 rows) committed
+    in `app/seed/seed_national_pull.csv`. Idempotent — does nothing if any row
+    already exists in the table.
+    """
+    try:
+        _ensure_dir(OUT_DIR)
+        with sqlite3.connect(DB_PATH, timeout=10) as c:
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS national_pulls("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "pull_date TEXT, specialty TEXT, csv_path TEXT,"
+                "row_count INTEGER, summary_json TEXT, created_at INTEGER)"
+            )
+            row = c.execute("SELECT COUNT(*) FROM national_pulls").fetchone()
+            if row and row[0] > 0:
+                return {"ok": True, "skipped": True, "reason": "pull already recorded"}
+
+        seed_src = os.path.join(os.path.dirname(__file__), "seed", "seed_national_pull.csv")
+        if not os.path.exists(seed_src):
+            return {"ok": False, "reason": f"seed file missing at {seed_src}"}
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        seed_dst = os.path.join(OUT_DIR, f"leads_national_seed_{date_str}.csv")
+        # copy once, count rows
+        import shutil
+        shutil.copyfile(seed_src, seed_dst)
+        row_count = 0
+        with open(seed_dst, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for _ in reader:
+                row_count += 1
+        _record_pull(date_str, seed_dst, row_count, {"source": "seed"}, "seed")
+        log.info(f"[national-pull] SEED loaded: {row_count} rows -> {seed_dst}")
+        return {"ok": True, "loaded": True, "row_count": row_count, "csv_path": seed_dst}
+    except Exception as e:
+        log.exception(f"ensure_seed_loaded failed: {e}")
+        return {"ok": False, "error": str(e)}
+

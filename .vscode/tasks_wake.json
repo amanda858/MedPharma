@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "wake-server-now",
+      "type": "shell",
+      "command": "echo 'Waking medpharma-hub...' && for i in 1 2 3 4 5 6 7 8 9 10; do CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://medpharma-hub.onrender.com/healthz || echo 000); echo \"Attempt $i: HTTP $CODE\"; if [ \"$CODE\" = \"200\" ]; then echo '✅ Server is awake'; exit 0; fi; sleep 6; done; echo 'Still warming...'",
+      "options": {"cwd": "/workspaces/CVOPro"},
+      "problemMatcher": []
+    },
+    {
+      "label": "trigger-keepalive-workflow",
+      "type": "shell",
+      "command": "gh workflow run 'Keep Render Awake' --repo amanda858/MedPharma 2>&1 || echo 'gh CLI not available — workflow will run on its 10-min schedule'",
+      "options": {"cwd": "/workspaces/CVOPro"},
+      "problemMatcher": []
+    }
+  ]
+}

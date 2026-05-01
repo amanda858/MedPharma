@@ -1,0 +1,5 @@
+Tier,Rule Score,Priority,Org Name,City,State,Heat Score,Decision Maker,DM Email,Phone,Org Domain,Lab Type,Signals,money_score,pain_score,fit_score,total_score
+C,37,Low,AT HOME LAB SERVICES LLC,CAPE CORAL,FL,45,MADAY BRUZON,,(863) 233-4548,athome.org,"Spec/Tech, Pathology, Laboratory Management",Tier C lab type: lab services; Priority market: FL,0,0,3,3
+C,37,Low,CYM MOBILE LABS,NORTH PORT,FL,45,CAROL TIRADOR,,(908) 405-0310,cym-mobile.com,"Spec/Tech, Pathology, Laboratory Management",Tier C lab type: mobile lab; Priority market: FL,0,0,3,3
+C,37,Low,SUNSHINE LAB SERVICES LLC,MIRAMAR,FL,45,JUDY UVALLE,,(651) 318-2010,sunshine.com,"Spec/Tech, Pathology, Laboratory Management, Diplomate",Tier C lab type: lab services; Priority market: FL,0,0,3,3
+C,37,Low,PA HEALTH & RESEARCH CLINIC LLC,MIAMI,FL,50,YARIELYS ACOSTA,bingwen.eugene.fan@nhghealth.com.sg,(786) 857-1902,research.org,"Specialist, Research Study",Tier C lab type: research clinic; Priority market: FL,0,0,0,0

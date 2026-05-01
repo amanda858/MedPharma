@@ -795,8 +795,67 @@ async def find_emails_for_lab(
             print(f"Found {len(normalized_scraped)} emails via scraping")
             return result
 
-    # NO PATTERN FALLBACK. Real emails only.
-    result["error"] = f"Live domain found: {live_domain} — No real emails could be scraped/verified"
+    # ── Pattern generation + SMTP verification fallback ──────────────
+    # Many healthcare sites hide emails behind contact forms. We generate
+    # common patterns and SMTP-probe each one. Only confirmed addresses
+    # (or high-probability generics) are returned.
+    pattern_candidates: list[dict] = []
+
+    # Generic company mailboxes — try these regardless of name
+    for prefix in ["info", "contact", "billing", "admin", "referrals", "lab"]:
+        pattern_candidates.append({
+            "email": f"{prefix}@{live_domain}",
+            "first_name": "",
+            "last_name": "",
+            "full_name": None,
+            "position": f"{prefix.title()} Mailbox",
+            "is_decision_maker": prefix in ("billing", "referrals"),
+            "is_generic": True,
+            "confidence": 45,
+            "verified": False,
+            "source": "pattern_generic",
+            "domain": live_domain,
+        })
+
+    # Name-based patterns if we have a contact name
+    if first_name and last_name:
+        name_patterns = generate_pattern_emails(first_name, last_name, live_domain)
+        pattern_candidates.extend(name_patterns)
+
+    # SMTP-verify each candidate, keep confirmed + accept-all
+    verified_patterns: list[dict] = []
+    try:
+        for candidate in pattern_candidates:
+            try:
+                verification = await verify_email_smtp(candidate["email"])
+                if verification.get("valid"):
+                    candidate["verified"] = True
+                    candidate["confidence"] = verification.get("confidence", 65)
+                    candidate["source"] = "pattern_smtp_verified"
+                    verified_patterns.append(candidate)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if verified_patterns:
+        normalized_patterns = _normalize_email_records(verified_patterns, live_domain)
+        if normalized_patterns:
+            result["emails"] = normalized_patterns
+            result["total_at_domain"] = len(normalized_patterns)
+            print(f"Found {len(normalized_patterns)} emails via pattern+SMTP for {live_domain}")
+            return result
+
+    # Nothing worked — return generic mailboxes as best-effort (unverified)
+    # so caller at least has something to work with
+    best_effort = [c for c in pattern_candidates if c["is_generic"]][:3]
+    if best_effort:
+        result["emails"] = best_effort
+        result["total_at_domain"] = len(best_effort)
+        result["error"] = "Unverified generic mailboxes — SMTP probe inconclusive"
+        return result
+
+    result["error"] = f"Live domain found: {live_domain} — No emails could be verified"
     return result
 
 

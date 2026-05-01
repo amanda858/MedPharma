@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "verify-live-e2e",
+      "type": "shell",
+      "command": "sleep 60 && python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py",
+      "options": {"cwd": "/workspaces/CVOPro"}
+    }
+  ]
+}
