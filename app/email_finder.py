@@ -16,118 +16,53 @@ from app.config import HUNTER_API_KEY
 
 
 async def scrape_emails_from_website(url: str) -> list[str]:
-    """Scrape email addresses from a website using enhanced targeting and patterns."""
-    emails = set()
-
-    # Expanded list of professional pages to try
+    """Scrape email addresses from a website — concurrent, fast-timeout."""
+    emails: set[str] = set()
+    base = url.rstrip('/')
     pages_to_try = [
-        url,
-        url.rstrip('/') + '/contact',
-        url.rstrip('/') + '/contact-us',
-        url.rstrip('/') + '/about',
-        url.rstrip('/') + '/about-us',
-        url.rstrip('/') + '/team',
-        url.rstrip('/') + '/staff',
-        url.rstrip('/') + '/doctors',
-        url.rstrip('/') + '/physicians',
-        url.rstrip('/') + '/providers',
-        url.rstrip('/') + '/practitioners',
-        url.rstrip('/') + '/leadership',
-        url.rstrip('/') + '/management',
-        url.rstrip('/') + '/administration',
-        url.rstrip('/') + '/directory',
-        url.rstrip('/') + '/people',
-        url.rstrip('/') + '/our-team',
-        url.rstrip('/') + '/meet-the-team',
-        url.rstrip('/') + '/leadership-team',
-        url.rstrip('/') + '/medical-staff',
-        url.rstrip('/') + '/privacy',
-        url.rstrip('/') + '/privacy-policy',
-        url.rstrip('/') + '/legal',
-        url.rstrip('/') + '/terms',
-        url.rstrip('/') + '/hipaa',
-        url.rstrip('/') + '/patient-privacy',
-        url.rstrip('/') + '/locations',
+        base,
+        base + '/contact',
+        base + '/contact-us',
+        base + '/about',
+        base + '/about-us',
     ]
 
-    async with httpx.AsyncClient(
-        timeout=20.0,
-        follow_redirects=True,
-        headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-    ) as client:
-        for page_url in pages_to_try[:14]:  # Try 14 pages
-            try:
-                resp = await client.get(page_url)
+    email_patterns = [
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+        r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
+        r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
+    ]
+
+    async def _fetch(page_url: str) -> None:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout=5.0, connect=1.5),
+                follow_redirects=True,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; MedPharma/1.0)'},
+            ) as c:
+                resp = await c.get(page_url)
                 if resp.status_code != 200:
-                    continue
-                html = resp.text
-                # Decode HTML entities (&#64; = @, &commat;, &period; etc.)
-                # and common JS obfuscation (" [at] ", "(at)", " at ").
+                    return
                 import html as _html_mod
-                decoded = _html_mod.unescape(html)
-                # Reverse common email obfuscation patterns
-                deob = re.sub(r'\s*\[\s*at\s*\]\s*', '@', decoded, flags=re.IGNORECASE)
-                deob = re.sub(r'\s*\(\s*at\s*\)\s*', '@', deob, flags=re.IGNORECASE)
-                deob = re.sub(r'\s*\{\s*at\s*\}\s*', '@', deob, flags=re.IGNORECASE)
-                deob = re.sub(r'\s+at\s+', '@', deob, flags=re.IGNORECASE)
-                deob = re.sub(r'\s*\[\s*dot\s*\]\s*', '.', deob, flags=re.IGNORECASE)
-                deob = re.sub(r'\s*\(\s*dot\s*\)\s*', '.', deob, flags=re.IGNORECASE)
-                deob = re.sub(r'\s+dot\s+', '.', deob, flags=re.IGNORECASE)
-
-                # Enhanced email regex patterns
-                email_patterns = [
-                    # Standard email pattern
-                    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-                    # Mailto links (high confidence)
-                    r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
-                    # Emails with spaces around @
-                    r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
-                    # Emails in quotes or brackets
-                    r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
-                    # Emails after "Email:" or similar labels
-                    r'(?:email|contact|e-mail)[\s:]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
-                    # JS string concatenation: "user" + "@" + "domain.com"
-                    r'["\']([A-Za-z0-9._%+-]+)["\']\s*\+\s*["\']@["\']\s*\+\s*["\']([A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
-                ]
-
+                text = _html_mod.unescape(resp.text)
                 for pattern in email_patterns:
-                    found = re.findall(pattern, deob, re.IGNORECASE)
-                    for email in found:
-                        # JS concatenation match returns tuple
-                        if isinstance(email, tuple):
-                            email = "@".join(email)
-                        email = email.strip().lower().strip('"\'')
-                        email = re.sub(r'\s+', '', email)  # remove any residual whitespace
-                        # Enhanced validation
-                        if _is_basic_email_format(email):
-                            emails.add(email)
+                    for m in re.findall(pattern, text, re.IGNORECASE):
+                        e = (m if isinstance(m, str) else m[0]).strip().lower()
+                        if _is_basic_email_format(e):
+                            emails.add(e)
+        except Exception:
+            pass
 
-                # Small delay to be respectful
-                await asyncio.sleep(0.3)
+    await asyncio.gather(*[_fetch(p) for p in pages_to_try])
 
-            except Exception:
-                continue
-
-    # Keep REAL emails including generic company mailboxes (info@/contact@)
-    professional_emails = []
-    for email in emails:
-        # Skip placeholder/example domains
-        if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
-                                   'yourcompany.com', 'company.com', 'website.com',
-                                   'sentry.io', 'wixpress.com']):
-            continue
-
-        # Skip emails that look like literal templates (exact match only)
-        username = email.split('@')[0]
-        if any(template == username for template in ['yourname', 'firstname', 'lastname',
-                                                    'youremail', 'name']):
-            continue
-
-        professional_emails.append(email)
-
-    return professional_emails[:15]  # Return up to 15 real emails
+    return [
+        e for e in emails
+        if not any(x in e for x in [
+            'example.com', 'test.com', 'noreply', 'placeholder',
+            'yourcompany.com', 'sentry.io', 'wixpress.com',
+        ])
+        and e.split('@')[0] not in {'yourname', 'firstname', 'lastname', 'name'}
+    ][:15]
 
 
 def _is_basic_email_format(email: str) -> bool:
@@ -925,58 +860,6 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
     return emails
 
 
-async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -> list:
-    """Try enhanced website scraping with quality filtering and verification.
-
-    Returns BOTH person-level emails AND real generic company mailboxes
-    (info@/contact@/sales@). All emails are real (scraped from the live site).
-    Generic mailboxes are tagged with `is_generic=True` and lower confidence.
-    """
-    try:
-        scraped_emails = await scrape_emails_from_website(f"https://{domain}")
-        print(f"Scraped {len(scraped_emails)} emails from {domain}")
-
-        if not scraped_emails:
-            return []
-
-        # Comprehensive quality filtering and verification
-        verified_emails = []
-        for email in scraped_emails:
-            is_generic = _is_generic_company_mailbox(email)
-            if not _is_quality_email(email) and not is_generic:
-                continue
-
-            # Attempt SMTP verification
-            try:
-                smtp_result = await verify_email_smtp(email)
-                if smtp_result.get("valid"):
-                    confidence = smtp_result.get("confidence", 75)
-                else:
-                    confidence = 60  # Still accept but lower confidence
-            except Exception:
-                confidence = 70  # Default if verification fails
-
-            verified_emails.append({
-                "email": email,
-                "first_name": "",
-                "last_name": "",
-                "full_name": None,
-                "position": "Company Mailbox" if is_generic else "",
-                "is_decision_maker": False,
-                "is_generic": is_generic,
-                "confidence": (confidence - 15) if is_generic else confidence,
-                "verified": smtp_result.get("valid", False) if 'smtp_result' in locals() else False,
-                "source": "website_scrape_verified",
-                "domain": domain,
-            })
-
-        # Sort by confidence and return top results
-        verified_emails.sort(key=lambda x: x["confidence"], reverse=True)
-        return verified_emails[:5]  # Limit to 5
-
-    except Exception as e:
-        print(f"Enhanced scraping failed: {e}")
-        return []
 
 
 def _is_generic_company_mailbox(email: str) -> bool:
