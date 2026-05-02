@@ -66,9 +66,14 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
     spec_durations = []
     for sp in SPECIALTIES:
         t0 = time.time()
-        rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
-                    json={"state":"FL","specialty":sp,"limit":5,"new_only":False,"dm_only":True},
-                    timeout=60)
+        try:
+            rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
+                        json={"state":"FL","specialty":sp,"limit":5,"new_only":False,"dm_only":True},
+                        timeout=60)
+        except Exception as e:
+            print(f"    FAIL  {sp:18s} POST error: {e}")
+            issues.append(f"hunt {sp} POST error: {e}")
+            continue
         if rr.status_code != 200:
             print(f"    FAIL  {sp:18s} POST -> {rr.status_code}")
             issues.append(f"hunt {sp} POST failed: {rr.status_code}")
@@ -78,9 +83,11 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
         ok_rows = False
         for _ in range(40):
             time.sleep(1.5)
-            sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
-            try: sj = sr.json()
-            except Exception: continue
+            try:
+                sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
+                sj = sr.json()
+            except Exception:
+                continue
             if sj.get("status") in ("done","completed","ready","success"):
                 rows = sj.get("preview") or sj.get("rows") or []
                 ok_rows = True
@@ -110,9 +117,14 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
     print("\n[4] MULTI-STATE — clinical, limit=5")
     for st in STATES:
         t0 = time.time()
-        rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
-                    json={"state":st,"specialty":"clinical","limit":5,"new_only":False,"dm_only":True},
-                    timeout=60)
+        try:
+            rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
+                        json={"state":st,"specialty":"clinical","limit":5,"new_only":False,"dm_only":True},
+                        timeout=60)
+        except Exception as e:
+            print(f"    FAIL  {st} POST error: {e}")
+            issues.append(f"hunt {st} POST error: {e}")
+            continue
         if rr.status_code != 200:
             print(f"    FAIL  {st} POST -> {rr.status_code}")
             issues.append(f"hunt {st} POST failed: {rr.status_code}")
@@ -121,9 +133,11 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
         rows = []
         for _ in range(40):
             time.sleep(1.5)
-            sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
-            try: sj = sr.json()
-            except Exception: continue
+            try:
+                sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
+                sj = sr.json()
+            except Exception:
+                continue
             if sj.get("status") in ("done","completed","ready","success"):
                 rows = sj.get("preview") or sj.get("rows") or []
                 break
