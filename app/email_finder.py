@@ -290,45 +290,34 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
     ]
 
     async with httpx.AsyncClient(
-        timeout=20.0,
+        timeout=7.0,
         follow_redirects=True,
         headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'        }
     ) as client:
-        for page_url in pages_to_try[:8]:  # Try more pages but limit to 8
+        async def _fetch_page(page_url: str) -> None:
             try:
                 resp = await client.get(page_url)
                 if resp.status_code != 200:
-                    continue
+                    return
                 html = resp.text
-
-                # Enhanced email regex patterns
                 email_patterns = [
-                    # Standard email pattern
                     r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-                    # Mailto links
                     r'mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
-                    # Emails with spaces around @
                     r'[A-Za-z0-9._%+-]+\s*@\s*[A-Za-z0-9.-]+\s*\.\s*[A-Z|a-z]{2,}',
-                    # Emails in quotes or brackets
                     r'["\']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})["\']',
-                    # Emails after "Email:" or similar labels
                     r'(?:email|contact|e-mail)[\s:]*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})',
                 ]
-
                 for pattern in email_patterns:
-                    found = re.findall(pattern, html, re.IGNORECASE)
-                    for email in found:
+                    for email in re.findall(pattern, html, re.IGNORECASE):
                         email = email.strip().lower().strip('"\'')
-                        # Enhanced validation
                         if _is_basic_email_format(email):
                             emails.add(email)
-
-                # Small delay to be respectful
-                await asyncio.sleep(0.5)
-
             except Exception:
-                continue
+                pass
+
+        # Fetch up to 5 highest-value pages concurrently
+        await asyncio.gather(*[_fetch_page(u) for u in pages_to_try[:5]])
 
     # Keep REAL emails including generic company mailboxes (info@/contact@)
     professional_emails = []
@@ -425,7 +414,7 @@ async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
     for scheme in ("https", "http"):
         try:
             resp = await client.head(
-                f"{scheme}://{domain}", timeout=15.0, follow_redirects=True,
+                f"{scheme}://{domain}", timeout=5.0, follow_redirects=True,
             )
             if resp.status_code < 400:  # Accept more status codes
                 # Additional check: ensure it's not redirecting to a generic page
@@ -468,7 +457,7 @@ def _is_business_domain(domain: str) -> bool:
 
 async def _find_live_domain(candidates: list[str]) -> Optional[str]:
     """Check all candidates concurrently, return the first live one."""
-    async with httpx.AsyncClient(timeout=12.0) as client:
+    async with httpx.AsyncClient(timeout=6.0) as client:
         results = await asyncio.gather(
             *[_check_domain_exists(d, client) for d in candidates],
             return_exceptions=True,
