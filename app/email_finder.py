@@ -542,19 +542,12 @@ async def hunter_verify_email(email: str, api_key: str) -> dict:
     }
 
 
-async def verify_email_smtp(email: str) -> dict:
-    """
-    Basic SMTP verification for an email address.
-    Returns dict with verification results.
-    """
+def _smtp_probe_sync(email: str) -> dict:
+    """Synchronous SMTP probe — runs in a thread executor to avoid blocking the event loop."""
     import smtplib
     import dns.resolver
-
     try:
-        # Extract domain
         domain = email.split('@')[1]
-
-        # Check MX records
         try:
             mx_records = dns.resolver.resolve(domain, 'MX')
             if not mx_records:
@@ -562,28 +555,32 @@ async def verify_email_smtp(email: str) -> dict:
         except Exception:
             return {"valid": False, "reason": "mx_lookup_failed"}
 
-        # Try SMTP verification (be very gentle)
         mx_host = str(mx_records[0].exchange).rstrip('.')
         try:
-            server = smtplib.SMTP(mx_host, timeout=10)
+            server = smtplib.SMTP(mx_host, timeout=5)
             server.helo()
-            server.mail('test@example.com')  # Use a safe sender
-            code, message = server.rcpt(email)
+            server.mail('test@example.com')
+            code, _ = server.rcpt(email)
             server.quit()
-
-            # 250 = success, 550 = doesn't exist, others = unknown
             if code == 250:
                 return {"valid": True, "confidence": 80}
             elif code == 550:
                 return {"valid": False, "reason": "user_unknown"}
             else:
-                return {"valid": True, "confidence": 60}  # Accept on unknown response
-
+                return {"valid": True, "confidence": 60}
         except Exception:
             return {"valid": False, "reason": "smtp_error"}
-
     except Exception:
         return {"valid": False, "reason": "general_error"}
+
+
+async def verify_email_smtp(email: str) -> dict:
+    """
+    SMTP verification — runs the blocking probe in a thread executor
+    so it never blocks the asyncio event loop.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _smtp_probe_sync, email)
 
 
 async def hunter_combined_enrichment(email: str, api_key: str) -> dict:
@@ -761,9 +758,11 @@ async def find_emails_for_lab(
     # SMTP-verify each candidate, keep confirmed + accept-all
     verified_patterns: list[dict] = []
     try:
-        for candidate in pattern_candidates:
+        for candidate in pattern_candidates[:5]:  # limit patterns to avoid runaway
             try:
-                verification = await verify_email_smtp(candidate["email"])
+                verification = await asyncio.wait_for(
+                    verify_email_smtp(candidate["email"]), timeout=3.0
+                )
                 if verification.get("valid"):
                     candidate["verified"] = True
                     candidate["confidence"] = verification.get("confidence", 65)

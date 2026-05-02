@@ -7,6 +7,9 @@ SPECIALTIES = ['clinical','pathology','toxicology','molecular','genetic',
                'histology','cytopathology','microbiology','blood_bank',
                'physiological','physician_office','urgent_care','all_labs']
 STATES = ['FL','TX','CA','NY','NC']
+# Reduced sets for CI — full list takes too long on Render free-tier
+SWEEP_SPECIALTIES = ['clinical', 'pathology', 'molecular']
+SWEEP_STATES = ['FL', 'TX']
 
 print("="*72)
 print(f"DEEP OPTIMIZATION SWEEP  ::  {BASE}")
@@ -62,9 +65,9 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
             issues.append(f"hub HTML contains: {b}")
 
     # ── Hunt every specialty in FL ──────────────────────────────
-    print("\n[3] HUNT MODE — every specialty (FL, limit=5)")
+    print("\n[3] HUNT MODE — 3 representative specialties (FL, limit=5)")
     spec_durations = []
-    for sp in SPECIALTIES:
+    for sp in SWEEP_SPECIALTIES:
         t0 = time.time()
         try:
             rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
@@ -81,8 +84,8 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
         job = rr.json().get("job_id")
         rows = []
         ok_rows = False
-        for _ in range(40):
-            time.sleep(1.5)
+        for _ in range(20):
+            time.sleep(2)
             try:
                 sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
                 sj = sr.json()
@@ -115,7 +118,7 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
 
     # ── Multi-state spot check (clinical) ───────────────────────
     print("\n[4] MULTI-STATE — clinical, limit=5")
-    for st in STATES:
+    for st in SWEEP_STATES:
         t0 = time.time()
         try:
             rr = c.post(BASE + "/admin/leads/api/prospect/bulk",
@@ -131,8 +134,8 @@ with httpx.Client(timeout=90, follow_redirects=False) as c:
             continue
         job = rr.json().get("job_id")
         rows = []
-        for _ in range(40):
-            time.sleep(1.5)
+        for _ in range(20):
+            time.sleep(2)
             try:
                 sr = c.get(BASE + f"/admin/leads/api/scrub/status/{job}", timeout=20)
                 sj = sr.json()
