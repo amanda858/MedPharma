@@ -407,24 +407,30 @@ async def _try_hunter_approaches(domain: str, first_name: str, last_name: str, a
 
 async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
     """Return True if the domain resolves to a live, legitimate business website."""
-    # Skip obviously invalid domains
     if not _is_business_domain(domain):
         return False
 
-    for scheme in ("https", "http"):
+    # Short connect timeout so DNS threads fail fast and don't block asyncio cancellation
+    _timeout = httpx.Timeout(timeout=3.0, connect=1.5)
+
+    async def _try(scheme: str) -> bool:
         try:
             resp = await client.head(
-                f"{scheme}://{domain}", timeout=5.0, follow_redirects=True,
+                f"{scheme}://{domain}", timeout=_timeout, follow_redirects=True,
             )
-            if resp.status_code < 400:  # Accept more status codes
-                # Additional check: ensure it's not redirecting to a generic page
+            if resp.status_code < 400:
                 final_url = str(resp.url)
-                if not any(generic in final_url for generic in ['godaddy.com', 'squarespace.com',
-                                                              'wix.com', 'wordpress.com', 'weebly.com']):
+                if not any(g in final_url for g in [
+                    'godaddy.com', 'squarespace.com', 'wix.com', 'wordpress.com', 'weebly.com'
+                ]):
                     return True
         except Exception:
             pass
-    return False
+        return False
+
+    # Try https and http concurrently — whichever responds first wins
+    results = await asyncio.gather(_try("https"), _try("http"), return_exceptions=True)
+    return any(r is True for r in results)
 
 
 def _is_business_domain(domain: str) -> bool:
@@ -457,11 +463,17 @@ def _is_business_domain(domain: str) -> bool:
 
 async def _find_live_domain(candidates: list[str]) -> Optional[str]:
     """Check all candidates concurrently, return the first live one."""
-    async with httpx.AsyncClient(timeout=6.0) as client:
-        results = await asyncio.gather(
-            *[_check_domain_exists(d, client) for d in candidates],
-            return_exceptions=True,
-        )
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=3.0, connect=1.5)) as client:
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[_check_domain_exists(d, client) for d in candidates[:4]],
+                    return_exceptions=True,
+                ),
+                timeout=4.0,
+            )
+        except asyncio.TimeoutError:
+            return None
     for domain, result in zip(candidates, results):
         if result is True:
             return domain
