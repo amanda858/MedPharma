@@ -1430,12 +1430,16 @@ async def prospect_bulk(req: ProspectRequest):
 
     async def _run():
         try:
-            result = await prospect_and_scrub(
-                state=req.state,
-                specialty=req.specialty,
-                limit=req.limit,
-                new_only=req.new_only,
-                dm_only=req.dm_only,
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: asyncio.run(prospect_and_scrub(
+                    state=req.state,
+                    specialty=req.specialty,
+                    limit=req.limit,
+                    new_only=req.new_only,
+                    dm_only=req.dm_only,
+                ))
             )
             _SCRUB_JOBS[job_id].update({
                 "status":  "done",

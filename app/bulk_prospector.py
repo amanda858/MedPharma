@@ -396,7 +396,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Reset the per-run live-lookup budget so each hunt gets a fresh quota
     reset_run_budget()
 
-    _sem = asyncio.Semaphore(5)  # process up to 5 prospects concurrently
+    _sem = asyncio.Semaphore(3)  # 3 concurrent on free-tier to keep event loop responsive
 
     async def _process_impl(p: dict):
         """Enrich a single prospect; returns row dict or None."""
