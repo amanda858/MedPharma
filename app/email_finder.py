@@ -60,8 +60,13 @@ async def scrape_emails_from_website(url: str) -> list[str]:
         if not any(x in e for x in [
             'example.com', 'test.com', 'noreply', 'placeholder',
             'yourcompany.com', 'sentry.io', 'wixpress.com',
+            'email.com', 'domain.com', 'yourdomain.com', 'mail.com',
         ])
-        and e.split('@')[0] not in {'yourname', 'firstname', 'lastname', 'name'}
+        and e.split('@')[0] not in {
+            'yourname', 'firstname', 'lastname', 'name', 'your',
+            'email', 'user', 'admin', 'webmaster', 'support',
+            'hello', 'hi', 'contact', 'info', 'sales', 'help',
+        }
     ][:15]
 
 
@@ -260,13 +265,16 @@ async def _try_enhanced_scraping(domain: str, first_name: str, last_name: str) -
         # Skip placeholder/example domains
         if any(x in email for x in ['example.com', 'test.com', 'noreply', 'placeholder',
                                    'yourcompany.com', 'company.com', 'website.com',
-                                   'sentry.io', 'wixpress.com']):
+                                   'sentry.io', 'wixpress.com', 'email.com',
+                                   'domain.com', 'yourdomain.com', 'mail.com']):
             continue
 
         # Skip emails that look like literal templates (exact match only)
         username = email.split('@')[0]
         if any(template == username for template in ['yourname', 'firstname', 'lastname',
-                                                    'youremail', 'name']):
+                                                    'youremail', 'name', 'your', 'email',
+                                                    'user', 'admin', 'webmaster', 'support',
+                                                    'hello', 'hi']):
             continue
 
         professional_emails.append(email)

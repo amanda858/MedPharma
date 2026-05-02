@@ -14,5 +14,17 @@
             "onAutoForward": "notify",
             "visibility": "public"
         }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "vscodevim.vim",
+                "github.vscode-github-actions",
+                "GitHub.copilot-chat",
+                "eamodio.gitlens",
+                "ms-vscode.vscode-typescript-next",
+                "bradlc.vscode-tailwindcss"
+            ]
+        }
     }
 }
