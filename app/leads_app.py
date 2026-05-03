@@ -1678,7 +1678,93 @@ async def patch_outreach_queue_status(queue_id: int, updates: OutreachQueueStatu
     return {"ok": True, "queue_id": queue_id, "contact_status": status, "status_notes": updates.status_notes or ""}
 
 
-@app.put("/api/leads/{lead_id}")
+_hunt_build_running: dict = {"flag": False, "started_at": None, "last_result": None}
+
+
+@app.post("/api/outreach-queue/build")
+async def trigger_outreach_queue_build():
+    """Run hunt_now.py in the background to rebuild the outreach queue."""
+    if _hunt_build_running["flag"]:
+        return {
+            "ok": False,
+            "running": True,
+            "started_at": _hunt_build_running["started_at"],
+            "message": "A build is already in progress.",
+        }
+
+    import subprocess as _subproc
+    import sys as _sys
+
+    async def _bg():
+        _hunt_build_running["flag"] = True
+        _hunt_build_running["started_at"] = datetime.now().isoformat()
+        try:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            proc = await asyncio.create_subprocess_exec(
+                _sys.executable, os.path.join(root, "hunt_now.py"),
+                cwd=root,
+                stdout=_subproc.PIPE,
+                stderr=_subproc.STDOUT,
+            )
+            stdout, _ = await proc.communicate()
+            _hunt_build_running["last_result"] = {
+                "ok": proc.returncode == 0,
+                "returncode": proc.returncode,
+                "output": (stdout or b"").decode("utf-8", errors="replace")[-4000:],
+                "finished_at": datetime.now().isoformat(),
+            }
+        except Exception as exc:
+            _hunt_build_running["last_result"] = {"ok": False, "error": str(exc), "finished_at": datetime.now().isoformat()}
+        finally:
+            _hunt_build_running["flag"] = False
+
+    asyncio.create_task(_bg())
+    return {
+        "ok": True,
+        "started": True,
+        "started_at": _hunt_build_running["started_at"],
+        "message": "Building outreach queue in background…",
+    }
+
+
+@app.get("/api/outreach-queue/build-status")
+async def outreach_queue_build_status():
+    """Return the current build job status."""
+    return {
+        "running": _hunt_build_running["flag"],
+        "started_at": _hunt_build_running["started_at"],
+        "last_result": _hunt_build_running["last_result"],
+    }
+
+
+@app.get("/api/outreach-queue/download-csv")
+async def download_outreach_queue_csv(
+    run_type: str = Query("hunt_now"),
+    limit: int = Query(1000, ge=1, le=5000),
+):
+    """Stream the latest outreach queue as a downloadable CSV."""
+    payload = get_outreach_queue_with_status(run_type=run_type, limit=limit)
+    rows = payload.get("rows", [])
+    fieldnames = [
+        "queue_rank", "Primary Action", "Outreach Channel", "Heat Score",
+        "Tier", "Priority", "Org Name", "Decision Maker", "Title",
+        "Email", "Email Source", "Email Verdict", "LinkedIn",
+        "Company LinkedIn", "Company People Search", "Phone",
+        "City", "State", "NPI", "contact_status", "status_notes", "Notes",
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+    filename = f"outreach_queue_{datetime.now().strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 async def update_lead_endpoint(lead_id: int, updates: LeadUpdate):
     update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
     update_lead(lead_id, update_data)

@@ -773,6 +773,7 @@
     <div class="tab-bar">
         <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Intelligence Scrubber</div>
         <div class="tab" data-tab="hunt" onclick="switchTab('hunt')">🎯 Hunt Mode</div>
+        <div class="tab" data-tab="outreach" onclick="switchTab('outreach')">📬 Outreach Queue</div>
         <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
         <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
@@ -933,6 +934,69 @@
                 <div id="huntDownloads" style="margin-top:10px;"></div>
             </div>
             <div id="huntResults"></div>
+        </div>
+
+        <!-- ═══════════════════ OUTREACH QUEUE PANEL ═══════════════════ -->
+        <div class="panel" id="panel-outreach">
+            <div class="card" style="background:linear-gradient(135deg,#1a3a1a,#2d6a2d);color:#fff;">
+                <div class="card-title" style="color:#fff;">📬 Outreach Queue — Ready-to-Work Contact List</div>
+                <p style="font-size:13px;color:#c8f5c8;margin-bottom:14px;">
+                    Your ranked, merged outreach list — real person emails first, LinkedIn fallback rows second.
+                    Mark each contact as you work through them. Rebuild any time to pull the freshest leads.
+                </p>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="buildOutreachQueue()" id="btnBuildQueue">🔨 Build / Rebuild Queue</button>
+                    <button class="btn" style="background:#fff;color:#1a3a1a;" onclick="downloadOutreachCSV()">⬇️ Download CSV</button>
+                    <button class="btn" style="background:transparent;color:#fff;border:1px solid #fff;" onclick="loadOutreachQueue()">↻ Refresh</button>
+                    <span id="oqBuildStatus" style="font-size:13px;color:#c8f5c8;"></span>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="card">
+                <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+                    <div class="form-group" style="margin:0;min-width:140px;">
+                        <label style="font-size:11px;font-weight:600;">Status</label>
+                        <select id="oqFilterStatus" onchange="loadOutreachQueue()">
+                            <option value="">All</option>
+                            <option value="not_started">Not Started</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="replied">Replied</option>
+                            <option value="won">Won</option>
+                            <option value="dead">Dead</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:140px;">
+                        <label style="font-size:11px;font-weight:600;">Channel</label>
+                        <select id="oqFilterChannel" onchange="loadOutreachQueue()">
+                            <option value="">All</option>
+                            <option value="email">Email</option>
+                            <option value="linkedin">LinkedIn</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:100px;">
+                        <label style="font-size:11px;font-weight:600;">Tier</label>
+                        <select id="oqFilterTier" onchange="loadOutreachQueue()">
+                            <option value="">All</option>
+                            <option value="A">Tier A</option>
+                            <option value="B">Tier B</option>
+                            <option value="C">Tier C</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:80px;">
+                        <label style="font-size:11px;font-weight:600;">Limit</label>
+                        <select id="oqLimit" onchange="loadOutreachQueue()">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="250">250</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="oqSummary" style="margin-top:10px;font-size:12px;color:var(--gray-600);"></div>
+            </div>
+
+            <div id="oqResults"></div>
         </div>
 
         <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
@@ -2602,6 +2666,207 @@
         function closeEmailModal() {
             document.getElementById('emailModal').style.display = 'none';
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // Outreach Queue
+        // ──────────────────────────────────────────────────────────────
+        const OQ_STATUS_LABELS = {
+            not_started: { label: 'Not Started', color: '#6c757d' },
+            contacted:   { label: 'Contacted',   color: '#0a3d62' },
+            replied:     { label: 'Replied',      color: '#856404' },
+            won:         { label: 'Won ✅',        color: '#155724' },
+            dead:        { label: 'Dead ❌',       color: '#721c24' },
+        };
+        const OQ_STATUS_OPTIONS = ['not_started','contacted','replied','won','dead'];
+
+        let _oqBuildPoller = null;
+
+        async function buildOutreachQueue() {
+            const btn = document.getElementById('btnBuildQueue');
+            const statusEl = document.getElementById('oqBuildStatus');
+            btn.disabled = true;
+            statusEl.textContent = '⏳ Starting build…';
+            try {
+                const resp = await fetch('/api/outreach-queue/build', { method: 'POST' });
+                const data = await resp.json();
+                if (!data.ok && data.running) {
+                    statusEl.textContent = '⏳ Build already running… polling…';
+                } else if (!data.ok) {
+                    statusEl.textContent = '❌ ' + (data.message || 'Failed to start');
+                    btn.disabled = false;
+                    return;
+                } else {
+                    statusEl.textContent = '⏳ Building… this takes ~30s';
+                }
+                _oqBuildPoller = setInterval(async () => {
+                    try {
+                        const s = await (await fetch('/api/outreach-queue/build-status')).json();
+                        if (!s.running) {
+                            clearInterval(_oqBuildPoller);
+                            _oqBuildPoller = null;
+                            btn.disabled = false;
+                            if (s.last_result && s.last_result.ok) {
+                                statusEl.textContent = '✅ Build complete!';
+                                loadOutreachQueue();
+                            } else {
+                                statusEl.textContent = '❌ Build failed — check server logs';
+                            }
+                        }
+                    } catch(e) {}
+                }, 3000);
+            } catch(e) {
+                statusEl.textContent = '❌ ' + e.message;
+                btn.disabled = false;
+            }
+        }
+
+        async function loadOutreachQueue() {
+            const container = document.getElementById('oqResults');
+            const summary   = document.getElementById('oqSummary');
+            const status    = document.getElementById('oqFilterStatus').value;
+            const channel   = document.getElementById('oqFilterChannel').value;
+            const tier      = document.getElementById('oqFilterTier').value;
+            const limit     = document.getElementById('oqLimit').value;
+
+            let url = `/api/outreach-queue?limit=${limit}`;
+            if (status)  url += `&contact_status=${encodeURIComponent(status)}`;
+            if (channel) url += `&outreach_channel=${encodeURIComponent(channel)}`;
+            if (tier)    url += `&tier=${encodeURIComponent(tier)}`;
+
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading outreach queue…</p></div>';
+            try {
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Failed to load');
+
+                const rows = data.rows || [];
+                const run  = data.run;
+
+                if (run) {
+                    summary.innerHTML = `Run <b>#${run.id}</b> · ${run.row_count} rows · built <b>${_oqFmt(run.created_at)}</b>  — showing <b>${rows.length}</b>`;
+                } else {
+                    summary.innerHTML = rows.length ? `Showing <b>${rows.length}</b> rows` : '⚠️ No outreach queue yet — click <b>Build / Rebuild Queue</b> above.';
+                }
+
+                if (!rows.length) {
+                    container.innerHTML = '<div class="card" style="text-align:center;color:var(--gray-500);padding:40px;">No rows match your filters.</div>';
+                    return;
+                }
+
+                container.innerHTML = _oqRenderTable(rows);
+            } catch(e) {
+                container.innerHTML = `<div class="card" style="color:var(--danger);">Error: ${e.message}</div>`;
+            }
+        }
+
+        function _oqFmt(ts) {
+            if (!ts) return '—';
+            try { return new Date(ts).toLocaleString(); } catch(e) { return ts; }
+        }
+
+        function _oqEsc(s) {
+            if (s === null || s === undefined) return '';
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function _oqRenderTable(rows) {
+            let html = `
+            <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="background:var(--gray-100);text-align:left;">
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);white-space:nowrap;">Rank</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Channel</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Heat</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Tier</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Org</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Decision Maker</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Email</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">LinkedIn</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Phone</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">City/State</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);min-width:140px;">Status</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Notes</th>
+            </tr></thead><tbody>`;
+
+            rows.forEach((r, i) => {
+                const qid     = r.queue_id || '';
+                const rank    = r.queue_rank || (i + 1);
+                const channel = r['Outreach Channel'] || r.outreach_channel || '';
+                const heat    = r['Heat Score'] || '';
+                const tier    = r['Tier'] || '';
+                const org     = r['Org Name'] || '';
+                const dm      = r['Decision Maker'] || '';
+                const title   = r['Title'] || '';
+                const email   = r['Email'] || '';
+                const verdict = (r['Email Verdict'] || '').toLowerCase();
+                const liUrl   = r['LinkedIn'] || '';
+                const phone   = r['Phone'] || '';
+                const loc     = [r['City'], r['State']].filter(Boolean).join(', ');
+                const status  = r.contact_status || 'not_started';
+                const notes   = r.status_notes || '';
+                const channelIcon = channel === 'email' ? '📧' : '🔗';
+                const verdictBadge = verdict === 'deliverable' ? ' <span style="color:#155724;font-weight:600;">(✓)</span>'
+                    : verdict === 'catch-all' ? ' <span style="color:#856404;">(~)</span>'
+                    : verdict === 'risky' ? ' <span style="color:#721c24;">(⚠)</span>' : '';
+                const st = OQ_STATUS_LABELS[status] || { label: status, color: '#6c757d' };
+                const optionsHtml = OQ_STATUS_OPTIONS.map(s =>
+                    `<option value="${s}" ${s === status ? 'selected' : ''}>${OQ_STATUS_LABELS[s]?.label || s}</option>`
+                ).join('');
+
+                html += `<tr style="border-bottom:1px solid var(--gray-200);" id="oqrow-${qid}">
+                    <td style="padding:7px 8px;color:var(--gray-500);">${rank}</td>
+                    <td style="padding:7px 8px;" title="${_oqEsc(r['Primary Action'])}">${channelIcon} ${_oqEsc(channel)}</td>
+                    <td style="padding:7px 8px;font-weight:600;">${_oqEsc(heat)}</td>
+                    <td style="padding:7px 8px;"><span style="font-weight:600;color:${tier==='A'?'#155724':tier==='B'?'#0a3d62':'#495057'}">${_oqEsc(tier)}</span></td>
+                    <td style="padding:7px 8px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_oqEsc(org)}">${_oqEsc(org)}</td>
+                    <td style="padding:7px 8px;max-width:140px;" title="${_oqEsc(title)}">${_oqEsc(dm)}${title ? `<br><span style="color:var(--gray-500);font-size:11px;">${_oqEsc(title)}</span>` : ''}</td>
+                    <td style="padding:7px 8px;">${email ? `<a href="mailto:${_oqEsc(email)}" style="font-size:11px;">${_oqEsc(email)}</a>${verdictBadge}` : '—'}</td>
+                    <td style="padding:7px 8px;">${liUrl ? `<a href="${_oqEsc(liUrl)}" target="_blank" rel="noopener" style="font-size:11px;">profile</a>` : '—'}</td>
+                    <td style="padding:7px 8px;white-space:nowrap;">${_oqEsc(phone)}</td>
+                    <td style="padding:7px 8px;white-space:nowrap;">${_oqEsc(loc)}</td>
+                    <td style="padding:7px 8px;">
+                        ${qid ? `<select onchange="oqUpdateStatus(${qid}, this.value, '')" style="font-size:11px;padding:3px 5px;border-radius:4px;border:1px solid var(--gray-300);background:#fff;color:${st.color};font-weight:600;">
+                            ${optionsHtml}
+                        </select>` : `<span style="color:${st.color}">${st.label}</span>`}
+                    </td>
+                    <td style="padding:7px 8px;max-width:140px;font-size:11px;color:var(--gray-600);" title="${_oqEsc(notes)}">${_oqEsc(notes) || '—'}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+            return html;
+        }
+
+        async function oqUpdateStatus(queueId, newStatus, notes) {
+            try {
+                const resp = await fetch(`/api/outreach-queue/${queueId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contact_status: newStatus, status_notes: notes }),
+                });
+                if (!resp.ok) {
+                    const d = await resp.json();
+                    showToast('Update failed: ' + (d.detail || 'unknown error'), 'error');
+                }
+            } catch(e) {
+                showToast('Update failed: ' + e.message, 'error');
+            }
+        }
+
+        function downloadOutreachCSV() {
+            window.open('/api/outreach-queue/download-csv?limit=1000', '_blank');
+        }
+
+        // Auto-load outreach queue when tab is first opened
+        (function() {
+            const origSwitch = window.switchTab;
+            if (typeof origSwitch === 'function') {
+                window.switchTab = function(tab) {
+                    origSwitch(tab);
+                    if (tab === 'outreach') loadOutreachQueue();
+                };
+            }
+        })();
     </script>
 
 </body>
