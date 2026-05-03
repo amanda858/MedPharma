@@ -745,62 +745,130 @@ async def find_emails_for_lab(
             print(f"Found {len(normalized_scraped)} emails via scraping")
             return result
 
-    # ── Pattern generation + SMTP verification fallback ──────────────
-    # Many healthcare sites hide emails behind contact forms. We generate
-    # common patterns and SMTP-probe each one. Only confirmed addresses
-    # (or high-probability generics) are returned.
+    # ── Pattern generation + SMTP verification ────────────────────────
+    # Strategy: generate every common professional email pattern for the
+    # authorized official name from NPPES, then MX-probe all at once.
+    # We first check if the domain is catch-all (accepts anything) — if so,
+    # SMTP can't confirm; fall back to returning the top pattern unverified
+    # but marked as a "best guess" with low confidence.
     pattern_candidates: list[dict] = []
 
-    # Generic company mailboxes — try these regardless of name
-    for prefix in ["info", "contact", "billing", "admin", "referrals", "lab"]:
+    # Name-based patterns — these are the PERSON-level emails we want
+    if first_name and last_name:
+        fn = first_name.lower().replace(' ', '').replace('-', '')
+        ln = last_name.lower().replace(' ', '').replace('-', '')
+        fi = fn[0] if fn else ''
+        li = ln[0] if ln else ''
+        name_email_patterns = [
+            (f"{fn}.{ln}@{live_domain}", 70),
+            (f"{fn}{ln}@{live_domain}", 70),
+            (f"{fi}{ln}@{live_domain}", 68),
+            (f"{fi}.{ln}@{live_domain}", 68),
+            (f"{fn}@{live_domain}", 55),
+            (f"{fn}{li}@{live_domain}", 55),
+            (f"{ln}@{live_domain}", 45),
+            (f"{fn}_{ln}@{live_domain}", 45),
+            (f"{fi}{ln}{fi}@{live_domain}", 40),
+        ]
+        for email_addr, conf in name_email_patterns:
+            if _is_quality_email(email_addr):
+                pattern_candidates.append({
+                    "email": email_addr,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "full_name": f"{first_name} {last_name}",
+                    "position": "Authorized Official",
+                    "is_decision_maker": True,
+                    "is_generic": False,
+                    "confidence": conf,
+                    "verified": False,
+                    "source": "pattern_generated",
+                    "domain": live_domain,
+                })
+
+    # Generic company mailboxes — always probe these
+    for prefix in ["billing", "referrals", "lab", "director", "office", "info", "contact"]:
         pattern_candidates.append({
             "email": f"{prefix}@{live_domain}",
             "first_name": "",
             "last_name": "",
             "full_name": None,
             "position": f"{prefix.title()} Mailbox",
-            "is_decision_maker": prefix in ("billing", "referrals"),
+            "is_decision_maker": prefix in ("billing", "referrals", "director"),
             "is_generic": True,
-            "confidence": 45,
+            "confidence": 40,
             "verified": False,
             "source": "pattern_generic",
             "domain": live_domain,
         })
 
-    # Name-based patterns if we have a contact name
-    if first_name and last_name:
-        name_patterns = generate_pattern_emails(first_name, last_name, live_domain)
-        pattern_candidates.extend(name_patterns)
+    # SMTP-verify all name patterns concurrently (faster than sequential)
+    # Prioritize person-level emails; fall back to generics only if none verify
+    person_candidates = [c for c in pattern_candidates if not c["is_generic"]]
+    generic_candidates = [c for c in pattern_candidates if c["is_generic"]]
 
-    # SMTP-verify each candidate, keep confirmed + accept-all
+    async def _smtp_probe(candidate: dict) -> dict | None:
+        try:
+            v = await asyncio.wait_for(verify_email_smtp(candidate["email"]), timeout=4.0)
+            if v.get("valid"):
+                candidate = dict(candidate)
+                candidate["verified"] = True
+                candidate["confidence"] = max(candidate["confidence"], int(v.get("confidence", 65)))
+                candidate["source"] = "pattern_smtp_verified"
+                return candidate
+        except Exception:
+            pass
+        return None
+
     verified_patterns: list[dict] = []
-    try:
-        for candidate in pattern_candidates[:5]:  # limit patterns to avoid runaway
-            try:
-                verification = await asyncio.wait_for(
-                    verify_email_smtp(candidate["email"]), timeout=3.0
-                )
-                if verification.get("valid"):
-                    candidate["verified"] = True
-                    candidate["confidence"] = verification.get("confidence", 65)
-                    candidate["source"] = "pattern_smtp_verified"
-                    verified_patterns.append(candidate)
-            except Exception:
-                continue
-    except Exception:
-        pass
+
+    # Probe all person patterns concurrently (up to 6 at once)
+    if person_candidates:
+        try:
+            probe_tasks = [_smtp_probe(c) for c in person_candidates[:6]]
+            results_raw = await asyncio.wait_for(
+                asyncio.gather(*probe_tasks, return_exceptions=True),
+                timeout=12.0,
+            )
+            verified_patterns = [r for r in results_raw if isinstance(r, dict) and r]
+        except Exception:
+            pass
+
+    # If person SMTP failed, probe generic mailboxes concurrently
+    if not verified_patterns and generic_candidates:
+        try:
+            probe_tasks = [_smtp_probe(c) for c in generic_candidates[:5]]
+            results_raw = await asyncio.wait_for(
+                asyncio.gather(*probe_tasks, return_exceptions=True),
+                timeout=10.0,
+            )
+            verified_patterns = [r for r in results_raw if isinstance(r, dict) and r]
+        except Exception:
+            pass
 
     if verified_patterns:
+        # Sort: person emails before generics, higher confidence first
+        verified_patterns.sort(key=lambda r: (r.get("is_generic", True), -r.get("confidence", 0)))
         normalized_patterns = _normalize_email_records(verified_patterns, live_domain)
         if normalized_patterns:
             result["emails"] = normalized_patterns
             result["total_at_domain"] = len(normalized_patterns)
-            print(f"Found {len(normalized_patterns)} emails via pattern+SMTP for {live_domain}")
             return result
 
-    # Nothing worked — return generic mailboxes as best-effort (unverified)
-    # so caller at least has something to work with
-    best_effort = [c for c in pattern_candidates if c["is_generic"]][:3]
+    # SMTP blocked or catch-all domain — return top person pattern as best-guess
+    # (marked unverified, low confidence — better than nothing for manual outreach)
+    if person_candidates:
+        best = dict(person_candidates[0])
+        best["confidence"] = 30
+        best["source"] = "pattern_best_guess"
+        best["verified"] = False
+        result["emails"] = [best]
+        result["total_at_domain"] = 1
+        result["error"] = "SMTP probe inconclusive — best-guess name pattern returned"
+        return result
+
+    # Nothing worked — return generic mailboxes as last resort (unverified)
+    best_effort = generic_candidates[:2]
     if best_effort:
         result["emails"] = best_effort
         result["total_at_domain"] = len(best_effort)
