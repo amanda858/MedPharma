@@ -734,6 +734,45 @@ async def find_emails_for_lab(
                 print(f"Found {len(normalized_hunter)} emails via Hunter.io")
                 return result
 
+    # ── Free enrichment: PubMed + Semantic Scholar + RDAP + Bing off-site ──
+    try:
+        from app.free_enrichment import enrich_contact as _free_enrich
+        free_result = _free_enrich(
+            first=first_name or "",
+            last=last_name or "",
+            org=org_name,
+            domain=live_domain,
+        )
+        if free_result.get("best_email"):
+            free_emails = [
+                {
+                    "email": e["email"],
+                    "first_name": first_name or "",
+                    "last_name": last_name or "",
+                    "full_name": f"{first_name or ''} {last_name or ''}".strip() or None,
+                    "position": "",
+                    "is_decision_maker": True,
+                    "is_generic": False,
+                    "confidence": e["confidence"],
+                    "verified": e["verdict"] == "deliverable",
+                    "source": e["source"],
+                    "domain": live_domain,
+                }
+                for e in free_result["emails"]
+                if e.get("email")
+            ]
+            normalized_free = _normalize_email_records(free_emails, live_domain)
+            if normalized_free:
+                result["emails"] = normalized_free
+                result["total_at_domain"] = len(normalized_free)
+                # Also store any LinkedIn profiles found
+                if free_result.get("linkedin_profiles"):
+                    result["linkedin_profiles"] = free_result["linkedin_profiles"]
+                print(f"Found {len(normalized_free)} emails via free enrichment")
+                return result
+    except Exception as _fe:
+        print(f"Free enrichment error: {_fe}")
+
     # Fallback to enhanced website scraping
     print(f"Trying enhanced website scraping for {live_domain}")
     scraped_emails = await _try_enhanced_scraping(live_domain, first_name, last_name)
