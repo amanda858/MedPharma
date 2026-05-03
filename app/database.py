@@ -157,6 +157,48 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_enrichment_billing ON lead_enrichment(billing_score);
         CREATE INDEX IF NOT EXISTS idx_enrichment_payor ON lead_enrichment(payor_score);
         CREATE INDEX IF NOT EXISTS idx_enrichment_workflow ON lead_enrichment(workflow_score);
+
+        CREATE TABLE IF NOT EXISTS outreach_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_type TEXT NOT NULL,
+            row_count INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS outreach_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            queue_rank INTEGER DEFAULT 0,
+            primary_action TEXT DEFAULT '',
+            outreach_channel TEXT DEFAULT '',
+            contact_status TEXT DEFAULT 'not_started',
+            status_notes TEXT DEFAULT '',
+            heat_score INTEGER DEFAULT 0,
+            tier TEXT DEFAULT '',
+            priority TEXT DEFAULT '',
+            org_name TEXT DEFAULT '',
+            decision_maker TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            email_source TEXT DEFAULT '',
+            email_verdict TEXT DEFAULT '',
+            linkedin TEXT DEFAULT '',
+            company_linkedin TEXT DEFAULT '',
+            company_people_search TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            state TEXT DEFAULT '',
+            npi TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            payload_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (run_id) REFERENCES outreach_runs(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_outreach_runs_type ON outreach_runs(run_type, created_at);
+        CREATE INDEX IF NOT EXISTS idx_outreach_queue_run ON outreach_queue(run_id, queue_rank);
+        CREATE INDEX IF NOT EXISTS idx_outreach_queue_npi ON outreach_queue(npi);
     """)
 
     # Backward-compatible schema upgrades
@@ -176,8 +218,176 @@ def init_db():
     if "urgency_updated_at" not in existing_cols:
         cursor.execute("ALTER TABLE lead_enrichment ADD COLUMN urgency_updated_at TEXT DEFAULT ''")
 
+    cursor.execute("PRAGMA table_info(outreach_queue)")
+    outreach_cols = {row[1] for row in cursor.fetchall()}
+    if outreach_cols:
+        if "contact_status" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN contact_status TEXT DEFAULT 'not_started'")
+        if "status_notes" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN status_notes TEXT DEFAULT ''")
+
     conn.commit()
     conn.close()
+
+
+def save_outreach_queue(rows: list[dict], run_type: str = "hunt_now", notes: str = "") -> dict:
+    """Persist a generated outreach queue and return the new run metadata."""
+
+    def _write() -> dict:
+        conn = get_db()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO outreach_runs (run_type, row_count, notes) VALUES (?, ?, ?)",
+                (run_type, len(rows), notes),
+            )
+            run_id = int(cursor.lastrowid or 0)
+            queue_rows = []
+            for index, row in enumerate(rows, start=1):
+                try:
+                    heat_score = int(row.get("Heat Score") or 0)
+                except Exception:
+                    heat_score = 0
+                queue_rows.append((
+                    run_id,
+                    index,
+                    str(row.get("Primary Action") or ""),
+                    str(row.get("Outreach Channel") or ""),
+                    "not_started",
+                    "",
+                    heat_score,
+                    str(row.get("Tier") or ""),
+                    str(row.get("Priority") or ""),
+                    str(row.get("Org Name") or ""),
+                    str(row.get("Decision Maker") or ""),
+                    str(row.get("Title") or ""),
+                    str(row.get("Email") or ""),
+                    str(row.get("Email Source") or ""),
+                    str(row.get("Email Verdict") or ""),
+                    str(row.get("LinkedIn") or ""),
+                    str(row.get("Company LinkedIn") or ""),
+                    str(row.get("Company People Search") or ""),
+                    str(row.get("Phone") or ""),
+                    str(row.get("City") or ""),
+                    str(row.get("State") or ""),
+                    str(row.get("NPI") or ""),
+                    str(row.get("Notes") or ""),
+                    json.dumps(row, ensure_ascii=True),
+                ))
+            cursor.executemany(
+                """
+                INSERT INTO outreach_queue (
+                    run_id, queue_rank, primary_action, outreach_channel, contact_status, status_notes, heat_score,
+                    tier, priority, org_name, decision_maker, title, email, email_source,
+                    email_verdict, linkedin, company_linkedin, company_people_search,
+                    phone, city, state, npi, notes, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                queue_rows,
+            )
+            conn.commit()
+            return {"run_id": run_id, "row_count": len(rows), "run_type": run_type}
+        finally:
+            conn.close()
+
+    return _run_write_with_retry(_write)
+
+
+def get_latest_outreach_queue(run_type: str = "hunt_now", limit: int = 100) -> list[dict]:
+    """Return the latest persisted outreach queue rows for a run type."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id FROM outreach_runs WHERE run_type = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (run_type,),
+        ).fetchone()
+        if not row:
+            return []
+        queue_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM outreach_queue
+            WHERE run_id = ?
+            ORDER BY queue_rank ASC
+            LIMIT ?
+            """,
+            (int(row[0]), int(limit)),
+        ).fetchall()
+        out: list[dict] = []
+        for payload_row in queue_rows:
+            try:
+                out.append(json.loads(payload_row[0] or "{}"))
+            except Exception:
+                continue
+        return out
+    finally:
+        conn.close()
+
+
+def get_outreach_queue_with_status(run_type: str = "hunt_now", limit: int = 100) -> dict:
+    """Return the latest outreach queue with workflow status included."""
+    conn = get_db()
+    try:
+        run = conn.execute(
+            "SELECT id, run_type, row_count, notes, created_at FROM outreach_runs WHERE run_type = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (run_type,),
+        ).fetchone()
+        if not run:
+            return {"run": None, "rows": []}
+        rows = conn.execute(
+            """
+            SELECT id, queue_rank, contact_status, status_notes, payload_json
+            FROM outreach_queue
+            WHERE run_id = ?
+            ORDER BY queue_rank ASC
+            LIMIT ?
+            """,
+            (int(run[0]), int(limit)),
+        ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            try:
+                payload = json.loads(row[4] or "{}")
+            except Exception:
+                payload = {}
+            payload.update({
+                "queue_id": int(row[0]),
+                "queue_rank": int(row[1] or 0),
+                "contact_status": row[2] or "not_started",
+                "status_notes": row[3] or "",
+            })
+            out.append(payload)
+        return {
+            "run": {
+                "id": int(run[0]),
+                "run_type": run[1],
+                "row_count": int(run[2] or 0),
+                "notes": run[3] or "",
+                "created_at": run[4] or "",
+            },
+            "rows": out,
+        }
+    finally:
+        conn.close()
+
+
+def update_outreach_queue_status(queue_id: int, contact_status: str, status_notes: str = "") -> bool:
+    """Update contact workflow status for a queue row."""
+
+    def _write() -> bool:
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE outreach_queue SET contact_status = ?, status_notes = ? WHERE id = ?",
+                (contact_status, status_notes, int(queue_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    return _run_write_with_retry(_write)
 
 
 def seed_demo_leads():

@@ -18,7 +18,7 @@ from app.database import (
     delete_lead, get_lead_stats, log_search,
     save_lead_emails, get_lead_emails, get_all_leads_with_emails,
     save_enrichment, get_enrichment, get_all_enrichments, get_enrichment_stats,
-    get_db,
+    get_db, get_outreach_queue_with_status, update_outreach_queue_status,
 )
 try:
     from app.database import update_enrichment_urgency
@@ -1504,6 +1504,11 @@ class LeadSave(BaseModel):
     tags: Optional[str] = ""
 
 
+class OutreachQueueStatusUpdate(BaseModel):
+    contact_status: str
+    status_notes: Optional[str] = ""
+
+
 @app.post("/api/leads")
 async def save_lead_endpoint(lead: LeadSave):
     try:
@@ -1623,6 +1628,54 @@ async def list_leads(
         reverse=True,
     )
     return {"leads": leads, "count": len(leads)}
+
+
+@app.get("/api/outreach-queue")
+async def get_outreach_queue(
+    run_type: str = Query("hunt_now"),
+    limit: int = Query(100, ge=1, le=1000),
+    contact_status: Optional[str] = Query(None),
+    outreach_channel: Optional[str] = Query(None),
+    tier: Optional[str] = Query(None),
+):
+    if not isinstance(run_type, str):
+        run_type = "hunt_now"
+    if not isinstance(limit, int):
+        limit = 100
+    if contact_status is not None and not isinstance(contact_status, str):
+        contact_status = None
+    if outreach_channel is not None and not isinstance(outreach_channel, str):
+        outreach_channel = None
+    if tier is not None and not isinstance(tier, str):
+        tier = None
+    payload = get_outreach_queue_with_status(run_type=run_type, limit=limit)
+    rows = payload.get("rows", [])
+    if contact_status:
+        wanted = str(contact_status).strip().lower()
+        rows = [row for row in rows if str(row.get("contact_status") or "").strip().lower() == wanted]
+    if outreach_channel:
+        wanted = str(outreach_channel).strip().lower()
+        rows = [row for row in rows if str(row.get("Outreach Channel") or "").strip().lower() == wanted]
+    if tier:
+        wanted = str(tier).strip().upper()
+        rows = [row for row in rows if str(row.get("Tier") or "").strip().upper() == wanted]
+    return {
+        "run": payload.get("run"),
+        "rows": rows,
+        "count": len(rows),
+    }
+
+
+@app.patch("/api/outreach-queue/{queue_id}")
+async def patch_outreach_queue_status(queue_id: int, updates: OutreachQueueStatusUpdate):
+    allowed_statuses = {"not_started", "contacted", "replied", "won", "dead"}
+    status = str(updates.contact_status or "").strip().lower()
+    if status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"contact_status must be one of {sorted(allowed_statuses)}")
+    updated = update_outreach_queue_status(queue_id, status, updates.status_notes or "")
+    if not updated:
+        raise HTTPException(status_code=404, detail="queue row not found")
+    return {"ok": True, "queue_id": queue_id, "contact_status": status, "status_notes": updates.status_notes or ""}
 
 
 @app.put("/api/leads/{lead_id}")

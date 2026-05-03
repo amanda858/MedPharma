@@ -46,6 +46,11 @@ with open(apollo_path,"w",newline="",encoding="utf-8") as f:
 with open(top_path,"w",newline="",encoding="utf-8") as f:
     w = csv.DictWriter(f, fieldnames=apollo_fields); w.writeheader(); w.writerows(out_rows[:50])
 
+print("=== BUILD strict person-email export ===")
+r = subprocess.run([sys.executable, "build_real_human_email_export.py"], cwd=ROOT)
+if r.returncode != 0:
+    sys.exit(r.returncode)
+
 from collections import Counter
 tc = Counter(r["Tier"] for r in out_rows)
 print(f"\nTOTAL: {len(out_rows)}  TIERS: {dict(tc)}")

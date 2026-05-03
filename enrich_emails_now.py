@@ -30,13 +30,11 @@ async def main():
     for lead in leads:
         npi = lead['npi']
         org_name = lead['organization_name']
-        city = lead['city']
-        state = lead['state']
         # Check if already has emails
         existing_emails = db.execute("SELECT COUNT(*) FROM lead_emails WHERE npi = ?", (npi,)).fetchone()[0]
         if existing_emails == 0:
             try:
-                emails_result = await find_emails_for_lab(org_name, city=city, state=state)
+                emails_result = await find_emails_for_lab(org_name)
                 emails = emails_result.get('emails', [])
                 if emails:
                     for email in emails:

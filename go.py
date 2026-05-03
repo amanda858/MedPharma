@@ -83,6 +83,9 @@ with open(top_path, "w", newline="", encoding="utf-8") as f:
     w.writeheader()
     w.writerows(out_rows[:50])
 
+# 4. Build strict person-email export for outreach tonight
+step("BUILD strict person-email export", [sys.executable, "build_real_human_email_export.py"])
+
 # Summary
 tier_counts = {"A": 0, "B": 0, "C": 0, "Unknown": 0}
 for r in out_rows:
@@ -96,4 +99,6 @@ print(f"  Tier C        : {tier_counts.get('C', 0)}")
 print(f"  Unknown       : {tier_counts.get('Unknown', 0)}")
 print(f"\nFinal Apollo upload : {apollo_path}")
 print(f"Top 50 outbound     : {top_path}")
+print(f"Strict person-email : {os.path.join(OUT, 'FINAL_real_human_emails.csv')}")
+print(f"Strict top 50       : {os.path.join(OUT, 'FINAL_real_human_top_50.csv')}")
 print("\nUpload FINAL_apollo_upload.csv to Apollo. That's it.")
