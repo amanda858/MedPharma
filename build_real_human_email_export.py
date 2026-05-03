@@ -409,6 +409,11 @@ def _build_linkedin_fallback_rows(email_rows: list[dict]) -> list[dict]:
 
         first_name = str(raw_national.get("contact_first") or lead["first_name"] or "").strip()
         last_name = str(raw_national.get("contact_last") or lead["last_name"] or "").strip()
+        # If full name landed in first_name with empty last_name, split it properly
+        if first_name and not last_name and " " in first_name:
+            name_parts = first_name.split()
+            first_name = name_parts[0]
+            last_name = " ".join(name_parts[1:])
         known_contact = " ".join(part for part in [first_name, last_name] if part).strip()
         known_title = _fallback_contact_title(lead, raw_national)
 

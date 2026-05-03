@@ -363,9 +363,13 @@ def linkedin_search_url(first: str, last: str, org: str = "") -> str:
     correct profile. This is the production fallback when we can't
     resolve a direct slug from cloud IPs (search engines block bots).
     """
-    if not (first and last):
+    first = (first or "").strip()
+    last = (last or "").strip()
+    if not first:
         return ""
-    parts = [first.strip(), last.strip()]
+    # If last is empty but first looks like a full name (has spaces), use it whole
+    name = f"{first} {last}".strip()
+    parts = [name]
     if org:
         cleaned = _clean_org(org)
         if cleaned:

@@ -71,8 +71,8 @@ def _email_rows() -> list[dict]:
                 first_name = parts[0]
                 last_name = parts[-1] if len(parts) > 1 else ""
 
-        li_profile = resolve_linkedin_profile(first_name, last_name, org_name) if first_name and last_name else ""
-        li_search = linkedin_search_url(first_name, last_name, org_name) if first_name and last_name else ""
+        li_profile = resolve_linkedin_profile(first_name, last_name, org_name) if first_name else ""
+        li_search = linkedin_search_url(first_name, last_name, org_name) if first_name else ""
         company_linkedin = linkedin_company_search_url(org_name) if org_name else ""
         company_people = linkedin_company_people_url(org_name) if org_name else ""
 
