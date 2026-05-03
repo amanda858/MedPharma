@@ -26,20 +26,29 @@ HUNT_NOW_TOP_100_CSV = os.path.join(OUT, "HUNT_NOW_top_100.csv")
 
 
 def _contact_quality(source: str, verdict: str, confidence: int, has_email: bool) -> str:
-    """A+/A/B/C contact quality rating."""
+    """A+/A/B/C contact quality rating.
+
+    A+ = Hunter/PubMed sourced AND verified deliverable
+    A  = Any source AND verified deliverable
+    B  = SMTP-verified pattern or MX-confirmed (catch-all/risky) — domain real, mailbox uncertain
+    C  = Unverified pattern or no email
+    """
     if not has_email:
         return "C"
     src = (source or "").lower()
     verd = (verdict or "").lower()
-    if src in ("hunter", "pubmed") and verd == "deliverable":
+    hunter_sources = ("hunter", "hunter.io/domain-search", "hunter.io/email-finder", "pubmed")
+    if src in hunter_sources and verd == "deliverable":
         return "A+"
     if verd == "deliverable":
         return "A"
-    if src == "mx_verified_pattern" or (confidence >= 75 and verd in ("catch-all", "deliverable")):
-        return "A"
-    if confidence >= 60:
+    # SMTP-verified pattern or MX-confirmed — real domain, uncertain mailbox
+    if src in ("pattern_smtp_verified", "mx_verified_pattern", "website_scrape", "national_csv"):
+        if verd in ("catch-all", "risky"):
+            return "B"
+    if verd in ("catch-all", "risky"):
         return "B"
-    return "B"
+    return "C"
 
 
 def _email_rows() -> list[dict]:

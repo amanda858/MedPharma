@@ -40,7 +40,7 @@ UA = (
 
 CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/data/linkedin_profiles.db")
 HTTP_TIMEOUT = 5.0
-MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "500"))
+MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "2000"))
 THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.15"))
 
 _lock = threading.Lock()
