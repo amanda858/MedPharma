@@ -38,7 +38,8 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/data/linkedin_profiles.db")
+_DEFAULT_CACHE_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "linkedin_profiles.db")
+CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", _DEFAULT_CACHE_DB)
 HTTP_TIMEOUT = 5.0
 MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "2000"))
 THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.15"))
@@ -401,18 +402,26 @@ def linkedin_company_people_url(org: str) -> str:
     return f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
 
 
-def resolve_linkedin_profile(first: str, last: str, org: str = "") -> str:
+def resolve_linkedin_profile(first: str, last: str, org: str = "", cache_only: bool = False) -> str:
     """Return a direct linkedin.com/in/<slug> URL, or '' if unresolvable.
 
-    Tries multiple query variants — with org, with org cleaned of
-    LLC/INC/LABS suffixes, and finally without org. First hit wins.
+    If cache_only=True, returns cached result only — no live HTTP calls.
+    Use cache_only=True in fast CSV generation; run resolve_linkedin_now.py
+    separately to populate the cache in bulk.
     """
-    if not first or not last:
+    if not first:
         return ""
+    # Handle full name in first param
+    if not last and " " in first:
+        parts = first.split()
+        first = parts[0]
+        last = " ".join(parts[1:])
     key = _norm_key(first, last, org)
     cached = _cache_get("linkedin", key)
     if cached is not None:
         return cached  # may be '' meaning we tried and failed
+    if cache_only:
+        return ""
 
     queries = []
     for variant in _org_query_variants(org):

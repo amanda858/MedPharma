@@ -296,7 +296,7 @@ def _apply_mx_gate(rows: list[dict]) -> list[dict]:
         if co:
             all_emails.add(co)
 
-    results = asyncio.run(verify_batch(list(all_emails), do_smtp=True, concurrency=6))
+    results = asyncio.run(verify_batch(list(all_emails), do_smtp=False, concurrency=12))
     by_email = {str(r.get("email") or "").strip().lower(): r for r in results}
 
     gated: list[dict] = []
