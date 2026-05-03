@@ -22,6 +22,7 @@ Design:
 
 from __future__ import annotations
 
+import json as _json
 import os
 import re
 import sqlite3
@@ -37,7 +38,7 @@ UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/tmp/linkedin_resolver_cache_v4.db")
+CACHE_DB = os.environ.get("LINKEDIN_CACHE_DB", "/data/linkedin_profiles.db")
 HTTP_TIMEOUT = 5.0
 MAX_LIVE_LOOKUPS_PER_RUN = int(os.environ.get("LINKEDIN_MAX_LIVE_LOOKUPS", "500"))
 THROTTLE_SEC = float(os.environ.get("LINKEDIN_THROTTLE_SEC", "0.15"))
@@ -296,9 +297,36 @@ def _resolve_via_startpage(query: str, regex: re.Pattern, post_filter=None, max_
     return matches[0] if matches else ""
 
 
+def _resolve_via_serp(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
+    """SerpAPI Google Search JSON — highest reliability, 100 free searches/month.
+    Set SERP_API_KEY env var to enable. Falls back to HTML scrapers if not set."""
+    serp_key = os.environ.get("SERP_API_KEY", "")
+    if not serp_key:
+        return [] if max_results > 1 else ""
+    if not _can_make_live_query():
+        return [] if max_results > 1 else ""
+    try:
+        url = (
+            "https://serpapi.com/search.json"
+            f"?engine=google&q={urllib.parse.quote(query)}&num=10&api_key={serp_key}"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        resp = urllib.request.urlopen(req, timeout=HTTP_TIMEOUT)
+        data = _json.loads(resp.read().decode("utf-8", "replace"))
+        links = [r.get("link", "") for r in data.get("organic_results", [])]
+        matches = [u for u in links if regex.match(u)]
+        if post_filter:
+            matches = post_filter(matches)
+        if max_results > 1:
+            return matches[:max_results]
+        return matches[0] if matches else ""
+    except Exception:
+        return [] if max_results > 1 else ""
+
+
 def _resolve_chain(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
-    """Try Bing → DDG → Brave (Brave last — rate-limited from cloud IPs)."""
-    for fn in (_resolve_via_bing, _resolve_via_ddg, _resolve_via_brave):
+    """Try SerpAPI (best, if key set) → Bing → DDG → Brave."""
+    for fn in (_resolve_via_serp, _resolve_via_bing, _resolve_via_ddg, _resolve_via_brave):
         res = fn(query, regex, post_filter, max_results)
         if res:
             return res

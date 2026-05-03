@@ -13,13 +13,33 @@ import os
 
 import build_real_human_email_export as builder
 from app.database import init_db, save_outreach_queue
-from app.linkedin_resolver import linkedin_company_people_url, linkedin_company_search_url, linkedin_search_url
+from app.linkedin_resolver import (
+    linkedin_company_people_url, linkedin_company_search_url,
+    linkedin_search_url, resolve_linkedin_profile,
+)
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(ROOT, "output")
 HUNT_NOW_CSV = os.path.join(OUT, "HUNT_NOW.csv")
 HUNT_NOW_TOP_100_CSV = os.path.join(OUT, "HUNT_NOW_top_100.csv")
+
+
+def _contact_quality(source: str, verdict: str, confidence: int, has_email: bool) -> str:
+    """A+/A/B/C contact quality rating."""
+    if not has_email:
+        return "C"
+    src = (source or "").lower()
+    verd = (verdict or "").lower()
+    if src in ("hunter", "pubmed") and verd == "deliverable":
+        return "A+"
+    if verd == "deliverable":
+        return "A"
+    if src == "mx_verified_pattern" or (confidence >= 75 and verd in ("catch-all", "deliverable")):
+        return "A"
+    if confidence >= 60:
+        return "B"
+    return "B"
 
 
 def _email_rows() -> list[dict]:
@@ -33,13 +53,27 @@ def _email_rows() -> list[dict]:
         last_name = ""
         if decision_maker:
             parts = [p for p in str(decision_maker).split() if p]
-            if parts:
+            # Skip honorifics
+            _hon = {"dr.", "dr", "mr.", "mr", "mrs.", "mrs", "ms.", "ms"}
+            non_hon = [p for p in parts if p.lower().rstrip(".") not in _hon]
+            if non_hon:
+                first_name = non_hon[0]
+                last_name = non_hon[-1] if len(non_hon) > 1 else ""
+            elif parts:
                 first_name = parts[0]
                 last_name = parts[-1] if len(parts) > 1 else ""
-        linkedin = linkedin_search_url(first_name, last_name, org_name) if first_name and last_name else ""
+        # Try to resolve a real LinkedIn profile (uses SerpAPI if key present)
+        li_profile = resolve_linkedin_profile(first_name, last_name, org_name) if first_name and last_name else ""
+        li_search = linkedin_search_url(first_name, last_name, org_name) if first_name and last_name else ""
         company_linkedin = linkedin_company_search_url(org_name) if org_name else ""
         company_people = linkedin_company_people_url(org_name) if org_name else ""
+        source = row.get("DM Email Source", "")
+        verdict = row.get("DM Email Verdict", "")
+        confidence = int(row.get("DM Email Confidence", 0) or 0)
+        email = row.get("DM Email", "")
+        quality = _contact_quality(source, verdict, confidence, bool(email))
         out.append({
+            "Contact Quality": quality,
             "Primary Action": "email first, linkedin backup",
             "Outreach Channel": "email",
             "Heat Score": row.get("Heat Score", ""),
@@ -48,10 +82,11 @@ def _email_rows() -> list[dict]:
             "Org Name": org_name,
             "Decision Maker": decision_maker,
             "Title": title,
-            "Email": row.get("DM Email", ""),
-            "Email Source": row.get("DM Email Source", ""),
-            "Email Verdict": row.get("DM Email Verdict", ""),
-            "LinkedIn": linkedin,
+            "Email": email,
+            "Email Source": source,
+            "Email Verdict": verdict,
+            "LinkedIn Profile": li_profile,
+            "LinkedIn Search": li_search,
             "Company LinkedIn": company_linkedin,
             "Company People Search": company_people,
             "Phone": row.get("Phone", ""),
@@ -69,10 +104,19 @@ def _linkedin_rows(email_rows: list[dict]) -> list[dict]:
     for row in fallback_rows:
         person_name = row.get("Known Contact", "") or row.get("Backup Person", "")
         person_title = row.get("Known Contact Title", "") or row.get("Backup Person Title", "")
-        person_linkedin = row.get("Known Contact LinkedIn", "") or row.get("Backup Person LinkedIn", "")
-        if not person_linkedin:
-            person_linkedin = row.get("Employee LinkedIn 1", "")
+        # Prefer resolved profile URL, fall back to search URL
+        person_linkedin_profile = row.get("Known Contact LinkedIn", "") or row.get("Backup Person LinkedIn", "")
+        if not person_linkedin_profile:
+            person_linkedin_profile = row.get("Employee LinkedIn 1", "")
+        # If stored URL looks like a search URL, move to search field
+        li_profile = ""
+        li_search = ""
+        if person_linkedin_profile and "linkedin.com/in/" in person_linkedin_profile and "search" not in person_linkedin_profile and "bing.com" not in person_linkedin_profile:
+            li_profile = person_linkedin_profile
+        else:
+            li_search = person_linkedin_profile
         out.append({
+            "Contact Quality": "C",
             "Primary Action": "linkedin first",
             "Outreach Channel": "linkedin",
             "Heat Score": row.get("Heat Score", ""),
@@ -84,7 +128,8 @@ def _linkedin_rows(email_rows: list[dict]) -> list[dict]:
             "Email": "",
             "Email Source": "",
             "Email Verdict": "",
-            "LinkedIn": person_linkedin,
+            "LinkedIn Profile": li_profile,
+            "LinkedIn Search": li_search,
             "Company LinkedIn": row.get("Company LinkedIn", ""),
             "Company People Search": row.get("Company People Search", ""),
             "Phone": row.get("Phone", ""),
@@ -96,7 +141,8 @@ def _linkedin_rows(email_rows: list[dict]) -> list[dict]:
     return out
 
 
-def _sort_key(row: dict) -> tuple[int, int, str]:
+def _sort_key(row: dict) -> tuple:
+    quality_rank = {"A+": 0, "A": 1, "B": 2, "C": 3}.get(row.get("Contact Quality", "C"), 3)
     channel_rank = 0 if row.get("Outreach Channel") == "email" else 1
     verdict_rank = {
         "deliverable": 0,
@@ -109,11 +155,12 @@ def _sort_key(row: dict) -> tuple[int, int, str]:
         heat = int(row.get("Heat Score") or 0)
     except Exception:
         heat = 0
-    return (channel_rank, verdict_rank, -heat, str(row.get("Org Name") or ""))
+    return (quality_rank, channel_rank, verdict_rank, -heat, str(row.get("Org Name") or ""))
 
 
 def _write(path: str, rows: list[dict]) -> None:
     fieldnames = [
+        "Contact Quality",
         "Primary Action",
         "Outreach Channel",
         "Heat Score",
@@ -125,7 +172,8 @@ def _write(path: str, rows: list[dict]) -> None:
         "Email",
         "Email Source",
         "Email Verdict",
-        "LinkedIn",
+        "LinkedIn Profile",
+        "LinkedIn Search",
         "Company LinkedIn",
         "Company People Search",
         "Phone",

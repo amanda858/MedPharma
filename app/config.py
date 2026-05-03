@@ -19,10 +19,14 @@ HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
 
 DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
 
-# Hunter.io API key (set via environment variable)
+# Hunter.io API key — free tier: 25 searches/month (sign up at hunter.io)
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
 
-# OpenAI API key (set via environment variable for AI report generation)
+# SerpAPI key — free tier: 100 searches/month (sign up at serpapi.com)
+# Used to resolve real LinkedIn profile URLs via Google Search JSON API.
+SERP_API_KEY = os.getenv("SERP_API_KEY", "")
+
+# OpenAI API key (optional — AI narratives fall back to rule-based without it)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ── Notification settings ──

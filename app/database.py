@@ -170,10 +170,15 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id INTEGER NOT NULL,
             queue_rank INTEGER DEFAULT 0,
+            contact_quality TEXT DEFAULT 'C',
             primary_action TEXT DEFAULT '',
             outreach_channel TEXT DEFAULT '',
             contact_status TEXT DEFAULT 'not_started',
             status_notes TEXT DEFAULT '',
+            sequence_step INTEGER DEFAULT 0,
+            first_contacted_at TEXT DEFAULT '',
+            next_followup_at TEXT DEFAULT '',
+            last_action_at TEXT DEFAULT '',
             heat_score INTEGER DEFAULT 0,
             tier TEXT DEFAULT '',
             priority TEXT DEFAULT '',
@@ -183,7 +188,8 @@ def init_db():
             email TEXT DEFAULT '',
             email_source TEXT DEFAULT '',
             email_verdict TEXT DEFAULT '',
-            linkedin TEXT DEFAULT '',
+            linkedin_profile TEXT DEFAULT '',
+            linkedin_search TEXT DEFAULT '',
             company_linkedin TEXT DEFAULT '',
             company_people_search TEXT DEFAULT '',
             phone TEXT DEFAULT '',
@@ -221,18 +227,19 @@ def init_db():
     cursor.execute("PRAGMA table_info(outreach_queue)")
     outreach_cols = {row[1] for row in cursor.fetchall()}
     if outreach_cols:
-        if "contact_status" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN contact_status TEXT DEFAULT 'not_started'")
-        if "status_notes" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN status_notes TEXT DEFAULT ''")
-        if "sequence_step" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN sequence_step INTEGER DEFAULT 0")
-        if "first_contacted_at" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN first_contacted_at TEXT DEFAULT ''")
-        if "next_followup_at" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN next_followup_at TEXT DEFAULT ''")
-        if "last_action_at" not in outreach_cols:
-            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN last_action_at TEXT DEFAULT ''")
+        for col, defval in [
+            ("contact_status", "TEXT DEFAULT 'not_started'"),
+            ("status_notes", "TEXT DEFAULT ''"),
+            ("sequence_step", "INTEGER DEFAULT 0"),
+            ("first_contacted_at", "TEXT DEFAULT ''"),
+            ("next_followup_at", "TEXT DEFAULT ''"),
+            ("last_action_at", "TEXT DEFAULT ''"),
+            ("contact_quality", "TEXT DEFAULT 'C'"),
+            ("linkedin_profile", "TEXT DEFAULT ''"),
+            ("linkedin_search", "TEXT DEFAULT ''"),
+        ]:
+            if col not in outreach_cols:
+                cursor.execute(f"ALTER TABLE outreach_queue ADD COLUMN {col} {defval}")
 
     conn.commit()
     conn.close()
@@ -259,6 +266,7 @@ def save_outreach_queue(rows: list[dict], run_type: str = "hunt_now", notes: str
                 queue_rows.append((
                     run_id,
                     index,
+                    str(row.get("Contact Quality") or "C"),
                     str(row.get("Primary Action") or ""),
                     str(row.get("Outreach Channel") or ""),
                     "not_started",
@@ -272,7 +280,8 @@ def save_outreach_queue(rows: list[dict], run_type: str = "hunt_now", notes: str
                     str(row.get("Email") or ""),
                     str(row.get("Email Source") or ""),
                     str(row.get("Email Verdict") or ""),
-                    str(row.get("LinkedIn") or ""),
+                    str(row.get("LinkedIn Profile") or ""),
+                    str(row.get("LinkedIn Search") or row.get("LinkedIn") or ""),
                     str(row.get("Company LinkedIn") or ""),
                     str(row.get("Company People Search") or ""),
                     str(row.get("Phone") or ""),
@@ -285,11 +294,13 @@ def save_outreach_queue(rows: list[dict], run_type: str = "hunt_now", notes: str
             cursor.executemany(
                 """
                 INSERT INTO outreach_queue (
-                    run_id, queue_rank, primary_action, outreach_channel, contact_status, status_notes, heat_score,
+                    run_id, queue_rank, contact_quality, primary_action, outreach_channel,
+                    contact_status, status_notes, heat_score,
                     tier, priority, org_name, decision_maker, title, email, email_source,
-                    email_verdict, linkedin, company_linkedin, company_people_search,
+                    email_verdict, linkedin_profile, linkedin_search,
+                    company_linkedin, company_people_search,
                     phone, city, state, npi, notes, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 queue_rows,
             )
@@ -344,7 +355,9 @@ def get_outreach_queue_with_status(run_type: str = "hunt_now", limit: int = 100)
             return {"run": None, "rows": []}
         rows = conn.execute(
             """
-            SELECT id, queue_rank, contact_status, status_notes, payload_json
+            SELECT id, queue_rank, contact_status, status_notes, payload_json,
+                   sequence_step, next_followup_at, contact_quality,
+                   linkedin_profile, linkedin_search
             FROM outreach_queue
             WHERE run_id = ?
             ORDER BY queue_rank ASC
@@ -363,6 +376,11 @@ def get_outreach_queue_with_status(run_type: str = "hunt_now", limit: int = 100)
                 "queue_rank": int(row[1] or 0),
                 "contact_status": row[2] or "not_started",
                 "status_notes": row[3] or "",
+                "sequence_step": int(row[5] or 0),
+                "next_followup_at": row[6] or "",
+                "Contact Quality": row[7] or payload.get("Contact Quality", "C"),
+                "LinkedIn Profile": row[8] or payload.get("LinkedIn Profile", ""),
+                "LinkedIn Search": row[9] or payload.get("LinkedIn Search", payload.get("LinkedIn", "")),
             })
             out.append(payload)
         return {

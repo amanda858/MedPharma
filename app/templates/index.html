@@ -994,6 +994,13 @@
                     </div>
                 </div>
                 <div id="oqSummary" style="margin-top:10px;font-size:12px;color:var(--gray-600);"></div>
+                <div style="margin-top:8px;font-size:11px;color:var(--gray-500);display:flex;gap:12px;flex-wrap:wrap;">
+                    <span><span style="background:#155724;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">A+</span> Verified person email</span>
+                    <span><span style="background:#0a3d62;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">A</span> SMTP-verified pattern</span>
+                    <span><span style="background:#856404;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">B</span> Scraped/lower confidence</span>
+                    <span><span style="background:#6c757d;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">C</span> No email — LinkedIn only</span>
+                    <span>✅ Profile = real URL &nbsp;|&nbsp; 🔍 Search = find manually</span>
+                </div>
             </div>
 
             <div id="oqResults"></div>
@@ -2817,6 +2824,7 @@
             <div style="overflow-x:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
             <thead><tr style="background:var(--gray-100);text-align:left;">
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Quality</th>
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);white-space:nowrap;">Rank</th>
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Channel</th>
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Heat</th>
@@ -2832,9 +2840,17 @@
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Copy</th>
             </tr></thead><tbody>`;
 
+            const QUALITY_STYLE = {
+                'A+': { bg: '#155724', color: '#fff', label: 'A+', title: 'Verified person email (Hunter/PubMed, deliverable)' },
+                'A':  { bg: '#0a3d62', color: '#fff', label: 'A',  title: 'SMTP-verified email pattern (85% confidence)' },
+                'B':  { bg: '#856404', color: '#fff', label: 'B',  title: 'Scraped or lower-confidence email' },
+                'C':  { bg: '#6c757d', color: '#fff', label: 'C',  title: 'No email — LinkedIn outreach only' },
+            };
+
             rows.forEach((r, i) => {
                 const qid     = r.queue_id || '';
                 const rank    = r.queue_rank || (i + 1);
+                const quality = r['Contact Quality'] || r.contact_quality || 'C';
                 const channel = r['Outreach Channel'] || r.outreach_channel || '';
                 const heat    = r['Heat Score'] || '';
                 const tier    = r['Tier'] || '';
@@ -2843,7 +2859,8 @@
                 const title   = r['Title'] || '';
                 const email   = r['Email'] || '';
                 const verdict = (r['Email Verdict'] || '').toLowerCase();
-                const liUrl   = r['LinkedIn'] || '';
+                const liProfile = r['LinkedIn Profile'] || r.linkedin_profile || '';
+                const liSearch  = r['LinkedIn Search'] || r.linkedin_search || r['LinkedIn'] || '';
                 const phone   = r['Phone'] || '';
                 const loc     = [r['City'], r['State']].filter(Boolean).join(', ');
                 const status  = r.contact_status || 'not_started';
@@ -2861,8 +2878,19 @@
                 const followLabel = nextFollow
                     ? `<div style="font-size:10px;color:${new Date(nextFollow) < new Date() ? '#c00' : 'var(--gray-500)'};">${_oqFmt(nextFollow)}</div>`
                     : '';
+                const qs = QUALITY_STYLE[quality] || QUALITY_STYLE['C'];
+                const qualityBadge = `<span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:${qs.bg};color:${qs.color};" title="${qs.title}">${qs.label}</span>`;
+
+                // LinkedIn: show real profile link if resolved, else show search link labeled honestly
+                let liCell = '—';
+                if (liProfile) {
+                    liCell = `<a href="${_oqEsc(liProfile)}" target="_blank" rel="noopener" style="font-size:11px;color:#0a3d62;font-weight:600;">✅ Profile</a>`;
+                } else if (liSearch) {
+                    liCell = `<a href="${_oqEsc(liSearch)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--gray-500);">🔍 Search</a>`;
+                }
 
                 html += `<tr style="border-bottom:1px solid var(--gray-200);" id="oqrow-${qid}">
+                    <td style="padding:7px 8px;">${qualityBadge}</td>
                     <td style="padding:7px 8px;color:var(--gray-500);">${rank}</td>
                     <td style="padding:7px 8px;" title="${_oqEsc(r['Primary Action'])}">${channelIcon} ${_oqEsc(channel)}</td>
                     <td style="padding:7px 8px;font-weight:600;">${_oqEsc(heat)}</td>
@@ -2870,7 +2898,7 @@
                     <td style="padding:7px 8px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_oqEsc(org)}">${_oqEsc(org)}</td>
                     <td style="padding:7px 8px;max-width:140px;" title="${_oqEsc(title)}">${_oqEsc(dm)}${title ? `<br><span style="color:var(--gray-500);font-size:11px;">${_oqEsc(title)}</span>` : ''}</td>
                     <td style="padding:7px 8px;">${email ? `<a href="mailto:${_oqEsc(email)}" style="font-size:11px;">${_oqEsc(email)}</a>${verdictBadge}` : '—'}</td>
-                    <td style="padding:7px 8px;">${liUrl ? `<a href="${_oqEsc(liUrl)}" target="_blank" rel="noopener" style="font-size:11px;">profile</a>` : '—'}</td>
+                    <td style="padding:7px 8px;">${liCell}</td>
                     <td style="padding:7px 8px;white-space:nowrap;">${_oqEsc(phone)}</td>
                     <td style="padding:7px 8px;white-space:nowrap;">${_oqEsc(loc)}</td>
                     <td style="padding:7px 8px;">
