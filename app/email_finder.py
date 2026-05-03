@@ -169,6 +169,10 @@ def _org_name_to_domain_candidates(org_name: str) -> list[str]:
     if abbrev != full:
         candidates.append(abbrev + ".com")
     
+    # Try first token alone (catches "MD Tox Lab" → "mdtox.com" AND "md.com")
+    if tokens[0] != full:
+        candidates.append(tokens[0] + ".com")
+
     # Try first token + second token
     if len(tokens) >= 2:
         candidates.append(tokens[0] + tokens[1] + ".com")
@@ -179,16 +183,16 @@ def _org_name_to_domain_candidates(org_name: str) -> list[str]:
         candidates.append(tokens[0] + "-" + tokens[1] + ".com")
         candidates.append(abbrev_tokens[0] + "-" + abbrev_tokens[1] + ".com")
     
-    # Try .org and .net
-    for domain in [full + ".com", abbrev + ".com"]:
-        candidates.append(domain.replace(".com", ".org"))
-        candidates.append(domain.replace(".com", ".net"))
+    # Try .org, .net, .us, .info for full and abbreviated names
+    for base in [full, abbrev]:
+        for tld in [".org", ".net", ".us", ".info"]:
+            candidates.append(base + tld)
     
-    # Remove duplicates and limit to 10
+    # Remove duplicates and limit to 16
     seen = set()
     unique_candidates = []
     for c in candidates:
-        if c not in seen and len(unique_candidates) < 10:
+        if c not in seen and len(unique_candidates) < 16:
             seen.add(c)
             unique_candidates.append(c)
     
@@ -397,8 +401,8 @@ def _is_business_domain(domain: str) -> bool:
     if re.match(r'^\d+\..*$', domain):  # Starts with numbers
         return False
 
-    # Skip extremely short domains
-    if len(domain.split('.')[0]) < 3:
+    # Skip extremely short domains (allow 2-char abbreviations like tx, md, jk)
+    if len(domain.split('.')[0]) < 2:
         return False
 
     return True
@@ -410,14 +414,14 @@ async def _find_live_domain(candidates: list[str]) -> Optional[str]:
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(
-                    *[_check_domain_exists(d, client) for d in candidates[:4]],
+                    *[_check_domain_exists(d, client) for d in candidates[:8]],
                     return_exceptions=True,
                 ),
-                timeout=4.0,
+                timeout=6.0,
             )
         except asyncio.TimeoutError:
             return None
-    for domain, result in zip(candidates, results):
+    for domain, result in zip(candidates[:8], results):
         if result is True:
             return domain
     return None

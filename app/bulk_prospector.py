@@ -459,7 +459,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                 )
                 org_domain = em.get("live_domain", "") or ""
                 org_emails = em.get("emails") or []
-                # Drop any pattern-generated emails defensively (belt & suspenders).
+                # Drop raw (unverified) pattern-generated emails — only keep
+                # those that were confirmed via SMTP or another live check.
                 org_emails = [
                     e for e in org_emails
                     if (e.get("source") or "") != "pattern_generated"

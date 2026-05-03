@@ -35,10 +35,14 @@ NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
 DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")
 
-# Daily national pull defaults to high-quality, email-required output.
-# Override these env vars at the platform level if a wider net is desired.
+# Daily national pull defaults to high-quality output.
+# QUALITY_FIRST keeps rows with at least a live website, CLIA, or any email.
+# REQUIRE_EMAIL is OFF by default so rows with a confirmed domain but no scraped
+# email still appear — this dramatically increases usable output when email
+# enrichment partially fails (e.g. Hunter key not set, scraping timeouts).
+# Set REQUIRE_EMAIL=1 in your platform env vars if you want email-only rows.
 os.environ.setdefault("QUALITY_FIRST", "1")
-os.environ.setdefault("REQUIRE_EMAIL", "1")
+os.environ.setdefault("REQUIRE_EMAIL", "0")
 os.environ.setdefault("ENABLE_CLIA_ENRICHMENT", "1")
 os.environ.setdefault("ENABLE_PUBMED_LOOKUP", "1")
 os.environ.setdefault("ENABLE_EMAIL_ENRICHMENT", "1")
