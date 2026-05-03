@@ -2107,6 +2107,7 @@ import time as _time_np
 
 _national_csv_cache = {"path": "", "mtime": 0.0, "rows": []}
 _bundled_fallback_cache = {"mtime": 0.0, "rows": []}
+_leads_national_cache = {"mtime": 0.0, "rows": []}
 
 
 def _attach_emails_to_rows(rows: list[dict]) -> list[dict]:
@@ -2221,19 +2222,90 @@ def _load_bundled_lab_rows() -> list[dict]:
     return out
 
 
+def _load_leads_national_rows() -> list[dict]:
+    """Load output/leads_national.csv (enriched, with emails) into national-pull schema.
+
+    This file has 1445+ rows with 527 rows containing confirmed emails. It uses a
+    different column layout from the live national-pull CSV, so we map columns here.
+    Used as the preferred fallback over the no-email rule-intercept CSV.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "output", "leads_national.csv",
+    )
+    if not os.path.exists(path):
+        return []
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        return []
+    if _leads_national_cache["mtime"] == mtime and _leads_national_cache["rows"]:
+        return _leads_national_cache["rows"]
+    out: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            for r in _csv_np.DictReader(f):
+                # Split "emails" field (semicolon-separated) into DM + Company
+                raw_emails = [e.strip() for e in (r.get("emails") or "").split(";") if e.strip()]
+                dm_email = raw_emails[0] if raw_emails else ""
+                company_email = raw_emails[1] if len(raw_emails) > 1 else ""
+                dm_name = " ".join(filter(None, [
+                    r.get("contact_first", "").strip(),
+                    r.get("contact_last", "").strip(),
+                ])).strip()
+                try:
+                    score = int(r.get("score") or 0)
+                except Exception:
+                    score = 0
+                tier = (r.get("tier") or "").strip().upper()
+                heat = score + (40 if tier == "A" else 20 if tier == "B" else 0)
+                out.append({
+                    "Org Name": r.get("org_name", ""),
+                    "City": r.get("city", ""),
+                    "State": (r.get("state") or "").upper(),
+                    "Zip": r.get("zip", ""),
+                    "NPI": r.get("npi", ""),
+                    "Phone": r.get("phone", ""),
+                    "Taxonomy / Type": r.get("taxonomy", ""),
+                    "Type Detected": "laboratory",
+                    "Heat Score": str(heat),
+                    "Tier": tier,
+                    "Decision Maker": dm_name,
+                    "DM Title": r.get("contact_title", ""),
+                    "DM Email": dm_email,
+                    "Company Email": company_email,
+                    "PubMed Email": "",
+                    "Directory Email": "",
+                    "Site-Search Email": "",
+                    "Sunbiz Email": "",
+                    "Person-Site Email": "",
+                    "Wayback Email": "",
+                    "Org Domain": r.get("domain", ""),
+                    "Source": "leads-national",
+                })
+    except Exception:
+        return []
+    _leads_national_cache.update({"mtime": mtime, "rows": out})
+    return out
+
+
 def _load_latest_national_rows() -> list[dict]:
     """Read most recent national-pull CSV into memory (cached by mtime).
 
-    Falls back to the bundled rule-intercept lab CSV so the search panel
-    always returns results even before the first scheduled pull runs.
+    Fallback priority:
+      1. Live national-pull CSV from /data/national_pulls/ (from scheduled/manual run)
+      2. output/leads_national.csv (1445 rows, 527 with confirmed emails — committed to repo)
+      3. output/labs_routed_full.csv (16K rows, no emails — last resort to show something)
     """
     csv_path = _np_latest_csv_path()
     if not csv_path or not os.path.exists(csv_path):
-        return _load_bundled_lab_rows()
+        rows = _load_leads_national_rows()
+        return rows if rows else _load_bundled_lab_rows()
     try:
         mtime = os.path.getmtime(csv_path)
     except Exception:
-        return _load_bundled_lab_rows()
+        rows = _load_leads_national_rows()
+        return rows if rows else _load_bundled_lab_rows()
     if (_national_csv_cache["path"] == csv_path
             and _national_csv_cache["mtime"] == mtime
             and _national_csv_cache["rows"]):
@@ -2244,9 +2316,11 @@ def _load_latest_national_rows() -> list[dict]:
             for r in _csv_np.DictReader(f):
                 rows.append(r)
     except Exception:
-        return _load_bundled_lab_rows()
+        enriched = _load_leads_national_rows()
+        return enriched if enriched else _load_bundled_lab_rows()
     if not rows:
-        return _load_bundled_lab_rows()
+        enriched = _load_leads_national_rows()
+        return enriched if enriched else _load_bundled_lab_rows()
     _national_csv_cache.update({"path": csv_path, "mtime": mtime, "rows": rows})
     return rows
 
