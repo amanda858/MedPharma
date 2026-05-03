@@ -44,10 +44,13 @@ async def scrape_emails_from_website(url: str) -> list[str]:
                 if resp.status_code != 200:
                     return
                 import html as _html_mod
-                text = _html_mod.unescape(resp.text)
+                from urllib.parse import unquote as _url_unquote
+                text = _html_mod.unescape(_url_unquote(resp.text))
                 for pattern in email_patterns:
                     for m in re.findall(pattern, text, re.IGNORECASE):
                         e = (m if isinstance(m, str) else m[0]).strip().lower()
+                        # Strip any leading %20 / whitespace artifacts
+                        e = re.sub(r'^[%\s0-9a-f]{0,4}', '', e).strip()
                         if _is_basic_email_format(e):
                             emails.add(e)
         except Exception:
@@ -61,11 +64,13 @@ async def scrape_emails_from_website(url: str) -> list[str]:
             'example.com', 'test.com', 'noreply', 'placeholder',
             'yourcompany.com', 'sentry.io', 'wixpress.com',
             'email.com', 'domain.com', 'yourdomain.com', 'mail.com',
+            'clinic.com', 'company.com', 'website.com',
         ])
         and e.split('@')[0] not in {
             'yourname', 'firstname', 'lastname', 'name', 'your',
-            'email', 'user', 'admin', 'webmaster', 'support',
-            'hello', 'hi', 'contact', 'info', 'sales', 'help',
+            'email', 'user', 'username', 'someone', 'colleague',
+            'admin', 'webmaster', 'support', 'hello', 'hi',
+            'contact', 'info', 'sales', 'help', 'staff', 'person',
         }
     ][:15]
 
@@ -894,9 +899,39 @@ def _is_quality_email(email: str) -> bool:
     but rescued separately by `_is_generic_company_mailbox` — so they
     can still be emitted as a fallback Company Email column.
     """
-    email_lower = email.lower()
-    username = email.split('@')[0].lower()
-    domain = email.split('@')[1].lower() if '@' in email else ''
+    # Hard reject URL-encoded or whitespace-prefixed emails
+    if '%' in email or email != email.strip():
+        return False
+
+    email_lower = email.lower().strip()
+    if '@' not in email_lower:
+        return False
+
+    username = email_lower.split('@')[0]
+    domain = email_lower.split('@')[1] if '@' in email_lower else ''
+
+    # Domain must have a valid email TLD (not .jpg, .png, .gif, etc.)
+    valid_tld_re = re.compile(r'\.(com|net|org|edu|gov|us|io|co|biz|info|health|care|med|clinic|lab|[a-z]{2})$')
+    if not valid_tld_re.search(domain):
+        return False
+
+    # Reject placeholder/demo domains
+    placeholder_domains = {
+        'example.com', 'test.com', 'domain.com', 'yourdomain.com',
+        'yourcompany.com', 'email.com', 'mail.com', 'clinic.com',
+        'company.com', 'website.com', 'placeholder.com', 'sample.com',
+    }
+    if domain in placeholder_domains:
+        return False
+
+    # Reject placeholder usernames
+    placeholder_usernames = {
+        'yourname', 'firstname', 'lastname', 'name', 'your', 'email',
+        'user', 'username', 'someone', 'anybody', 'nobody', 'colleague',
+        'person', 'human', 'contact', 'owner', 'staff', 'member',
+    }
+    if username in placeholder_usernames:
+        return False
 
     # Skip obvious spam/non-professional emails
     skip_patterns = [
