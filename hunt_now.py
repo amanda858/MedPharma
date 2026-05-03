@@ -82,18 +82,11 @@ def _email_rows() -> list[dict]:
         verdict = str(row.get("DM Email Verdict") or "").strip()
         confidence = int(row.get("DM Email Confidence") or 0)
 
-        # Use the best available email: person-level first, company mailbox as fallback
+        # Use person-level email only — generic mailboxes (info@, billing@ etc.) are not actionable
         if dm_email:
             email = dm_email
             channel = "email"
             primary_action = "email first, linkedin backup"
-        elif co_email:
-            email = co_email
-            source = "company_mailbox"
-            verdict = str(row.get("Company Email Verdict") or "").strip()
-            confidence = 40
-            channel = "company email"
-            primary_action = "company email, then linkedin"
         else:
             email = ""
             channel = "linkedin"

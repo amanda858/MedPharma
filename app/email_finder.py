@@ -825,26 +825,9 @@ async def find_emails_for_lab(
                     "domain": live_domain,
                 })
 
-    # Generic company mailboxes — always probe these
-    for prefix in ["billing", "referrals", "lab", "director", "office", "info", "contact"]:
-        pattern_candidates.append({
-            "email": f"{prefix}@{live_domain}",
-            "first_name": "",
-            "last_name": "",
-            "full_name": None,
-            "position": f"{prefix.title()} Mailbox",
-            "is_decision_maker": prefix in ("billing", "referrals", "director"),
-            "is_generic": True,
-            "confidence": 40,
-            "verified": False,
-            "source": "pattern_generic",
-            "domain": live_domain,
-        })
-
     # SMTP-verify all name patterns concurrently (faster than sequential)
-    # Prioritize person-level emails; fall back to generics only if none verify
+    # Person-level emails only — generic mailboxes (info@/billing@ etc.) are never generated
     person_candidates = [c for c in pattern_candidates if not c["is_generic"]]
-    generic_candidates = [c for c in pattern_candidates if c["is_generic"]]
 
     async def _smtp_probe(candidate: dict) -> dict | None:
         try:
@@ -873,21 +856,8 @@ async def find_emails_for_lab(
         except Exception:
             pass
 
-    # If person SMTP failed, probe generic mailboxes concurrently
-    if not verified_patterns and generic_candidates:
-        try:
-            probe_tasks = [_smtp_probe(c) for c in generic_candidates[:5]]
-            results_raw = await asyncio.wait_for(
-                asyncio.gather(*probe_tasks, return_exceptions=True),
-                timeout=10.0,
-            )
-            verified_patterns = [r for r in results_raw if isinstance(r, dict) and r]
-        except Exception:
-            pass
-
     if verified_patterns:
-        # Sort: person emails before generics, higher confidence first
-        verified_patterns.sort(key=lambda r: (r.get("is_generic", True), -r.get("confidence", 0)))
+        verified_patterns.sort(key=lambda r: -r.get("confidence", 0))
         normalized_patterns = _normalize_email_records(verified_patterns, live_domain)
         if normalized_patterns:
             result["emails"] = normalized_patterns
@@ -904,14 +874,6 @@ async def find_emails_for_lab(
         result["emails"] = [best]
         result["total_at_domain"] = 1
         result["error"] = "SMTP probe inconclusive — best-guess name pattern returned"
-        return result
-
-    # Nothing worked — return generic mailboxes as last resort (unverified)
-    best_effort = generic_candidates[:2]
-    if best_effort:
-        result["emails"] = best_effort
-        result["total_at_domain"] = len(best_effort)
-        result["error"] = "Unverified generic mailboxes — SMTP probe inconclusive"
         return result
 
     result["error"] = f"Live domain found: {live_domain} — No emails could be verified"
