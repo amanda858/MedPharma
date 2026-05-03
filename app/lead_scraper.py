@@ -354,7 +354,7 @@ def _build_queries(segment: str) -> List[str]:
 
 
 async def discover_national_leads(
-    max_per_query: int = 10,
+    max_per_query: int = 15,
     segment: str = "all",
     include_news: bool = True,
     include_reddit: bool = True,
@@ -427,7 +427,7 @@ async def enrich_discovered_leads(leads: List[Dict]) -> List[Dict]:
 
 async def run_national_lead_pull(
     segment: str = "all",
-    max_per_query: int = 8,
+    max_per_query: int = 15,
     include_news: bool = True,
     include_reddit: bool = True,
     include_jobs: bool = True,
@@ -451,4 +451,4 @@ async def run_national_lead_pull(
     ]
 
     filtered.sort(key=lambda x: x.get("overall_priority_score", x.get("signal_score", 0)), reverse=True)
-    return filtered[:50]
+    return filtered[:150]

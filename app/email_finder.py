@@ -929,6 +929,8 @@ def _is_generic_company_mailbox(email: str) -> bool:
         'info', 'contact', 'sales', 'admin', 'office', 'hello', 'inquiry',
         'inquiries', 'reception', 'frontdesk', 'mail', 'team', 'general',
         'support', 'help', 'service', 'customerservice', 'ar', 'billing',
+        'referrals', 'lab', 'labs', 'director', 'outreach', 'manager',
+        'medical', 'clinic',
     }
 
 
@@ -973,7 +975,9 @@ def _is_quality_email(email: str) -> bool:
     if username in placeholder_usernames:
         return False
 
-    # Skip obvious spam/non-professional emails
+    # Skip obvious spam/non-professional emails AND all generic company mailboxes.
+    # Any prefix handled by _is_generic_company_mailbox must also appear here so
+    # those addresses are never promoted to the person-level "DM Email" slot.
     skip_patterns = [
         'noreply@', 'no-reply@', 'donotreply@', 'notifications@',
         'alerts@', 'news@', 'newsletter@', 'updates@', 'mail@',
@@ -981,11 +985,16 @@ def _is_quality_email(email: str) -> bool:
         'test@', 'demo@', 'example@', 'sample@', 'fake@', 'spam@',
         'abuse@', 'security@', 'support@', 'help@', 'info@', 'contact@',
         'sales@', 'marketing@', 'hello@', 'hi@', 'welcome@',
-        'feedback@', 'comments@', 'inquiry@', 'questions@',
+        'feedback@', 'comments@', 'inquiry@', 'inquiries@', 'questions@',
         'privacy@', 'legal@', 'terms@', 'copyright@', 'hr@', 'jobs@',
         'careers@', 'recruiting@', 'employment@', 'press@', 'media@',
         'events@', 'conference@', 'webinar@', 'signup@', 'register@',
-        'unsubscribe@', 'bounce@', 'complaints@', 'report@'
+        'unsubscribe@', 'bounce@', 'complaints@', 'report@',
+        # Generic company mailboxes (mirrors _is_generic_company_mailbox)
+        'office@', 'reception@', 'frontdesk@', 'team@', 'general@',
+        'service@', 'customerservice@', 'ar@', 'billing@',
+        'referrals@', 'lab@', 'labs@', 'director@', 'outreach@',
+        'manager@', 'medical@', 'clinic@',
     ]
 
     # Skip error tracking and analytics domains

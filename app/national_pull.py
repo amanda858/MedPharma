@@ -30,7 +30,7 @@ US_STATES_PLUS = [
 
 OUT_DIR = os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
 SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
-PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "50"))
+PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "150"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
 DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")

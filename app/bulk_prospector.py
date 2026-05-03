@@ -262,7 +262,7 @@ async def prospect_state(
 async def prospect_multi_state(
     states: list[str],
     specialty: str = "all_labs",
-    per_state: int = 50,
+    per_state: int = 150,
     new_only: bool = False,
     new_days: int = 90,
 ) -> list[dict]:

@@ -161,17 +161,19 @@ def _best_rows() -> list[dict]:
         if not npi or not email:
             continue
 
-        if _is_quality_email(email):
-            current = best_person.get(npi)
-            if current is None or _candidate_rank(row) > _candidate_rank(current):
-                best_person[npi] = row
-            continue
-
+        # Check generic FIRST so addresses like billing@/lab@/director@ are
+        # never accidentally promoted to the person-level DM Email slot.
         if _is_generic_company_mailbox(email):
             current = best_generic.get(npi)
             current_score = int(current["confidence"] or 0) if current is not None else -1
             if current is None or int(row["confidence"] or 0) > current_score:
                 best_generic[npi] = row
+            continue
+
+        if _is_quality_email(email):
+            current = best_person.get(npi)
+            if current is None or _candidate_rank(row) > _candidate_rank(current):
+                best_person[npi] = row
 
     output_rows: list[dict] = []
     seen_org_keys: set[tuple[str, str, str]] = set()
