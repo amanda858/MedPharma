@@ -39,6 +39,7 @@ from app.linkedin_resolver import (
     linkedin_company_people_url,
 )
 from app.backup_people import find_backup_people
+from app.email_finder import _is_generic_company_mailbox, _is_quality_email
 
 import os as _os
 
@@ -467,8 +468,16 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                 ]
                 tgt_first = (first or "").lower()
                 tgt_last = (last or "").lower()
-                # Person-level: match name OR (named, decision-maker, not generic)
-                person_pool = [e for e in org_emails if not e.get("is_generic")]
+                # Person-level: match name OR (named, decision-maker, not generic).
+                # Double-filter: exclude both the is_generic flag AND any address
+                # that fails _is_quality_email (catches scraped info@/billing@ etc
+                # that were stored without the is_generic flag set).
+                person_pool = [
+                    e for e in org_emails
+                    if not e.get("is_generic")
+                    and not _is_generic_company_mailbox(e.get("email", ""))
+                    and _is_quality_email(e.get("email", ""))
+                ]
                 best_person = None
                 if tgt_first and tgt_last:
                     for e in person_pool:
@@ -649,7 +658,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                     chosen = (pers[0] if pers else hits[0])
                     person_email = chosen.get("email", "")
                     person_email_source = chosen.get("source", "person-site-search")
-                    if person_email:
+                    if person_email and _is_quality_email(person_email) and not _is_generic_company_mailbox(person_email):
                         dm_email = person_email
                         dm_email_confidence = int(chosen.get("confidence") or 80)
                         dm_email_source = person_email_source
@@ -806,6 +815,19 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         if dm_email or company_email:
             score = min(100, int(score) + 5)
             reasons.append("Real email")
+
+        # Final guard: if dm_email is generic or fails quality, demote it to
+        # company_email so it never appears in the DM Email column.
+        if dm_email and (
+            _is_generic_company_mailbox(dm_email) or not _is_quality_email(dm_email)
+        ):
+            if not company_email:
+                company_email = dm_email
+                company_email_source = dm_email_source
+            dm_email = ""
+            dm_email_confidence = 0
+            dm_email_source = ""
+            email_status_dm = ""
 
         full_name = f"{first} {last}".strip().upper() if (first and last) else ""
         return {
