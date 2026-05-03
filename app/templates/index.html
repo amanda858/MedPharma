@@ -999,6 +999,49 @@
             <div id="oqResults"></div>
         </div>
 
+        <!-- ═══ Outreach Copy Modal ═══ -->
+        <div id="oqCopyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;overflow-y:auto;padding:40px 16px;">
+          <div style="background:#fff;max-width:700px;margin:0 auto;border-radius:10px;padding:28px;position:relative;">
+            <button onclick="document.getElementById('oqCopyModal').style.display='none'"
+              style="position:absolute;top:14px;right:16px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);">✕</button>
+            <div style="font-weight:700;font-size:16px;margin-bottom:16px;">📝 Outreach Copy — <span id="oqCopyOrgLabel"></span></div>
+
+            <!-- Tab bar -->
+            <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+              <button class="oqCopyTab active" data-step="email_1" onclick="oqShowStep('email_1',this)"
+                style="padding:6px 14px;border-radius:6px;border:1px solid #0a3d62;background:#0a3d62;color:#fff;cursor:pointer;font-size:12px;">📧 Email 1</button>
+              <button class="oqCopyTab" data-step="email_2" onclick="oqShowStep('email_2',this)"
+                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">📧 Day 3</button>
+              <button class="oqCopyTab" data-step="email_3" onclick="oqShowStep('email_3',this)"
+                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">📧 Day 7</button>
+              <button class="oqCopyTab" data-step="linkedin_dm" onclick="oqShowStep('linkedin_dm',this)"
+                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">🔗 LinkedIn DM</button>
+            </div>
+
+            <div id="oqCopyLoading" style="text-align:center;padding:30px;color:var(--gray-500);">Loading…</div>
+            <div id="oqCopyContent" style="display:none;">
+              <div id="oqCopySubjectRow" style="margin-bottom:10px;">
+                <label style="font-size:11px;font-weight:600;color:var(--gray-600);">SUBJECT</label>
+                <div style="display:flex;gap:8px;margin-top:4px;">
+                  <input id="oqCopySubject" type="text" style="flex:1;padding:8px;border:1px solid var(--gray-200);border-radius:6px;font-size:13px;" readonly />
+                  <button onclick="oqClipboard('oqCopySubject')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;cursor:pointer;font-size:12px;">Copy</button>
+                </div>
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:600;color:var(--gray-600);">BODY</label>
+                <div style="display:flex;gap:8px;margin-top:4px;align-items:flex-start;">
+                  <textarea id="oqCopyBody" rows="12"
+                    style="flex:1;padding:10px;border:1px solid var(--gray-200);border-radius:6px;font-size:13px;line-height:1.6;resize:vertical;" readonly></textarea>
+                  <button onclick="oqClipboard('oqCopyBody')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;cursor:pointer;font-size:12px;">Copy</button>
+                </div>
+              </div>
+              <div style="margin-top:14px;font-size:11px;color:var(--gray-500);">
+                ✏️ All copy is editable above — personalise before sending.
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
         <div class="panel" id="panel-saved">
             <div class="card">
@@ -2785,7 +2828,8 @@
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Phone</th>
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);">City/State</th>
                 <th style="padding:8px;border-bottom:2px solid var(--gray-300);min-width:140px;">Status</th>
-                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Notes</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);white-space:nowrap;">Step</th>
+                <th style="padding:8px;border-bottom:2px solid var(--gray-300);">Copy</th>
             </tr></thead><tbody>`;
 
             rows.forEach((r, i) => {
@@ -2803,7 +2847,8 @@
                 const phone   = r['Phone'] || '';
                 const loc     = [r['City'], r['State']].filter(Boolean).join(', ');
                 const status  = r.contact_status || 'not_started';
-                const notes   = r.status_notes || '';
+                const step    = r.sequence_step || 0;
+                const nextFollow = r.next_followup_at || '';
                 const channelIcon = channel === 'email' ? '📧' : '🔗';
                 const verdictBadge = verdict === 'deliverable' ? ' <span style="color:#155724;font-weight:600;">(✓)</span>'
                     : verdict === 'catch-all' ? ' <span style="color:#856404;">(~)</span>'
@@ -2812,6 +2857,10 @@
                 const optionsHtml = OQ_STATUS_OPTIONS.map(s =>
                     `<option value="${s}" ${s === status ? 'selected' : ''}>${OQ_STATUS_LABELS[s]?.label || s}</option>`
                 ).join('');
+                const stepLabel = step > 0 ? `<span style="font-weight:600;color:#0a3d62;">Step ${step}</span>` : '—';
+                const followLabel = nextFollow
+                    ? `<div style="font-size:10px;color:${new Date(nextFollow) < new Date() ? '#c00' : 'var(--gray-500)'};">${_oqFmt(nextFollow)}</div>`
+                    : '';
 
                 html += `<tr style="border-bottom:1px solid var(--gray-200);" id="oqrow-${qid}">
                     <td style="padding:7px 8px;color:var(--gray-500);">${rank}</td>
@@ -2829,7 +2878,11 @@
                             ${optionsHtml}
                         </select>` : `<span style="color:${st.color}">${st.label}</span>`}
                     </td>
-                    <td style="padding:7px 8px;max-width:140px;font-size:11px;color:var(--gray-600);" title="${_oqEsc(notes)}">${_oqEsc(notes) || '—'}</td>
+                    <td style="padding:7px 8px;">${stepLabel}${followLabel}</td>
+                    <td style="padding:7px 8px;">
+                        ${qid ? `<button onclick="oqOpenCopyModal(${qid},'${_oqEsc(org)}')" title="Generate outreach copy"
+                            style="padding:4px 8px;border-radius:5px;border:1px solid var(--gray-300);background:#fff;cursor:pointer;font-size:12px;">📝</button>` : ''}
+                    </td>
                 </tr>`;
             });
 
@@ -2867,6 +2920,59 @@
                 };
             }
         })();
+
+        // ── Copy Modal ──────────────────────────────────────────────
+        let _oqCopyData = null;
+
+        async function oqOpenCopyModal(queueId, orgName) {
+            const modal = document.getElementById('oqCopyModal');
+            modal.style.display = 'block';
+            document.getElementById('oqCopyOrgLabel').textContent = orgName || '';
+            document.getElementById('oqCopyLoading').style.display = 'block';
+            document.getElementById('oqCopyContent').style.display = 'none';
+            _oqCopyData = null;
+            try {
+                const resp = await fetch(`/api/outreach-queue/${queueId}/copy`);
+                if (!resp.ok) throw new Error('Failed to load copy');
+                _oqCopyData = await resp.json();
+                document.getElementById('oqCopyLoading').style.display = 'none';
+                document.getElementById('oqCopyContent').style.display = 'block';
+                // Reset tabs
+                document.querySelectorAll('.oqCopyTab').forEach(t => {
+                    const active = t.dataset.step === 'email_1';
+                    t.style.background = active ? '#0a3d62' : '#fff';
+                    t.style.color = active ? '#fff' : 'var(--gray-700)';
+                    t.style.borderColor = active ? '#0a3d62' : 'var(--gray-300)';
+                });
+                oqShowStep('email_1', document.querySelector('.oqCopyTab[data-step="email_1"]'), false);
+            } catch(e) {
+                document.getElementById('oqCopyLoading').textContent = '❌ ' + e.message;
+            }
+        }
+
+        function oqShowStep(step, btn, updateTabs = true) {
+            if (!_oqCopyData) return;
+            const d = _oqCopyData[step] || {};
+            const isLinkedIn = step === 'linkedin_dm';
+            document.getElementById('oqCopySubjectRow').style.display = isLinkedIn ? 'none' : '';
+            document.getElementById('oqCopySubject').value = d.subject || '';
+            document.getElementById('oqCopyBody').value = d.body || '';
+            if (updateTabs) {
+                document.querySelectorAll('.oqCopyTab').forEach(t => {
+                    const active = t.dataset.step === step;
+                    t.style.background = active ? '#0a3d62' : '#fff';
+                    t.style.color = active ? '#fff' : 'var(--gray-700)';
+                    t.style.borderColor = active ? '#0a3d62' : 'var(--gray-300)';
+                });
+            }
+        }
+
+        function oqClipboard(elId) {
+            const el = document.getElementById(elId);
+            el.select();
+            document.execCommand('copy');
+            showToast('Copied to clipboard!', 'success');
+        }
     </script>
 
 </body>

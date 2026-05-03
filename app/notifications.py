@@ -59,8 +59,45 @@ TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
 TWILIO_FROM = os.getenv("TWILIO_FROM", "")
 NOTIFY_PHONE = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500"))
 
+# Free carrier email-to-SMS gateways — no Twilio required.
+# Set NOTIFY_PHONE_CARRIER to your carrier name (e.g. "att", "verizon", "tmobile").
+# The 10-digit phone from NOTIFY_PHONE is sent as an email to <number>@<gateway>.
+_CARRIER_GATEWAYS: dict[str, str] = {
+    "att": "txt.att.net",
+    "at&t": "txt.att.net",
+    "verizon": "vtext.com",
+    "vzw": "vtext.com",
+    "tmobile": "tmomail.net",
+    "t-mobile": "tmomail.net",
+    "sprint": "messaging.sprintpcs.com",
+    "metro": "mymetropcs.com",
+    "metropcs": "mymetropcs.com",
+    "boost": "sms.myboostmobile.com",
+    "cricket": "sms.cricketwireless.net",
+    "uscellular": "email.uscc.net",
+    "us cellular": "email.uscc.net",
+    "straighttalk": "vtext.com",
+    "tracfone": "txt.att.net",
+    "googlefi": "msg.fi.google.com",
+    "fi": "msg.fi.google.com",
+}
+NOTIFY_PHONE_CARRIER = os.getenv("NOTIFY_PHONE_CARRIER", "").strip().lower()
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 IN_APP_ONLY_MODE = os.getenv("NOTIFY_IN_APP_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _carrier_sms_email(phone: str, carrier: str) -> str | None:
+    """Return email-to-SMS gateway address for a phone+carrier combo, or None."""
+    gateway = _CARRIER_GATEWAYS.get(carrier.strip().lower(), "")
+    if not gateway:
+        return None
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return None
+    return f"{digits}@{gateway}"
 
 
 def _live_config() -> dict:
@@ -73,6 +110,7 @@ def _live_config() -> dict:
     t_tok = os.getenv("TWILIO_TOKEN", "") or TWILIO_TOKEN
     t_from = _normalize_phone(os.getenv("TWILIO_FROM", "") or TWILIO_FROM)
     phone = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500")) or NOTIFY_PHONE
+    carrier = os.getenv("NOTIFY_PHONE_CARRIER", "").strip().lower() or NOTIFY_PHONE_CARRIER
     smtp_h = os.getenv("SMTP_HOST", "smtp.gmail.com") or SMTP_HOST
     smtp_p = int(os.getenv("SMTP_PORT", "587") or SMTP_PORT)
     smtp_u = os.getenv("SMTP_USER", "") or SMTP_USER
@@ -81,7 +119,8 @@ def _live_config() -> dict:
     return {
         "SENDGRID_API_KEY": sg_key, "SENDGRID_FROM": sg_from, "NOTIFY_EMAILS": emails,
         "TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from,
-        "NOTIFY_PHONE": phone, "SMTP_HOST": smtp_h, "SMTP_PORT": smtp_p,
+        "NOTIFY_PHONE": phone, "NOTIFY_PHONE_CARRIER": carrier,
+        "SMTP_HOST": smtp_h, "SMTP_PORT": smtp_p,
         "SMTP_USER": smtp_u, "SMTP_PASS": smtp_pw, "IN_APP_ONLY_MODE": in_app,
     }
 
@@ -94,11 +133,12 @@ NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
 
-# SMTP fallback (used when SENDGRID_API_KEY is not configured)
+# SMTP (primary send path — no SendGrid account required)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
+
 
 # ── Industry-standard RCM benchmarks (actions per 8-hour day) ──
 # Sources: MGMA, HBMA, AAPC industry reports for medical billing / credentialing
@@ -696,8 +736,12 @@ def _send_email(subject: str, body: str, html_body: str = ""):
 
 
 def _send_sms(message: str):
-    """Send SMS notification via Twilio.
-    Uses _live_config() to read credentials fresh (avoids stale cache)."""
+    """Send SMS notification.
+    Priority:
+      1. Twilio (if TWILIO_SID/TOKEN/FROM configured)
+      2. Carrier email-to-SMS via SMTP (if NOTIFY_PHONE_CARRIER + SMTP configured — FREE, no sign-up)
+      3. Skip silently with a log warning
+    """
     cfg = _live_config()
     if cfg["IN_APP_ONLY_MODE"]:
         log.info("In-app notification mode active — SMS send simulated")
@@ -707,21 +751,52 @@ def _send_sms(message: str):
     t_tok = cfg["TWILIO_TOKEN"]
     t_from = cfg["TWILIO_FROM"]
     phone = cfg["NOTIFY_PHONE"]
+    carrier = cfg["NOTIFY_PHONE_CARRIER"]
 
-    if not t_sid or not t_tok or not t_from or not phone:
-        log.debug("SMS notification skipped — Twilio not configured")
-        return
-    try:
-        import httpx
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
-        data = {"To": phone, "From": t_from, "Body": message}
-        resp = httpx.post(url, data=data, auth=(t_sid, t_tok), timeout=15)
-        if resp.status_code in (200, 201):
-            log.info(f"SMS sent to {phone}")
-        else:
+    # Path 1: Twilio
+    if t_sid and t_tok and t_from and phone:
+        try:
+            import httpx
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
+            data = {"To": phone, "From": t_from, "Body": message}
+            resp = httpx.post(url, data=data, auth=(t_sid, t_tok), timeout=15)
+            if resp.status_code in (200, 201):
+                log.info(f"SMS sent via Twilio to {phone}")
+                return
             log.error(f"Twilio SMS failed ({resp.status_code}): {resp.text}")
-    except Exception as e:
-        log.error(f"Failed to send SMS: {e}")
+        except Exception as e:
+            log.error(f"Failed to send SMS via Twilio: {e}")
+        return
+
+    # Path 2: Carrier email-to-SMS (free — just needs SMTP + NOTIFY_PHONE_CARRIER)
+    sms_email = _carrier_sms_email(phone, carrier) if carrier else None
+    smtp_h = cfg["SMTP_HOST"]
+    smtp_u = cfg["SMTP_USER"]
+    smtp_pw = cfg["SMTP_PASS"]
+    smtp_p = cfg["SMTP_PORT"]
+
+    if sms_email and smtp_h and smtp_u and smtp_pw:
+        try:
+            import email.mime.text as _mt
+            msg = _mt.MIMEText(message[:160])
+            msg["Subject"] = ""
+            msg["From"] = smtp_u
+            msg["To"] = sms_email
+            with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(smtp_u, smtp_pw)
+                server.sendmail(smtp_u, [sms_email], msg.as_string())
+            log.info(f"SMS sent via carrier email-to-SMS ({carrier}) to {sms_email}")
+            return
+        except Exception as e:
+            log.error(f"Failed to send SMS via carrier email-to-SMS: {e}")
+        return
+
+    if not carrier:
+        log.debug("SMS skipped — set NOTIFY_PHONE_CARRIER (e.g. att, verizon, tmobile) to enable free SMS via SMTP")
+    else:
+        log.debug(f"SMS skipped — carrier '{carrier}' configured but SMTP credentials missing (SMTP_USER/SMTP_PASS)")
 
 
 def _send_email_force(subject: str, body: str, html_body: str = ""):

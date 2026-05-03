@@ -26,6 +26,8 @@ except ImportError:
     def update_enrichment_urgency(npi: str, urgency_score: int, urgency_level: str, urgency_reason: str):
         return None
 
+from app.outreach_templates import generate_sequence_for_queue_id, generate_sequence
+
 from app.email_finder import find_emails_for_lab, _is_quality_email
 from app.enrichment import enrich_lead, enrich_leads_bulk
 from app.build_info import BUILD_MARKER
@@ -1507,6 +1509,8 @@ class LeadSave(BaseModel):
 class OutreachQueueStatusUpdate(BaseModel):
     contact_status: str
     status_notes: Optional[str] = ""
+    sequence_step: Optional[int] = None
+    next_followup_at: Optional[str] = ""
 
 
 @app.post("/api/leads")
@@ -1672,7 +1676,12 @@ async def patch_outreach_queue_status(queue_id: int, updates: OutreachQueueStatu
     status = str(updates.contact_status or "").strip().lower()
     if status not in allowed_statuses:
         raise HTTPException(status_code=400, detail=f"contact_status must be one of {sorted(allowed_statuses)}")
-    updated = update_outreach_queue_status(queue_id, status, updates.status_notes or "")
+    updated = update_outreach_queue_status(
+        queue_id, status,
+        updates.status_notes or "",
+        sequence_step=updates.sequence_step,
+        next_followup_at=updates.next_followup_at or "",
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="queue row not found")
     return {"ok": True, "queue_id": queue_id, "contact_status": status, "status_notes": updates.status_notes or ""}
@@ -1735,6 +1744,15 @@ async def outreach_queue_build_status():
         "started_at": _hunt_build_running["started_at"],
         "last_result": _hunt_build_running["last_result"],
     }
+
+
+@app.get("/api/outreach-queue/{queue_id}/copy")
+async def get_outreach_copy(queue_id: int):
+    """Generate rule-based email sequence + LinkedIn DM copy for a queue row."""
+    result = generate_sequence_for_queue_id(queue_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="queue row not found")
+    return result
 
 
 @app.get("/api/outreach-queue/download-csv")

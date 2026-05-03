@@ -225,6 +225,14 @@ def init_db():
             cursor.execute("ALTER TABLE outreach_queue ADD COLUMN contact_status TEXT DEFAULT 'not_started'")
         if "status_notes" not in outreach_cols:
             cursor.execute("ALTER TABLE outreach_queue ADD COLUMN status_notes TEXT DEFAULT ''")
+        if "sequence_step" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN sequence_step INTEGER DEFAULT 0")
+        if "first_contacted_at" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN first_contacted_at TEXT DEFAULT ''")
+        if "next_followup_at" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN next_followup_at TEXT DEFAULT ''")
+        if "last_action_at" not in outreach_cols:
+            cursor.execute("ALTER TABLE outreach_queue ADD COLUMN last_action_at TEXT DEFAULT ''")
 
     conn.commit()
     conn.close()
@@ -371,16 +379,44 @@ def get_outreach_queue_with_status(run_type: str = "hunt_now", limit: int = 100)
         conn.close()
 
 
-def update_outreach_queue_status(queue_id: int, contact_status: str, status_notes: str = "") -> bool:
-    """Update contact workflow status for a queue row."""
+def update_outreach_queue_status(
+    queue_id: int,
+    contact_status: str,
+    status_notes: str = "",
+    sequence_step: int | None = None,
+    next_followup_at: str = "",
+) -> bool:
+    """Update contact workflow status, sequence step, and follow-up timestamps."""
+    from datetime import datetime as _dt
 
     def _write() -> bool:
         conn = get_db()
         try:
             cur = conn.cursor()
+            now = _dt.now().isoformat()
+            # Fetch existing row to determine first_contacted_at
+            existing = conn.execute(
+                "SELECT contact_status, first_contacted_at, sequence_step FROM outreach_queue WHERE id = ?",
+                (int(queue_id),),
+            ).fetchone()
+            if not existing:
+                return False
+            first_contacted = existing[1] or ""
+            current_step = existing[2] or 0
+            # Set first_contacted_at when transitioning away from not_started
+            if not first_contacted and contact_status not in ("not_started", ""):
+                first_contacted = now
+            new_step = sequence_step if sequence_step is not None else current_step
             cur.execute(
-                "UPDATE outreach_queue SET contact_status = ?, status_notes = ? WHERE id = ?",
-                (contact_status, status_notes, int(queue_id)),
+                """UPDATE outreach_queue
+                   SET contact_status = ?, status_notes = ?, sequence_step = ?,
+                       first_contacted_at = ?, next_followup_at = ?, last_action_at = ?
+                   WHERE id = ?""",
+                (
+                    contact_status, status_notes, new_step,
+                    first_contacted, next_followup_at or "", now,
+                    int(queue_id),
+                ),
             )
             conn.commit()
             return cur.rowcount > 0

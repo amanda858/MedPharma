@@ -2888,7 +2888,62 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
     from datetime import date
 
     if not OPENAI_API_KEY:
-        raise HTTPException(400, "OpenAI API key not configured. Set OPENAI_API_KEY environment variable.")
+        # Rule-based narrative — no API key needed
+        try:
+            cl = overall.get("claims", {})
+            cred = overall.get("credentialing", {})
+            enr = overall.get("enrollment", {})
+            edi = overall.get("edi", {})
+            pay = overall.get("payments", {})
+            company = client_info.get("company", "the practice")
+            charged = cl.get("total_charged", 0)
+            paid = cl.get("total_paid", 0)
+            balance = cl.get("total_balance", 0)
+            total_claims = cl.get("total", 0)
+            coll_rate = round((paid / charged) * 100, 1) if charged else 0
+            denials = cl.get("top_denials", [])
+            cred_count = len(cred.get("detail", []))
+            enr_count = len(enr.get("detail", []))
+            edi_count = len(edi.get("detail", []))
+
+            health = "healthy" if coll_rate >= 90 else "moderate" if coll_rate >= 70 else "needs attention"
+            narrative = (
+                f"<b>Executive Summary:</b> {company} shows a {health} revenue cycle with a collection rate of <b>{coll_rate}%</b> "
+                f"on <b>{total_claims}</b> total claims. Total charges stand at <b>${charged:,.2f}</b> against payments of <b>${paid:,.2f}</b>, "
+                f"leaving an outstanding A/R balance of <b>${balance:,.2f}</b>.\n\n"
+            )
+            if denials:
+                top = denials[0]
+                narrative += (
+                    f"<b>Denial Management:</b> The leading denial category is <b>{top.get('category','Unknown')}</b> "
+                    f"({top.get('count', 0)} claims). Addressing this category represents the highest-leverage action "
+                    f"to recover revenue. "
+                )
+                if len(denials) > 1:
+                    narrative += f"Additional denial categories include: {', '.join(d.get('category','?') for d in denials[1:4])}. "
+                narrative += "\n\n"
+            if cred_count or enr_count or edi_count:
+                narrative += (
+                    f"<b>Operational Status:</b> Credentialing shows <b>{cred_count}</b> active records, "
+                    f"enrollment <b>{enr_count}</b> records, and EDI connectivity is configured for <b>{edi_count}</b> connections. "
+                    "Ensure all pending credentialing items are resolved to avoid future payment delays.\n\n"
+                )
+            if coll_rate < 80:
+                narrative += (
+                    "<b>Recommended Actions:</b> (1) Work down the top denial category immediately. "
+                    "(2) Review claim submission timely filing windows. "
+                    "(3) Confirm all providers are enrolled with all active payors. "
+                    "(4) Audit EDI/ERA/EFT setup for any inactive connections.\n\n"
+                )
+            else:
+                narrative += (
+                    "<b>Recommended Actions:</b> Maintain current billing cadence. "
+                    "Continue monitoring denial trends weekly and confirm all credentialing is current.\n\n"
+                )
+            narrative += f"<b>Outlook:</b> With continued focus on denial resolution and timely claim submission, {company} is positioned to improve net collections."
+            return {"narrative": narrative, "model": "rule-based", "company": client_info.get("company", "")}
+        except Exception:
+            return {"narrative": "Narrative generation unavailable — set OPENAI_API_KEY for AI narratives.", "model": "none", "company": client_info.get("company", "")}
 
     # Gather all report data
     conn = get_db()
