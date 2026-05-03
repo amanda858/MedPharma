@@ -177,63 +177,92 @@ def _best_rows() -> list[dict]:
 
     output_rows: list[dict] = []
     seen_org_keys: set[tuple[str, str, str]] = set()
-    for npi, person in best_person.items():
-        lead = national.get(npi, {})
-        generic = best_generic.get(npi)
 
-        org_name = str(lead.get("org_name") or person["organization_name"] or "").strip()
-        city = str(lead.get("city") or person["city"] or "").strip()
-        state = str(lead.get("state") or person["state"] or "").strip().upper()
+    def _build_row(npi: str, person_row, generic_row) -> dict | None:
+        """Build one output row. person_row may be None (generic-only lead)."""
+        anchor = person_row if person_row is not None else generic_row
+        lead = national.get(npi, {})
+
+        org_name = str(lead.get("org_name") or anchor["organization_name"] or "").strip()
+        city = str(lead.get("city") or anchor["city"] or "").strip()
+        state = str(lead.get("state") or anchor["state"] or "").strip().upper()
         dedupe_key = (org_name.lower(), city.lower(), state.lower())
         if dedupe_key in seen_org_keys or not org_name:
-            continue
+            return None
         seen_org_keys.add(dedupe_key)
 
         try:
-            base_score = int(lead.get("score") or person["lead_score"] or 0)
+            base_score = int(lead.get("score") or anchor["lead_score"] or 0)
         except Exception:
             base_score = 0
         tier = _parse_tier(str(lead.get("tier") or "")) or _tier_from_saved_lead(
-            str(person["tags"] or ""),
-            str(person["notes"] or ""),
+            str(anchor["tags"] or ""),
+            str(anchor["notes"] or ""),
         )
         if not tier:
             tier = str(
                 score_lab_lead(
                     org_name,
-                    lab_type=str(lead.get("taxonomy") or person["taxonomy_desc"] or ""),
+                    lab_type=str(lead.get("taxonomy") or anchor["taxonomy_desc"] or ""),
                     state=state,
                 ).get("tier", "") or ""
             ).strip().upper()
         heat = base_score + _tier_bonus(tier)
         priority = str(lead.get("priority") or "").strip() or _default_priority(tier)
 
-        first_name = str(person["first_name"] or "").strip()
-        last_name = str(person["last_name"] or "").strip()
-        decision_maker = " ".join(part for part in [first_name, last_name] if part).strip()
+        if person_row is not None:
+            first_name = str(person_row["first_name"] or "").strip()
+            last_name = str(person_row["last_name"] or "").strip()
+            dm_email = str(person_row["email"] or "").strip().lower()
+            dm_confidence = int(person_row["confidence"] or 0)
+            dm_source = str(person_row["source"] or "").strip()
+            dm_title = str(person_row["position"] or lead.get("contact_title") or "").strip()
+            org_domain = str(person_row["domain"] or lead.get("domain") or "").strip().lower()
+        else:
+            first_name = last_name = dm_email = dm_source = dm_title = org_domain = ""
+            dm_confidence = 0
 
-        output_rows.append({
+        decision_maker = " ".join(part for part in [first_name, last_name] if part).strip()
+        company_email = str(generic_row["email"] or "").strip().lower() if generic_row is not None else ""
+        if not org_domain and generic_row is not None:
+            org_domain = str(generic_row["domain"] or lead.get("domain") or "").strip().lower()
+
+        return {
             "Heat Score": heat,
             "Lead Score": base_score,
             "Tier": tier,
             "Priority": priority,
             "Org Name": org_name,
-            "Taxonomy / Type": str(lead.get("taxonomy") or person["taxonomy_desc"] or "").strip(),
+            "Taxonomy / Type": str(lead.get("taxonomy") or anchor["taxonomy_desc"] or "").strip(),
             "NPI": npi,
             "City": city,
             "State": state,
             "ZIP": str(lead.get("zip") or "").strip(),
-            "Phone": str(lead.get("phone") or person["phone"] or "").strip(),
+            "Phone": str(lead.get("phone") or anchor["phone"] or "").strip(),
             "Decision Maker": decision_maker,
-            "DM Title": str(person["position"] or lead.get("contact_title") or "").strip(),
-            "DM Email": str(person["email"] or "").strip().lower(),
-            "DM Email Confidence": int(person["confidence"] or 0),
-            "DM Email Source": str(person["source"] or "").strip(),
-            "Company Email": str(generic["email"] or "").strip().lower() if generic is not None else "",
-            "Org Domain": str(person["domain"] or lead.get("domain") or "").strip().lower(),
-            "Notes": str(person["notes"] or "").strip(),
-            "Tags": str(person["tags"] or "").strip(),
-        })
+            "DM Title": dm_title,
+            "DM Email": dm_email,
+            "DM Email Confidence": dm_confidence,
+            "DM Email Source": dm_source,
+            "Company Email": company_email,
+            "Org Domain": org_domain,
+            "Notes": str(anchor["notes"] or "").strip(),
+            "Tags": str(anchor["tags"] or "").strip(),
+        }
+
+    # Person-email leads (highest priority)
+    for npi, person in best_person.items():
+        row = _build_row(npi, person, best_generic.get(npi))
+        if row:
+            output_rows.append(row)
+
+    # Generic-email-only leads (no person email found — still contactable)
+    for npi, generic in best_generic.items():
+        if npi in best_person:
+            continue  # already covered above
+        row = _build_row(npi, None, generic)
+        if row:
+            output_rows.append(row)
 
     output_rows.sort(
         key=lambda row: (
@@ -257,19 +286,49 @@ def _apply_mx_gate(rows: list[dict]) -> list[dict]:
     if not rows:
         return rows
 
-    emails = [str(row.get("DM Email") or "").strip().lower() for row in rows]
-    results = asyncio.run(verify_batch(emails, do_smtp=True, concurrency=6))
-    by_email = {str(result.get("email") or "").strip().lower(): result for result in results}
+    # Collect every email that needs checking (DM + company)
+    all_emails: set[str] = set()
+    for row in rows:
+        dm = str(row.get("DM Email") or "").strip().lower()
+        co = str(row.get("Company Email") or "").strip().lower()
+        if dm:
+            all_emails.add(dm)
+        if co:
+            all_emails.add(co)
+
+    results = asyncio.run(verify_batch(list(all_emails), do_smtp=True, concurrency=6))
+    by_email = {str(r.get("email") or "").strip().lower(): r for r in results}
 
     gated: list[dict] = []
     for row in rows:
-        email = str(row.get("DM Email") or "").strip().lower()
-        verdict = by_email.get(email, {})
-        if not verdict.get("mx_found"):
-            continue
+        dm = str(row.get("DM Email") or "").strip().lower()
+        co = str(row.get("Company Email") or "").strip().lower()
+
+        dm_verdict = by_email.get(dm, {}) if dm else {}
+        co_verdict = by_email.get(co, {}) if co else {}
+
+        dm_ok = bool(dm_verdict.get("mx_found"))
+        co_ok = bool(co_verdict.get("mx_found"))
+
+        if not dm_ok and not co_ok:
+            continue  # no valid MX for anything — drop the row
+
         row = dict(row)
-        row["DM Email MX"] = "true"
-        row["DM Email Verdict"] = str(verdict.get("verdict") or "")
+        if dm_ok:
+            row["DM Email MX"] = "true"
+            row["DM Email Verdict"] = str(dm_verdict.get("verdict") or "")
+        else:
+            # DM email bad — clear it so it doesn't mislead downstream
+            row["DM Email"] = ""
+            row["DM Email Confidence"] = 0
+            row["DM Email Source"] = ""
+            row["DM Email MX"] = ""
+            row["DM Email Verdict"] = ""
+
+        if co_ok:
+            row["Company Email MX"] = "true"
+            row["Company Email Verdict"] = str(co_verdict.get("verdict") or "")
+
         gated.append(row)
     return gated
 

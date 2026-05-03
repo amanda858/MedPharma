@@ -62,7 +62,6 @@ def _email_rows() -> list[dict]:
         last_name = ""
         if decision_maker:
             parts = [p for p in str(decision_maker).split() if p]
-            # Skip honorifics
             _hon = {"dr.", "dr", "mr.", "mr", "mrs.", "mrs", "ms.", "ms"}
             non_hon = [p for p in parts if p.lower().rstrip(".") not in _hon]
             if non_hon:
@@ -71,20 +70,40 @@ def _email_rows() -> list[dict]:
             elif parts:
                 first_name = parts[0]
                 last_name = parts[-1] if len(parts) > 1 else ""
-        # Try to resolve a real LinkedIn profile (uses SerpAPI if key present)
+
         li_profile = resolve_linkedin_profile(first_name, last_name, org_name) if first_name and last_name else ""
         li_search = linkedin_search_url(first_name, last_name, org_name) if first_name and last_name else ""
         company_linkedin = linkedin_company_search_url(org_name) if org_name else ""
         company_people = linkedin_company_people_url(org_name) if org_name else ""
-        source = row.get("DM Email Source", "")
-        verdict = row.get("DM Email Verdict", "")
-        confidence = int(row.get("DM Email Confidence", 0) or 0)
-        email = row.get("DM Email", "")
+
+        dm_email = str(row.get("DM Email") or "").strip().lower()
+        co_email = str(row.get("Company Email") or "").strip().lower()
+        source = str(row.get("DM Email Source") or "").strip()
+        verdict = str(row.get("DM Email Verdict") or "").strip()
+        confidence = int(row.get("DM Email Confidence") or 0)
+
+        # Use the best available email: person-level first, company mailbox as fallback
+        if dm_email:
+            email = dm_email
+            channel = "email"
+            primary_action = "email first, linkedin backup"
+        elif co_email:
+            email = co_email
+            source = "company_mailbox"
+            verdict = str(row.get("Company Email Verdict") or "").strip()
+            confidence = 40
+            channel = "company email"
+            primary_action = "company email, then linkedin"
+        else:
+            email = ""
+            channel = "linkedin"
+            primary_action = "linkedin only"
+
         quality = _contact_quality(source, verdict, confidence, bool(email))
         out.append({
             "Contact Quality": quality,
-            "Primary Action": "email first, linkedin backup",
-            "Outreach Channel": "email",
+            "Primary Action": primary_action,
+            "Outreach Channel": channel,
             "Heat Score": row.get("Heat Score", ""),
             "Tier": row.get("Tier", ""),
             "Priority": row.get("Priority", ""),
