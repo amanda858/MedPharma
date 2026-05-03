@@ -18,6 +18,7 @@ LAB_PORT = int(os.getenv("LAB_PORT", "8000"))    # Lab Lead Generator
 HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
 
 DATABASE_PATH = os.getenv("DB_PATH", "data/leads.db")
+DB_PATH = DATABASE_PATH  # alias used by other modules
 
 # Hunter.io API key — free tier: 25 searches/month (sign up at hunter.io)
 HUNTER_API_KEY = os.getenv("HUNTER_API_KEY", "")
