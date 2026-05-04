@@ -44,7 +44,7 @@ def _default_out_dir() -> str:
 
 OUT_DIR = os.environ.get("NATIONAL_PULL_DIR") or _default_out_dir()
 SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
-PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "150"))
+PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "30"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
 DB_PATH = os.environ.get("DB_PATH", CONFIG_DB_PATH)
@@ -131,7 +131,7 @@ async def _run_pull_async(
                 log.info(f"[national-pull] {st}: 0 prospects")
                 states_done.append(st)
                 continue
-            res = await _enrich_dm_only(prospects)
+            res = await _enrich_dm_only(prospects, fast=True)
             rows = res.get("rows") or []
             summ = res.get("summary") or {}
             log.info(f"[national-pull] {st}: {len(prospects)} prospects -> {len(rows)} rows in {time.time()-ts:.1f}s")

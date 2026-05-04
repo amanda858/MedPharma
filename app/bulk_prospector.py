@@ -383,8 +383,13 @@ def _format_phone(raw: str) -> str:
     return f"({digits[0:3]}) {digits[3:6]}-{digits[6:10]}"
 
 
-async def _enrich_dm_only(prospects: list[dict]) -> dict:
-    """Build DM-ready rows directly from NPPES records — no scraping."""
+async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
+    """Build DM-ready rows directly from NPPES records.
+
+    fast=True: skip ALL network calls (email scraping, CLIA, PubMed, backup people).
+    Used by the national pull so 52 states complete in under 3 minutes instead of hours.
+    Rows still include org/DM/phone/LinkedIn URLs — enough for a rep to act on.
+    """
     from app.social_finder import find_social_profiles, social_outreach_templates
     from app.playbook import (
         personalized_hook, objection_handlers, heat_score,
@@ -395,7 +400,8 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     # Reset the per-run live-lookup budget so each hunt gets a fresh quota
     reset_run_budget()
 
-    _sem = asyncio.Semaphore(3)  # 3 concurrent on free-tier to keep event loop responsive
+    # Fast mode: high concurrency — no network I/O so no risk of flooding
+    _sem = asyncio.Semaphore(100 if fast else 3)
 
     async def _process_impl(p: dict):
         """Enrich a single prospect; returns row dict or None."""
@@ -447,7 +453,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         company_email_source = ""
         org_domain = ""
         org_emails: list[dict] = []
-        if ENABLE_EMAIL_ENRICHMENT:
+        if ENABLE_EMAIL_ENRICHMENT and not fast:
             try:
                 from app.email_finder import find_emails_for_lab
                 em = await asyncio.wait_for(
@@ -517,7 +523,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # ── CLIA enrichment (test volume + accreditation + fax) ────────────
         # Free CMS public dataset. Adds qualification signal + a fax line.
         clia: dict = {}
-        if ENABLE_CLIA:
+        if ENABLE_CLIA and not fast:
             try:
                 from app.clia_enrich import enrich_with_clia
                 clia = await asyncio.wait_for(enrich_with_clia(
@@ -536,7 +542,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         pubmed_email = ""
         pubmed_source_year = ""
         pubmed_author_name = ""
-        if ENABLE_PUBMED and not dm_email:
+        if ENABLE_PUBMED and not dm_email and not fast:
             try:
                 from app.pubmed_lookup import find_pubmed_emails, find_pubmed_emails_for_person
                 # Try DM-specific match first
@@ -571,7 +577,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         site_email = ""
         site_source = ""
         if (not dm_email and not company_email and not pubmed_email
-                and org_domain and ENABLE_EMAIL_ENRICHMENT):
+                and org_domain and ENABLE_EMAIL_ENRICHMENT and not fast):
             try:
                 from app.site_search import find_emails_via_site_search
                 hits = await asyncio.wait_for(find_emails_via_site_search(
@@ -596,7 +602,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         sos_officer = ""
         sos_officers_all: list[dict] = []
         if (not dm_email and not company_email and not pubmed_email
-                and ENABLE_EMAIL_ENRICHMENT):
+                and ENABLE_EMAIL_ENRICHMENT and not fast):
             try:
                 from app.sos_lookup import find_state_filings
                 filings = await asyncio.wait_for(find_state_filings(org_name=org, state=state), timeout=4.0)
@@ -621,7 +627,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         directory_email = ""
         directory_source = ""
         if (not dm_email and not company_email and not pubmed_email
-                and ENABLE_EMAIL_ENRICHMENT):
+                and ENABLE_EMAIL_ENRICHMENT and not fast):
             try:
                 from app.directory_emails import find_directory_emails
                 dir_hits = await asyncio.wait_for(find_directory_emails(
@@ -644,7 +650,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         person_email = ""
         person_email_source = ""
         if (not dm_email and first and last and org_domain
-                and ENABLE_EMAIL_ENRICHMENT):
+                and ENABLE_EMAIL_ENRICHMENT and not fast):
             try:
                 from app.last_resort import find_email_for_person_on_site
                 hits = await asyncio.wait_for(find_email_for_person_on_site(
@@ -670,7 +676,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         wayback_source = ""
         if (not dm_email and not company_email and not pubmed_email
                 and not directory_email and org_domain
-                and ENABLE_EMAIL_ENRICHMENT):
+                and ENABLE_EMAIL_ENRICHMENT and not fast):
             try:
                 from app.last_resort import find_wayback_emails
                 wb = await asyncio.wait_for(find_wayback_emails(domain=org_domain, max_pages=4), timeout=4.0)
@@ -685,7 +691,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
 
         # ── Verified LinkedIn URL (real slug, not search) ─────────────────
         verified_li_url = ""
-        if first and last and org and ENABLE_EMAIL_ENRICHMENT:
+        if first and last and org and ENABLE_EMAIL_ENRICHMENT and not fast:
             try:
                 from app.last_resort import resolve_linkedin_url
                 verified_li_url = await asyncio.wait_for(resolve_linkedin_url(first, last, org), timeout=3.0)
@@ -697,7 +703,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         # Treats 5xx as bounce, accept-all providers as 'unknown'.
         email_status_dm = ""
         email_status_company = ""
-        if _os.environ.get("VERIFY_DELIVERABILITY", "1") == "1":
+        if _os.environ.get("VERIFY_DELIVERABILITY", "1") == "1" and not fast:
             try:
                 from app.email_deliverability import check_deliverability
                 if dm_email:
@@ -751,7 +757,9 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
         backup_first = backup_last = backup_title = backup_phone = backup_npi = ""
         backup_li = ""
         backup_li_search = ""
-        try:
+        backups = []
+        if not fast:
+          try:
             backups = await asyncio.wait_for(find_backup_people(
                 zip_code=p.get("zip", ""),
                 city=city,
@@ -760,7 +768,7 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
                 exclude_npi=p.get("npi", ""),
                 limit=3,
             ), timeout=4.0)
-        except Exception:
+          except Exception:
             backups = []
         if backups:
             cand = backups[0]
