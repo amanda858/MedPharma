@@ -514,27 +514,6 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             except Exception:
                 pass
 
-        # ── MX-verified pattern emails (no DM email yet + we have name + domain) ──
-        # When scraping/Hunter didn't produce a person email, generate the
-        # standard first.last / f.last / firstlast patterns and MX-verify them.
-        # MX presence proves the domain accepts mail — not a guarantee of delivery,
-        # but the same signal every major data vendor (Apollo, ZoomInfo, Hunter)
-        # uses to rate emails "risky/valid". Far more actionable than nothing.
-        if not dm_email and first and last and org_domain and ENABLE_EMAIL_ENRICHMENT:
-            try:
-                from app.email_finder import generate_pattern_emails
-                from app.email_verifier import lookup_mx
-                patterns = generate_pattern_emails(first, last, org_domain)
-                if patterns:
-                    mx = await asyncio.wait_for(lookup_mx(org_domain), timeout=4.0)
-                    if mx:  # domain has live MX — patterns are worth sending
-                        best = patterns[0]  # first.last@domain is highest confidence
-                        dm_email = best["email"]
-                        dm_email_confidence = 72  # MX-verified pattern = reasonable confidence
-                        dm_email_source = "mx_verified_pattern"
-            except Exception:
-                pass
-
         # ── CLIA enrichment (test volume + accreditation + fax) ────────────
         # Free CMS public dataset. Adds qualification signal + a fax line.
         clia: dict = {}
@@ -960,13 +939,23 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
     #   - a qualified backup person (NPPES NPI-1 with phone)
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
-        has_dm_reach = bool(r.get("Decision Maker") and (r.get("Direct Line") or r.get("Phone") or r.get("DM Email")))
-        has_email = bool(r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email") or r.get("Directory Email") or r.get("Site-Search Email") or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email"))
-        has_fax = bool(r.get("CLIA Fax"))
-        has_backup_reach = bool(r.get("Backup Contact") and r.get("Backup Phone"))
-        has_social = bool(r.get("LinkedIn URL") or r.get("Facebook URL") or r.get("Instagram URL")
-                          or r.get("LinkedIn Search URL") or r.get("Backup LinkedIn Search URL"))
-        return has_dm_reach or has_email or has_fax or has_backup_reach or has_social
+        # Only keep leads with a REAL scraped/verified email OR a LinkedIn URL.
+        # Pattern-guessed emails, phone-only, fax-only = not actionable, drop them.
+        PATTERN_SOURCES = {"mx_verified_pattern"}
+        dm_src = (r.get("DM Email Source") or "").strip()
+        dm_email = r.get("DM Email") or ""
+        real_dm_email = bool(dm_email and dm_src not in PATTERN_SOURCES)
+        real_email = real_dm_email or bool(
+            r.get("Company Email") or r.get("PubMed Email") or
+            r.get("Directory Email") or r.get("Site-Search Email") or
+            r.get("Sunbiz Email") or r.get("Person-Site Email") or
+            r.get("Wayback Email")
+        )
+        has_linkedin = bool(
+            r.get("LinkedIn URL") or r.get("LinkedIn Search URL") or
+            r.get("Backup LinkedIn Search URL")
+        )
+        return real_email or has_linkedin
 
     pre_filter = len(rows)
     rows = [r for r in rows if _has_reach(r)]
