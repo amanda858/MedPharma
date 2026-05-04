@@ -59,37 +59,63 @@ def _norm_org(s: str) -> str:
     return s
 
 
+async def _search_links(query: str, max_hits: int = 6, filter_fn=None) -> list[str]:
+    """Fetch search results from DDG (primary) → Bing (fallback).
+
+    DDG does not CAPTCHA from cloud/datacenter IPs; Bing does.
+    Returns a list of result URLs after optionally filtering them.
+    """
+    search_urls = [
+        f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}",
+        f"https://www.bing.com/search?q={urllib.parse.quote(query)}&count=10",
+    ]
+    for search_url in search_urls:
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0, follow_redirects=True, headers={"User-Agent": UA}
+            ) as c:
+                r = await c.get(search_url)
+                if r.status_code != 200:
+                    continue
+                html = r.text
+        except Exception:
+            continue
+
+        # DDG wraps result URLs in uddg= query params; Bing uses plain hrefs
+        candidates: list[str] = []
+        import urllib.parse as _up
+        for m in re.findall(r'uddg=([^"&]+)', html):
+            u = _up.unquote(m)
+            if u.startswith("http"):
+                candidates.append(u)
+        # Also pick up bare href links
+        for u in re.findall(r'<a[^>]+href="(https?://[^"\']+)"', html):
+            if "duckduckgo.com/" not in u and "bing.com/" not in u and "microsoft.com/" not in u:
+                candidates.append(u)
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for u in candidates:
+            if filter_fn and not filter_fn(u):
+                continue
+            if u in seen:
+                continue
+            seen.add(u)
+            out.append(u)
+            if len(out) >= max_hits:
+                break
+
+        if out:
+            return out
+    return []
+
+
 async def _bing_first_hits(query: str, max_hits: int = 6) -> list[str]:
-    """Return up to N URLs from Bing for a query, filtered to trusted dir domains."""
-    url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
-    try:
-        async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True, headers={"User-Agent": UA}
-        ) as c:
-            r = await c.get(url)
-            if r.status_code != 200:
-                return []
-            html = r.text
-    except Exception:
-        return []
-    # Bing result links sit in <a href="https://...">; we just regex them.
-    hits = re.findall(r'<a[^>]+href="(https?://[^"\']+)"', html)
-    out: list[str] = []
-    seen: set[str] = set()
-    for u in hits:
-        # Strip Bing tracker URLs
-        if "bing.com/" in u or "microsoft.com/" in u:
-            continue
+    """Return up to N URLs from DDG/Bing for a query, filtered to trusted dir domains."""
+    def _is_trusted(u: str) -> bool:
         host = u.split("/")[2].lower() if u.startswith("http") and len(u.split("/")) > 2 else ""
-        if not any(d in host for d in TRUSTED_DIRECTORY_DOMAINS):
-            continue
-        if u in seen:
-            continue
-        seen.add(u)
-        out.append(u)
-        if len(out) >= max_hits:
-            break
-    return out
+        return any(d in host for d in TRUSTED_DIRECTORY_DOMAINS)
+    return await _search_links(query, max_hits=max_hits, filter_fn=_is_trusted)
 
 
 async def _fetch_emails(url: str, client: httpx.AsyncClient) -> list[str]:

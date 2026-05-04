@@ -167,7 +167,10 @@ _STATE_SOS_DOMAIN = {
 
 
 async def find_sos_officers(org_name: str, state: Optional[str]) -> dict:
-    """Bing-search the state's SoS domain for the org and pull officer names.
+    """Search the state's SoS domain for the org and pull officer names.
+
+    Uses DDG (primary) → Bing (fallback) — Bing is CAPTCHA-blocked from
+    cloud IPs, DDG is not.
 
     Returns: {"officers": [...], "source_url": "...", "source": "sos-<ST>"}
     Empty dict if nothing useful.
@@ -183,23 +186,39 @@ async def find_sos_officers(org_name: str, state: Optional[str]) -> dict:
         return {}
 
     q = f'site:{domain} "{org}"'
-    bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
+    search_urls = [
+        f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(q)}",
+        f"https://www.bing.com/search?q={urllib.parse.quote(q)}",
+    ]
 
+    detail_url = ""
     async with httpx.AsyncClient(
         timeout=15.0, follow_redirects=True, headers={"User-Agent": UA}
     ) as c:
-        try:
-            r = await c.get(bing_url)
-            if r.status_code != 200:
-                return {}
-            html = r.text
-        except Exception:
+        for search_url in search_urls:
+            try:
+                r = await c.get(search_url)
+                if r.status_code != 200:
+                    continue
+                html = r.text
+            except Exception:
+                continue
+            # DDG wraps links in uddg=; Bing puts them in href=""
+            import urllib.parse as _up
+            for m in re.findall(r'uddg=([^"&]+)', html):
+                u = _up.unquote(m)
+                if domain in u:
+                    detail_url = u
+                    break
+            if not detail_url:
+                m2 = re.search(rf'href="(https?://[^"\']*{re.escape(domain)}[^"\']+)"', html)
+                if m2:
+                    detail_url = _html.unescape(m2.group(1))
+            if detail_url:
+                break
+
+        if not detail_url:
             return {}
-        # First on-domain hit
-        m = re.search(rf'href="(https?://[^"\']*{re.escape(domain)}[^"\']+)"', html)
-        if not m:
-            return {}
-        detail_url = _html.unescape(m.group(1))
         try:
             await asyncio.sleep(0.4)
             r2 = await c.get(detail_url)

@@ -248,7 +248,10 @@ def rdap_contact_email(domain: str) -> list[EnrichedContact]:
 # ─── Off-site Bing search for emails ──────────────────────────────────────────
 
 async def bing_search_emails(org: str, domain: str) -> list[EnrichedContact]:
-    """Search Bing for emails/LinkedIn profiles related to a lab off their website."""
+    """Search DDG (primary) → Bing (fallback) for emails/LinkedIn profiles.
+
+    DDG is tried first because Bing serves CAPTCHA pages from cloud IPs.
+    """
     results: list[EnrichedContact] = []
     queries = []
     if domain:
@@ -258,6 +261,11 @@ async def bing_search_emails(org: str, domain: str) -> list[EnrichedContact]:
         clean = re.sub(r"\b(llc|inc|corp)\b", "", org, flags=re.I).strip()
         if clean:
             queries.append(f'"{clean}" laboratory director email site:linkedin.com/in')
+
+    search_engines = [
+        "https://html.duckduckgo.com/html/?q=",
+        "https://www.bing.com/search?q=",
+    ]
 
     try:
         async with httpx.AsyncClient(
@@ -269,11 +277,14 @@ async def bing_search_emails(org: str, domain: str) -> list[EnrichedContact]:
             },
         ) as client:
             for q in queries[:2]:
-                try:
-                    resp = await client.get(
-                        f"https://www.bing.com/search?q={urllib.parse.quote(q)}&count=10"
-                    )
-                    if resp.status_code == 200:
+                got_results = False
+                for engine_base in search_engines:
+                    try:
+                        resp = await client.get(
+                            f"{engine_base}{urllib.parse.quote(q)}"
+                        )
+                        if resp.status_code != 200:
+                            continue
                         text = resp.text
                         for email in _extract_emails(text):
                             if domain and domain in email:
@@ -292,8 +303,11 @@ async def bing_search_emails(org: str, domain: str) -> list[EnrichedContact]:
                                 verdict="unknown",
                                 linkedin_profile=li,
                             ))
-                except Exception:
-                    pass
+                        got_results = True
+                        break  # got a response — stop trying other engines for this query
+                    except Exception:
+                        pass
+                _ = got_results  # suppress unused variable warning
     except Exception:
         pass
     return results
