@@ -12,7 +12,7 @@ from fastapi import FastAPI, Query, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
-from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY, HUNTER_API_KEY
+from app.config import US_STATES, LAB_TAXONOMY_CODES, OPENAI_API_KEY, HUNTER_API_KEY, DB_PATH as CONFIG_DB_PATH
 from app.database import (
     init_db, save_lead, get_saved_leads, update_lead,
     delete_lead, get_lead_stats, log_search,
@@ -2173,7 +2173,7 @@ def _np_scan_disk() -> dict | None:
 def _np_ensure_table() -> None:
     import sqlite3 as _sql
     try:
-        with _sql.connect(os.environ.get("DB_PATH", "/data/leads.db"), timeout=10) as c:
+        with _sql.connect(os.environ.get("DB_PATH", CONFIG_DB_PATH), timeout=10) as c:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS national_pulls("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -2187,7 +2187,7 @@ def _np_ensure_table() -> None:
 def _np_latest_csv_path() -> str:
     """Return path to newest CSV — prefers DB record, falls back to disk scan."""
     import sqlite3 as _sql
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    db_path = os.environ.get("DB_PATH", CONFIG_DB_PATH)
     try:
         with _sql.connect(db_path) as conn:
             row = conn.execute(
@@ -2206,7 +2206,7 @@ async def national_pull_status():
     """Return current run status + most recent CSV metadata."""
     import sqlite3 as _sql
     _np_ensure_table()
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    db_path = os.environ.get("DB_PATH", CONFIG_DB_PATH)
     latest = None
     try:
         with _sql.connect(db_path) as conn:
@@ -2275,7 +2275,7 @@ def _attach_emails_to_rows(rows: list[dict]) -> list[dict]:
     if not npis:
         return rows
     import sqlite3 as _sql
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    db_path = os.environ.get("DB_PATH", CONFIG_DB_PATH)
     by_npi: dict[str, list[tuple]] = {}
     try:
         with _sql.connect(db_path, timeout=10) as c:
@@ -2512,7 +2512,7 @@ async def search_national_pull(
     if has_email:
         try:
             import sqlite3 as _sql
-            db_path = os.environ.get("DB_PATH", "/data/leads.db")
+            db_path = os.environ.get("DB_PATH", CONFIG_DB_PATH)
             with _sql.connect(db_path, timeout=10) as c:
                 cur = c.execute("SELECT DISTINCT npi FROM lead_emails")
                 enriched_npis = {row[0] for row in cur.fetchall() if row[0]}
@@ -2593,7 +2593,7 @@ async def _bulk_enrich_labs(state: str, tier: str, limit: int) -> dict:
     import sqlite3 as _sql
     from app.email_finder import find_emails_for_lab as _find
 
-    db_path = os.environ.get("DB_PATH", "/data/leads.db")
+    db_path = os.environ.get("DB_PATH", CONFIG_DB_PATH)
     with _sql.connect(db_path, timeout=15) as c:
         params: list = []
         clauses = ["source = 'rule-intercept'"]

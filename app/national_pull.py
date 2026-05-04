@@ -17,6 +17,8 @@ import time
 from datetime import datetime
 from typing import Any
 
+from app.config import DB_PATH as CONFIG_DB_PATH
+
 log = logging.getLogger(__name__)
 
 US_STATES_PLUS = [
@@ -33,7 +35,7 @@ SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
 PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "150"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"
 NEW_DAYS = int(os.environ.get("NATIONAL_PULL_NEW_DAYS", "90"))
-DB_PATH = os.environ.get("DB_PATH", "/data/leads.db")
+DB_PATH = os.environ.get("DB_PATH", CONFIG_DB_PATH)
 
 # Daily national pull defaults to high-quality output.
 # QUALITY_FIRST keeps rows with at least a live website, CLIA, or any email.
@@ -55,8 +57,17 @@ def _ensure_dir(p: str) -> None:
         pass
 
 
+def _ensure_db_parent_dir(db_path: str) -> None:
+    if not db_path or db_path == ":memory:":
+        return
+    parent = os.path.dirname(db_path)
+    if parent:
+        _ensure_dir(parent)
+
+
 def _record_pull(date_str: str, csv_path: str, row_count: int, summary: dict[str, Any], specialty: str = "") -> None:
     try:
+        _ensure_db_parent_dir(DB_PATH)
         with sqlite3.connect(DB_PATH, timeout=10) as c:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS national_pulls("
@@ -172,6 +183,7 @@ def ensure_seed_loaded() -> dict[str, Any]:
     """
     try:
         _ensure_dir(OUT_DIR)
+        _ensure_db_parent_dir(DB_PATH)
         with sqlite3.connect(DB_PATH, timeout=10) as c:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS national_pulls("
