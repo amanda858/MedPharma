@@ -1332,6 +1332,7 @@ async def scrub_status(job_id: str):
             "csv": f"/api/scrub/download/{job_id}.csv",
             "xlsx": f"/api/scrub/download/{job_id}.xlsx",
             "top10_csv": f"/api/scrub/download/{job_id}-top10.csv",
+            "campaign_csv": f"/api/scrub/download/{job_id}-campaign.csv",
         },
     }
 
@@ -1360,6 +1361,60 @@ async def scrub_download_csv(job_id: str):
     fn = f"scrubbed_{job_id[:8]}.csv"
     return Response(
         content=body, media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.get("/api/scrub/download/{job_id}-campaign.csv")
+async def scrub_download_campaign(job_id: str):
+    """Campaign-ready slim CSV for this hunt job — columns only a rep needs."""
+    import csv as _csv_c, io as _io_c
+    job = _SCRUB_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    rows = job.get("rows") or []
+    COLS = [
+        "Org Name", "Decision Maker", "DM Title",
+        "Direct Line", "Phone",
+        "Best Email", "Email Source", "Email Confidence",
+        "Org Domain", "LinkedIn Search URL", "LinkedIn Company Search URL",
+        "Backup Contact", "Backup Title", "Backup Phone",
+        "City", "State", "Taxonomy / Type",
+        "Heat Score", "CLIA Number", "NPI", "Personalized Hook",
+    ]
+    buf = _io_c.StringIO()
+    w = _csv_c.DictWriter(buf, fieldnames=COLS, extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        dm_e = (r.get("DM Email") or "").strip()
+        co_e = (r.get("Company Email") or "").strip()
+        best = dm_e or co_e or (r.get("PubMed Email") or "").strip() or (r.get("Directory Email") or "").strip()
+        w.writerow({
+            "Org Name":                   r.get("Org Name", ""),
+            "Decision Maker":             r.get("Decision Maker", ""),
+            "DM Title":                   r.get("DM Title", ""),
+            "Direct Line":                r.get("Direct Line", ""),
+            "Phone":                      r.get("Phone", ""),
+            "Best Email":                 best,
+            "Email Source":               r.get("DM Email Source", "") if dm_e else r.get("Company Email Source", ""),
+            "Email Confidence":           r.get("DM Email Confidence", "") if dm_e else "",
+            "Org Domain":                 r.get("Org Domain", ""),
+            "LinkedIn Search URL":        r.get("LinkedIn Search URL", ""),
+            "LinkedIn Company Search URL": r.get("LinkedIn Company Search URL", ""),
+            "Backup Contact":             r.get("Backup Contact", ""),
+            "Backup Title":               r.get("Backup Title", ""),
+            "Backup Phone":               r.get("Backup Phone", ""),
+            "City":                       r.get("City", ""),
+            "State":                      r.get("State", ""),
+            "Taxonomy / Type":            r.get("Taxonomy / Type", ""),
+            "Heat Score":                 r.get("Heat Score", ""),
+            "CLIA Number":                r.get("CLIA Number", ""),
+            "NPI":                        r.get("NPI", ""),
+            "Personalized Hook":          r.get("Personalized Hook", ""),
+        })
+    fn = f"campaign_{job_id[:8]}_{len(rows)}rows.csv"
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
 
@@ -1462,6 +1517,7 @@ async def prospect_bulk(req: ProspectRequest):
         "new_only": req.new_only, "target": req.limit,
         "poll": f"/api/scrub/status/{job_id}",
         "download_csv": f"/api/scrub/download/{job_id}.csv",
+        "download_campaign_csv": f"/api/scrub/download/{job_id}-campaign.csv",
         "download_top10": f"/api/scrub/download/{job_id}-top10.csv",
     }
 
@@ -2147,7 +2203,14 @@ async def trigger_national_pull(
 
 
 def _np_out_dir() -> str:
-    return os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
+    if os.environ.get("NATIONAL_PULL_DIR"):
+        return os.environ["NATIONAL_PULL_DIR"]
+    # Use Render persistent disk when available, local data/ otherwise
+    if os.path.isdir("/data") and os.access("/data", os.W_OK):
+        return "/data/national_pulls"
+    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "national_pulls")
+    os.makedirs(local, exist_ok=True)
+    return local
 
 
 def _np_scan_disk() -> dict | None:
@@ -2258,7 +2321,115 @@ async def download_national_pull():
     )
 
 
-# ─── National pull SEARCH (specialty / state / free-text) ────────────
+# ─── Campaign-ready export (clean columns, ready for HubSpot/Apollo/sequences) ─
+
+@app.get("/api/national-pull/export-campaign")
+async def export_campaign_csv(
+    min_heat: int = Query(0, description="Minimum heat score (0 = all rows)"),
+    require_email: bool = Query(False, description="Only rows with any email"),
+    require_phone: bool = Query(False, description="Only rows with any phone"),
+    max_rows: int = Query(5000, ge=1, le=50000),
+):
+    """Export a clean, campaign-ready CSV from the latest national pull.
+
+    Columns are pruned to what a real BD campaign needs:
+    Org Name, DM Name, Title, Direct Phone, Org Phone, Best Email, Email Source,
+    Email Confidence, Company Domain, LinkedIn Search URL, Company LinkedIn,
+    Backup Name, Backup Title, Backup Phone, City, State, Taxonomy, Heat Score, NPI.
+
+    Use min_heat=60 for a hot-lead focus, require_email=true for email sequences.
+    """
+    import csv as _csv_c
+    import io as _io_c
+
+    csv_path = _np_latest_csv_path()
+    if not csv_path or not os.path.exists(csv_path):
+        raise HTTPException(status_code=404, detail="No national pull CSV yet. Trigger a pull first.")
+
+    CAMPAIGN_COLS = [
+        "Org Name", "Decision Maker", "DM Title",
+        "Direct Line", "Phone",
+        "Best Email", "Email Source", "Email Confidence",
+        "Company Email", "Org Domain",
+        "LinkedIn Search URL", "LinkedIn Company Search URL",
+        "Backup Contact", "Backup Title", "Backup Phone",
+        "City", "State", "ZIP",
+        "Taxonomy / Type", "Heat Score", "Lead Score", "Tier",
+        "CLIA Number", "CLIA Active",
+        "NPI", "Personalized Hook",
+    ]
+
+    out_rows = []
+    try:
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            reader = _csv_c.DictReader(f)
+            for row in reader:
+                heat = int(row.get("Heat Score") or row.get("score") or 0)
+                if heat < min_heat:
+                    continue
+                # Best email = DM Email first, then Company Email, then any other
+                dm_e = (row.get("DM Email") or "").strip()
+                co_e = (row.get("Company Email") or "").strip()
+                best_email = dm_e or co_e or (row.get("PubMed Email") or "").strip() or (row.get("Directory Email") or "").strip()
+                email_source = (row.get("DM Email Source") if dm_e else row.get("Company Email Source") if co_e else "").strip() if best_email else ""
+                email_conf = (row.get("DM Email Confidence") or "").strip() if dm_e else ""
+
+                phone = (row.get("Direct Line") or row.get("Phone") or "").strip()
+                if require_email and not best_email:
+                    continue
+                if require_phone and not phone:
+                    continue
+
+                out_rows.append({
+                    "Org Name":                row.get("Org Name", ""),
+                    "Decision Maker":          row.get("Decision Maker", ""),
+                    "DM Title":                row.get("DM Title", ""),
+                    "Direct Line":             row.get("Direct Line", ""),
+                    "Phone":                   row.get("Phone", ""),
+                    "Best Email":              best_email,
+                    "Email Source":            email_source,
+                    "Email Confidence":        email_conf,
+                    "Company Email":           co_e,
+                    "Org Domain":              row.get("Org Domain", ""),
+                    "LinkedIn Search URL":     row.get("LinkedIn Search URL", ""),
+                    "LinkedIn Company Search URL": row.get("LinkedIn Company Search URL", ""),
+                    "Backup Contact":          row.get("Backup Contact", ""),
+                    "Backup Title":            row.get("Backup Title", ""),
+                    "Backup Phone":            row.get("Backup Phone", ""),
+                    "City":                    row.get("City", ""),
+                    "State":                   row.get("State", ""),
+                    "ZIP":                     row.get("ZIP", ""),
+                    "Taxonomy / Type":         row.get("Taxonomy / Type", ""),
+                    "Heat Score":              row.get("Heat Score", ""),
+                    "Lead Score":              row.get("Lead Score", ""),
+                    "Tier":                    row.get("Tier", ""),
+                    "CLIA Number":             row.get("CLIA Number", ""),
+                    "CLIA Active":             row.get("CLIA Active", ""),
+                    "NPI":                     row.get("NPI", ""),
+                    "Personalized Hook":       row.get("Personalized Hook", ""),
+                })
+                if len(out_rows) >= max_rows:
+                    break
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
+
+    if not out_rows:
+        raise HTTPException(status_code=404, detail="No rows matched your filters.")
+
+    buf = _io_c.StringIO()
+    w = _csv_c.DictWriter(buf, fieldnames=CAMPAIGN_COLS)
+    w.writeheader()
+    w.writerows(out_rows)
+
+    fname = f"medpharma_campaign_{len(out_rows)}rows.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+
 import csv as _csv_np
 import time as _time_np
 

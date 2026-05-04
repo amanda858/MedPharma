@@ -514,6 +514,27 @@ async def _enrich_dm_only(prospects: list[dict]) -> dict:
             except Exception:
                 pass
 
+        # ── MX-verified pattern emails (no DM email yet + we have name + domain) ──
+        # When scraping/Hunter didn't produce a person email, generate the
+        # standard first.last / f.last / firstlast patterns and MX-verify them.
+        # MX presence proves the domain accepts mail — not a guarantee of delivery,
+        # but the same signal every major data vendor (Apollo, ZoomInfo, Hunter)
+        # uses to rate emails "risky/valid". Far more actionable than nothing.
+        if not dm_email and first and last and org_domain and ENABLE_EMAIL_ENRICHMENT:
+            try:
+                from app.email_finder import generate_pattern_emails
+                from app.email_verifier import lookup_mx
+                patterns = generate_pattern_emails(first, last, org_domain)
+                if patterns:
+                    mx = await asyncio.wait_for(lookup_mx(org_domain), timeout=4.0)
+                    if mx:  # domain has live MX — patterns are worth sending
+                        best = patterns[0]  # first.last@domain is highest confidence
+                        dm_email = best["email"]
+                        dm_email_confidence = 72  # MX-verified pattern = reasonable confidence
+                        dm_email_source = "mx_verified_pattern"
+            except Exception:
+                pass
+
         # ── CLIA enrichment (test volume + accreditation + fax) ────────────
         # Free CMS public dataset. Adds qualification signal + a fax line.
         clia: dict = {}
