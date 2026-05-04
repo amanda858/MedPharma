@@ -326,8 +326,12 @@ def _resolve_via_serp(query: str, regex: re.Pattern, post_filter=None, max_resul
 
 
 def _resolve_chain(query: str, regex: re.Pattern, post_filter=None, max_results: int = 1):
-    """Try SerpAPI (best, if key set) → Bing → DDG → Brave."""
-    for fn in (_resolve_via_serp, _resolve_via_bing, _resolve_via_ddg, _resolve_via_brave):
+    """Try SerpAPI → DDG → Bing → Brave → Mojeek.
+
+    DDG is tried before Bing because Bing consistently returns CAPTCHA pages
+    from cloud/datacenter IPs while DuckDuckGo's HTML endpoint does not.
+    """
+    for fn in (_resolve_via_serp, _resolve_via_ddg, _resolve_via_bing, _resolve_via_brave, _resolve_via_mojeek):
         res = fn(query, regex, post_filter, max_results)
         if res:
             return res

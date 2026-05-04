@@ -47,12 +47,10 @@ import os as _os
 ENABLE_CLIA = _os.environ.get("ENABLE_CLIA_ENRICHMENT", "1") == "1"
 ENABLE_PUBMED = _os.environ.get("ENABLE_PUBMED_LOOKUP", "1") == "1"
 
-# Live LinkedIn slug resolution is unreliable from cloud IPs (search engines
-# block scrapers). When this flag is False we skip live lookups entirely
-# and rely on guaranteed-clickable Bing search URLs (pre-filtered to the
-# exact person + org on linkedin.com/in). Result: 100% of rows get a
-# one-click path to the LinkedIn profile, in seconds, no rate-limit risk.
-LIVE_LINKEDIN_LOOKUP = _os.environ.get("LIVE_LINKEDIN_LOOKUP", "0") == "1"
+# Live LinkedIn slug resolution — enabled by default now that DDG is used as
+# the primary search engine (no CAPTCHA from cloud IPs).  Set
+# LIVE_LINKEDIN_LOOKUP=0 to fall back to guaranteed-clickable Bing search URLs.
+LIVE_LINKEDIN_LOOKUP = _os.environ.get("LIVE_LINKEDIN_LOOKUP", "1") == "1"
 
 # Email enrichment (Hunter.io + pattern). On by default — this is the
 # single most valuable signal for outreach. Set ENABLE_EMAIL_ENRICHMENT=0

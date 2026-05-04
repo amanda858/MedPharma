@@ -407,11 +407,19 @@ def enrich_contact(
 
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError
-        extra = loop.run_until_complete(_async_enrich())
-    except RuntimeError:
-        extra = asyncio.run(_async_enrich())
+        if loop.is_running():
+            # Called from inside an existing async context — run in a thread
+            # to avoid "event loop already running" errors.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _async_enrich())
+                extra = future.result(timeout=12)
+        elif loop.is_closed():
+            extra = asyncio.run(_async_enrich())
+        else:
+            extra = loop.run_until_complete(_async_enrich())
+    except Exception:
+        extra = []
     contacts.extend(extra)
 
     # Deduplicate + rank

@@ -366,18 +366,25 @@ async def _check_domain_exists(domain: str, client: httpx.AsyncClient) -> bool:
     _timeout = httpx.Timeout(timeout=3.0, connect=1.5)
 
     async def _try(scheme: str) -> bool:
-        try:
-            resp = await client.head(
-                f"{scheme}://{domain}", timeout=_timeout, follow_redirects=True,
-            )
-            if resp.status_code < 400:
-                final_url = str(resp.url)
-                if not any(g in final_url for g in [
-                    'godaddy.com', 'squarespace.com', 'wix.com', 'wordpress.com', 'weebly.com'
-                ]):
-                    return True
-        except Exception:
-            pass
+        base_url = f"{scheme}://{domain}"
+        # Try HEAD first (fast); many sites block HEAD with 403, so fall back to GET
+        for method in ("HEAD", "GET"):
+            try:
+                if method == "HEAD":
+                    resp = await client.head(base_url, timeout=_timeout, follow_redirects=True)
+                else:
+                    resp = await client.get(base_url, timeout=_timeout, follow_redirects=True)
+                if resp.status_code < 400 or resp.status_code in (403, 405):
+                    # 403/405 still means the server is alive
+                    final_url = str(resp.url)
+                    if not any(g in final_url for g in [
+                        'godaddy.com', 'squarespace.com', 'wix.com', 'wordpress.com', 'weebly.com'
+                    ]):
+                        return True
+                if resp.status_code < 400:
+                    break  # already confirmed live
+            except Exception:
+                pass
         return False
 
     # Try https and http concurrently — whichever responds first wins

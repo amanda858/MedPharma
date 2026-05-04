@@ -180,23 +180,80 @@ async def find_email_for_person_on_site(
 
 
 # ─── 3. Verified LinkedIn slug resolver ───────────────────────────────
-async def resolve_linkedin_url(first: str, last: str, org: str) -> str:
-    """Return the first linkedin.com/in/<slug> URL Bing finds, or ""."""
-    if not (first and last):
-        return ""
-    q = f'"{first} {last}" "{org}" site:linkedin.com/in'
-    url = f"https://www.bing.com/search?q={urllib.parse.quote(q)}"
+_LI_PROFILE_RE = re.compile(
+    r"https?://(?:www\.|[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9_%\-./]+",
+    re.IGNORECASE,
+)
+_LI_NOISE = re.compile(r'[.,)\]"\'<]+$')
+
+
+def _parse_li_slug(html: str) -> str:
+    """Extract the first clean linkedin.com/in/<slug> from raw HTML."""
+    # Prefer href= attributes; fall back to bare URL matches
+    for pattern in (
+        r'href="(https?://[a-z]{0,3}\.?linkedin\.com/in/[^"\'?#\s<>]+)"',
+        r"href='(https?://[a-z]{0,3}\.?linkedin\.com/in/[^\"'?#\s<>]+)'",
+        r"uddg=([^\"&]+linkedin\.com/in/[^\"&]+)",  # DuckDuckGo wrapper
+    ):
+        m = re.search(pattern, html, re.I)
+        if m:
+            u = _html.unescape(urllib.parse.unquote(m.group(1)))
+            u = _LI_NOISE.sub("", u).split("?")[0].split("#")[0]
+            slug = u.split("/in/", 1)[1].strip("/") if "/in/" in u else ""
+            if slug and len(slug) >= 2:
+                return f"https://www.linkedin.com/in/{slug}"
+    return ""
+
+
+def _fetch_sync(url: str) -> str:
+    """Synchronous URL fetch with a short timeout — used inside the async wrapper."""
+    import urllib.request as _ureq
     try:
-        async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True, headers={"User-Agent": UA}
-        ) as c:
-            r = await c.get(url)
-            if r.status_code != 200:
-                return ""
-            html = r.text
+        req = _ureq.Request(
+            url,
+            headers={
+                "User-Agent": UA,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        return _ureq.urlopen(req, timeout=6).read().decode("utf-8", "replace")
     except Exception:
         return ""
-    m = re.search(r'href="(https?://[a-z]{0,3}\.?linkedin\.com/in/[^"\']+)"', html, re.I)
-    if not m:
+
+
+async def resolve_linkedin_url(first: str, last: str, org: str) -> str:
+    """Return a direct linkedin.com/in/<slug> URL or '' if unresolvable.
+
+    Tries DDG → Bing → Brave in order.  DDG is tried first because Bing
+    frequently serves CAPTCHA pages from cloud IPs, while DDG's HTML
+    endpoint works reliably.
+    """
+    if not (first and last):
         return ""
-    return _html.unescape(m.group(1))
+    q_quoted = f'"{first} {last}"'
+    if org:
+        q_quoted += f' "{org}"'
+    q_quoted += " site:linkedin.com/in"
+
+    search_urls = [
+        # DuckDuckGo HTML — no CAPTCHA from cloud IPs, returns uddg-wrapped URLs
+        f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(q_quoted)}",
+        # Bing (sometimes blocked but worth a try)
+        f"https://www.bing.com/search?q={urllib.parse.quote(q_quoted)}&count=10",
+        # Brave search
+        f"https://search.brave.com/search?q={urllib.parse.quote(q_quoted)}",
+    ]
+
+    loop = asyncio.get_event_loop()
+    for search_url in search_urls:
+        try:
+            html = await loop.run_in_executor(None, _fetch_sync, search_url)
+        except Exception:
+            html = ""
+        if not html:
+            continue
+        slug_url = _parse_li_slug(html)
+        if slug_url:
+            return slug_url
+    return ""
