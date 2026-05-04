@@ -3468,19 +3468,19 @@
       btn.textContent = 'Signing in…';
       statusEl.style.display = 'block';
 
-      // Retry logic for cold-start servers (Render free tier ~50s wake)
+      // Retry logic for cold-start servers (Render free tier can take 60-90s to wake)
       let lastErr = null;
-      const MAX_ATTEMPTS = 6;       // 6 × 10s = up to 60s of patience
+      const MAX_ATTEMPTS = 10;      // 10 × 10s = up to 100s of patience
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           if (attempt > 1) {
-            statusEl.textContent = `Waking up server… (${(attempt-1)*10}s) — please wait`;
-            await new Promise(r => setTimeout(r, 10000));
+            const elapsed = (attempt - 1) * 10;
+            statusEl.textContent = `Server is waking up… (${elapsed}s elapsed) — please wait`;
           } else {
             statusEl.textContent = 'Connecting to server…';
           }
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 60000);
+          const tid = setTimeout(() => controller.abort(), 12000); // 12s per attempt
           const r = await fetch('/hub/api/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -3505,11 +3505,12 @@
           lastErr = e;
           if (e.message === 'Invalid credentials') break; // Don't retry wrong passwords
           if (attempt === MAX_ATTEMPTS) break;
+          await new Promise(r => setTimeout(r, 10000)); // Wait 10s before next retry
         }
       }
       statusEl.style.display = 'none';
       if (lastErr?.name === 'AbortError') {
-        showLoginError('Server is waking up — please wait a moment and try again');
+        showLoginError('Server took too long to respond. Please try clicking Sign In again.');
       } else {
         showLoginError(lastErr?.message || 'Login failed. Check your username and password.');
       }
