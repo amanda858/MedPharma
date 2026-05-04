@@ -1901,23 +1901,31 @@
     <div class="app-body">
       <!-- Sidebar -->
       <div class="sidebar">
-        <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
-        <div class="nav-section">Operations</div>
-        <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
-        <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
-        <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">Enrollment</div>
-        <div class="nav-item" data-panel="edi" onclick="navTo('edi')">EDI Setup</div>
-        <div class="nav-item" data-panel="providers" onclick="navTo('providers')">Providers</div>
-        <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Profile</div>
-        <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
-        <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
-        <div class="nav-item" data-panel="production" onclick="navTo('production')">Team Production</div>
-        <div class="nav-section">Lead Generation</div>
-        <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">Lead Source</div>
-        <div id="adminNav" style="display:none">
-          <div class="nav-section">Admin</div>
-          <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
-          <div class="nav-item" data-panel="audit" onclick="navTo('audit')">Audit Log</div>
+        <!-- CLIENT SIDEBAR: only Daily Production + Documents -->
+        <div id="clientNav">
+          <div class="nav-item" data-panel="production" onclick="navTo('production')">📊 Daily Production</div>
+          <div class="nav-item" data-panel="files" onclick="navTo('files')">📁 Documents</div>
+        </div>
+        <!-- ADMIN SIDEBAR: full access -->
+        <div id="adminFullNav" style="display:none">
+          <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
+          <div class="nav-section">Operations</div>
+          <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
+          <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
+          <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">Enrollment</div>
+          <div class="nav-item" data-panel="edi" onclick="navTo('edi')">EDI Setup</div>
+          <div class="nav-item" data-panel="providers" onclick="navTo('providers')">Providers</div>
+          <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Profile</div>
+          <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
+          <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production')">Team Production</div>
+          <div class="nav-section">Lead Generation</div>
+          <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">Lead Source</div>
+          <div id="adminNav">
+            <div class="nav-section">Admin</div>
+            <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
+            <div class="nav-item" data-panel="audit" onclick="navTo('audit')">Audit Log</div>
+          </div>
         </div>
         <div class="nav-item" onclick="switchAccount()" style="color:#2563eb;font-weight:600;margin-top:auto">Change Account</div>
         <div class="nav-item" data-panel="alerts" onclick="navTo('alerts')">
@@ -2617,9 +2625,40 @@
                 Folders</button>
               <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
                 Upload File</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleSharefileForm()" style="background:#f0fdf4;border-color:#86efac;color:#15803d">🔗 Add Sharefile Link</button>
               <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
                 onchange="handleFileSelect(this)" multiple>
             </div>
+          </div>
+
+          <!-- Sharefile Link Form -->
+          <div id="sharefileForm" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px 16px;margin-bottom:12px">
+            <div style="font-size:13px;font-weight:700;color:#15803d;margin-bottom:8px">🔗 Save Sharefile Link</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+              <div style="flex:1;min-width:180px">
+                <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Label</label>
+                <input class="form-control" id="sfLabel" placeholder="e.g. Q1 Reports Folder">
+              </div>
+              <div style="flex:2;min-width:240px">
+                <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Sharefile URL</label>
+                <input class="form-control" id="sfUrl" placeholder="https://…">
+              </div>
+              <div style="flex:1;min-width:140px">
+                <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Category</label>
+                <input class="form-control" id="sfCategory" placeholder="General" value="General">
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="saveSharefileLink()">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleSharefileForm()">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Sharefile Links List -->
+          <div class="card" id="sharefileLinksCard" style="margin-bottom:16px;display:none">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+              <span class="card-title">🔗 Sharefile Links</span>
+              <span id="sharefileLinkCount" style="font-size:12px;color:var(--gray-400)"></span>
+            </div>
+            <div id="sharefileLinksList" style="padding:4px 0"></div>
           </div>
 
           <!-- Add New Folder inline -->
@@ -3560,13 +3599,22 @@
         rolePill.style.display = 'none';
       }
       document.getElementById('adminNav').style.display = currentUser.role === 'admin' ? 'block' : 'none';
+      // Show appropriate sidebar: clients see only Production + Documents
+      if (currentUser.role === 'admin') {
+        document.getElementById('adminFullNav').style.display = 'block';
+        document.getElementById('clientNav').style.display = 'none';
+      } else {
+        document.getElementById('adminFullNav').style.display = 'none';
+        document.getElementById('clientNav').style.display = 'block';
+      }
       // Determine practice_type for selected client
       const sel = clientsList.find(c => c.id === clientId);
       const pt = (sel && sel.practice_type) ? sel.practice_type : (currentUser.practice_type || '');
       activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
       updateSubProfileBar();
-      navTo('leads');
+      // Clients land on Daily Production; admins go to leads
+      navTo(currentUser.role === 'admin' ? 'leads' : 'production');
     }
 
     // Admin shortcut: enter the app shell without picking a client (Lead Source,
@@ -3581,6 +3629,8 @@
       const rolePill = document.getElementById('topRole');
       rolePill.style.display = 'none';
       document.getElementById('adminNav').style.display = 'block';
+      document.getElementById('adminFullNav').style.display = 'block';
+      document.getElementById('clientNav').style.display = 'none';
       activeClientPracticeType = '';
       updateNavForPracticeType('');
       const bar = document.getElementById('subProfileBar');
@@ -6077,12 +6127,17 @@
       try {
         const url = activeClientId ? `/hub/api/files?client_id=${activeClientId}` : '/hub/api/files';
         const profUrl = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
-        const [fr, pr] = await Promise.all([fetch(url), fetch(profUrl).catch(() => null)]);
+        const sfUrl = activeClientId ? `/hub/api/sharefile-links?client_id=${activeClientId}` : '/hub/api/sharefile-links';
+        const [fr, pr, sfr] = await Promise.all([fetch(url), fetch(profUrl).catch(() => null), fetch(sfUrl).catch(() => null)]);
         allDocFiles = (await fr.json()).files || [];
         if (pr && pr.ok) {
           const pd = await pr.json();
           if (pd.doc_tabs && pd.doc_tabs.length > 0) currentDocTabs = pd.doc_tabs;
           else currentDocTabs = [...DEFAULT_DOC_TABS];
+        }
+        if (sfr && sfr.ok) {
+          const sfData = await sfr.json();
+          renderSharefileLinks(sfData.links || []);
         }
         renderDocTabs();
         renderDocFiles();
@@ -6092,6 +6147,57 @@
 
     // alias so old code that calls loadFiles() still works
     function loadFiles() { loadDocuments(); }
+
+    function toggleSharefileForm() {
+      const f = document.getElementById('sharefileForm');
+      f.style.display = f.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function saveSharefileLink() {
+      const label = document.getElementById('sfLabel').value.trim();
+      const url   = document.getElementById('sfUrl').value.trim();
+      const cat   = document.getElementById('sfCategory').value.trim() || 'General';
+      if (!label) { showToast('Label is required', 'error'); return; }
+      if (!url.startsWith('http')) { showToast('Enter a valid URL', 'error'); return; }
+      const qs = activeClientId ? `?client_id=${activeClientId}` : '';
+      const r = await fetch(`/hub/api/sharefile-links${qs}`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({label, url, category: cat})
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); showToast(e.detail || 'Error saving link', 'error'); return; }
+      document.getElementById('sfLabel').value = '';
+      document.getElementById('sfUrl').value = '';
+      document.getElementById('sfCategory').value = 'General';
+      document.getElementById('sharefileForm').style.display = 'none';
+      showToast('Link saved!', 'success');
+      loadDocuments();
+    }
+
+    async function deleteSharefileLink(id) {
+      if (!confirm('Remove this link?')) return;
+      const qs = activeClientId ? `?client_id=${activeClientId}` : '';
+      await fetch(`/hub/api/sharefile-links/${id}${qs}`, {method:'DELETE'});
+      loadDocuments();
+    }
+
+    function renderSharefileLinks(links) {
+      const card = document.getElementById('sharefileLinksCard');
+      const list = document.getElementById('sharefileLinksList');
+      const cnt  = document.getElementById('sharefileLinkCount');
+      if (!links.length) { card.style.display = 'none'; return; }
+      card.style.display = 'block';
+      cnt.textContent = `${links.length} link${links.length !== 1 ? 's' : ''}`;
+      list.innerHTML = links.map(l => `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--gray-100)">
+          <div style="flex:1;min-width:0">
+            <a href="${esc(l.url)}" target="_blank" rel="noopener" style="font-weight:600;color:#1e40af;text-decoration:none;font-size:13px">${esc(l.label)}</a>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${esc(l.category)} &nbsp;·&nbsp; Added ${l.created_at ? l.created_at.slice(0,10) : ''}</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="padding:3px 10px;font-size:11px;color:#dc2626;border-color:#fca5a5" onclick="deleteSharefileLink(${l.id})">✕</button>
+        </div>
+      `).join('');
+    }
 
     function renderDocTabs() {
       const tabs = ['All', ...currentDocTabs];

@@ -35,6 +35,7 @@ from app.client_db import (
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
+    list_sharefile_links, add_sharefile_link, delete_sharefile_link,
 )
 
 from app.notifications import (
@@ -3433,3 +3434,47 @@ def dashboard_filtered(client_id: Optional[int] = None,
     data["user"] = user
     data["alerts"] = get_alerts(scope)
     return data
+
+# ─── Sharefile Links ──────────────────────────────────────────────────────────
+
+class SharefileLinkIn(BaseModel):
+    label: str
+    url: str
+    category: str = "General"
+
+
+@router.get("/sharefile-links")
+def get_sharefile_links(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    return {"links": list_sharefile_links(scope)}
+
+
+@router.post("/sharefile-links")
+def create_sharefile_link(
+    payload: SharefileLinkIn,
+    client_id: Optional[int] = None,
+    hub_session: Optional[str] = Cookie(None),
+):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    if not payload.label.strip():
+        raise HTTPException(400, "Label is required")
+    if not payload.url.strip().startswith(("http://", "https://")):
+        raise HTTPException(400, "URL must start with http:// or https://")
+    new_id = add_sharefile_link(
+        client_id=scope,
+        label=payload.label.strip(),
+        url=payload.url.strip(),
+        category=payload.category.strip() or "General",
+        added_by=user.get("username", ""),
+    )
+    return {"id": new_id, "ok": True}
+
+
+@router.delete("/sharefile-links/{link_id}")
+def remove_sharefile_link(link_id: int, client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    delete_sharefile_link(link_id, scope)
+    return {"ok": True}

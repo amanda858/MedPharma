@@ -253,6 +253,19 @@ def init_client_hub_db():
         );
         CREATE INDEX IF NOT EXISTS idx_files_client    ON client_files(client_id);
 
+        -- ── Sharefile / external document links ──────────────────────────
+        CREATE TABLE IF NOT EXISTS sharefile_links (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id   INTEGER NOT NULL,
+            label       TEXT NOT NULL,
+            url         TEXT NOT NULL,
+            category    TEXT DEFAULT 'General',
+            added_by    TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sf_client ON sharefile_links(client_id);
+
         -- ── practice sub-profiles (e.g. MHP + OMT under Luminary) ────────────────────
         CREATE TABLE IF NOT EXISTS practice_profiles (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2178,6 +2191,41 @@ def rename_report_note(client_id: int, old_name: str, new_name: str):
     try:
         conn.execute("UPDATE report_notes SET tab_name=?, updated_at=? WHERE client_id=? AND tab_name=?",
                      [new_name, datetime.now().isoformat(), client_id, old_name])
+        conn.commit()
+    finally:
+        conn.close()
+
+# ── Sharefile links ────────────────────────────────────────────────────────────
+
+def list_sharefile_links(client_id: int) -> list:
+    conn = get_db()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM sharefile_links WHERE client_id=? ORDER BY created_at DESC",
+            (client_id,)
+        ).fetchall()]
+    finally:
+        conn.close()
+    return rows
+
+
+def add_sharefile_link(client_id: int, label: str, url: str, category: str, added_by: str) -> int:
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO sharefile_links (client_id,label,url,category,added_by) VALUES (?,?,?,?,?)",
+            (client_id, label, url, category, added_by)
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_sharefile_link(link_id: int, client_id: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM sharefile_links WHERE id=? AND client_id=?", (link_id, client_id))
         conn.commit()
     finally:
         conn.close()
