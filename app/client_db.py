@@ -5,8 +5,11 @@ import sqlite3
 import os
 import hashlib
 import secrets
+import logging
 from datetime import datetime, date, timedelta
 from app.config import DATABASE_PATH
+
+log = logging.getLogger(__name__)
 
 
 def get_db():
@@ -431,6 +434,20 @@ def init_client_hub_db():
                        ptan_group='', ptan_individual='', specialty=''
                        WHERE username='eric' AND practice_type='MHP+OMT'""")
         conn.commit()
+
+    # ── Apply any password resets from environment variables ─────────────────
+    # Set RESET_PW_<username>=<newpassword> in Render env vars to force-reset
+    # a password on next startup. Remove the env var after logging in.
+    import os as _os_pw
+    for key, val in _os_pw.environ.items():
+        if key.startswith("RESET_PW_") and val.strip():
+            uname = key[len("RESET_PW_"):].lower()
+            new_salt = secrets.token_hex(16)
+            new_hash = _hash_pw(val.strip(), new_salt)
+            conn.execute("UPDATE clients SET password=?, salt=? WHERE username=?",
+                         (new_hash, new_salt, uname))
+            conn.commit()
+            log.info("startup: reset password for user '%s' via RESET_PW_ env var", uname)
 
     conn.close()
 
