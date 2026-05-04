@@ -3426,9 +3426,21 @@ async def export_emails_csv():
 
 @app.get("/api/leads/emails/export-csv")
 async def export_emails_csv_alias():
-    """Alias for /api/export/emails/csv — used by the hub dashboard button."""
-    return await export_emails_csv()
+    """Export email leads — serves bundled CSV file if DB has no emails, otherwise queries DB."""
+    import pathlib
 
+    # Always try the bundled file first — it is committed to the repo and
+    # available on Render immediately without any DB enrichment step.
+    bundled = pathlib.Path(__file__).parent.parent / "output" / "ALL_Email_Leads_NOW.csv"
+    if bundled.exists() and bundled.stat().st_size > 1000:
+        content = bundled.read_bytes()
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=\"email_leads.csv\""},
+        )
+    # Fall back to live DB query
+    return await export_emails_csv()
 
 @app.get("/api/admin/email-quality-audit")
 async def audit_email_quality():
