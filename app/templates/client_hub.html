@@ -3308,22 +3308,31 @@
   <div class="modal-overlay" id="clientModal">
     <div class="modal modal-sm">
       <div class="modal-header">
-        <h2>Add Client Account</h2>
+        <h2>Add Client</h2>
         <button class="modal-close" onclick="closeModal('clientModal')">&times;</button>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Username *</label><input class="form-control" id="fCUsername"></div>
-        <div class="form-group"><label>Password *</label><input class="form-control" id="fCPassword"></div>
+        <div class="form-group"><label>Company Name *</label><input class="form-control" id="fCCompany" placeholder="e.g. ABC Medical Group"></div>
+        <div class="form-group"><label>Contact Name</label><input class="form-control" id="fCContact" placeholder="Primary contact"></div>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Company *</label><input class="form-control" id="fCCompany"></div>
-        <div class="form-group"><label>Contact Name</label><input class="form-control" id="fCContact"></div>
+        <div class="form-group"><label>Email</label><input class="form-control" type="email" id="fCEmail" placeholder="email@example.com"></div>
+        <div class="form-group"><label>Phone</label><input class="form-control" id="fCPhone" placeholder="(555) 000-0000"></div>
       </div>
-      <div class="form-grid">
-        <div class="form-group"><label>Email</label><input class="form-control" type="email" id="fCEmail"></div>
-        <div class="form-group"><label>Phone</label><input class="form-control" id="fCPhone"></div>
+      <div class="form-group" style="margin-top:8px">
+        <label style="font-weight:600;margin-bottom:6px;display:block">Services Requested</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer"><input type="checkbox" class="fCService" value="rcm"> Revenue Cycle Management (RCM)</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer"><input type="checkbox" class="fCService" value="payer_contracting"> Payer Contracting</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer"><input type="checkbox" class="fCService" value="auditing"> Auditing</label>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:#64748b">Selecting multiple services creates a hybrid account with open fields for all selected services.</div>
       </div>
-      <button class="btn btn-primary" style="margin-top:8px" onclick="saveClient()">Create Client</button>
+      <div class="form-group" id="fCNotesWrap" style="display:none;margin-top:4px">
+        <label>Additional Notes <span style="font-size:11px;color:#94a3b8">(hybrid accounts — describe scope)</span></label>
+        <textarea class="form-control" id="fCNotes" rows="2" placeholder="e.g. Full RCM + quarterly payer contract audits for 3 providers"></textarea>
+      </div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="saveClient()">Create Client</button>
     </div>
   </div>
 
@@ -4728,18 +4737,35 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
-    function openClientModal() { document.getElementById('clientModal').classList.add('open'); }
+    function openClientModal() {
+      // Reset form
+      ['fCCompany','fCContact','fCEmail','fCPhone','fCNotes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+      document.querySelectorAll('.fCService').forEach(cb => cb.checked = false);
+      document.getElementById('fCNotesWrap').style.display = 'none';
+      document.getElementById('clientModal').classList.add('open');
+    }
+
+    // Show/hide notes field when multiple services selected
+    document.addEventListener('change', function(e) {
+      if (e.target && e.target.classList.contains('fCService')) {
+        const checked = document.querySelectorAll('.fCService:checked').length;
+        document.getElementById('fCNotesWrap').style.display = checked > 1 ? 'block' : 'none';
+      }
+    });
 
     async function saveClient() {
+      const services = Array.from(document.querySelectorAll('.fCService:checked')).map(cb => cb.value);
+      const service_type = services.length > 1 ? 'hybrid:' + services.join(',') : (services[0] || '');
       const data = {
-        username: document.getElementById('fCUsername').value,
-        password: document.getElementById('fCPassword').value,
-        company: document.getElementById('fCCompany').value,
-        contact_name: document.getElementById('fCContact').value,
-        email: document.getElementById('fCEmail').value,
-        phone: document.getElementById('fCPhone').value,
+        company: document.getElementById('fCCompany').value.trim(),
+        contact_name: document.getElementById('fCContact').value.trim(),
+        email: document.getElementById('fCEmail').value.trim(),
+        phone: document.getElementById('fCPhone').value.trim(),
+        service_type,
+        notes: document.getElementById('fCNotes') ? document.getElementById('fCNotes').value.trim() : '',
       };
-      if (!data.username || !data.password || !data.company) { toast('Username, password, and company required', 'error'); return; }
+      if (!data.company) { toast('Company name is required', 'error'); return; }
+      if (!service_type) { toast('Please select at least one service', 'error'); return; }
       try {
         const r = await fetch('/hub/api/clients', {
           method: 'POST',
@@ -6778,38 +6804,54 @@
       const overlay = document.createElement('div');
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600;display:flex;align-items:center;justify-content:center';
       const box = document.createElement('div');
-      box.style.cssText = 'background:#fff;border-radius:16px;padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3)';
+      box.style.cssText = 'background:#fff;border-radius:16px;padding:28px;max-width:500px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3)';
       box.innerHTML = `
         <div style="font-size:18px;font-weight:700;color:var(--gray-800);margin-bottom:16px">🏢 Create New Client</div>
         <div class="form-grid">
-          <div class="form-group"><label>Username *</label><input class="form-control" id="ncUsername" placeholder="login username"></div>
-          <div class="form-group"><label>Password *</label><input class="form-control" type="password" id="ncPassword" placeholder="password"></div>
-        </div>
-        <div class="form-grid">
-          <div class="form-group"><label>Company Name *</label><input class="form-control" id="ncCompany" placeholder="e.g. ABC Medical"></div>
-          <div class="form-group"><label>Contact Name</label><input class="form-control" id="ncContact" placeholder="Full name"></div>
+          <div class="form-group"><label>Company Name *</label><input class="form-control" id="ncCompany" placeholder="e.g. ABC Medical Group"></div>
+          <div class="form-group"><label>Contact Name</label><input class="form-control" id="ncContact" placeholder="Primary contact"></div>
         </div>
         <div class="form-grid">
           <div class="form-group"><label>Email</label><input class="form-control" type="email" id="ncEmail" placeholder="email@example.com"></div>
           <div class="form-group"><label>Phone</label><input class="form-control" id="ncPhone" placeholder="(555) 000-0000"></div>
         </div>
-        <div style="display:flex;gap:8px;margin-top:16px">
+        <div class="form-group" style="margin-top:8px">
+          <label style="font-weight:600;margin-bottom:8px;display:block">Services Requested *</label>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer"><input type="checkbox" class="ncService" value="rcm"> Revenue Cycle Management (RCM)</label>
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer"><input type="checkbox" class="ncService" value="payer_contracting"> Payer Contracting</label>
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer"><input type="checkbox" class="ncService" value="auditing"> Auditing</label>
+          </div>
+          <div style="margin-top:6px;font-size:12px;color:#64748b">Selecting multiple services creates a hybrid account with open fields for all selected services.</div>
+        </div>
+        <div id="ncNotesWrap" style="display:none;margin-top:8px">
+          <label class="form-group" style="font-size:13px">Additional Notes <span style="color:#94a3b8">(describe scope for hybrid accounts)</span></label>
+          <textarea class="form-control" id="ncNotes" rows="2" placeholder="e.g. Full RCM + quarterly payer contract audits"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:18px">
           <button class="btn btn-primary" id="ncSubmitBtn" style="flex:1">Create Client</button>
           <button class="btn btn-secondary" id="ncCancelBtn" style="flex:1">Cancel</button>
         </div>`;
+      // Show notes for hybrid
+      box.querySelectorAll('.ncService').forEach(cb => cb.addEventListener('change', () => {
+        const count = box.querySelectorAll('.ncService:checked').length;
+        box.querySelector('#ncNotesWrap').style.display = count > 1 ? 'block' : 'none';
+      }));
       overlay.appendChild(box);
       overlay.addEventListener('click', e => { if (e.target === overlay) { document.body.removeChild(overlay); } });
       box.querySelector('#ncCancelBtn').addEventListener('click', () => document.body.removeChild(overlay));
       box.querySelector('#ncSubmitBtn').addEventListener('click', async () => {
+        const services = Array.from(box.querySelectorAll('.ncService:checked')).map(cb => cb.value);
+        const service_type = services.length > 1 ? 'hybrid:' + services.join(',') : (services[0] || '');
         const data = {
-          username: document.getElementById('ncUsername').value.trim(),
-          password: document.getElementById('ncPassword').value,
           company: document.getElementById('ncCompany').value.trim(),
           contact_name: document.getElementById('ncContact').value.trim(),
           email: document.getElementById('ncEmail').value.trim(),
           phone: document.getElementById('ncPhone').value.trim(),
+          service_type,
         };
-        if (!data.username || !data.password || !data.company) { toast('Username, password, and company are required', 'error'); return; }
+        if (!data.company) { toast('Company name is required', 'error'); return; }
+        if (!service_type) { toast('Please select at least one service', 'error'); return; }
         try {
           const r = await fetch('/hub/api/clients', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)

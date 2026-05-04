@@ -366,4 +366,11 @@ async def serve_frontend():
 async def serve_client_hub():
     """Serve the MedPharma Client Hub."""
     with open(os.path.join(os.path.dirname(__file__), "templates", "client_hub.html"), "r") as f:
-        return f.read()
+        content = f.read()
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )

@@ -30,7 +30,19 @@ US_STATES_PLUS = [
     "DC","PR",
 ]
 
-OUT_DIR = os.environ.get("NATIONAL_PULL_DIR", "/data/national_pulls")
+def _default_out_dir() -> str:
+    """Return /data/national_pulls if the Render disk is mounted, otherwise
+    fall back to a local data/ directory so the module works in dev too."""
+    primary = "/data/national_pulls"
+    if os.path.isdir("/data") and os.access("/data", os.W_OK):
+        return primary
+    # Local dev fallback — same relative location as DB_PATH
+    local = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "national_pulls")
+    os.makedirs(local, exist_ok=True)
+    return local
+
+
+OUT_DIR = os.environ.get("NATIONAL_PULL_DIR") or _default_out_dir()
 SPECIALTY = os.environ.get("NATIONAL_PULL_SPECIALTY", "clinical")
 PER_STATE = int(os.environ.get("NATIONAL_PULL_PER_STATE", "150"))
 NEW_ONLY = os.environ.get("NATIONAL_PULL_NEW_ONLY", "0") == "1"

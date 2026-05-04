@@ -555,16 +555,38 @@ def list_clients():
     return rows
 
 
+def _auto_username(company: str, conn) -> str:
+    """Derive a unique username slug from company name."""
+    import re
+    slug = re.sub(r"[^a-z0-9]", "", company.lower())[:16] or "client"
+    base = slug
+    suffix = 1
+    while True:
+        candidate = f"{base}{suffix:04d}" if suffix > 1 else base
+        row = conn.execute("SELECT 1 FROM clients WHERE username=?", (candidate,)).fetchone()
+        if not row:
+            return candidate
+        suffix += 1
+
+
 def create_client(data: dict) -> int:
     conn = get_db()
     try:
         cur = conn.cursor()
+        # Auto-generate credentials if not supplied
+        username = (data.get("username") or "").strip() or _auto_username(data.get("company", "client"), conn)
+        raw_password = (data.get("password") or "").strip() or secrets.token_urlsafe(12)
         salt = secrets.token_hex(16)
-        cur.execute("""INSERT INTO clients (username,password,salt,company,contact_name,email,phone,role)
-                       VALUES (?,?,?,?,?,?,?,?)""",
-                    (data["username"], _hash_pw(data["password"], salt), salt,
-                     data.get("company", ""), data.get("contact_name", ""),
-                     data.get("email", ""), data.get("phone", ""), data.get("role", "client")))
+        service_type = (data.get("service_type") or "").strip()
+        cur.execute(
+            """INSERT INTO clients
+               (username, password, salt, company, contact_name, email, phone, role, practice_type)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (username, _hash_pw(raw_password, salt), salt,
+             data.get("company", ""), data.get("contact_name", ""),
+             data.get("email", ""), data.get("phone", ""),
+             data.get("role", "client"), service_type),
+        )
         conn.commit()
         cid = cur.lastrowid
     finally:

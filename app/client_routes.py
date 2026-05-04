@@ -230,13 +230,15 @@ def accounts(hub_session: Optional[str] = Cookie(None)):
 # ─── Clients (admin) ──────────────────────────────────────────────────────────
 
 class ClientIn(BaseModel):
-    username: str
-    password: str
     company: str
     contact_name: Optional[str] = ""
     email: Optional[str] = ""
     phone: Optional[str] = ""
+    service_type: Optional[str] = ""   # rcm | payer_contracting | auditing | hybrid
     role: Optional[str] = "client"
+    # Legacy fields — still accepted if provided, auto-generated otherwise
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
 class ClientUpdate(BaseModel):
