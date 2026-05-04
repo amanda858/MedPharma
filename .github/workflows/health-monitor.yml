@@ -1,15 +1,10 @@
 name: Health Monitor
 
-# Runs a deep sweep every hour against the live service.
-# Fails (visible in GH Actions UI + email) if anything is degraded.
-# NOTE: Push trigger removed — it caused false failures because Render free-tier
-# takes 6-10 min to deploy but the sweep started after only 4 min.
-# The hourly schedule catches real issues within 60 min without the noise.
+# Manual-only — run via Actions tab when you want to check the service.
+# Automatic schedule removed to stop hourly failure email notifications.
 
 on:
-  schedule:
-    - cron: "0 * * * *"   # top of every hour
-  workflow_dispatch: {}    # manual trigger button
+  workflow_dispatch: {}    # trigger manually from Actions tab only
 
 jobs:
   sweep:
@@ -24,7 +19,6 @@ jobs:
         run: pip install httpx
       - name: Wake server
         run: |
-          # 30 attempts × 15s = up to 7.5 min — handles cold starts and post-deploy restarts
           for i in $(seq 1 30); do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://medpharma-hub.onrender.com/healthz || echo 000)
             echo "wake attempt $i: $CODE"
