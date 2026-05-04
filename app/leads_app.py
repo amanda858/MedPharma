@@ -2621,10 +2621,10 @@ def _load_leads_national_rows() -> list[dict]:
         return _leads_national_cache["rows"]
     out: list[dict] = []
     try:
+        from app.email_finder import _is_quality_email, _is_generic_company_mailbox
         with open(path, "r", encoding="utf-8", newline="") as f:
             for r in _csv_np.DictReader(f):
                 # Split "emails" field (semicolon-separated), strip generic/garbage
-                from app.email_finder import _is_quality_email, _is_generic_company_mailbox
                 raw_emails = [e.strip() for e in (r.get("emails") or "").split(";") if e.strip()]
                 # Keep only person-level quality emails (no info@/billing@/image filenames)
                 clean_emails = [e for e in raw_emails
@@ -2752,10 +2752,15 @@ async def search_national_pull(
             if sp not in tax:
                 return False
         if has_email:
+            # Only count quality individual emails — not generic info@/billing@ mailboxes
+            from app.email_finder import _is_quality_email, _is_generic_company_mailbox
+            def _good(e):
+                return bool(e and _is_quality_email(e) and not _is_generic_company_mailbox(e))
             inline = (
-                r.get("DM Email") or r.get("Company Email") or r.get("PubMed Email")
-                or r.get("Directory Email") or r.get("Site-Search Email")
-                or r.get("Sunbiz Email") or r.get("Person-Site Email") or r.get("Wayback Email")
+                _good(r.get("DM Email")) or _good(r.get("PubMed Email")) or
+                _good(r.get("ClinicalTrials Email")) or _good(r.get("Directory Email")) or
+                _good(r.get("Site-Search Email")) or _good(r.get("Person-Site Email")) or
+                _good(r.get("Wayback Email"))
             )
             if not inline and (r.get("NPI") not in enriched_npis):
                 return False
