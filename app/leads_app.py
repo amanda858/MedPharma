@@ -2623,10 +2623,14 @@ def _load_leads_national_rows() -> list[dict]:
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             for r in _csv_np.DictReader(f):
-                # Split "emails" field (semicolon-separated) into DM + Company
+                # Split "emails" field (semicolon-separated), strip generic/garbage
+                from app.email_finder import _is_quality_email, _is_generic_company_mailbox
                 raw_emails = [e.strip() for e in (r.get("emails") or "").split(";") if e.strip()]
-                dm_email = raw_emails[0] if raw_emails else ""
-                company_email = raw_emails[1] if len(raw_emails) > 1 else ""
+                # Keep only person-level quality emails (no info@/billing@/image filenames)
+                clean_emails = [e for e in raw_emails
+                                if _is_quality_email(e) and not _is_generic_company_mailbox(e)]
+                dm_email = clean_emails[0] if clean_emails else ""
+                company_email = ""  # never populate from bundled data — always generic
                 dm_name = " ".join(filter(None, [
                     r.get("contact_first", "").strip(),
                     r.get("contact_last", "").strip(),
