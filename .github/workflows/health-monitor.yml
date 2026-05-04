@@ -1,18 +1,15 @@
 name: Health Monitor
 
-# Runs the deep sweep every hour against the live service.
+# Runs a deep sweep every hour against the live service.
 # Fails (visible in GH Actions UI + email) if anything is degraded.
+# NOTE: Push trigger removed — it caused false failures because Render free-tier
+# takes 6-10 min to deploy but the sweep started after only 4 min.
+# The hourly schedule catches real issues within 60 min without the noise.
 
 on:
   schedule:
     - cron: "0 * * * *"   # top of every hour
   workflow_dispatch: {}    # manual trigger button
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "render.yaml"
-      - "requirements.txt"
 
 jobs:
   sweep:
@@ -25,11 +22,6 @@ jobs:
           python-version: "3.11"
       - name: Install httpx
         run: pip install httpx
-      - name: Wait for Render deploy (push-triggered only)
-        if: github.event_name == 'push'
-        run: |
-          echo "Push detected — waiting 4 minutes for Render to finish deploying..."
-          sleep 240
       - name: Wake server
         run: |
           # 30 attempts × 15s = up to 7.5 min — handles cold starts and post-deploy restarts
