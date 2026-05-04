@@ -3348,9 +3348,10 @@ async def export_emails_csv():
     import io
 
     db = get_db()
-    # Join lead_emails with saved_leads to get org info
+    # Join lead_emails with saved_leads — return all usable emails,
+    # filtering only obvious generic/role addresses
     emails = db.execute("""
-        SELECT 
+        SELECT
             e.email,
             e.first_name,
             e.last_name,
@@ -3365,12 +3366,18 @@ async def export_emails_csv():
             l.phone
         FROM lead_emails e
         JOIN saved_leads l ON e.npi = l.npi
-        WHERE e.confidence >= 80
-            AND lower(COALESCE(e.source, '')) NOT LIKE '%pattern%'
-            AND lower(COALESCE(e.source, '')) NOT IN ('generated', 'fallback')
-            AND l.tags LIKE '%quality_tier=strict%'
-            AND l.tags LIKE '%need_signal_source=direct%'
-        ORDER BY l.organization_name, e.is_decision_maker DESC, e.confidence DESC
+        WHERE e.email NOT LIKE 'info@%'
+          AND e.email NOT LIKE 'billing@%'
+          AND e.email NOT LIKE 'contact@%'
+          AND e.email NOT LIKE 'admin@%'
+          AND e.email NOT LIKE 'support@%'
+          AND e.email NOT LIKE 'help@%'
+          AND e.email NOT LIKE 'office@%'
+          AND e.email NOT LIKE 'mail@%'
+          AND e.email NOT LIKE 'hello@%'
+          AND e.email NOT LIKE 'webmaster@%'
+          AND e.email NOT LIKE 'noreply@%'
+        ORDER BY e.is_decision_maker DESC, l.lead_score DESC, e.confidence DESC
     """).fetchall()
     db.close()
 
@@ -3415,6 +3422,12 @@ async def export_emails_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=lead_emails.csv"}
     )
+
+
+@app.get("/api/leads/emails/export-csv")
+async def export_emails_csv_alias():
+    """Alias for /api/export/emails/csv — used by the hub dashboard button."""
+    return await export_emails_csv()
 
 
 @app.get("/api/admin/email-quality-audit")
