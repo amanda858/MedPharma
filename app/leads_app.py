@@ -1383,6 +1383,7 @@ async def scrub_download_campaign(job_id: str):
         # Healthcare platforms
         "Doximity Search URL", "Doximity Native Search URL",
         "ResearchGate Search URL", "Healthgrades Search URL",
+        "ClinicalTrials.gov Search URL",
         "X / Twitter Search URL",
         "All Medical Channels URL",
         # Backup
@@ -1414,6 +1415,7 @@ async def scrub_download_campaign(job_id: str):
             "Doximity Native Search URL":   r.get("Doximity Native Search URL", ""),
             "ResearchGate Search URL":      r.get("ResearchGate Search URL", ""),
             "Healthgrades Search URL":      r.get("Healthgrades Search URL", ""),
+            "ClinicalTrials.gov Search URL": r.get("ClinicalTrials.gov Search URL", ""),
             "X / Twitter Search URL":       r.get("X / Twitter Search URL", ""),
             "All Medical Channels URL":     r.get("All Medical Channels URL", ""),
             "Backup Contact":               r.get("Backup Contact", ""),

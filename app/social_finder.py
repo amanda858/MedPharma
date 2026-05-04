@@ -232,6 +232,14 @@ def all_medical_channels_url(first: str, last: str, org: str = "", state: str = 
     return f"https://www.bing.com/search?q={quote(q)}"
 
 
+def clinicaltrials_search_url(first: str, last: str, org: str = "") -> str:
+    """ClinicalTrials.gov investigator search — lab directors running trials list real emails."""
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if org:
+        q += f" {org}"
+    return f"https://clinicaltrials.gov/search?term={quote(q)}&role=Principal+Investigator"
 
 def social_outreach_templates(
     first: str,

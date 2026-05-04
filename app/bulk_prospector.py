@@ -43,6 +43,7 @@ from app.linkedin_resolver import (
     healthgrades_search_url,
     all_medical_channels_url,
     x_twitter_search_url,
+    clinicaltrials_search_url,
 )
 from app.backup_people import find_backup_people
 from app.email_finder import _is_generic_company_mailbox, _is_quality_email
@@ -577,6 +578,28 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             except Exception:
                 pass
 
+        # ── ClinicalTrials.gov PI contact email ───────────────────────────
+        # Lab directors / pathologists running active trials list their REAL
+        # institutional email as study contact. Free, no API key, publicly
+        # consented. This is the cleanest non-scraped email source available.
+        clintrials_email = ""
+        if not dm_email and not fast:
+            try:
+                from app.clinicaltrials_lookup import find_clinicaltrials_email
+                ct_hits = await asyncio.wait_for(
+                    find_clinicaltrials_email(org_name=org, first_name=first, last_name=last),
+                    timeout=8.0,
+                )
+                if ct_hits:
+                    best = ct_hits[0]
+                    clintrials_email = best.get("email", "")
+                    if clintrials_email and not dm_email:
+                        dm_email = clintrials_email
+                        dm_email_confidence = 88
+                        dm_email_source = "clinicaltrials"
+            except Exception:
+                pass
+
         # ── Site-restricted Bing crawl on the org's own domain ────────────
         # Direct path crawling missed it? Ask Bing to surface email-bearing
         # pages on this domain (deeply nested provider/location/press pages).
@@ -762,6 +785,7 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
         hg_search = healthgrades_search_url(first, last, state) if (first and last) else ""
         twitter_search = x_twitter_search_url(first, last, org) if (first and last) else ""
         all_channels = all_medical_channels_url(first, last, org, state) if (first and last) else ""
+        ct_search = clinicaltrials_search_url(first, last, org) if (first and last) else ""
 
         # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
         # Always pull a backup person at the same address — even when DM
@@ -922,6 +946,7 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             "Doximity Native Search URL": dox_native,
             "ResearchGate Search URL": rg_search,
             "Healthgrades Search URL": hg_search,
+            "ClinicalTrials.gov Search URL": ct_search,
             "All Medical Channels URL": all_channels,
             "Facebook Company Page": "",
             "Instagram Company": "",
