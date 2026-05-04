@@ -1367,7 +1367,7 @@ async def scrub_download_csv(job_id: str):
 
 @app.get("/api/scrub/download/{job_id}-campaign.csv")
 async def scrub_download_campaign(job_id: str):
-    """Campaign-ready slim CSV for this hunt job — columns only a rep needs."""
+    """Campaign-ready CSV — every channel a rep needs to reach the DM."""
     import csv as _csv_c, io as _io_c
     job = _SCRUB_JOBS.get(job_id)
     if not job:
@@ -1377,8 +1377,17 @@ async def scrub_download_campaign(job_id: str):
         "Org Name", "Decision Maker", "DM Title",
         "Direct Line", "Phone",
         "Best Email", "Email Source", "Email Confidence",
-        "Org Domain", "LinkedIn Search URL", "LinkedIn Company Search URL",
+        "Org Domain",
+        # LinkedIn
+        "LinkedIn Search URL", "LinkedIn Company Search URL",
+        # Healthcare platforms
+        "Doximity Search URL", "Doximity Native Search URL",
+        "ResearchGate Search URL", "Healthgrades Search URL",
+        "X / Twitter Search URL",
+        "All Medical Channels URL",
+        # Backup
         "Backup Contact", "Backup Title", "Backup Phone",
+        # Context
         "City", "State", "Taxonomy / Type",
         "Heat Score", "CLIA Number", "NPI", "Personalized Hook",
     ]
@@ -1390,27 +1399,33 @@ async def scrub_download_campaign(job_id: str):
         co_e = (r.get("Company Email") or "").strip()
         best = dm_e or co_e or (r.get("PubMed Email") or "").strip() or (r.get("Directory Email") or "").strip()
         w.writerow({
-            "Org Name":                   r.get("Org Name", ""),
-            "Decision Maker":             r.get("Decision Maker", ""),
-            "DM Title":                   r.get("DM Title", ""),
-            "Direct Line":                r.get("Direct Line", ""),
-            "Phone":                      r.get("Phone", ""),
-            "Best Email":                 best,
-            "Email Source":               r.get("DM Email Source", "") if dm_e else r.get("Company Email Source", ""),
-            "Email Confidence":           r.get("DM Email Confidence", "") if dm_e else "",
-            "Org Domain":                 r.get("Org Domain", ""),
-            "LinkedIn Search URL":        r.get("LinkedIn Search URL", ""),
-            "LinkedIn Company Search URL": r.get("LinkedIn Company Search URL", ""),
-            "Backup Contact":             r.get("Backup Contact", ""),
-            "Backup Title":               r.get("Backup Title", ""),
-            "Backup Phone":               r.get("Backup Phone", ""),
-            "City":                       r.get("City", ""),
-            "State":                      r.get("State", ""),
-            "Taxonomy / Type":            r.get("Taxonomy / Type", ""),
-            "Heat Score":                 r.get("Heat Score", ""),
-            "CLIA Number":                r.get("CLIA Number", ""),
-            "NPI":                        r.get("NPI", ""),
-            "Personalized Hook":          r.get("Personalized Hook", ""),
+            "Org Name":                     r.get("Org Name", ""),
+            "Decision Maker":               r.get("Decision Maker", ""),
+            "DM Title":                     r.get("DM Title", ""),
+            "Direct Line":                  r.get("Direct Line", ""),
+            "Phone":                        r.get("Phone", ""),
+            "Best Email":                   best,
+            "Email Source":                 r.get("DM Email Source", "") if dm_e else r.get("Company Email Source", ""),
+            "Email Confidence":             r.get("DM Email Confidence", "") if dm_e else "",
+            "Org Domain":                   r.get("Org Domain", ""),
+            "LinkedIn Search URL":          r.get("LinkedIn Search URL", ""),
+            "LinkedIn Company Search URL":  r.get("LinkedIn Company Search URL", ""),
+            "Doximity Search URL":          r.get("Doximity Search URL", ""),
+            "Doximity Native Search URL":   r.get("Doximity Native Search URL", ""),
+            "ResearchGate Search URL":      r.get("ResearchGate Search URL", ""),
+            "Healthgrades Search URL":      r.get("Healthgrades Search URL", ""),
+            "X / Twitter Search URL":       r.get("X / Twitter Search URL", ""),
+            "All Medical Channels URL":     r.get("All Medical Channels URL", ""),
+            "Backup Contact":               r.get("Backup Contact", ""),
+            "Backup Title":                 r.get("Backup Title", ""),
+            "Backup Phone":                 r.get("Backup Phone", ""),
+            "City":                         r.get("City", ""),
+            "State":                        r.get("State", ""),
+            "Taxonomy / Type":              r.get("Taxonomy / Type", ""),
+            "Heat Score":                   r.get("Heat Score", ""),
+            "CLIA Number":                  r.get("CLIA Number", ""),
+            "NPI":                          r.get("NPI", ""),
+            "Personalized Hook":            r.get("Personalized Hook", ""),
         })
     fn = f"campaign_{job_id[:8]}_{len(rows)}rows.csv"
     return Response(

@@ -162,7 +162,76 @@ def google_company_social_url(org: str) -> str:
     return f"https://www.bing.com/search?q={quote(q)}"
 
 
-# ─── Message templates ─────────────────────────────────────────────────
+# ─── Healthcare-specific platforms ────────────────────────────────────
+
+def doximity_search_url(first: str, last: str, specialty: str = "") -> str:
+    """Doximity profile search — the professional network for US physicians/clinicians.
+    Lab directors, pathologists, and medical directors are heavily represented.
+    Profiles often show institutional email, direct message option, and NPI.
+    """
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if specialty:
+        q += f" {specialty}"
+    # Bing site-search surfaces indexed public Doximity profiles directly
+    return f"https://www.bing.com/search?q={quote(q + ' site:doximity.com')}"
+
+
+def doximity_native_search_url(first: str, last: str) -> str:
+    """Native Doximity search (requires free Doximity account — all reps should have one)."""
+    if not first or not last:
+        return ""
+    return f"https://www.doximity.com/pub/search#q={quote(first + ' ' + last)}&t=doctor"
+
+
+def researchgate_search_url(first: str, last: str, org: str = "") -> str:
+    """ResearchGate researcher profile search.
+    Lab directors who publish list their institutional email on their profile page.
+    Pathologists, clinical chemists, molecular diagnostics directors are heavily represented.
+    """
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if org:
+        q += f" {org}"
+    return f"https://www.researchgate.net/search/researcher?q={quote(q)}"
+
+
+def researchgate_bing_url(first: str, last: str, org: str = "") -> str:
+    """Bing-indexed ResearchGate profiles (catches profiles not indexed by RG's own search)."""
+    if not first or not last:
+        return ""
+    parts = [first, last]
+    if org:
+        parts.append(org)
+    parts.append("site:researchgate.net")
+    return f"https://www.bing.com/search?q={quote(' '.join(parts))}"
+
+
+def healthgrades_search_url(first: str, last: str, state: str = "") -> str:
+    """Healthgrades provider directory — lists practice address, phone, and sometimes email."""
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if state:
+        q += f" {state}"
+    q += " site:healthgrades.com"
+    return f"https://www.bing.com/search?q={quote(q)}"
+
+
+def all_medical_channels_url(first: str, last: str, org: str = "", state: str = "") -> str:
+    """Single Bing query that surfaces the DM across ALL medical/professional platforms."""
+    if not first or not last:
+        return ""
+    name = f"{first} {last}"
+    platforms = "(site:doximity.com OR site:researchgate.net OR site:linkedin.com/in OR site:healthgrades.com)"
+    q = f'"{name}" {platforms}'
+    if state:
+        q += f" {state}"
+    return f"https://www.bing.com/search?q={quote(q)}"
+
+
 
 def social_outreach_templates(
     first: str,

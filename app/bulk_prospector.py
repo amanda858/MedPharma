@@ -37,6 +37,12 @@ from app.linkedin_resolver import (
     linkedin_search_url,
     linkedin_company_search_url,
     linkedin_company_people_url,
+    doximity_search_url,
+    doximity_native_search_url,
+    researchgate_search_url,
+    healthgrades_search_url,
+    all_medical_channels_url,
+    x_twitter_search_url,
 )
 from app.backup_people import find_backup_people
 from app.email_finder import _is_generic_company_mailbox, _is_quality_email
@@ -744,12 +750,18 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
                 real_li = employee_lis[0]
                 li_label = "Employee"
 
-        # ── Always-clickable LinkedIn search URLs (100% hit rate) ──────────
-        # Pre-filtered Bing searches that land on LinkedIn results for
-        # this exact person + org. Production fallback for every row.
+        # ── Always-clickable search URLs — LinkedIn + medical platforms ──────
         li_search_dm = linkedin_search_url(first, last, org) if (first and last) else ""
         li_search_company = linkedin_company_search_url(org) if org else ""
         li_company_people = linkedin_company_people_url(org) if org else ""
+
+        # Healthcare-specific: Doximity, ResearchGate, Healthgrades, X
+        dox_search = doximity_search_url(first, last, specialty=tax) if (first and last) else ""
+        dox_native = doximity_native_search_url(first, last) if (first and last) else ""
+        rg_search = researchgate_search_url(first, last, org) if (first and last) else ""
+        hg_search = healthgrades_search_url(first, last, state) if (first and last) else ""
+        twitter_search = x_twitter_search_url(first, last, org) if (first and last) else ""
+        all_channels = all_medical_channels_url(first, last, org, state) if (first and last) else ""
 
         # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
         # Always pull a backup person at the same address — even when DM
@@ -898,13 +910,19 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             "LinkedIn Sales Nav URL": social.get("linkedin_sales_nav", "") if real_li else "",
             "Facebook URL": real_fb,
             "Instagram URL": real_ig,
-            "X / Twitter URL": "",  # Don't speculate
+            "X / Twitter Search URL": twitter_search,
             "Google Social Search": "",
             "Google LinkedIn Search": "",
             "LinkedIn Company Page": company_li,
             "LinkedIn Company Search URL": li_search_company,
             "LinkedIn Company Roster URL": li_company_people,
             "LinkedIn Other Employees": " | ".join(employee_lis[1:]) if len(employee_lis) > 1 else "",
+            # Healthcare-specific professional platforms
+            "Doximity Search URL": dox_search,
+            "Doximity Native Search URL": dox_native,
+            "ResearchGate Search URL": rg_search,
+            "Healthgrades Search URL": hg_search,
+            "All Medical Channels URL": all_channels,
             "Facebook Company Page": "",
             "Instagram Company": "",
             # Backup person at same address (NPPES NPI-1 lookup)
