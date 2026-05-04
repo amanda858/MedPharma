@@ -1399,7 +1399,14 @@ async def scrub_download_campaign(job_id: str):
     for r in rows:
         dm_e = (r.get("DM Email") or "").strip()
         co_e = (r.get("Company Email") or "").strip()
-        best = dm_e or co_e or (r.get("PubMed Email") or "").strip() or (r.get("Directory Email") or "").strip()
+        dm_src = (r.get("DM Email Source") or "").strip()
+        PATTERN_SOURCES = {"mx_verified_pattern", "institutional_pattern"}
+        # Skip pattern-guessed emails — only real scraped/verified emails in Best Email
+        real_dm_e = dm_e if (dm_e and dm_src not in PATTERN_SOURCES) else ""
+        best = (real_dm_e or co_e or
+                (r.get("PubMed Email") or "").strip() or
+                (r.get("ClinicalTrials Email") or "").strip() or
+                (r.get("Directory Email") or "").strip())
         w.writerow({
             "Org Name":                     r.get("Org Name", ""),
             "Decision Maker":               r.get("Decision Maker", ""),
@@ -2373,6 +2380,11 @@ async def export_campaign_csv(
         "Best Email", "Email Source", "Email Confidence",
         "Company Email", "Org Domain",
         "LinkedIn Search URL", "LinkedIn Company Search URL",
+        "Doximity Search URL", "Doximity Native Search URL",
+        "ResearchGate Search URL", "Healthgrades Search URL",
+        "ClinicalTrials.gov Search URL", "NIH Reporter Search URL",
+        "Google Scholar Search URL", "PubMed Author Search URL",
+        "X / Twitter Search URL", "All Medical Channels URL",
         "Backup Contact", "Backup Title", "Backup Phone",
         "City", "State", "ZIP",
         "Taxonomy / Type", "Heat Score", "Lead Score", "Tier",
@@ -2388,12 +2400,19 @@ async def export_campaign_csv(
                 heat = int(row.get("Heat Score") or row.get("score") or 0)
                 if heat < min_heat:
                     continue
-                # Best email = DM Email first, then Company Email, then any other
+                # Best email = DM Email first (never pattern-guessed), then Company, then other
                 dm_e = (row.get("DM Email") or "").strip()
                 co_e = (row.get("Company Email") or "").strip()
-                best_email = dm_e or co_e or (row.get("PubMed Email") or "").strip() or (row.get("Directory Email") or "").strip()
-                email_source = (row.get("DM Email Source") if dm_e else row.get("Company Email Source") if co_e else "").strip() if best_email else ""
-                email_conf = (row.get("DM Email Confidence") or "").strip() if dm_e else ""
+                dm_src = (row.get("DM Email Source") or "").strip()
+                _PATTERN_SRC = {"mx_verified_pattern", "institutional_pattern"}
+                real_dm_e = dm_e if (dm_e and dm_src not in _PATTERN_SRC) else ""
+                best_email = (real_dm_e or co_e or
+                              (row.get("PubMed Email") or "").strip() or
+                              (row.get("ClinicalTrials Email") or "").strip() or
+                              (row.get("Directory Email") or "").strip())
+                email_source = (dm_src if real_dm_e else
+                                row.get("Company Email Source", "") if co_e else "").strip() if best_email else ""
+                email_conf = (row.get("DM Email Confidence") or "").strip() if real_dm_e else ""
 
                 phone = (row.get("Direct Line") or row.get("Phone") or "").strip()
                 if require_email and not best_email:
@@ -2414,6 +2433,16 @@ async def export_campaign_csv(
                     "Org Domain":              row.get("Org Domain", ""),
                     "LinkedIn Search URL":     row.get("LinkedIn Search URL", ""),
                     "LinkedIn Company Search URL": row.get("LinkedIn Company Search URL", ""),
+                    "Doximity Search URL":     row.get("Doximity Search URL", ""),
+                    "Doximity Native Search URL": row.get("Doximity Native Search URL", ""),
+                    "ResearchGate Search URL": row.get("ResearchGate Search URL", ""),
+                    "Healthgrades Search URL": row.get("Healthgrades Search URL", ""),
+                    "ClinicalTrials.gov Search URL": row.get("ClinicalTrials.gov Search URL", ""),
+                    "NIH Reporter Search URL": row.get("NIH Reporter Search URL", ""),
+                    "Google Scholar Search URL": row.get("Google Scholar Search URL", ""),
+                    "PubMed Author Search URL": row.get("PubMed Author Search URL", ""),
+                    "X / Twitter Search URL":  row.get("X / Twitter Search URL", ""),
+                    "All Medical Channels URL": row.get("All Medical Channels URL", ""),
                     "Backup Contact":          row.get("Backup Contact", ""),
                     "Backup Title":            row.get("Backup Title", ""),
                     "Backup Phone":            row.get("Backup Phone", ""),

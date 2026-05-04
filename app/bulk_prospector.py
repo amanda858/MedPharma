@@ -37,6 +37,8 @@ from app.linkedin_resolver import (
     linkedin_search_url,
     linkedin_company_search_url,
     linkedin_company_people_url,
+)
+from app.social_finder import (
     doximity_search_url,
     doximity_native_search_url,
     researchgate_search_url,
@@ -517,16 +519,10 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
                     dm_email = best_person.get("email", "")
                     dm_email_confidence = int(best_person.get("confidence", 0) or 0)
                     dm_email_source = best_person.get("source", "")
-                # Company-level mailbox (info@/contact@/sales@)
-                generic_pool = [e for e in org_emails if e.get("is_generic")]
-                # Prefer info@ > contact@ > sales@ > rest
-                pref_order = ["info", "contact", "sales", "office", "admin", "hello"]
-                generic_pool.sort(key=lambda e: pref_order.index(
-                    (e.get("email", "").split("@", 1)[0] or "").lower()
-                ) if (e.get("email", "").split("@", 1)[0] or "").lower() in pref_order else 99)
-                if generic_pool:
-                    company_email = generic_pool[0].get("email", "")
-                    company_email_source = generic_pool[0].get("source", "")
+                # Drop generic company mailboxes (info@/contact@/sales@) entirely —
+                # they are not contactable individuals and waste campaign sends.
+                company_email = ""
+                company_email_source = ""
             except Exception:
                 pass
 
@@ -1019,9 +1015,10 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
     #   - a qualified backup person (NPPES NPI-1 with phone)
     # Otherwise it's noise and wastes the user's outreach time.
     def _has_reach(r: dict) -> bool:
-        # Only keep leads with a REAL scraped/verified email OR a LinkedIn URL.
-        # Pattern-guessed emails, phone-only, fax-only = not actionable, drop them.
-        PATTERN_SOURCES = {"mx_verified_pattern"}
+        # Keep leads with: real scraped email, confirmed LinkedIn profile, OR a
+        # person-specific LinkedIn search URL (still actionable for DM outreach).
+        # Drop: pattern-guessed emails, info@/generic mailboxes, phone-only leads.
+        PATTERN_SOURCES = {"mx_verified_pattern", "institutional_pattern"}
         dm_src = (r.get("DM Email Source") or "").strip()
         dm_email = r.get("DM Email") or ""
         real_dm_email = bool(dm_email and dm_src not in PATTERN_SOURCES)
@@ -1029,13 +1026,17 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             r.get("Company Email") or r.get("PubMed Email") or
             r.get("Directory Email") or r.get("Site-Search Email") or
             r.get("Sunbiz Email") or r.get("Person-Site Email") or
-            r.get("Wayback Email")
+            r.get("Wayback Email") or r.get("ClinicalTrials Email")
         )
-        has_linkedin = bool(
-            r.get("LinkedIn URL") or r.get("LinkedIn Search URL") or
-            r.get("Backup LinkedIn Search URL")
-        )
-        return real_email or has_linkedin
+        # Confirmed LinkedIn profile URL (resolved, best)
+        li_url = r.get("LinkedIn URL") or ""
+        has_real_linkedin = bool(li_url and "linkedin.com/in/" in li_url)
+        # Person-specific LinkedIn Search URL is still actionable for DM outreach
+        # (click → find person → connect). Company-level searches are lower value
+        # but still better than nothing. Require at least a DM name to count.
+        li_search = r.get("LinkedIn Search URL") or ""
+        has_li_search = bool(r.get("Decision Maker") and li_search)
+        return real_email or has_real_linkedin or has_li_search
 
     pre_filter = len(rows)
     rows = [r for r in rows if _has_reach(r)]

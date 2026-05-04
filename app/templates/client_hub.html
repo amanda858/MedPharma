@@ -1909,6 +1909,7 @@
         <!-- ADMIN SIDEBAR: full access -->
         <div id="adminFullNav" style="display:none">
           <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📊 Daily Production</div>
           <div class="nav-section">Operations</div>
           <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
           <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
@@ -2945,12 +2946,15 @@
                 <span style="font-size:13px;color:var(--gray-400)">to</span>
                 <input class="form-control" type="date" id="prodRptEnd" style="width:170px">
                 <button class="btn btn-primary btn-sm" onclick="loadProductionReport()">Generate Report</button>
-                <div style="display:flex;gap:6px;margin-left:4px">
+                <div style="display:flex;gap:6px;margin-left:4px;flex-wrap:wrap">
+                  <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('today')" style="background:#f0fdf4;border-color:#86efac;color:#15803d">📅 Today</button>
+                  <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('yesterday')">Yesterday</button>
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('thisweek')">This Week</button>
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('lastweek')">Last Week</button>
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('mtd')">MTD</button>
                 </div>
-                <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="downloadProductionReport()">📄 Branded Report</button>
+                <button class="btn btn-secondary btn-sm" style="margin-left:auto;background:#eff6ff;border-color:#93c5fd;color:#1d4ed8" onclick="eodReport()">🌙 EOD PDF</button>
+                <button class="btn btn-secondary btn-sm" onclick="downloadProductionReport()">📄 Weekly PDF</button>
               </div>
             </div>
 
@@ -6784,7 +6788,12 @@
     function setProdDatePreset(preset) {
       const today = new Date();
       let start, end;
-      if (preset === 'thisweek') {
+      if (preset === 'today') {
+        start = today; end = today;
+      } else if (preset === 'yesterday') {
+        const yd = new Date(today); yd.setDate(today.getDate() - 1);
+        start = yd; end = yd;
+      } else if (preset === 'thisweek') {
         const day = today.getDay(); // 0=Sun
         const mon = new Date(today); mon.setDate(today.getDate() - ((day + 6) % 7));
         const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
@@ -6802,6 +6811,22 @@
       document.getElementById('prodRptStart').value = fmt(start);
       document.getElementById('prodRptEnd').value   = fmt(end);
       loadProductionReport();
+    }
+
+    function eodReport() {
+      // One-click end-of-day report: set dates to today, switch to report view, generate + open PDF
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('prodRptStart').value = today;
+      document.getElementById('prodRptEnd').value   = today;
+      toggleProductionView('report');
+      loadProductionReport().then(() => {
+        // Auto-open branded PDF after short delay so content renders
+        setTimeout(() => {
+          let url = `/hub/api/production/report/download?start_date=${today}&end_date=${today}`;
+          if (activeClientId) url += `&client_id=${activeClientId}`;
+          window.open(url, '_blank');
+        }, 600);
+      });
     }
 
     function downloadProductionReport() {
