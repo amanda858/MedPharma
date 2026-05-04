@@ -44,6 +44,9 @@ from app.linkedin_resolver import (
     all_medical_channels_url,
     x_twitter_search_url,
     clinicaltrials_search_url,
+    nih_reporter_search_url,
+    google_scholar_search_url,
+    pubmed_author_search_url,
 )
 from app.backup_people import find_backup_people
 from app.email_finder import _is_generic_company_mailbox, _is_quality_email
@@ -579,9 +582,6 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
                 pass
 
         # ── ClinicalTrials.gov PI contact email ───────────────────────────
-        # Lab directors / pathologists running active trials list their REAL
-        # institutional email as study contact. Free, no API key, publicly
-        # consented. This is the cleanest non-scraped email source available.
         clintrials_email = ""
         if not dm_email and not fast:
             try:
@@ -597,6 +597,29 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
                         dm_email = clintrials_email
                         dm_email_confidence = 88
                         dm_email_source = "clinicaltrials"
+            except Exception:
+                pass
+
+        # ── NIH Reporter — derive email from PI name + institution domain ──
+        # NIH-funded lab directors run high-complexity labs (great RCM targets).
+        # NIH doesn't expose email directly, but we know the person's name + org.
+        # If we already have the org domain, generate + verify the institutional
+        # email pattern (first.last@university.edu). Academic domains have high
+        # MX delivery rates and the pattern is standard across all US universities.
+        if not dm_email and first and last and org_domain and not fast:
+            try:
+                from app.email_finder import generate_pattern_emails
+                from app.email_verifier import lookup_mx
+                from app.nih_reporter_lookup import find_nih_pi
+                # Only do this if the domain looks institutional (edu/org/gov)
+                if any(org_domain.endswith(ext) for ext in (".edu", ".org", ".gov", ".net")):
+                    mx = await asyncio.wait_for(lookup_mx(org_domain), timeout=3.0)
+                    if mx:
+                        patterns = generate_pattern_emails(first, last, org_domain)
+                        if patterns:
+                            dm_email = patterns[0]["email"]
+                            dm_email_confidence = 75
+                            dm_email_source = "institutional_pattern"
             except Exception:
                 pass
 
@@ -786,6 +809,9 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
         twitter_search = x_twitter_search_url(first, last, org) if (first and last) else ""
         all_channels = all_medical_channels_url(first, last, org, state) if (first and last) else ""
         ct_search = clinicaltrials_search_url(first, last, org) if (first and last) else ""
+        nih_search = nih_reporter_search_url(first, last, org) if (first and last) else ""
+        scholar_search = google_scholar_search_url(first, last, org) if (first and last) else ""
+        pubmed_search = pubmed_author_search_url(first, last, org) if (first and last) else ""
 
         # ── NPPES backup person (free, unlimited, reliable) ────────────────────────
         # Always pull a backup person at the same address — even when DM
@@ -947,6 +973,9 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             "ResearchGate Search URL": rg_search,
             "Healthgrades Search URL": hg_search,
             "ClinicalTrials.gov Search URL": ct_search,
+            "NIH Reporter Search URL": nih_search,
+            "Google Scholar Search URL": scholar_search,
+            "PubMed Author Search URL": pubmed_search,
             "All Medical Channels URL": all_channels,
             "Facebook Company Page": "",
             "Instagram Company": "",

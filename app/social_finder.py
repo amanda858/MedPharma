@@ -241,6 +241,37 @@ def clinicaltrials_search_url(first: str, last: str, org: str = "") -> str:
         q += f" {org}"
     return f"https://clinicaltrials.gov/search?term={quote(q)}&role=Principal+Investigator"
 
+
+def nih_reporter_search_url(first: str, last: str, org: str = "") -> str:
+    """NIH Reporter funded project search — lab directors with grants = high-value targets."""
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if org:
+        q += f" {org}"
+    return f"https://reporter.nih.gov/search/{quote(q)}"
+
+
+def google_scholar_search_url(first: str, last: str, org: str = "") -> str:
+    """Google Scholar profile search — academics list institutional email on their profile."""
+    if not first or not last:
+        return ""
+    q = f"{first} {last}"
+    if org:
+        q += f" {org}"
+    return f"https://scholar.google.com/scholar?q={quote(q)}&as_sauthors={quote(first+' '+last)}"
+
+
+def pubmed_author_search_url(first: str, last: str, org: str = "") -> str:
+    """PubMed author search — published lab directors list institutional email."""
+    if not first or not last:
+        return ""
+    author = f"{last} {first[0]}"  # PubMed standard: LastName FirstInitial
+    q = f"{author}[Author]"
+    if org:
+        q += f" {org}[Affiliation]"
+    return f"https://pubmed.ncbi.nlm.nih.gov/?term={quote(q)}"
+
 def social_outreach_templates(
     first: str,
     org: str,
