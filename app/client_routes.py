@@ -36,6 +36,7 @@ from app.client_db import (
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
     list_sharefile_links, add_sharefile_link, delete_sharefile_link,
+    _load_clients_seed,
 )
 
 from app.notifications import (
@@ -3478,3 +3479,19 @@ def remove_sharefile_link(link_id: int, client_id: Optional[int] = None, hub_ses
     scope = client_id or _client_scope(user)
     delete_sharefile_link(link_id, scope)
     return {"ok": True}
+
+
+# ─── Client Seed Backup ───────────────────────────────────────────────────────
+
+@router.get("/clients/export-seed")
+def export_client_seed(hub_session: Optional[str] = Cookie(None)):
+    """Admin: download clients_seed.json — commit this to repo for persistence."""
+    user = _require_user(hub_session)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    from fastapi.responses import JSONResponse
+    seed = _load_clients_seed()
+    return JSONResponse(
+        content=seed,
+        headers={"Content-Disposition": "attachment; filename=clients_seed.json"},
+    )

@@ -771,18 +771,15 @@
 
     <!-- ─── Tabs ─── -->
     <div class="tab-bar">
-        <div class="tab active" data-tab="scrub" onclick="switchTab('scrub')">Intelligence Scrubber</div>
-        <div class="tab" data-tab="hunt" onclick="switchTab('hunt')">🎯 Hunt Mode</div>
-        <div class="tab" data-tab="outreach" onclick="switchTab('outreach')">📬 Outreach Queue</div>
-        <div class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Leads</div>
-        <div class="tab" data-tab="intelligence" onclick="switchTab('intelligence')">Client Intelligence</div>
+        <div class="tab active" data-tab="hunt" onclick="switchTab('hunt')">🎯 Hunt Mode</div>
+        <div class="tab" data-tab="scrub" onclick="switchTab('scrub')">Intelligence Scrubber</div>
         <div class="tab" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</div>
     </div>
 
     <div class="container">
 
         <!-- ═══════════════════ SCRUB CSV PANEL ═══════════════════ -->
-        <div class="panel active" id="panel-scrub">
+        <div class="panel" id="panel-scrub">
             <div class="card">
                 <div class="card-title">Intelligence Scrubber — Verify Domains & Find Emails</div>
                 <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px;">
@@ -812,7 +809,7 @@
         </div>
 
         <!-- ═══════════════════ HUNT MODE PANEL ═══════════════════ -->
-        <div class="panel" id="panel-hunt">
+        <div class="panel active" id="panel-hunt">
             <div class="card" style="background:linear-gradient(135deg,#0a3d62,#1e5f8e);color:#fff;">
                 <div class="card-title" style="color:#fff;">🇺🇸 National Daily Pull — High-Quality Email-Ready Leads</div>
                 <p style="font-size:13px;color:#cfe3f7;margin-bottom:14px;">
@@ -936,224 +933,6 @@
             <div id="huntResults"></div>
         </div>
 
-        <!-- ═══════════════════ OUTREACH QUEUE PANEL ═══════════════════ -->
-        <div class="panel" id="panel-outreach">
-            <div class="card" style="background:linear-gradient(135deg,#1a3a1a,#2d6a2d);color:#fff;">
-                <div class="card-title" style="color:#fff;">📬 Outreach Queue — Ready-to-Work Contact List</div>
-                <p style="font-size:13px;color:#c8f5c8;margin-bottom:14px;">
-                    Your ranked, merged outreach list — real person emails first, LinkedIn fallback rows second.
-                    Mark each contact as you work through them. Rebuild any time to pull the freshest leads.
-                </p>
-                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                    <button class="btn btn-primary" onclick="buildOutreachQueue()" id="btnBuildQueue">🔨 Build / Rebuild Queue</button>
-                    <button class="btn" style="background:#fff;color:#1a3a1a;" onclick="downloadOutreachCSV()">⬇️ Download CSV</button>
-                    <button class="btn" style="background:transparent;color:#fff;border:1px solid #fff;" onclick="loadOutreachQueue()">↻ Refresh</button>
-                    <span id="oqBuildStatus" style="font-size:13px;color:#c8f5c8;"></span>
-                </div>
-            </div>
-
-            <!-- Filters -->
-            <div class="card">
-                <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-                    <div class="form-group" style="margin:0;min-width:140px;">
-                        <label style="font-size:11px;font-weight:600;">Status</label>
-                        <select id="oqFilterStatus" onchange="loadOutreachQueue()">
-                            <option value="">All</option>
-                            <option value="not_started">Not Started</option>
-                            <option value="contacted">Contacted</option>
-                            <option value="replied">Replied</option>
-                            <option value="won">Won</option>
-                            <option value="dead">Dead</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:140px;">
-                        <label style="font-size:11px;font-weight:600;">Channel</label>
-                        <select id="oqFilterChannel" onchange="loadOutreachQueue()">
-                            <option value="">All</option>
-                            <option value="email">Email</option>
-                            <option value="linkedin">LinkedIn</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:100px;">
-                        <label style="font-size:11px;font-weight:600;">Tier</label>
-                        <select id="oqFilterTier" onchange="loadOutreachQueue()">
-                            <option value="">All</option>
-                            <option value="A">Tier A</option>
-                            <option value="B">Tier B</option>
-                            <option value="C">Tier C</option>
-                        </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:80px;">
-                        <label style="font-size:11px;font-weight:600;">Limit</label>
-                        <select id="oqLimit" onchange="loadOutreachQueue()">
-                            <option value="50">50</option>
-                            <option value="100" selected>100</option>
-                            <option value="250">250</option>
-                            <option value="500">500</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="oqSummary" style="margin-top:10px;font-size:12px;color:var(--gray-600);"></div>
-                <div style="margin-top:8px;font-size:11px;color:var(--gray-500);display:flex;gap:12px;flex-wrap:wrap;">
-                    <span><span style="background:#155724;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">A+</span> Verified person email</span>
-                    <span><span style="background:#0a3d62;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">A</span> SMTP-verified pattern</span>
-                    <span><span style="background:#856404;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">B</span> Scraped/lower confidence</span>
-                    <span><span style="background:#6c757d;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;">C</span> No email — LinkedIn only</span>
-                    <span>✅ Profile = real URL &nbsp;|&nbsp; 🔍 Search = find manually</span>
-                </div>
-            </div>
-
-            <div id="oqResults"></div>
-        </div>
-
-        <!-- ═══ Outreach Copy Modal ═══ -->
-        <div id="oqCopyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;overflow-y:auto;padding:40px 16px;">
-          <div style="background:#fff;max-width:700px;margin:0 auto;border-radius:10px;padding:28px;position:relative;">
-            <button onclick="document.getElementById('oqCopyModal').style.display='none'"
-              style="position:absolute;top:14px;right:16px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);">✕</button>
-            <div style="font-weight:700;font-size:16px;margin-bottom:16px;">📝 Outreach Copy — <span id="oqCopyOrgLabel"></span></div>
-
-            <!-- Tab bar -->
-            <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
-              <button class="oqCopyTab active" data-step="email_1" onclick="oqShowStep('email_1',this)"
-                style="padding:6px 14px;border-radius:6px;border:1px solid #0a3d62;background:#0a3d62;color:#fff;cursor:pointer;font-size:12px;">📧 Email 1</button>
-              <button class="oqCopyTab" data-step="email_2" onclick="oqShowStep('email_2',this)"
-                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">📧 Day 3</button>
-              <button class="oqCopyTab" data-step="email_3" onclick="oqShowStep('email_3',this)"
-                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">📧 Day 7</button>
-              <button class="oqCopyTab" data-step="linkedin_dm" onclick="oqShowStep('linkedin_dm',this)"
-                style="padding:6px 14px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;color:var(--gray-700);cursor:pointer;font-size:12px;">🔗 LinkedIn DM</button>
-            </div>
-
-            <div id="oqCopyLoading" style="text-align:center;padding:30px;color:var(--gray-500);">Loading…</div>
-            <div id="oqCopyContent" style="display:none;">
-              <div id="oqCopySubjectRow" style="margin-bottom:10px;">
-                <label style="font-size:11px;font-weight:600;color:var(--gray-600);">SUBJECT</label>
-                <div style="display:flex;gap:8px;margin-top:4px;">
-                  <input id="oqCopySubject" type="text" style="flex:1;padding:8px;border:1px solid var(--gray-200);border-radius:6px;font-size:13px;" readonly />
-                  <button onclick="oqClipboard('oqCopySubject')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;cursor:pointer;font-size:12px;">Copy</button>
-                </div>
-              </div>
-              <div>
-                <label style="font-size:11px;font-weight:600;color:var(--gray-600);">BODY</label>
-                <div style="display:flex;gap:8px;margin-top:4px;align-items:flex-start;">
-                  <textarea id="oqCopyBody" rows="12"
-                    style="flex:1;padding:10px;border:1px solid var(--gray-200);border-radius:6px;font-size:13px;line-height:1.6;resize:vertical;" readonly></textarea>
-                  <button onclick="oqClipboard('oqCopyBody')" style="padding:6px 12px;border-radius:6px;border:1px solid var(--gray-300);background:#fff;cursor:pointer;font-size:12px;">Copy</button>
-                </div>
-              </div>
-              <div style="margin-top:14px;font-size:11px;color:var(--gray-500);">
-                ✏️ All copy is editable above — personalise before sending.
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ═══════════════════ SAVED LEADS PANEL ═══════════════════ -->
-        <div class="panel" id="panel-saved">
-            <div class="card">
-                <div class="card-title">Saved Leads</div>
-                <div class="search-form" style="grid-template-columns: repeat(3, 1fr) auto;">
-                    <div class="form-group">
-                        <label>Status</label>
-                        <select id="savedFilterStatus" onchange="loadSavedLeads()">
-                            <option value="">All</option>
-                            <option value="new">New</option>
-                            <option value="contacted">Contacted</option>
-                            <option value="qualified">Qualified</option>
-                            <option value="proposal">Proposal</option>
-                            <option value="closed">Closed</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>State</label>
-                        <select id="savedFilterState" onchange="loadSavedLeads()">
-                            <option value="">All</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Min Score</label>
-                        <input type="number" id="savedFilterScore" min="0" max="100" value="0" placeholder="0"
-                            onchange="loadSavedLeads()">
-                    </div>
-                    <div class="form-group">
-                        <label>&nbsp;</label>
-                        <div style="display:flex;gap:8px;">
-                            <button class="btn btn-secondary" onclick="exportCSV('saved')">↓ CSV</button>
-                            <button class="btn btn-secondary" onclick="exportExcel('saved')">↓ Excel</button>
-                        </div>
-                    </div>
-                </div>
-                <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <span style="font-size:12px;color:var(--gray-500);">Leads saved from scrubber results. Upload leads via the Intelligence Scrubber to generate email-enriched contacts.</span>
-                </div>
-                <div id="savedFilterSummary" style="margin-top:8px;font-size:12px;color:var(--gray-500);"></div>
-            </div>
-            <div id="savedResults"></div>
-        </div>
-
-        <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
-        <!-- ═══════════════════ CLIENT INTELLIGENCE PANEL ═══════════════════ -->
-        <div class="panel" id="panel-intelligence">
-            <!-- Stats Row -->
-            <div class="stats-grid" id="intelStats"></div>
-
-            <!-- Controls -->
-            <div class="card"
-                style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                    <div class="form-group">
-                        <label>MIN SCORE</label>
-                        <input type="number" id="intelMinScore" value="0" min="0" max="100" style="width:80px;"
-                            onchange="loadIntelligence()">
-                    </div>
-                    <div class="form-group" style="min-width:260px;">
-                        <label>SERVICE NEED (MULTI-SELECT)</label>
-                        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;">
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" class="intelServiceCheck" value="Billing Services"
-                                    onchange="loadIntelligence()">
-                                Billing Services
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" class="intelServiceCheck" value="Payor Contracting"
-                                    onchange="loadIntelligence()">
-                                Payor Contracting
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" class="intelServiceCheck" value="Workflow Support"
-                                    onchange="loadIntelligence()">
-                                Workflow Support
-                            </label>
-                        </div>
-                    </div>
-                </div>
-                <div style="display:flex;gap:8px;">
-                    <button class="btn btn-primary" onclick="enrichAllSaved()">
-                        ⚡ Enrich All Saved Leads
-                    </button>
-                    <button class="btn btn-success" onclick="exportEmailsCSV()">
-                        📊 Export Quality Emails (CSV)
-                    </button>
-                    <button class="btn btn-success" onclick="exportEmailsExcel()">
-                        📊 Export Quality Emails (Excel)
-                    </button>
-                    <button class="btn btn-secondary" onclick="loadIntelligence()">
-                        ↻ Refresh
-                    </button>
-                </div>
-            </div>
-
-            <!-- Results -->
-            <div id="intelResults">
-                <div class="card empty-state">
-                    <p style="font-size:18px;margin-bottom:8px;">No enrichment data yet</p>
-                    <p>Save leads first, then click <strong>Enrich All Saved Leads</strong> to pull online intelligence
-                    </p>
-                </div>
-            </div>
-        </div>
-
         <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
         <div class="panel" id="panel-dashboard">
             <div class="stats-grid" id="dashboardStats"></div>
@@ -1259,8 +1038,8 @@
                 });
             }
 
-            // Start on the scrubber tab.
-            switchTab('scrub');
+            // Start on Hunt Mode tab.
+            switchTab('hunt');
         });
 
         // ──────────────────────────────────────────────────────────────
@@ -1273,8 +1052,6 @@
             document.getElementById(`panel-${tab}`).classList.add('active');
 
             if (tab === 'dashboard') loadDashboard();
-            if (tab === 'saved') loadSavedLeads();
-            if (tab === 'intelligence') loadIntelligence();
         }
 
         // ──────────────────────────────────────────────────────────────
@@ -2938,16 +2715,7 @@
             window.open('/api/outreach-queue/download-csv?limit=1000', '_blank');
         }
 
-        // Auto-load outreach queue when tab is first opened
-        (function() {
-            const origSwitch = window.switchTab;
-            if (typeof origSwitch === 'function') {
-                window.switchTab = function(tab) {
-                    origSwitch(tab);
-                    if (tab === 'outreach') loadOutreachQueue();
-                };
-            }
-        })();
+        // (Outreach Queue removed)
 
         // ── Copy Modal ──────────────────────────────────────────────
         let _oqCopyData = null;

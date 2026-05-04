@@ -2314,6 +2314,7 @@
             <div class="page-title">Manage Clients</div>
             <div class="page-actions">
               <button class="btn btn-primary btn-sm" onclick="openClientModal()">+ Add Client</button>
+              <button class="btn btn-secondary btn-sm" onclick="downloadClientSeed()" title="Download backup of all clients — commit this file to preserve clients across deploys">💾 Backup Clients</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -4797,6 +4798,19 @@
       document.querySelectorAll('.fCService').forEach(cb => cb.checked = false);
       document.getElementById('fCNotesWrap').style.display = 'none';
       document.getElementById('clientModal').classList.add('open');
+    }
+
+    async function downloadClientSeed() {
+      try {
+        const res = await fetch('/hub/api/clients/export-seed');
+        if (!res.ok) { showToast('Backup failed: ' + res.status, 'error'); return; }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'clients_seed.json'; a.click();
+        URL.revokeObjectURL(url);
+        showToast('Client backup downloaded — commit data/clients_seed.json to repo to make it permanent', 'success');
+      } catch(e) { showToast('Backup failed: ' + e.message, 'error'); }
     }
 
     // Show/hide notes field when multiple services selected

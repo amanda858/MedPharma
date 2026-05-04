@@ -3,6 +3,7 @@ credentialing, enrollment, edi_setup, providers, clients, sessions."""
 
 import sqlite3
 import os
+import json
 import hashlib
 import secrets
 import logging
@@ -10,6 +11,68 @@ from datetime import datetime, date, timedelta
 from app.config import DATABASE_PATH
 
 log = logging.getLogger(__name__)
+
+# Path to the persistent client seed file (committed to repo)
+_CLIENTS_SEED_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "clients_seed.json"
+)
+
+
+def _load_clients_seed() -> list[dict]:
+    """Load clients_seed.json, return empty list on any error."""
+    try:
+        with open(_CLIENTS_SEED_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_clients_seed(clients: list[dict]):
+    """Overwrite clients_seed.json with the given list."""
+    try:
+        os.makedirs(os.path.dirname(_CLIENTS_SEED_PATH), exist_ok=True)
+        with open(_CLIENTS_SEED_PATH, "w", encoding="utf-8") as f:
+            json.dump(clients, f, indent=2)
+    except Exception as e:
+        log.warning("could not write clients_seed.json: %s", e)
+
+
+def _upsert_client_from_seed(conn, entry: dict):
+    """Insert or update a client from a seed entry (does NOT overwrite passwords)."""
+    username = (entry.get("username") or "").strip().lower()
+    if not username:
+        return
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM clients WHERE username=?", (username,))
+    row = cur.fetchone()
+    if row:
+        # Client already exists — update non-sensitive fields only
+        cur.execute(
+            "UPDATE clients SET company=?, contact_name=?, email=?, phone=?, "
+            "role=?, practice_type=? WHERE username=?",
+            (
+                entry.get("company", ""), entry.get("contact_name", ""),
+                entry.get("email", ""), entry.get("phone", ""),
+                entry.get("role", "client"), entry.get("service_type", ""),
+                username,
+            ),
+        )
+    else:
+        # Insert new client with a temp password (admin must reset via RESET_PW_ env var)
+        salt = secrets.token_hex(16)
+        raw_pw = entry.get("_temp_password") or secrets.token_urlsafe(12)
+        cur.execute(
+            "INSERT INTO clients (username,password,salt,company,contact_name,email,phone,role,practice_type) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                username, _hash_pw(raw_pw, salt), salt,
+                entry.get("company", ""), entry.get("contact_name", ""),
+                entry.get("email", ""), entry.get("phone", ""),
+                entry.get("role", "client"), entry.get("service_type", ""),
+            ),
+        )
+        log.info("startup: seeded client '%s' from clients_seed.json", username)
 
 
 def get_db():
@@ -449,6 +512,16 @@ def init_client_hub_db():
             conn.commit()
             log.info("startup: reset password for user '%s' via RESET_PW_ env var", uname)
 
+    # ── Re-seed clients from data/clients_seed.json ───────────────────────────
+    # Any real client added via Manage Clients is written to this JSON file so
+    # it survives Render deploys (which wipe the SQLite DB every time).
+    for entry in _load_clients_seed():
+        try:
+            _upsert_client_from_seed(conn, entry)
+        except Exception as _e:
+            log.warning("clients_seed.json upsert failed for %s: %s", entry.get("username"), _e)
+    conn.commit()
+
     conn.close()
 
 
@@ -621,7 +694,35 @@ def create_client(data: dict) -> int:
         cid = cur.lastrowid
     finally:
         conn.close()
+
+    # Persist to clients_seed.json so client survives Render deploys
+    _persist_client_to_seed({
+        "username": username,
+        "company": data.get("company", ""),
+        "contact_name": data.get("contact_name", ""),
+        "email": data.get("email", ""),
+        "phone": data.get("phone", ""),
+        "role": data.get("role", "client"),
+        "service_type": service_type,
+        "_temp_password": raw_password,  # stored so re-seed can restore login
+    })
     return cid
+
+
+def _persist_client_to_seed(entry: dict):
+    """Append or update a client entry in clients_seed.json."""
+    existing = _load_clients_seed()
+    username = (entry.get("username") or "").strip().lower()
+    updated = False
+    for i, e in enumerate(existing):
+        if (e.get("username") or "").strip().lower() == username:
+            existing[i] = entry
+            updated = True
+            break
+    if not updated:
+        existing.append(entry)
+    _save_clients_seed(existing)
+
 
 
 def update_client(cid: int, data: dict):
