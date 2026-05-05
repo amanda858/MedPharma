@@ -449,15 +449,15 @@ def init_client_hub_db():
     else:
         # Auto-migrate: fix client profile data
         cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # Migrate jessica from client → admin (she is a MedPharma staff user, not a client)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='jessica' AND role='client'")
-        # Ensure jessica account exists as admin
+        # Migrate jessica from client → staff (MedPharma operations staff, NOT full admin)
+        cur.execute("UPDATE clients SET role='staff', company='MedPharma SC' WHERE username='jessica' AND role IN ('client','admin')")
+        # Ensure jessica account exists as staff
         cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
         if cur.fetchone()[0] == 0:
             jsalt = secrets.token_hex(16)
             cur.execute(
                 "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
             )
         # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
         cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
@@ -557,11 +557,11 @@ def _seed_data(conn):
         ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
     )
 
-    # Jessica — MedPharma staff user (admin), NOT a client
+    # Jessica — MedPharma operations staff, NOT a full admin (no leads/audit/manage clients)
     jsalt = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "admin")
+        ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
     )
 
     # RCM — MedPharma staff user (admin), sees all client accounts

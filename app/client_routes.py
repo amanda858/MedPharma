@@ -140,14 +140,23 @@ def _require_user(hub_session: Optional[str] = Cookie(None)):
 def _require_admin(hub_session: Optional[str] = Cookie(None)):
     """Return the authenticated admin user or raise 401/403."""
     user = _require_user(hub_session)
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 
+def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
+    """Return the authenticated full-admin user (role='admin') or raise 403.
+    Used for sensitive operations: manage clients, audit log, leads."""
+    user = _require_user(hub_session)
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Full admin access required")
+    return user
+
+
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin sees all data)."""
-    if user.get("role") == "admin":
+    """Return client_id filter — None means all (admin/staff sees all data)."""
+    if user.get("role") in ("admin", "staff"):
         return None
     return user["id"]
 
@@ -294,21 +303,21 @@ def get_clients(hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/clients")
 def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     cid = create_client(body.model_dump())
     return {"id": cid, "ok": True}
 
 
 @router.put("/clients/{cid}")
 def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     update_client(cid, {k: v for k, v in body.model_dump().items() if v is not None})
     return {"ok": True}
 
 
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     delete_client(cid)
     return {"ok": True}
 
@@ -479,7 +488,7 @@ def get_providers(client_id: Optional[int] = None, sub_profile: Optional[str] = 
 def add_provider(body: ProviderIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         data["client_id"] = user["id"]
     pid = create_provider(data)
     return {"id": pid, "ok": True}
@@ -588,7 +597,7 @@ def get_single_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
 def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         data["client_id"] = user["id"]
     cid = create_claim(data)
     notify_activity(user["username"], "created", "Claims",
@@ -731,7 +740,7 @@ def list_cred(status: Optional[str] = None, client_id: Optional[int] = None,
 def add_cred(body: CredIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         data["client_id"] = user["id"]
     rid = create_credentialing(data)
     notify_activity(user["username"], "created", "Credentialing",
@@ -802,7 +811,7 @@ def list_enroll(status: Optional[str] = None, client_id: Optional[int] = None,
 def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         data["client_id"] = user["id"]
     eid = create_enrollment(data)
     notify_activity(user["username"], "created", "Enrollment",
@@ -872,7 +881,7 @@ def list_edi(client_id: Optional[int] = None, sub_profile: Optional[str] = None,
 def add_edi(body: EDIIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
-    if user["role"] != "admin":
+    if user["role"] not in ("admin", "staff"):
         data["client_id"] = user["id"]
     eid = create_edi(data)
     notify_activity(user["username"], "created", "EDI Setup",
@@ -952,7 +961,7 @@ def get_production(client_id: Optional[int] = None,
     logs = list_production_logs(scope, start_date, end_date, username=None)
     # Turnkey admin fallback: when a selected account has no rows,
     # return all production rows so the panel is never empty by mistake.
-    if user.get("role") == "admin" and client_id is not None and not logs:
+    if user.get("role") in ("admin", "staff") and client_id is not None and not logs:
         logs = list_production_logs(None, start_date, end_date, username=None)
         return {
             "logs": logs,
@@ -1154,7 +1163,7 @@ def production_report(client_id: Optional[int] = None,
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
     report = get_production_report(scope, start_date, end_date)
-    if user.get("role") == "admin" and client_id is not None and not (report.get("details") or []):
+    if user.get("role") in ("admin", "staff") and client_id is not None and not (report.get("details") or []):
         report = get_production_report(None, start_date, end_date)
         report["fallback_all_clients"] = True
         report["selected_client_id"] = client_id
@@ -1175,7 +1184,7 @@ def download_production_report(
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
     data = get_production_report(scope, start_date, end_date)
-    if user.get("role") == "admin" and client_id is not None and not (data.get("details") or []):
+    if user.get("role") in ("admin", "staff") and client_id is not None and not (data.get("details") or []):
         data = get_production_report(None, start_date, end_date)
 
     from html import escape as _esc

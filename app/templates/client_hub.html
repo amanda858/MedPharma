@@ -1849,8 +1849,8 @@
       <button class="btn-logout" onclick="doLogout()">Sign Out</button>
     </div>
     <div class="account-body">
-      <h2>Select an Account</h2>
-      <p>Choose a client account to open the dashboard</p>
+      <h2 id="accountGreeting">Select an Account</h2>
+      <p id="accountSubtitle">Choose a client account to open the dashboard</p>
       <div style="margin-bottom:16px;text-align:right">
         <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
@@ -1903,13 +1903,13 @@
       <div class="sidebar">
         <!-- CLIENT SIDEBAR: only Daily Production + Documents -->
         <div id="clientNav">
-          <div class="nav-item" data-panel="production" onclick="navTo('production')">📊 Daily Production</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production')">📋 Daily Work Log</div>
           <div class="nav-item" data-panel="files" onclick="navTo('files')">📁 Documents</div>
         </div>
         <!-- ADMIN SIDEBAR: full access -->
         <div id="adminFullNav" style="display:none">
           <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
-          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📊 Daily Production</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📋 Daily Work Log</div>
           <div class="nav-section">Operations</div>
           <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
           <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
@@ -1919,9 +1919,10 @@
           <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Profile</div>
           <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
           <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
-          <div class="nav-item" data-panel="production" onclick="navTo('production')">Team Production</div>
-          <div class="nav-section">Lead Generation</div>
-          <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">Lead Source</div>
+          <div id="leadGenNav">
+            <div class="nav-section">Lead Generation</div>
+            <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">Lead Source</div>
+          </div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -1953,8 +1954,8 @@
               <div>
                 <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:-.3px" id="dashTitle">Dashboard
                 </div>
-                <div style="font-size:13px;color:rgba(255,255,255,.7);margin-top:4px">MedPharma SC — Revenue Cycle
-                  Management & Credentialing Solutions</div>
+                <div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:4px;font-weight:600" id="dashGreetingLine"></div>
+                <div style="font-size:12px;color:rgba(255,255,255,.55);margin-top:2px">MedPharma SC — Revenue Cycle Management &amp; Credentialing Solutions</div>
               </div>
               <div style="display:flex;gap:8px;align-items:center">
                 <select id="dashPeriod" class="form-control btn-sm" onchange="loadDashboard()"
@@ -1967,6 +1968,17 @@
               </div>
             </div>
           </div>
+          <!-- Today's Activity Card -->
+          <div class="card" id="dashTodayCard" style="margin-bottom:18px">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+              <div class="card-title">📌 Currently Being Worked On — Today</div>
+              <button class="btn btn-secondary btn-sm" onclick="navTo('production');setProdDatePreset('today')">📝 Log Work</button>
+            </div>
+            <div id="dashTodayBody" style="margin-top:10px;font-size:13px;color:var(--gray-400);text-align:center;padding:12px 0">
+              Loading…
+            </div>
+          </div>
+
           <!-- Profile Card -->
           <div class="card" id="profileCard" style="margin-bottom:18px;display:none">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
@@ -2836,8 +2848,9 @@
         <!-- ═══ TEAM PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">⏱️ Team Production</div>
+            <div class="page-title">📋 Daily Work Log</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" style="background:#f0fdf4;border-color:#86efac;color:#15803d" onclick="eodReport()">🌙 End of Day Report</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('prodExcelInput').click()">📥 Import Excel</button>
               <input type="file" id="prodExcelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importProductionExcel(this)">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
@@ -3396,6 +3409,10 @@
     let activeQueueStatus = 'All';
     const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
 
+    // Role helpers
+    function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
+    function isFullAdmin()    { return currentUser && currentUser.role === 'admin'; }
+
     // ═══════════════════════════════════════
     // GLOBAL FETCH WRAPPER — auth for ALL API calls
     // ═══════════════════════════════════════
@@ -3446,7 +3463,7 @@
           const u = await r.json();
           currentUser = u;
           const next = getNextDestination();
-          if (next && currentUser?.role === 'admin') {
+          if (next && isStaffOrAdmin()) {
             window.location.href = next;
             return;
           }
@@ -3497,7 +3514,7 @@
           currentUser = d.user;
           statusEl.style.display = 'none';
           const next = getNextDestination();
-          if (next && currentUser?.role === 'admin') {
+          if (next && isStaffOrAdmin()) {
             window.location.href = next;
             return;
           }
@@ -3545,6 +3562,15 @@
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
+
+      // Time-based greeting
+      const hour = new Date().getHours();
+      const greetWord = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+      const greetName = currentUser ? (currentUser.contact_name || currentUser.username || '') : '';
+      const greetEl = document.getElementById('accountGreeting');
+      const subEl   = document.getElementById('accountSubtitle');
+      if (greetEl) greetEl.textContent = greetName ? `${greetWord}, ${greetName}! 👋` : `${greetWord}! 👋`;
+      if (subEl)   subEl.textContent   = 'Select a client account below to continue.';
 
       // All users see all client accounts — with error handling for cold starts
       let loadError = null;
@@ -3598,19 +3624,24 @@
       document.getElementById('appShell').style.display = 'block';
       document.getElementById('topAccount').innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(company)} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
       document.getElementById('topUser').textContent = currentUser.username;
-      // Hide the role pill for regular users; only show for admin
+      // Role pill: admin = 'Admin', staff = 'Staff', client = hidden
       const rolePill = document.getElementById('topRole');
-      if (currentUser.role === 'admin') {
-        rolePill.textContent = 'Admin';
-        rolePill.style.display = '';
+      if (isFullAdmin()) {
+        rolePill.textContent = 'Admin'; rolePill.style.display = '';
+      } else if (currentUser.role === 'staff') {
+        rolePill.textContent = 'Staff'; rolePill.style.display = '';
       } else {
         rolePill.style.display = 'none';
       }
-      document.getElementById('adminNav').style.display = currentUser.role === 'admin' ? 'block' : 'none';
-      // Show appropriate sidebar: clients see only Production + Documents
-      if (currentUser.role === 'admin') {
+      // adminNav (Manage Clients / Audit Log) — full admin only
+      document.getElementById('adminNav').style.display = isFullAdmin() ? 'block' : 'none';
+      // Full ops nav for admin and staff; client nav for regular clients
+      if (isStaffOrAdmin()) {
         document.getElementById('adminFullNav').style.display = 'block';
         document.getElementById('clientNav').style.display = 'none';
+        // Lead Generation section: admin-only
+        const leadSection = document.getElementById('leadGenNav');
+        if (leadSection) leadSection.style.display = isFullAdmin() ? '' : 'none';
       } else {
         document.getElementById('adminFullNav').style.display = 'none';
         document.getElementById('clientNav').style.display = 'block';
@@ -3621,8 +3652,8 @@
       activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
       updateSubProfileBar();
-      // Clients land on Daily Production; admins go to leads
-      navTo(currentUser.role === 'admin' ? 'leads' : 'production');
+      // Clients land on Daily Production; admin/staff go to dashboard
+      navTo(isStaffOrAdmin() ? 'dashboard' : 'production');
     }
 
     // Admin shortcut: enter the app shell without picking a client (Lead Source,
@@ -3643,7 +3674,7 @@
       updateNavForPracticeType('');
       const bar = document.getElementById('subProfileBar');
       if (bar) bar.style.display = 'none';
-      navTo('leads');
+      navTo('dashboard');
     }
 
     function updateSubProfileBar() {
@@ -3699,6 +3730,36 @@
       const credTitle = document.getElementById('credPanelTitle');
       if (credLabel) credLabel.textContent = isLab ? 'Group Contracting' : 'Credentialing';
       if (credTitle) credTitle.textContent = isLab ? 'Group Contracting' : 'Credentialing';
+      updateProductionCategories(pt);
+    }
+
+    // Returns the appropriate production log categories based on client's practice/service type
+    function getCategoriesForPracticeType(pt) {
+      const p = (pt || '').toLowerCase();
+      if (p.includes('audit') || p.includes('payor support')) {
+        return ['Audit', 'Payor Support', 'Payor Calls', 'Appeals', 'Reporting', 'Admin/Meeting', 'Other'];
+      }
+      if (p.includes('lab') || p.includes('laboratory') || p.includes('pathology')) {
+        return ['Claims Processing', 'Denial Management', 'A/R Follow-up', 'Appeals',
+                'Payor Calls', 'Reporting', 'Admin/Meeting', 'Other'];
+      }
+      if (p.includes('mhp') || p.includes('omt') || p.includes('mental') || p.includes('behav')) {
+        return ['Claims Processing', 'Credentialing', 'Enrollment', 'Denial Management',
+                'A/R Follow-up', 'Appeals', 'Patient Calls', 'Payor Calls', 'Reporting',
+                'Admin/Meeting', 'Other'];
+      }
+      // Full RCM / default — all categories
+      return ['Claims Processing', 'Credentialing', 'Enrollment', 'EDI Setup', 'Denial Management',
+              'A/R Follow-up', 'Appeals', 'Patient Calls', 'Payor Calls', 'Data Entry',
+              'Reporting', 'Admin/Meeting', 'Other'];
+    }
+
+    function updateProductionCategories(pt) {
+      const sel = document.getElementById('prodCategory');
+      if (!sel) return;
+      const cats = getCategoriesForPracticeType(pt);
+      const current = sel.value;
+      sel.innerHTML = cats.map(c => `<option value="${c}"${c === current ? ' selected' : ''}>${c}</option>`).join('');
     }
 
     function switchAccount() { showAccountSelector(); }
@@ -3800,10 +3861,24 @@
     }
 
     function renderDashboard(d) {
-      const adminView = currentUser && currentUser.role === 'admin';
+      const adminView = isStaffOrAdmin();
       let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
       if (activeSubProfile) title += ` — ${activeSubProfile}`;
       document.getElementById('dashTitle').textContent = title;
+
+      // Time-based greeting shown below the title in the hero banner
+      const hour = new Date().getHours();
+      const greetWord = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+      const greetName = currentUser ? (currentUser.contact_name || currentUser.username || '') : '';
+      const greetSubtitleEl = document.getElementById('dashGreetingLine');
+      if (greetSubtitleEl) {
+        greetSubtitleEl.textContent = greetName
+          ? `${greetWord}, ${greetName}! — ${title}`
+          : `${greetWord}! — ${title}`;
+      }
+
+      // Load today's activity card
+      loadTodayActivity();
 
       // ── Profile card ──────────────────────────────────────
       const prof = d.profile || {};
@@ -4156,7 +4231,7 @@
       document.getElementById('fAppealStatus').value = claim?.AppealStatus || '';
       document.getElementById('fSLA').value = claim?.SLABreached || 0;
 
-      if (currentUser.role === 'admin') {
+      if (isStaffOrAdmin()) {
         document.getElementById('claimClientGroup').style.display = '';
         populateClientDrop('fClaimClient', claim?.client_id);
       }
@@ -4211,7 +4286,7 @@
           });
           if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaffOrAdmin()
             ? parseInt(document.getElementById('fClaimClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4399,7 +4474,7 @@
       document.getElementById('fCredExpires').value = item?.ExpirationDate || '';
       document.getElementById('fCredOwner').value = item?.Owner || '';
       document.getElementById('fCredNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaffOrAdmin()) {
         document.getElementById('credClientGroup').style.display = '';
         populateClientDrop('fCredClient', item?.client_id);
       }
@@ -4427,7 +4502,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaffOrAdmin()
             ? parseInt(document.getElementById('fCredClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4514,7 +4589,7 @@
       document.getElementById('fEnrollEffective').value = item?.EffectiveDate || '';
       document.getElementById('fEnrollOwner').value = item?.Owner || '';
       document.getElementById('fEnrollNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaffOrAdmin()) {
         document.getElementById('enrollClientGroup').style.display = '';
         populateClientDrop('fEnrollClient', item?.client_id);
       }
@@ -4542,7 +4617,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaffOrAdmin()
             ? parseInt(document.getElementById('fEnrollClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4632,7 +4707,7 @@
       document.getElementById('fEdiGoLive').value = item?.GoLiveDate || '';
       document.getElementById('fEdiOwner').value = item?.Owner || '';
       document.getElementById('fEdiNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaffOrAdmin()) {
         document.getElementById('ediClientGroup').style.display = '';
         populateClientDrop('fEdiClient', item?.client_id);
       }
@@ -4660,7 +4735,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaffOrAdmin()
             ? parseInt(document.getElementById('fEdiClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -4723,7 +4798,7 @@
       document.getElementById('fProvStatus').value = item?.Status || 'Active';
       document.getElementById('fProvStart').value = item?.StartDate || '';
       document.getElementById('fProvNotes').value = item?.Notes || '';
-      if (currentUser.role === 'admin') {
+      if (isStaffOrAdmin()) {
         document.getElementById('provClientGroup').style.display = '';
         populateClientDrop('fProvClient', item?.client_id);
       }
@@ -4750,7 +4825,7 @@
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
         } else {
-          data.client_id = currentUser.role === 'admin'
+          data.client_id = isStaffOrAdmin()
             ? parseInt(document.getElementById('fProvClient').value) || activeClientId
             : activeClientId || currentUser.id;
           if (activeSubProfile) data.sub_profile = activeSubProfile;
@@ -6669,6 +6744,49 @@
       fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
         .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
         .catch(e => toast(e.message, 'error'));
+    }
+
+    // ═══════════════════════════════════════
+    // TODAY'S ACTIVITY (Dashboard card)
+    // ═══════════════════════════════════════
+    async function loadTodayActivity() {
+      const el = document.getElementById('dashTodayBody');
+      if (!el) return;
+      const today = new Date().toISOString().split('T')[0];
+      let url = `/hub/api/production?start_date=${today}&end_date=${today}`;
+      if (activeClientId) url += `&client_id=${activeClientId}`;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('fetch failed');
+        const data = await r.json();
+        const items = Array.isArray(data) ? data : (data.logs || []);
+        if (!items.length) {
+          el.innerHTML = `<div style="color:var(--gray-400);text-align:center;padding:16px 0">
+            No activity logged yet today. <a href="#production" onclick="navTo('production');setProdDatePreset('today');return false;" style="color:var(--primary);font-weight:600">Log your first entry →</a>
+          </div>`;
+          return;
+        }
+        el.innerHTML = `<div class="table-wrap"><table>
+          <thead><tr>
+            <th>Time</th><th>Team Member</th><th>Category</th><th>Task</th><th>Qty</th><th>Hrs</th>
+          </tr></thead>
+          <tbody>
+            ${items.map(e => `<tr>
+              <td style="white-space:nowrap;font-size:12px;color:var(--gray-400)">${esc(e.work_date || today)}</td>
+              <td><span class="badge badge-blue">${esc(e.username || '')}</span></td>
+              <td><span class="badge badge-purple">${esc(e.category || '')}</span></td>
+              <td style="max-width:280px">${esc(e.task_description || '')}</td>
+              <td style="text-align:center">${e.quantity || 0}</td>
+              <td style="text-align:center">${e.time_spent || 0}h</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>
+        <div style="margin-top:10px;text-align:right">
+          <button class="btn btn-secondary btn-sm" style="background:#eff6ff;border-color:#93c5fd;color:#1d4ed8" onclick="eodReport()">🌙 End of Day Report</button>
+        </div>`;
+      } catch (e) {
+        el.innerHTML = `<div style="color:var(--gray-400);text-align:center;padding:12px 0">Could not load today's activity.</div>`;
+      }
     }
 
     // ═══════════════════════════════════════
