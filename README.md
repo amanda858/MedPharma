@@ -1,8 +1,8 @@
-# MedPharma — Lead Generator
+# MedPharma — Client Hub
 
 [Download MedPharma Hub](https://github.com/amanda858/MedPharma/archive/refs/heads/main.zip)
 
-Find clinical laboratories, hospitals, clinics, urgent care, primary care, and ASCs across the United States for **medical billing**, **compliance**, and **payor contracting** services. Stop exhausting yourself with Google Ads and LinkedIn — pull real, verified leads directly from federal databases.
+Client operations hub for claims, credentialing, enrollment, EDI setup, provider management, reporting, and documents.
 
 ## What It Does
 
@@ -31,6 +31,12 @@ python run.py
 ```
 
 Open **<http://localhost:8000>** in your browser.
+
+## Premium Roadmap and Backlog
+
+Execution-ready product and engineering backlog:
+
+- `docs/premium-implementation-backlog.md`
 
 ## Enable Live Hub Notifications (Render)
 

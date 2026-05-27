@@ -15,11 +15,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 IS_PROD = bool(os.getenv("PORT"))  # Render sets PORT in production
+log = logging.getLogger(__name__)
 
 from app.client_db import (
     get_db,
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client, delete_client,
+    create_user_invite, get_password_setup_token_info, consume_password_setup_token,
     get_profile, update_profile,
     get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
@@ -33,9 +35,12 @@ from app.client_db import (
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
     list_production_logs, add_production_log, delete_production_log, get_production_report,
     log_audit, get_audit_log, auto_flag_sla, get_alerts,
+    log_activity, list_activity_events, get_live_users, get_productivity_report,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
     list_sharefile_links, add_sharefile_link, delete_sharefile_link,
+    create_job, append_job_event, set_job_running, update_job_progress,
+    complete_job, fail_job, get_job, list_jobs, reset_job_for_retry,
     _load_clients_seed,
 )
 
@@ -52,6 +57,72 @@ router = APIRouter(prefix="/hub/api")
 
 
 DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
+
+
+def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: str = "") -> tuple[bool, str]:
+    """Send a direct email to a single recipient using SendGrid or SMTP."""
+    to_email = (to_email or "").strip()
+    if not to_email:
+        return False, "missing recipient"
+
+    sg_key = (os.getenv("SENDGRID_API_KEY") or "").strip()
+    sg_from = (os.getenv("SENDGRID_FROM") or os.getenv("SMTP_USER") or "notifications@medprosc.com").strip()
+    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
+    smtp_p = int((os.getenv("SMTP_PORT") or "587").strip() or 587)
+    smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
+
+    if sg_key:
+        try:
+            import urllib.request
+            import urllib.error
+            payload = _json.dumps({
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": sg_from, "name": "MedPharma Hub"},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": text_body or "(no content)"},
+                    *([{"type": "text/html", "value": html_body}] if html_body else []),
+                ],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.sendgrid.com/v3/mail/send",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {sg_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                if resp.getcode() in (200, 202):
+                    return True, "sendgrid"
+        except Exception as e:
+            log.error("invite email sendgrid failed: %s", e)
+
+    if smtp_h and smtp_u and smtp_pw:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = smtp_u
+            msg["To"] = to_email
+            msg.attach(MIMEText(text_body or "(no content)", "plain"))
+            if html_body:
+                msg.attach(MIMEText(html_body, "html"))
+
+            with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
+                server.starttls()
+                server.login(smtp_u, smtp_pw)
+                server.sendmail(msg["From"], [to_email], msg.as_string())
+            return True, "smtp"
+        except Exception as e:
+            log.error("invite email smtp failed: %s", e)
+
+    return False, "no provider configured or send failed"
 
 
 def _norm_text(value: str) -> str:
@@ -168,8 +239,21 @@ class LoginIn(BaseModel):
     password: str
 
 
+class InviteUserIn(BaseModel):
+    company: str
+    contact_name: Optional[str] = ""
+    email: str
+    phone: Optional[str] = ""
+    role: Optional[str] = "client"
+    username: Optional[str] = ""
+
+
+class SetupPasswordIn(BaseModel):
+    password: str
+
+
 @router.post("/login")
-def login(body: LoginIn, response: Response):
+def login(body: LoginIn, request: Request, response: Response):
     user, token = authenticate(body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -181,13 +265,34 @@ def login(body: LoginIn, response: Response):
         path="/",              # Explicit root path — available to ALL routes
         max_age=86400 * 30,
     )
+    try:
+        log_activity(
+            user["username"], "login",
+            client_id=user.get("id"),
+            ip=(request.client.host if request.client else ""),
+            user_agent=request.headers.get("user-agent", ""),
+            details="hub login",
+        )
+    except Exception:
+        pass
     return {"ok": True, "user": user}
 
 
 @router.post("/logout")
-def logout(response: Response, hub_session: Optional[str] = Cookie(None)):
+def logout(request: Request, response: Response, hub_session: Optional[str] = Cookie(None)):
     # Capture user info BEFORE deleting session
     user = _get_user(hub_session) if hub_session else None
+    if user:
+        try:
+            log_activity(
+                user["username"], "logout",
+                client_id=user.get("id"),
+                ip=(request.client.host if request.client else ""),
+                user_agent=request.headers.get("user-agent", ""),
+                details="hub logout",
+            )
+        except Exception:
+            pass
     # Always delete session + cookie first — this must succeed unconditionally
     if hub_session:
         try:
@@ -213,18 +318,52 @@ def me(hub_session: Optional[str] = Cookie(None)):
     return user
 
 
+@router.get("/auth/setup-password/{token}")
+def check_setup_password_token(token: str):
+    info = get_password_setup_token_info(token)
+    if not info:
+        raise HTTPException(status_code=404, detail="Invalid or expired setup token")
+    return {
+        "ok": True,
+        "username": info.get("username", ""),
+        "contact_name": info.get("contact_name", ""),
+        "email": info.get("email", ""),
+        "company": info.get("company", ""),
+        "role": info.get("role", "client"),
+        "expires_at": info.get("expires_at", ""),
+    }
+
+
+@router.post("/auth/setup-password/{token}")
+def complete_setup_password(token: str, body: SetupPasswordIn):
+    pw = (body.password or "").strip()
+    if len(pw) < 10:
+        raise HTTPException(status_code=400, detail="Password must be at least 10 characters")
+    updated = consume_password_setup_token(token, pw)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Invalid or expired setup token")
+    return {"ok": True, "username": updated.get("username", "")}
+
+
 # ─── Accounts (for selector screen) ──────────────────────────────────────────
 
 @router.get("/accounts")
 def accounts(hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
 
     # Account selector should show client companies only (not internal/admin users),
     # and avoid duplicate cards for the same company.
-    clients = [
-        c for c in list_clients()
-        if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
-    ]
+    if user.get("role") in ("admin", "staff"):
+        clients = [
+            c for c in list_clients()
+            if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
+        ]
+    else:
+        # Client users should only see their own account card.
+        clients = [
+            c for c in list_clients()
+            if int(c.get("id", 0) or 0) == int(user.get("id", 0) or 0)
+        ]
 
     deduped: dict[str, dict] = {}
     for c in clients:
@@ -297,7 +436,7 @@ class PracticeProfileUpdate(BaseModel):
 
 @router.get("/clients")
 def get_clients(hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     return list_clients()
 
 
@@ -306,6 +445,66 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     _require_full_admin(hub_session)
     cid = create_client(body.model_dump())
     return {"id": cid, "ok": True}
+
+
+@router.post("/admin/users/invite")
+def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str] = Cookie(None)):
+    admin = _require_full_admin(hub_session)
+    email = (body.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email is required")
+
+    payload = body.model_dump()
+    payload["email"] = email
+
+    try:
+        invite = create_user_invite(payload, invited_by=admin.get("username", "admin"), ttl_hours=72)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Username or email already exists")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not create user invite: {e}")
+
+    base_url = str(request.base_url).rstrip("/")
+    setup_link = f"{base_url}/hub?setup_token={invite['token']}"
+    display_name = invite.get("contact_name") or invite.get("username") or "there"
+    subject = "MedPharma Hub: Set your password"
+    text_body = (
+        f"Hi {display_name},\n\n"
+        f"Your MedPharma Hub account is ready.\n"
+        f"Username: {invite.get('username','')}\n"
+        f"Role: {invite.get('role','client')}\n\n"
+        f"Set your password using this link (expires in 72 hours):\n{setup_link}\n\n"
+        "If you did not expect this email, contact your administrator."
+    )
+    html_body = (
+        f"<p>Hi {display_name},</p>"
+        f"<p>Your MedPharma Hub account is ready.</p>"
+        f"<p><b>Username:</b> {invite.get('username','')}<br/>"
+        f"<b>Role:</b> {invite.get('role','client')}</p>"
+        f"<p><a href=\"{setup_link}\" style=\"padding:10px 16px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:6px;\">Set Password</a></p>"
+        f"<p style=\"font-size:12px;color:#64748b\">Or copy this link: {setup_link}</p>"
+    )
+    sent, via = _send_direct_email(email, subject, text_body, html_body)
+
+    log_audit(
+        None,
+        admin.get("username", ""),
+        "invite_user",
+        "client",
+        invite.get("client_id"),
+        f"Invited user {invite.get('username')} ({email}), email_sent={sent}, via={via}",
+    )
+
+    return {
+        "ok": True,
+        "user_id": invite.get("client_id"),
+        "username": invite.get("username"),
+        "email": email,
+        "email_sent": sent,
+        "delivery": via,
+        "setup_link": setup_link,
+        "expires_at": invite.get("expires_at"),
+    }
 
 
 @router.put("/clients/{cid}")
@@ -334,7 +533,7 @@ def get_my_profile(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/profile/{cid}")
 def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     return get_profile(cid)
 
 
@@ -354,8 +553,7 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 
 @router.put("/profile/{cid}")
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
-    # Any authenticated user can edit any client profile
+    _require_admin(hub_session)
     data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
@@ -378,28 +576,28 @@ class ReportNoteRenameBody(BaseModel):
 @router.get("/report-notes/{cid}")
 def get_client_report_notes(cid: int, tab_name: Optional[str] = None,
                              hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     notes = get_report_notes(cid, tab_name)
     return {"notes": notes}
 
 @router.put("/report-notes/{cid}")
 def save_report_note(cid: int, body: ReportNoteBody,
                      hub_session: Optional[str] = Cookie(None)):
-    user = _require_user(hub_session)
+    user = _require_admin(hub_session)
     upsert_report_note(cid, body.tab_name, body.content, user.get("username", ""))
     return {"ok": True}
 
 @router.delete("/report-notes/{cid}/{tab_name}")
 def remove_report_note(cid: int, tab_name: str,
                        hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     delete_report_note(cid, tab_name)
     return {"ok": True}
 
 @router.put("/report-notes/{cid}/rename")
 def rename_report_note_endpoint(cid: int, body: ReportNoteRenameBody,
                                 hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     rename_report_note(cid, body.old_name, body.new_name)
     return {"ok": True}
 
@@ -416,7 +614,7 @@ def list_practice_profiles(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/practice-profiles/{cid}")
 def list_practice_profiles_admin(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    _require_admin(hub_session)
     return {"profiles": get_practice_profiles(cid)}
 
 
@@ -951,6 +1149,205 @@ class ProductionRelinkIn(BaseModel):
     max_rows: int = 5000
 
 
+class ProductionReportJobIn(BaseModel):
+    client_id: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+def _import_rows_to_production(
+    rows: list[dict],
+    client_id: int,
+    default_username: str,
+    dry_run: bool = False,
+    progress_cb=None,
+) -> dict:
+    # Tiered column finder: exact > starts-with > contains.
+    def _find_col(headers: list[str], *candidates: str) -> Optional[str]:
+        hl = [h.lower().strip() for h in headers]
+        for c in candidates:
+            cl = c.lower()
+            for i, h in enumerate(hl):
+                if h == cl:
+                    return headers[i]
+        for c in candidates:
+            cl = c.lower()
+            for i, h in enumerate(hl):
+                if h.startswith(cl):
+                    return headers[i]
+        for c in candidates:
+            cl = c.lower()
+            for i, h in enumerate(hl):
+                if cl in h:
+                    return headers[i]
+        return None
+
+    headers = list(rows[0].keys()) if rows else []
+    col_date = _find_col(headers, "work date", "work_date", "date", "day")
+    col_username = _find_col(headers, "username", "user name", "user", "agent", "rep", "employee", "staff", "technician", "tech")
+    col_category = _find_col(headers, "category", "task type", "activity type", "work type", "type")
+    col_task = _find_col(headers, "task description", "task", "description", "work performed", "work done", "activity", "detail")
+    col_qty = _find_col(headers, "quantity", "qty", "count", "units", "items")
+    col_hours = _find_col(headers, "hours", "time spent", "duration", "hrs")
+    col_notes = _find_col(headers, "notes", "comments", "comment", "additional", "remarks")
+
+    used: set[str] = set()
+
+    def _claim(col: Optional[str]) -> Optional[str]:
+        if col is None or col in used:
+            return None
+        used.add(col)
+        return col
+
+    col_date = _claim(col_date)
+    col_task = _claim(col_task)
+    col_username = col_username if col_username not in used else None
+    col_category = col_category if col_category not in used else None
+    col_qty = col_qty if col_qty not in used else None
+    col_hours = col_hours if col_hours not in used else None
+    col_notes = col_notes if col_notes not in used else None
+
+    if not col_task:
+        remaining = [h for h in headers if h not in used]
+        col_task = _find_col(remaining, "task", "description", "work", "notes", "detail", "activity")
+        if col_task:
+            used.add(col_task)
+
+    if not col_date or not col_task:
+        missing = []
+        if not col_date:
+            missing.append("Date")
+        if not col_task:
+            missing.append("Task/Description")
+        raise ValueError(f"Cannot find required column(s): {', '.join(missing)}. Headers found: {headers}")
+
+    date_formats = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"]
+
+    def _parse_date(val) -> Optional[str]:
+        if val is None or str(val).strip() in ("", "None"):
+            return None
+        if hasattr(val, "strftime"):
+            return val.strftime("%Y-%m-%d")
+        if isinstance(val, (int, float)):
+            try:
+                from datetime import datetime as _dt, timedelta as _td
+                dt = _dt(1899, 12, 30) + _td(days=float(val))
+                if 1970 <= dt.year <= 2100:
+                    return dt.strftime("%Y-%m-%d")
+            except (ValueError, OverflowError):
+                pass
+            return None
+        s = str(val).strip()
+        for fmt in date_formats:
+            try:
+                from datetime import datetime as _dt
+                return _dt.strptime(s, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return None
+
+    imported = 0
+    skipped = 0
+    errors: list[str] = []
+    preview: list[dict] = []
+    total = len(rows)
+
+    for i, row in enumerate(rows, start=2):
+        try:
+            work_date = _parse_date(row.get(col_date, ""))
+            task_desc = str(row.get(col_task, "")).strip()
+            if not work_date or not task_desc:
+                skipped += 1
+                continue
+
+            username = str(row.get(col_username, "") or default_username).strip() or default_username
+            category = str(row.get(col_category, "") or "General").strip() or "General"
+            notes = str(row.get(col_notes, "") or "").strip()
+
+            raw_qty = row.get(col_qty, "")
+            try:
+                quantity = int(float(str(raw_qty))) if raw_qty not in (None, "") else 1
+            except (ValueError, TypeError):
+                quantity = 1
+
+            raw_hrs = row.get(col_hours, "")
+            try:
+                time_spent = float(str(raw_hrs)) if raw_hrs not in (None, "") else 0.0
+            except (ValueError, TypeError):
+                time_spent = 0.0
+
+            row_payload = {
+                "client_id": client_id,
+                "work_date": work_date,
+                "username": username,
+                "category": category,
+                "task_description": task_desc,
+                "quantity": quantity,
+                "time_spent": time_spent,
+                "notes": notes,
+            }
+
+            if dry_run:
+                if len(preview) < 25:
+                    preview.append(row_payload)
+            else:
+                add_production_log(row_payload)
+            imported += 1
+        except Exception as exc:
+            errors.append(f"Row {i}: {str(exc)[:120]}")
+
+        if progress_cb and total > 0 and (imported + skipped) % 25 == 0:
+            progress_cb(min(95, int(((imported + skipped) / total) * 100)))
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "preview": preview,
+    }
+
+
+def _start_production_report_job(job_id: str, user: dict):
+    def _runner():
+        try:
+            job = get_job(job_id)
+            if not job:
+                return
+            payload = job.get("payload") or {}
+            requested_client_id = payload.get("client_id")
+            start_date = payload.get("start_date")
+            end_date = payload.get("end_date")
+
+            set_job_running(job_id, progress=5)
+            append_job_event(job_id, "start", "Starting production report build")
+
+            role = (payload.get("requested_by_role") or user.get("role") or "").lower()
+            if role in ("admin", "staff"):
+                scope = requested_client_id
+            else:
+                scope = user.get("id")
+
+            report = get_production_report(scope, start_date, end_date)
+            if role in ("admin", "staff") and requested_client_id is not None and not (report.get("details") or []):
+                report = get_production_report(None, start_date, end_date)
+
+            update_job_progress(job_id, 90)
+            result = {
+                "report": report,
+                "selected_client_id": requested_client_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "generated_at": datetime.now().isoformat(),
+            }
+            complete_job(job_id, result=result)
+            append_job_event(job_id, "done", "Production report ready")
+        except Exception as exc:
+            fail_job(job_id, str(exc))
+            append_job_event(job_id, "error", f"Report build failed: {str(exc)[:200]}", "error")
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
 @router.get("/production")
 def get_production(client_id: Optional[int] = None,
                    start_date: Optional[str] = None,
@@ -996,163 +1393,185 @@ def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)
 async def import_production_excel(
     client_id: Optional[int] = Query(None),
     file: UploadFile = FastAPIFile(...),
+    dry_run: bool = Query(False, description="If true, parse and preview without saving."),
+    async_job: bool = Query(False, description="If true, run import as a tracked background job."),
     hub_session: Optional[str] = Cookie(None),
 ):
-    """Import production log entries from an Excel / CSV file."""
+    """Import production log entries from Excel / CSV / structured PDF files."""
     user = _require_user(hub_session)
     if not client_id:
         raise HTTPException(status_code=422, detail="client_id is required")
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if ext not in {"xlsx", "xls", "csv"}:
-        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, or .csv")
+    if ext not in {"xlsx", "xls", "csv", "pdf"}:
+        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, .csv, or .pdf")
 
     content = await file.read()
     try:
-        rows = _parse_excel_rows(content, f".{ext}")
+        if ext == "pdf":
+            rows = _parse_pdf_rows(content)
+        else:
+            rows = _parse_excel_rows(content, f".{ext}")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}")
     if not rows:
         raise HTTPException(status_code=422, detail="No data rows found in file")
 
-    # ── Tiered column finder: exact > starts-with > contains ────────────────
-    def _find_col(headers: list[str], *candidates: str) -> Optional[str]:
-        hl = [h.lower().strip() for h in headers]
-        # Tier 1: exact match
-        for c in candidates:
-            cl = c.lower()
-            for i, h in enumerate(hl):
-                if h == cl:
-                    return headers[i]
-        # Tier 2: starts with
-        for c in candidates:
-            cl = c.lower()
-            for i, h in enumerate(hl):
-                if h.startswith(cl):
-                    return headers[i]
-        # Tier 3: contains
-        for c in candidates:
-            cl = c.lower()
-            for i, h in enumerate(hl):
-                if cl in h:
-                    return headers[i]
-        return None
-
-    headers = list(rows[0].keys()) if rows else []
-    # Specific candidates first — broad/conflicting keywords removed
-    col_date     = _find_col(headers, "work date", "work_date", "date", "day")
-    col_username = _find_col(headers, "username", "user name", "user", "agent", "rep", "employee", "staff", "technician", "tech")
-    col_category = _find_col(headers, "category", "task type", "activity type", "work type", "type")
-    col_task     = _find_col(headers, "task description", "task", "description", "work performed", "work done", "activity", "detail")
-    col_qty      = _find_col(headers, "quantity", "qty", "count", "units", "items")
-    col_hours    = _find_col(headers, "hours", "time spent", "duration", "hrs")
-    col_notes    = _find_col(headers, "notes", "comments", "comment", "additional", "remarks")
-
-    # ── Conflict resolution: prevent two fields grabbing the same column ────
-    used: set[str] = set()
-    def _claim(col: Optional[str]) -> Optional[str]:
-        if col is None or col in used:
-            return None
-        used.add(col)
-        return col
-
-    col_date     = _claim(col_date)
-    col_task     = _claim(col_task)
-    # Remaining optional columns — skip if already claimed
-    col_username = col_username if col_username not in used else None
-    col_category = col_category if col_category not in used else None
-    col_qty      = col_qty      if col_qty      not in used else None
-    col_hours    = col_hours    if col_hours    not in used else None
-    col_notes    = col_notes    if col_notes    not in used else None
-
-    # If col_task wasn't found after conflict resolution, try remaining headers
-    if not col_task:
-        remaining = [h for h in headers if h not in used]
-        col_task = _find_col(remaining, "task", "description", "work", "notes", "detail", "activity")
-        if col_task:
-            used.add(col_task)
-
-    if not col_date or not col_task:
-        missing = []
-        if not col_date: missing.append("Date")
-        if not col_task: missing.append("Task/Description")
-        raise HTTPException(
-            status_code=422,
-            detail=f"Cannot find required column(s): {', '.join(missing)}. Headers found: {headers}"
+    if async_job and not dry_run:
+        job = create_job(
+            account_id=client_id,
+            job_type="production_import",
+            created_by=user.get("username", ""),
+            payload={
+                "client_id": client_id,
+                "source_type": ext,
+                "filename": file.filename or "upload",
+                "total_rows": len(rows),
+            },
         )
+        append_job_event(job["id"], "queued", f"Queued import of {len(rows)} rows")
 
-    DATE_FMTS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"]
-
-    def _parse_date(val) -> Optional[str]:
-        if val is None or str(val).strip() in ("", "None"):
-            return None
-        # openpyxl / xlrd return Python datetime or date objects for date cells
-        if hasattr(val, "strftime"):
-            return val.strftime("%Y-%m-%d")
-        # Excel serial numbers stored as float/int (rare, but happens with .xls edge cases)
-        if isinstance(val, (int, float)):
+        def _runner():
             try:
-                from datetime import datetime as _dt, timedelta as _td
-                dt = _dt(1899, 12, 30) + _td(days=float(val))
-                if 1970 <= dt.year <= 2100:  # sanity check
-                    return dt.strftime("%Y-%m-%d")
-            except (ValueError, OverflowError):
-                pass
-            return None
-        s = str(val).strip()
-        for fmt in DATE_FMTS:
-            try:
-                from datetime import datetime
-                return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-        return None
+                set_job_running(job["id"], progress=5)
+                append_job_event(job["id"], "start", "Parsing and importing rows")
 
-    imported = 0
-    skipped = 0
-    errors: list[str] = []
+                def _progress_cb(pct: int):
+                    update_job_progress(job["id"], pct)
 
-    for i, row in enumerate(rows, start=2):  # row 2 = first data row (1 = header)
-        try:
-            work_date = _parse_date(row.get(col_date, ""))
-            task_desc = str(row.get(col_task, "")).strip()
-            if not work_date or not task_desc:
-                skipped += 1
-                continue
+                outcome = _import_rows_to_production(
+                    rows=rows,
+                    client_id=client_id,
+                    default_username=user["username"],
+                    dry_run=False,
+                    progress_cb=_progress_cb,
+                )
+                result = {
+                    "source_type": ext,
+                    "filename": file.filename or "upload",
+                    "total_rows": len(rows),
+                    "imported": outcome["imported"],
+                    "skipped": outcome["skipped"],
+                    "errors": outcome["errors"],
+                }
+                complete_job(job["id"], result=result)
+                append_job_event(job["id"], "done", f"Imported {outcome['imported']} rows")
+                notify_activity(user["username"], "imported", "Time Tracking",
+                                f"{outcome['imported']} entries for client #{client_id}")
+            except Exception as exc:
+                fail_job(job["id"], str(exc))
+                append_job_event(job["id"], "error", f"Import failed: {str(exc)[:200]}", "error")
 
-            username = str(row.get(col_username, "") or user["username"]).strip() or user["username"]
-            category = str(row.get(col_category, "") or "General").strip() or "General"
-            notes    = str(row.get(col_notes, "") or "").strip()
+        threading.Thread(target=_runner, daemon=True).start()
+        return {
+            "ok": True,
+            "job_id": job["id"],
+            "status": "queued",
+            "async_job": True,
+            "source_type": ext,
+            "total_rows": len(rows),
+        }
 
-            raw_qty = row.get(col_qty, "")
-            try:
-                quantity = int(float(str(raw_qty))) if raw_qty not in (None, "") else 1
-            except (ValueError, TypeError):
-                quantity = 1
+    outcome = _import_rows_to_production(
+        rows=rows,
+        client_id=client_id,
+        default_username=user["username"],
+        dry_run=dry_run,
+    )
 
-            raw_hrs = row.get(col_hours, "")
-            try:
-                time_spent = float(str(raw_hrs)) if raw_hrs not in (None, "") else 0.0
-            except (ValueError, TypeError):
-                time_spent = 0.0
+    if not dry_run:
+        notify_activity(user["username"], "imported", "Time Tracking",
+                        f"{outcome['imported']} entries for client #{client_id}")
 
-            add_production_log({
-                "client_id":       client_id,
-                "work_date":       work_date,
-                "username":        username,
-                "category":        category,
-                "task_description": task_desc,
-                "quantity":        quantity,
-                "time_spent":      time_spent,
-                "notes":           notes,
-            })
-            imported += 1
-        except Exception as exc:
-            errors.append(f"Row {i}: {str(exc)[:120]}")
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "source_type": ext,
+        "imported": outcome["imported"],
+        "skipped": outcome["skipped"],
+        "errors": outcome["errors"],
+        "preview": outcome["preview"],
+    }
 
-    notify_activity(user["username"], "imported", "Time Tracking",
-                    f"{imported} entries for client #{client_id}")
-    return {"ok": True, "imported": imported, "skipped": skipped, "errors": errors}
+
+@router.post("/jobs/production-report")
+def create_production_report_job(body: ProductionReportJobIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    role = user.get("role")
+    requested_client_id = body.client_id
+    if role not in ("admin", "staff"):
+        requested_client_id = user["id"]
+
+    job = create_job(
+        account_id=requested_client_id,
+        job_type="production_report_pack",
+        created_by=user.get("username", ""),
+        payload={
+            "client_id": requested_client_id,
+            "start_date": body.start_date,
+            "end_date": body.end_date,
+            "requested_by_role": role,
+        },
+    )
+    append_job_event(job["id"], "queued", "Queued production report pack")
+    _start_production_report_job(job["id"], user)
+    return {"ok": True, "job_id": job["id"], "status": "queued"}
+
+
+@router.get("/jobs")
+def jobs_list(
+    status: Optional[str] = None,
+    job_type: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    hub_session: Optional[str] = Cookie(None),
+):
+    user = _require_user(hub_session)
+    account_scope = _client_scope(user)
+    rows = list_jobs(
+        account_id=account_scope,
+        status=(status or "").strip(),
+        job_type=(job_type or "").strip(),
+        limit=limit,
+    )
+    return {"jobs": rows}
+
+
+@router.get("/jobs/{job_id}")
+def jobs_get(job_id: str, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    job = get_job(job_id, include_events=True)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    scope = _client_scope(user)
+    if scope is not None and int(job.get("account_id") or 0) != int(scope):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return job
+
+
+@router.post("/jobs/{job_id}/retry")
+def jobs_retry(job_id: str, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    scope = _client_scope(user)
+    if scope is not None and int(job.get("account_id") or 0) != int(scope):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if job.get("status") != "error":
+        raise HTTPException(status_code=409, detail="Only failed jobs can be retried")
+
+    if job.get("job_type") != "production_report_pack":
+        raise HTTPException(status_code=409, detail="Retry currently supported for production report jobs")
+
+    reset = reset_job_for_retry(job_id)
+    if not reset:
+        raise HTTPException(status_code=404, detail="Job not found")
+    append_job_event(job_id, "queued", f"Retry requested by {user.get('username', '')}")
+    _start_production_report_job(job_id, user)
+    return {"ok": True, "job_id": job_id, "status": "queued"}
 
 
 @router.get("/production/report")
@@ -1980,6 +2399,80 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                 best = max(sheet_results, key=lambda x: len(x[2]))
                 rows = best[2]
         wb.close()
+    return rows
+
+
+def _parse_pdf_rows(content: bytes) -> list[dict]:
+    """Parse table-like PDF content into list[dict] using detected headers.
+
+    Intended for controlled imports where PDFs are exported in tabular layout.
+    """
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:
+        raise ValueError("PDF parsing dependency missing. Install 'pypdf'.") from exc
+
+    import io as _io
+
+    reader = PdfReader(_io.BytesIO(content))
+    lines: list[str] = []
+    for page in reader.pages:
+        txt = page.extract_text() or ""
+        for raw in txt.splitlines():
+            s = re.sub(r"\s+", " ", str(raw or "")).strip()
+            if s:
+                lines.append(s)
+
+    if not lines:
+        return []
+
+    def _split_line(line: str) -> list[str]:
+        if "|" in line:
+            return [p.strip() for p in line.split("|") if p.strip()]
+        if "\t" in line:
+            return [p.strip() for p in line.split("\t") if p.strip()]
+        parts = [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
+        if len(parts) >= 3:
+            return parts
+        return [line.strip()]
+
+    header_idx = -1
+    headers: list[str] = []
+    header_keywords = (
+        "date", "work date", "task", "description", "hours", "qty", "quantity", "category", "user", "notes",
+    )
+    for i, line in enumerate(lines[:60]):
+        parts = _split_line(line)
+        if len(parts) < 3:
+            continue
+        joined = " ".join(parts).lower()
+        hits = sum(1 for k in header_keywords if k in joined)
+        if hits >= 2:
+            header_idx = i
+            headers = parts
+            break
+
+    if header_idx < 0:
+        raise ValueError(
+            "Could not detect a table header in PDF. "
+            "Expected columns like Date, Task/Description, Category, Qty, Hours, Notes."
+        )
+
+    ncols = len(headers)
+    rows: list[dict] = []
+    for line in lines[header_idx + 1:]:
+        if re.fullmatch(r"[-_=| ]{3,}", line):
+            continue
+        parts = _split_line(line)
+        if len(parts) < 2:
+            continue
+        if len(parts) < ncols:
+            parts = parts + [""] * (ncols - len(parts))
+        elif len(parts) > ncols:
+            parts = parts[: ncols - 1] + [" ".join(parts[ncols - 1 :])]
+        row = dict(zip(headers, parts))
+        if any(str(v).strip() for v in row.values()):
+            rows.append(row)
     return rows
 
 
@@ -3504,3 +3997,65 @@ def export_client_seed(hub_session: Optional[str] = Cookie(None)):
         content=seed,
         headers={"Content-Disposition": "attachment; filename=clients_seed.json"},
     )
+
+
+# ─── Team Tracking / Productivity (ActivTrak-style) ──────────────────────────
+
+@router.post("/track/heartbeat")
+def track_heartbeat(request: Request, hub_session: Optional[str] = Cookie(None)):
+    """Frontend pings this every ~60s while the tab is focused. Updates the
+    user's last-seen timestamp and contributes to their daily active time."""
+    user = _require_user(hub_session)
+    log_activity(
+        user["username"], "heartbeat",
+        client_id=user.get("id"),
+        ip=(request.client.host if request.client else ""),
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    return {"ok": True, "ts": datetime.now().isoformat(timespec="seconds")}
+
+
+@router.get("/track/activity")
+def track_activity(
+    username: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = 500,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """List timestamped activity events. Non-admin users can only see their own."""
+    user = _require_user(hub_session)
+    if user.get("role") not in ("admin", "staff"):
+        username = user["username"]
+    rows = list_activity_events(
+        username=username, start=start, end=end,
+        event_type=event_type, limit=min(int(limit or 500), 5000),
+    )
+    return {"ok": True, "count": len(rows), "events": rows}
+
+
+@router.get("/track/live")
+def track_live(within: int = 300, hub_session: Optional[str] = Cookie(None)):
+    """Who's online right now (seen in the last `within` seconds)."""
+    _require_user(hub_session)
+    users = get_live_users(within_seconds=max(30, min(int(within or 300), 3600)))
+    return {"ok": True, "within_seconds": within, "users": users}
+
+
+@router.get("/track/productivity")
+def track_productivity(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    username: Optional[str] = None,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Per-user-per-day productivity rollup (ActivTrak-style)."""
+    user = _require_user(hub_session)
+    if user.get("role") not in ("admin", "staff"):
+        username = user["username"]
+    if not start_date:
+        start_date = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    return get_productivity_report(start_date=start_date, end_date=end_date, username=username)

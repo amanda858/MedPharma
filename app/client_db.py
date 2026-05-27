@@ -89,6 +89,25 @@ def _hash_pw(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode()).hexdigest()
 
 
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _ensure_password_setup_table(conn):
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS password_setup_tokens (
+               id            INTEGER PRIMARY KEY AUTOINCREMENT,
+               client_id     INTEGER NOT NULL,
+               token_hash    TEXT UNIQUE NOT NULL,
+               created_by    TEXT DEFAULT '',
+               created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+               expires_at    TEXT NOT NULL,
+               used_at       TEXT,
+               FOREIGN KEY (client_id) REFERENCES clients(id)
+           )"""
+    )
+
+
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +147,17 @@ def init_client_hub_db():
             client_id     INTEGER NOT NULL,
             created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
             expires_at    TEXT,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS password_setup_tokens (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id     INTEGER NOT NULL,
+            token_hash    TEXT UNIQUE NOT NULL,
+            created_by    TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            expires_at    TEXT NOT NULL,
+            used_at       TEXT,
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
 
@@ -400,6 +430,69 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_rn_client ON report_notes(client_id);
+
+        -- ── Activity events (timestamped team-tracking firehose) ─────────────
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            username      TEXT NOT NULL,
+            client_id     INTEGER,
+            event_type    TEXT NOT NULL,
+            method        TEXT DEFAULT '',
+            path          TEXT DEFAULT '',
+            status_code   INTEGER,
+            duration_ms   INTEGER,
+            ip            TEXT DEFAULT '',
+            user_agent    TEXT DEFAULT '',
+            details       TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_ae_user_time ON activity_events(username, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_ae_time      ON activity_events(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_ae_type      ON activity_events(event_type);
+
+        -- ── Per-user-per-day presence rollup (ActivTrak-style) ──────────────
+        CREATE TABLE IF NOT EXISTS user_presence (
+            username       TEXT NOT NULL,
+            work_date      TEXT NOT NULL,
+            first_seen_at  TEXT,
+            last_seen_at   TEXT,
+            active_seconds INTEGER DEFAULT 0,
+            idle_seconds   INTEGER DEFAULT 0,
+            action_count   INTEGER DEFAULT 0,
+            PRIMARY KEY (username, work_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_up_date ON user_presence(work_date);
+
+        -- ── async jobs ─────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS jobs (
+            id            TEXT PRIMARY KEY,
+            account_id    INTEGER,
+            job_type      TEXT NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'queued',
+            progress      INTEGER DEFAULT 0,
+            eta_seconds   INTEGER,
+            latest_error  TEXT DEFAULT '',
+            payload_json  TEXT DEFAULT '{}',
+            result_json   TEXT DEFAULT '{}',
+            created_by    TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            started_at    TEXT,
+            finished_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_account     ON jobs(account_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_created_at  ON jobs(created_at);
+
+        CREATE TABLE IF NOT EXISTS job_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id      TEXT NOT NULL,
+            stage       TEXT DEFAULT '',
+            level       TEXT DEFAULT 'info',
+            message     TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, created_at);
     """)
     conn.commit()
 
@@ -707,6 +800,145 @@ def create_client(data: dict) -> int:
         "_temp_password": raw_password,  # stored so re-seed can restore login
     })
     return cid
+
+
+def create_user_invite(data: dict, invited_by: str, ttl_hours: int = 72) -> dict:
+    """Create a user account and issue a one-time password setup token."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        _ensure_password_setup_table(conn)
+        company = (data.get("company") or "").strip()
+        contact_name = (data.get("contact_name") or "").strip()
+        email = (data.get("email") or "").strip().lower()
+        phone = (data.get("phone") or "").strip()
+        role = (data.get("role") or "client").strip().lower()
+        if role not in ("client", "staff", "admin"):
+            role = "client"
+
+        username = (data.get("username") or "").strip().lower()
+        if not username:
+            base = contact_name or company or (email.split("@", 1)[0] if "@" in email else "user")
+            username = _auto_username(base, conn)
+
+        # Random placeholder password; user must set via token.
+        salt = secrets.token_hex(16)
+        temp_pw = secrets.token_urlsafe(24)
+        cur.execute(
+            """INSERT INTO clients
+               (username, password, salt, company, contact_name, email, phone, role, practice_type)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                username,
+                _hash_pw(temp_pw, salt),
+                salt,
+                company or (contact_name or username),
+                contact_name,
+                email,
+                phone,
+                role,
+                (data.get("service_type") or "").strip(),
+            ),
+        )
+        client_id = cur.lastrowid
+
+        # Invalidate any outstanding setup tokens for this user.
+        cur.execute(
+            "UPDATE password_setup_tokens SET used_at=? WHERE client_id=? AND used_at IS NULL",
+            (datetime.now().isoformat(), client_id),
+        )
+
+        raw_token = secrets.token_urlsafe(48)
+        token_hash = _hash_token(raw_token)
+        expires_at = (datetime.now() + timedelta(hours=max(1, int(ttl_hours)))).isoformat()
+        cur.execute(
+            """INSERT INTO password_setup_tokens (client_id, token_hash, created_by, expires_at)
+               VALUES (?,?,?,?)""",
+            (client_id, token_hash, invited_by or "", expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "client_id": client_id,
+        "username": username,
+        "email": email,
+        "contact_name": contact_name,
+        "company": company,
+        "role": role,
+        "token": raw_token,
+        "expires_at": expires_at,
+    }
+
+
+def get_password_setup_token_info(token: str) -> dict | None:
+    if not token:
+        return None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        _ensure_password_setup_table(conn)
+        cur.execute(
+            """SELECT t.id, t.client_id, t.expires_at, t.used_at,
+                      c.username, c.contact_name, c.email, c.company, c.role
+               FROM password_setup_tokens t
+               JOIN clients c ON c.id = t.client_id
+               WHERE t.token_hash = ?""",
+            (_hash_token(token),),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return None
+    info = dict(row)
+    if info.get("used_at"):
+        return None
+    if info.get("expires_at") and info["expires_at"] <= datetime.now().isoformat():
+        return None
+    return info
+
+
+def consume_password_setup_token(token: str, new_password: str) -> dict | None:
+    """Set password for token's user and consume all outstanding tokens."""
+    if not token or not new_password:
+        return None
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        _ensure_password_setup_table(conn)
+        cur.execute(
+            """SELECT t.id, t.client_id, t.expires_at, t.used_at, c.username
+               FROM password_setup_tokens t
+               JOIN clients c ON c.id=t.client_id
+               WHERE t.token_hash=?""",
+            (_hash_token(token),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if d.get("used_at"):
+            return None
+        if d.get("expires_at") and d["expires_at"] <= datetime.now().isoformat():
+            return None
+
+        salt = secrets.token_hex(16)
+        pw_hash = _hash_pw(new_password, salt)
+        now_iso = datetime.now().isoformat()
+        cur.execute("UPDATE clients SET password=?, salt=? WHERE id=?", (pw_hash, salt, d["client_id"]))
+        cur.execute("UPDATE sessions SET expires_at=? WHERE client_id=?", (now_iso, d["client_id"]))
+        cur.execute(
+            "UPDATE password_setup_tokens SET used_at=? WHERE client_id=? AND used_at IS NULL",
+            (now_iso, d["client_id"]),
+        )
+        conn.commit()
+        return {"client_id": d["client_id"], "username": d["username"]}
+    finally:
+        conn.close()
 
 
 def _persist_client_to_seed(entry: dict):
@@ -1791,6 +2023,242 @@ def get_audit_log(client_id: int = None, limit: int = 100):
     return rows
 
 
+# ─── Team Tracking / Productivity (ActivTrak-style) ───────────────────────
+#
+# We log every authenticated HTTP request + login/logout + frontend heartbeats
+# into `activity_events`, and maintain a per-user-per-day rollup in
+# `user_presence`. "Active seconds" is computed as the gap between consecutive
+# events for the same user, capped at IDLE_THRESHOLD_SECONDS (default 5 min).
+# Gaps longer than the threshold are considered idle and not counted.
+
+IDLE_THRESHOLD_SECONDS = 5 * 60   # gap > 5 min = idle session
+HEARTBEAT_INTERVAL_SEC = 60       # frontend pings this often when tab is focused
+PRODUCTIVITY_TARGET_HOURS = 7.0   # used for the 0-100 productivity score
+
+
+def log_activity(username: str,
+                 event_type: str,
+                 *,
+                 client_id: int = None,
+                 method: str = "",
+                 path: str = "",
+                 status_code: int = None,
+                 duration_ms: int = None,
+                 ip: str = "",
+                 user_agent: str = "",
+                 details: str = "") -> None:
+    """Record one timestamped activity event and update the user's daily
+    presence rollup. Safe — swallows any errors so tracking never breaks the
+    main request flow.
+    """
+    if not username:
+        return
+    username = username.strip().lower()
+    if not username:
+        return
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        now = datetime.now()
+        now_iso = now.isoformat(timespec="seconds")
+        today = now.strftime("%Y-%m-%d")
+
+        cur.execute(
+            "INSERT INTO activity_events "
+            "(occurred_at, username, client_id, event_type, method, path, "
+            " status_code, duration_ms, ip, user_agent, details) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso, username, client_id, event_type, method or "",
+             path or "", status_code, duration_ms, ip or "",
+             (user_agent or "")[:255], details or ""),
+        )
+
+        cur.execute(
+            "SELECT last_seen_at, active_seconds, idle_seconds, action_count "
+            "FROM user_presence WHERE username=? AND work_date=?",
+            (username, today),
+        )
+        row = cur.fetchone()
+        counts_as_action = event_type not in ("heartbeat",)
+        action_inc = 1 if counts_as_action else 0
+
+        if row is None:
+            cur.execute(
+                "INSERT INTO user_presence "
+                "(username, work_date, first_seen_at, last_seen_at, "
+                " active_seconds, idle_seconds, action_count) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (username, today, now_iso, now_iso, 0, 0, action_inc),
+            )
+        else:
+            try:
+                prev = datetime.fromisoformat(row["last_seen_at"]) if row["last_seen_at"] else now
+            except Exception:
+                prev = now
+            gap = max(0, int((now - prev).total_seconds()))
+            if gap <= IDLE_THRESHOLD_SECONDS:
+                active_add, idle_add = gap, 0
+            else:
+                active_add, idle_add = 0, gap
+            cur.execute(
+                "UPDATE user_presence SET "
+                "  last_seen_at=?, "
+                "  active_seconds=active_seconds+?, "
+                "  idle_seconds=idle_seconds+?, "
+                "  action_count=action_count+? "
+                "WHERE username=? AND work_date=?",
+                (now_iso, active_add, idle_add, action_inc, username, today),
+            )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+
+
+def list_activity_events(username: str = None,
+                         start: str = None,
+                         end: str = None,
+                         event_type: str = None,
+                         limit: int = 500) -> list[dict]:
+    """List recent activity events with optional filters."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        conds, params = [], []
+        if username:
+            conds.append("lower(username)=lower(?)")
+            params.append(username)
+        if start:
+            conds.append("occurred_at >= ?")
+            params.append(start)
+        if end:
+            conds.append("occurred_at <= ?")
+            params.append(end)
+        if event_type:
+            conds.append("event_type=?")
+            params.append(event_type)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        params.append(int(limit))
+        cur.execute(
+            f"SELECT * FROM activity_events {where} "
+            f"ORDER BY occurred_at DESC LIMIT ?", params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_live_users(within_seconds: int = 300) -> list[dict]:
+    """Users seen within the last N seconds — 'who is online right now'."""
+    conn = get_db()
+    try:
+        cutoff = (datetime.now() - timedelta(seconds=within_seconds)).isoformat(timespec="seconds")
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT username, MAX(occurred_at) AS last_seen, COUNT(*) AS recent_events "
+            "FROM activity_events WHERE occurred_at >= ? "
+            "GROUP BY username ORDER BY last_seen DESC",
+            (cutoff,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_productivity_report(start_date: str = None,
+                            end_date: str = None,
+                            username: str = None) -> dict:
+    """ActivTrak-style productivity report aggregated from `user_presence`.
+
+    Returns one row per user per day with active/idle minutes, action count
+    and a 0-100 productivity score relative to PRODUCTIVITY_TARGET_HOURS.
+    Also returns per-user totals and a top-paths breakdown.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        conds, params = [], []
+        if start_date:
+            conds.append("work_date >= ?")
+            params.append(start_date)
+        if end_date:
+            conds.append("work_date <= ?")
+            params.append(end_date)
+        if username:
+            conds.append("lower(username)=lower(?)")
+            params.append(username)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+
+        target_sec = PRODUCTIVITY_TARGET_HOURS * 3600.0
+        cur.execute(
+            f"SELECT username, work_date, first_seen_at, last_seen_at, "
+            f"       active_seconds, idle_seconds, action_count "
+            f"FROM user_presence {where} "
+            f"ORDER BY work_date DESC, username", params,
+        )
+        daily = []
+        for r in cur.fetchall():
+            d = dict(r)
+            score = round(min(100.0, (d["active_seconds"] / target_sec) * 100.0), 1) if target_sec else 0.0
+            d["active_minutes"] = round(d["active_seconds"] / 60.0, 1)
+            d["idle_minutes"]   = round(d["idle_seconds"]   / 60.0, 1)
+            d["productivity_score"] = score
+            daily.append(d)
+
+        cur.execute(
+            f"SELECT username, "
+            f"       SUM(active_seconds) AS active_seconds, "
+            f"       SUM(idle_seconds)   AS idle_seconds, "
+            f"       SUM(action_count)   AS action_count, "
+            f"       COUNT(*)            AS days_active "
+            f"FROM user_presence {where} "
+            f"GROUP BY username ORDER BY active_seconds DESC", params,
+        )
+        by_user = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["active_seconds"] = int(d["active_seconds"] or 0)
+            d["idle_seconds"]   = int(d["idle_seconds"]   or 0)
+            d["action_count"]   = int(d["action_count"]   or 0)
+            d["active_hours"]   = round(d["active_seconds"] / 3600.0, 2)
+            d["idle_hours"]     = round(d["idle_seconds"]   / 3600.0, 2)
+            avg_daily_sec = (d["active_seconds"] / d["days_active"]) if d["days_active"] else 0
+            d["avg_active_hours_per_day"] = round(avg_daily_sec / 3600.0, 2)
+            d["productivity_score"] = round(min(100.0, (avg_daily_sec / target_sec) * 100.0), 1) if target_sec else 0.0
+            by_user.append(d)
+
+        ev_conds, ev_params = ["event_type='request'"], []
+        if start_date:
+            ev_conds.append("date(occurred_at) >= ?")
+            ev_params.append(start_date)
+        if end_date:
+            ev_conds.append("date(occurred_at) <= ?")
+            ev_params.append(end_date)
+        if username:
+            ev_conds.append("lower(username)=lower(?)")
+            ev_params.append(username)
+        ev_where = "WHERE " + " AND ".join(ev_conds)
+        cur.execute(
+            f"SELECT path, COUNT(*) AS hits FROM activity_events {ev_where} "
+            f"GROUP BY path ORDER BY hits DESC LIMIT 20", ev_params,
+        )
+        top_paths = [dict(r) for r in cur.fetchall()]
+
+        return {
+            "ok": True,
+            "target_hours_per_day": PRODUCTIVITY_TARGET_HOURS,
+            "idle_threshold_seconds": IDLE_THRESHOLD_SECONDS,
+            "daily": daily,
+            "by_user": by_user,
+            "top_paths": top_paths,
+        }
+    finally:
+        conn.close()
+
+
 # ─── SLA Auto-Flagging ───────────────────────────────────────────────────
 
 SLA_THRESHOLDS = {
@@ -2044,6 +2512,242 @@ def export_table(table: str, client_id: int = None):
     finally:
         conn.close()
     return rows
+
+
+# ─── Async Jobs ───────────────────────────────────────────────────────────
+
+def _job_row_to_dict(row) -> dict:
+    if not row:
+        return {}
+    item = dict(row)
+    try:
+        item["payload"] = json.loads(item.get("payload_json") or "{}")
+    except Exception:
+        item["payload"] = {}
+    try:
+        item["result"] = json.loads(item.get("result_json") or "{}")
+    except Exception:
+        item["result"] = {}
+    item.pop("payload_json", None)
+    item.pop("result_json", None)
+    return item
+
+
+def _ensure_jobs_tables(conn):
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id            TEXT PRIMARY KEY,
+            account_id    INTEGER,
+            job_type      TEXT NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'queued',
+            progress      INTEGER DEFAULT 0,
+            eta_seconds   INTEGER,
+            latest_error  TEXT DEFAULT '',
+            payload_json  TEXT DEFAULT '{}',
+            result_json   TEXT DEFAULT '{}',
+            created_by    TEXT DEFAULT '',
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            started_at    TEXT,
+            finished_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_account     ON jobs(account_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_created_at  ON jobs(created_at);
+
+        CREATE TABLE IF NOT EXISTS job_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id      TEXT NOT NULL,
+            stage       TEXT DEFAULT '',
+            level       TEXT DEFAULT 'info',
+            message     TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, created_at);
+        """
+    )
+    conn.commit()
+
+
+def create_job(account_id: int = None, job_type: str = "", created_by: str = "", payload: dict = None) -> dict:
+    if not job_type:
+        raise ValueError("job_type is required")
+    payload = payload or {}
+    job_id = secrets.token_hex(16)
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO jobs (id, account_id, job_type, status, progress, payload_json, created_by)
+            VALUES (?, ?, ?, 'queued', 0, ?, ?)
+            """,
+            (job_id, account_id, job_type, json.dumps(payload), created_by),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_job(job_id)
+
+
+def append_job_event(job_id: str, stage: str, message: str, level: str = "info"):
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            "INSERT INTO job_events (job_id, stage, level, message) VALUES (?, ?, ?, ?)",
+            (job_id, stage or "", level or "info", (message or "")[:500]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_job_running(job_id: str, progress: int = 0, eta_seconds: int = None):
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='running', progress=?, eta_seconds=?, started_at=COALESCE(started_at, CURRENT_TIMESTAMP), latest_error=''
+            WHERE id=?
+            """,
+            (max(0, min(100, int(progress))), eta_seconds, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_job_progress(job_id: str, progress: int, eta_seconds: int = None):
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            "UPDATE jobs SET progress=?, eta_seconds=? WHERE id=?",
+            (max(0, min(100, int(progress))), eta_seconds, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def complete_job(job_id: str, result: dict = None):
+    result = result or {}
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='done', progress=100, eta_seconds=NULL, latest_error='',
+                result_json=?, finished_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (json.dumps(result), job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fail_job(job_id: str, error: str):
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='error', latest_error=?, eta_seconds=NULL, finished_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            ((error or "Job failed")[:500], job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_job_events(job_id: str, limit: int = 200) -> list:
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        rows = conn.execute(
+            "SELECT * FROM job_events WHERE job_id=? ORDER BY id DESC LIMIT ?",
+            (job_id, max(1, min(int(limit), 1000))),
+        ).fetchall()
+    finally:
+        conn.close()
+    events = [dict(r) for r in rows]
+    events.reverse()
+    return events
+
+
+def get_job(job_id: str, include_events: bool = False) -> dict | None:
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    item = _job_row_to_dict(row)
+    if include_events:
+        item["events"] = get_job_events(job_id)
+    return item
+
+
+def list_jobs(account_id: int = None, status: str = "", job_type: str = "", limit: int = 50) -> list:
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        cond = []
+        params = []
+        if account_id is not None:
+            cond.append("account_id=?")
+            params.append(account_id)
+        if status:
+            cond.append("status=?")
+            params.append(status)
+        if job_type:
+            cond.append("job_type=?")
+            params.append(job_type)
+        where = f"WHERE {' AND '.join(cond)}" if cond else ""
+        params.append(max(1, min(int(limit), 200)))
+        rows = conn.execute(
+            f"SELECT * FROM jobs {where} ORDER BY created_at DESC LIMIT ?",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_job_row_to_dict(r) for r in rows]
+
+
+def reset_job_for_retry(job_id: str) -> dict | None:
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        if row["status"] != "error":
+            return _job_row_to_dict(row)
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='queued', progress=0, eta_seconds=NULL, latest_error='',
+                started_at=NULL, finished_at=NULL
+            WHERE id=?
+            """,
+            (job_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_job(job_id)
 
 
 # ─── Team Production ──────────────────────────────────────────────────────

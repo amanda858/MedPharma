@@ -1809,6 +1809,7 @@
                   <div class="login-card-secure">🔐 Secure Sign In</div>
                 </div>
                 <div class="login-divider"></div>
+                <div id="loginFieldsWrap">
                 <div class="login-field">
                   <label>Username</label>
                   <input type="text" id="loginUser" placeholder="Enter username" autofocus autocomplete="username"
@@ -1824,6 +1825,20 @@
                   </div>
                 </div>
                 <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In →</button>
+                </div>
+                <div id="setupPwPanel" style="display:none">
+                  <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px">Set Your Password</div>
+                  <div style="font-size:12px;color:#64748b;margin-bottom:14px" id="setupPwMeta"></div>
+                  <div class="login-field">
+                    <label>New Password</label>
+                    <input type="password" id="setupPw1" placeholder="At least 10 characters" autocomplete="new-password">
+                  </div>
+                  <div class="login-field">
+                    <label>Confirm Password</label>
+                    <input type="password" id="setupPw2" placeholder="Re-enter password" autocomplete="new-password">
+                  </div>
+                  <button class="btn-login" id="btnSetupPw" onclick="submitSetupPassword()">Save Password</button>
+                </div>
                 <div class="login-error" id="loginError"></div>
                 <div id="loginStatus"
                   style="text-align:center;font-size:13px;color:#94a3b8;margin-top:8px;display:none">
@@ -1852,7 +1867,7 @@
       <h2 id="accountGreeting">Select an Account</h2>
       <p id="accountSubtitle">Choose a client account to open the dashboard</p>
       <div style="margin-bottom:16px;text-align:right">
-        <button class="btn btn-primary btn-sm" onclick="showNewClientFromSelector()"
+        <button class="btn btn-primary btn-sm" id="selectorNewClientBtn" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
       </div>
       <div class="account-grid" id="accountGrid"></div>
@@ -1878,6 +1893,12 @@
         <div id="searchDropdown" class="search-dropdown" style="display:none"></div>
       </div>
       <div class="topbar-right">
+        <button id="jobsBell" onclick="toggleJobsDrawer()" title="Recent Jobs"
+          style="position:relative;background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">
+          🧭<span id="jobsBadge"
+            style="display:none;position:absolute;top:-2px;right:0;background:#1d4ed8;color:#fff;
+            font-size:10px;font-weight:700;border-radius:50%;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px">0</span>
+        </button>
         <!-- Alerts Bell -->
         <button id="alertsBell" onclick="navTo('alerts')" title="Alerts & Notifications"
           style="position:relative;background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">
@@ -1888,6 +1909,21 @@
         <span id="topUser" style="font-weight:500"></span>
         <span class="role-pill" id="topRole"></span>
         <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+      </div>
+    </div>
+
+    <div id="jobsDrawer" style="display:none;position:fixed;top:62px;right:16px;width:min(420px,calc(100vw - 24px));
+      max-height:70vh;overflow:auto;background:#fff;border:1px solid #dbe2ea;border-radius:12px;box-shadow:0 16px 40px rgba(15,23,42,.18);
+      z-index:620;padding:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-weight:700;color:var(--gray-800)">Recent Jobs</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span id="jobsDrawerMeta" style="font-size:11px;color:var(--gray-500)"></span>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px" onclick="loadGlobalJobsStatus(true)">Refresh</button>
+        </div>
+      </div>
+      <div id="jobsDrawerList" style="display:flex;flex-direction:column;gap:8px">
+        <div style="font-size:12px;color:var(--gray-400);padding:10px;text-align:center">No jobs yet.</div>
       </div>
     </div>
     <!-- Sub-Profile Filter Bar (MHP/OMT) — visible only for Luminary-type clients -->
@@ -1919,10 +1955,6 @@
           <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Profile</div>
           <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
           <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
-          <div id="leadGenNav">
-            <div class="nav-section">Lead Generation</div>
-            <div class="nav-item" data-panel="leads" onclick="navTo('leads')" style="color:#7c3aed;font-weight:600">Lead Source</div>
-          </div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -2325,6 +2357,7 @@
           <div class="page-header">
             <div class="page-title">Manage Clients</div>
             <div class="page-actions">
+                <button class="btn btn-primary btn-sm" onclick="openUserInviteModal()">+ Add User</button>
               <button class="btn btn-primary btn-sm" onclick="openClientModal()">+ Add Client</button>
               <button class="btn btn-secondary btn-sm" onclick="downloadClientSeed()" title="Download backup of all clients — commit this file to preserve clients across deploys">💾 Backup Clients</button>
             </div>
@@ -2856,6 +2889,7 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
+              <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('jobs')" id="btnProdJobs">🧭 Job Center</button>
               <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
                 Log</button>
             </div>
@@ -2960,6 +2994,7 @@
                 <span style="font-size:13px;color:var(--gray-400)">to</span>
                 <input class="form-control" type="date" id="prodRptEnd" style="width:170px">
                 <button class="btn btn-primary btn-sm" onclick="loadProductionReport()">Generate Report</button>
+                <button class="btn btn-secondary btn-sm" onclick="queueProductionReportJob()">🧭 Queue Report Job</button>
                 <div style="display:flex;gap:6px;margin-left:4px;flex-wrap:wrap">
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('today')" style="background:#f0fdf4;border-color:#86efac;color:#15803d">📅 Today</button>
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('yesterday')">Yesterday</button>
@@ -2977,6 +3012,57 @@
                 click Generate Report</p>
             </div>
           </div>
+
+          <!-- Job Center View -->
+          <div id="prodJobsView" style="display:none">
+            <div class="card" style="margin-bottom:18px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <label style="font-weight:600;font-size:13px">Status:</label>
+                <select class="form-control" id="prodJobStatus" style="width:170px" onchange="loadProductionJobs()">
+                  <option value="">All statuses</option>
+                  <option value="queued">Queued</option>
+                  <option value="running">Running</option>
+                  <option value="done">Done</option>
+                  <option value="error">Error</option>
+                </select>
+                <label style="font-weight:600;font-size:13px">Type:</label>
+                <select class="form-control" id="prodJobType" style="width:220px" onchange="loadProductionJobs()">
+                  <option value="">All production jobs</option>
+                  <option value="production_import">Production Import</option>
+                  <option value="production_report_pack">Production Report Pack</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="loadProductionJobs()">🔄 Refresh</button>
+                <span id="prodJobsMeta" style="margin-left:auto;font-size:12px;color:var(--gray-500)"></span>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px">
+              <div class="card" style="padding:0;overflow:hidden">
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Created</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th>By</th>
+                      </tr>
+                    </thead>
+                    <tbody id="prodJobsTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                  <div class="card-title">🧾 Job Details</div>
+                  <button class="btn btn-secondary btn-sm" id="prodJobRetryBtn" style="display:none" onclick="retrySelectedProductionJob()">↻ Retry</button>
+                </div>
+                <div id="prodJobDetail" style="margin-top:10px;color:var(--gray-500);font-size:13px">Select a job to inspect timeline and results.</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- ═══ ALERTS & NOTIFICATIONS ═══ -->
@@ -2990,22 +3076,6 @@
           <div id="alertsContent">
             <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading alerts...</div>
           </div>
-        </div>
-
-        <!-- ═══ LEAD SOURCE (embedded scrubber + hunt mode) ═══ -->
-        <div class="hub-panel" id="panel-leads" style="padding:0;height:calc(100vh - 60px);position:relative;">
-          <div style="position:absolute;top:8px;right:14px;z-index:5;display:flex;gap:8px;align-items:center;">
-            <a href="/admin/leads/api/leads/emails/export-csv" download="email_leads.csv"
-               style="font-size:12px;padding:6px 14px;border-radius:6px;background:#16a34a;color:#fff;text-decoration:none;border:none;font-weight:600;">⬇ Download All Emails (CSV)</a>
-            <a href="/admin/leads/" target="_blank" rel="noopener"
-               style="font-size:12px;padding:6px 12px;border-radius:6px;background:#eef2ff;color:#4338ca;text-decoration:none;border:1px solid #c7d2fe;font-weight:600;">↗ Open Full Page</a>
-          </div>
-          <iframe
-            id="leadsIframe"
-            src="about:blank"
-            style="width:100%;height:100%;border:none;display:block;"
-            allow="same-origin"
-          ></iframe>
         </div>
 
         <!-- ═══ ALERTS ═══ -->
@@ -3165,6 +3235,36 @@
           <button class="btn btn-success btn-sm" onclick="addPayment()">+ Add</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- User Invite Modal -->
+  <div class="modal-overlay" id="userInviteModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2>Invite New User</h2>
+        <button class="modal-close" onclick="closeModal('userInviteModal')">&times;</button>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Display Company/Team *</label><input class="form-control" id="fUCompany" placeholder="e.g. MedPharma SC"></div>
+        <div class="form-group"><label>Full Name</label><input class="form-control" id="fUContact" placeholder="User full name"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Email *</label><input class="form-control" type="email" id="fUEmail" placeholder="user@example.com"></div>
+        <div class="form-group"><label>Phone</label><input class="form-control" id="fUPhone" placeholder="(555) 000-0000"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Role</label>
+          <select class="form-control" id="fURole">
+            <option value="client">Client</option>
+            <option value="staff">Staff</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Username (optional)</label><input class="form-control" id="fUUsername" placeholder="auto-generated if blank"></div>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:12px">The user will receive an email with a secure link to set their own password.</div>
+      <button class="btn btn-primary" style="margin-top:6px" onclick="sendUserInvite()">Send Invite</button>
     </div>
   </div>
 
@@ -3404,7 +3504,11 @@
     let activeClientId = null;
     let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
     let activeClientPracticeType = '';
+    let setupToken = null;
     let clientsList = [];
+    let globalJobsTimer = null;
+    let globalJobsDrawerOpen = false;
+    let globalJobsCache = [];
     let allClaims = [];
     let activeQueueStatus = 'All';
     const QUEUE_STATUSES = ['All', 'Intake', 'Verification', 'Coding', 'Billed/Submitted', 'Rejected', 'Denied', 'A/R Follow-Up', 'Appeals', 'Paid', 'Closed'];
@@ -3436,13 +3540,6 @@
     // ═══════════════════════════════════════
     // BOOT
     // ═══════════════════════════════════════
-    function getNextDestination() {
-      const next = new URLSearchParams(window.location.search).get('next') || '';
-      // Only allow internal leads destination to avoid open redirects.
-      if (!next.startsWith('/admin/leads')) return '';
-      return next;
-    }
-
     document.addEventListener('DOMContentLoaded', async () => {
       // Enter key on login
       document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
@@ -3454,6 +3551,13 @@
         m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
       });
 
+      const qp = new URLSearchParams(window.location.search);
+      setupToken = (qp.get('setup_token') || '').trim();
+      if (setupToken) {
+        await showSetupPasswordMode(setupToken);
+        return;
+      }
+
       // Ping server immediately so it wakes up before user hits Sign In
       fetch('/hub/api/me').catch(() => { });
 
@@ -3462,15 +3566,49 @@
         if (r.ok) {
           const u = await r.json();
           currentUser = u;
-          const next = getNextDestination();
-          if (next && isStaffOrAdmin()) {
-            window.location.href = next;
-            return;
-          }
           await showAccountSelector();
         }
       } catch (_) { }
     });
+
+    async function showSetupPasswordMode(token) {
+      document.getElementById('loginFieldsWrap').style.display = 'none';
+      document.getElementById('setupPwPanel').style.display = '';
+      document.getElementById('loginStatus').style.display = 'none';
+      document.getElementById('loginError').style.display = 'none';
+      try {
+        const r = await fetch(`/hub/api/auth/setup-password/${encodeURIComponent(token)}`);
+        if (!r.ok) throw new Error('Invalid or expired setup link');
+        const d = await r.json();
+        document.getElementById('setupPwMeta').textContent = `${d.username || ''} (${d.email || ''})`;
+      } catch (e) {
+        showLoginError(e.message || 'Could not validate setup token');
+      }
+    }
+
+    async function submitSetupPassword() {
+      const p1 = document.getElementById('setupPw1').value || '';
+      const p2 = document.getElementById('setupPw2').value || '';
+      if (!setupToken) { showLoginError('Missing setup token'); return; }
+      if (p1.length < 10) { showLoginError('Password must be at least 10 characters'); return; }
+      if (p1 !== p2) { showLoginError('Passwords do not match'); return; }
+      try {
+        const r = await fetch(`/hub/api/auth/setup-password/${encodeURIComponent(setupToken)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: p1 }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Failed to set password');
+        toast('Password set. Sign in with your new password.', 'success');
+        const clean = window.location.pathname;
+        window.history.replaceState({}, '', clean);
+        document.getElementById('setupPwPanel').style.display = 'none';
+        document.getElementById('loginFieldsWrap').style.display = '';
+        if (d.username) document.getElementById('loginUser').value = d.username;
+      } catch (e) {
+        showLoginError(e.message || 'Could not set password');
+      }
+    }
 
     // ═══════════════════════════════════════
     // AUTH
@@ -3550,15 +3688,115 @@
     }
 
     async function doLogout() {
+      stopGlobalJobsMonitor();
       try { await fetch('/hub/api/logout', { method: 'POST' }); } catch (_) { }
       // Full page reload to /hub guarantees clean auth state — no stale cookie can auto-login
       window.location.href = '/hub';
+    }
+
+    function stopGlobalJobsMonitor() {
+      if (globalJobsTimer) {
+        clearInterval(globalJobsTimer);
+        globalJobsTimer = null;
+      }
+      globalJobsDrawerOpen = false;
+      const drawer = document.getElementById('jobsDrawer');
+      if (drawer) drawer.style.display = 'none';
+    }
+
+    function startGlobalJobsMonitor() {
+      stopGlobalJobsMonitor();
+      loadGlobalJobsStatus();
+      globalJobsTimer = setInterval(() => {
+        if (document.getElementById('appShell')?.style.display !== 'none') {
+          loadGlobalJobsStatus(globalJobsDrawerOpen);
+        }
+      }, 6000);
+    }
+
+    async function loadGlobalJobsStatus(updateDrawer = false) {
+      if (document.getElementById('appShell')?.style.display === 'none') return;
+      try {
+        const r = await fetch('/hub/api/jobs?limit=12');
+        const d = await r.json();
+        if (!r.ok) return;
+        const jobs = (d.jobs || []).filter(j => (j.job_type || '').startsWith('production_'));
+        globalJobsCache = jobs;
+
+        const running = jobs.filter(j => j.status === 'running').length;
+        const queued = jobs.filter(j => j.status === 'queued').length;
+        const errors = jobs.filter(j => j.status === 'error').length;
+        const active = running + queued + errors;
+
+        const badge = document.getElementById('jobsBadge');
+        if (badge) {
+          if (active > 0) {
+            badge.textContent = String(active > 99 ? '99+' : active);
+            badge.style.display = '';
+            badge.style.background = errors > 0 ? 'var(--danger)' : '#1d4ed8';
+          } else {
+            badge.style.display = 'none';
+          }
+        }
+
+        const meta = document.getElementById('jobsDrawerMeta');
+        if (meta) meta.textContent = `${jobs.length} total • ${running} running • ${errors} error`;
+        if (updateDrawer || globalJobsDrawerOpen) renderGlobalJobsDrawer(jobs);
+      } catch (_) { }
+    }
+
+    function renderGlobalJobsDrawer(jobs) {
+      const list = document.getElementById('jobsDrawerList');
+      if (!list) return;
+      if (!jobs.length) {
+        list.innerHTML = '<div style="font-size:12px;color:var(--gray-400);padding:10px;text-align:center">No recent jobs.</div>';
+        return;
+      }
+
+      const top = jobs.slice(0, 8);
+      const typeLabel = (t) => t === 'production_import' ? 'Import' : (t === 'production_report_pack' ? 'Report Pack' : (t || 'Job'));
+      const statusChip = (s) => {
+        if (s === 'done') return 'badge-green';
+        if (s === 'error') return 'badge-red';
+        if (s === 'running') return 'badge-blue';
+        return 'badge-purple';
+      };
+
+      list.innerHTML = top.map(j => `
+        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;background:#fff">
+          <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+            <div style="font-size:12px;font-weight:700;color:var(--gray-700)">${esc(typeLabel(j.job_type))}</div>
+            <span class="badge ${statusChip(j.status)}">${esc(j.status || 'unknown')}</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+            <div style="flex:1;height:6px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div style="height:100%;background:#1d4ed8;width:${Math.max(0, Math.min(100, Number(j.progress || 0)))}%"></div></div>
+            <span style="font-size:11px;color:var(--gray-500)">${Number(j.progress || 0)}%</span>
+          </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--gray-500);display:flex;justify-content:space-between;gap:8px">
+            <span>${esc(String(j.created_by || '-'))}</span>
+            <span>${esc(String(j.created_at || '').replace('T', ' ').slice(0, 19))}</span>
+          </div>
+          ${j.latest_error ? `<div style="margin-top:6px;font-size:11px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:4px 6px">${esc(j.latest_error)}</div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    function toggleJobsDrawer(forceOpen = false) {
+      const drawer = document.getElementById('jobsDrawer');
+      if (!drawer) return;
+      globalJobsDrawerOpen = forceOpen ? true : !globalJobsDrawerOpen;
+      drawer.style.display = globalJobsDrawerOpen ? '' : 'none';
+      if (globalJobsDrawerOpen) {
+        renderGlobalJobsDrawer(globalJobsCache || []);
+        loadGlobalJobsStatus(true);
+      }
     }
 
     // ═══════════════════════════════════════
     // ACCOUNT SELECTOR
     // ═══════════════════════════════════════
     async function showAccountSelector() {
+      stopGlobalJobsMonitor();
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appShell').style.display = 'none';
       document.getElementById('accountSelect').style.display = 'block';
@@ -3571,6 +3809,8 @@
       const subEl   = document.getElementById('accountSubtitle');
       if (greetEl) greetEl.textContent = greetName ? `${greetWord}, ${greetName}! 👋` : `${greetWord}! 👋`;
       if (subEl)   subEl.textContent   = 'Select a client account below to continue.';
+      const newClientBtn = document.getElementById('selectorNewClientBtn');
+      if (newClientBtn) newClientBtn.style.display = isFullAdmin() ? '' : 'none';
 
       // All users see all client accounts — with error handling for cold starts
       let loadError = null;
@@ -3601,7 +3841,7 @@
           <div style="font-size:40px;margin-bottom:12px;">🏥</div>
           <div style="font-size:18px;font-weight:600;color:#0f172a;margin-bottom:8px;">No client accounts yet</div>
           <div style="color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Click <strong>+ New Client</strong> above to create your first client workspace, or jump straight to admin tools.</div>
-          <button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>
+          ${isFullAdmin() ? `<button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>` : ''}
           ${currentUser && currentUser.role === 'admin' ? `<button onclick="enterAsAdmin()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#eef2ff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">Enter as Admin →</button>` : ''}
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
@@ -3639,9 +3879,6 @@
       if (isStaffOrAdmin()) {
         document.getElementById('adminFullNav').style.display = 'block';
         document.getElementById('clientNav').style.display = 'none';
-        // Lead Generation section: admin-only
-        const leadSection = document.getElementById('leadGenNav');
-        if (leadSection) leadSection.style.display = isFullAdmin() ? '' : 'none';
       } else {
         document.getElementById('adminFullNav').style.display = 'none';
         document.getElementById('clientNav').style.display = 'block';
@@ -3654,10 +3891,10 @@
       updateSubProfileBar();
       // Clients land on Daily Production; admin/staff go to dashboard
       navTo(isStaffOrAdmin() ? 'dashboard' : 'production');
+      startGlobalJobsMonitor();
     }
 
-    // Admin shortcut: enter the app shell without picking a client (Lead Source,
-    // Manage Clients, Audit Log, etc. are all available without a selected client).
+    // Admin shortcut: enter the app shell without picking a client.
     function enterAsAdmin() {
       activeClientId = null;
       activeSubProfile = null;
@@ -3675,6 +3912,7 @@
       const bar = document.getElementById('subProfileBar');
       if (bar) bar.style.display = 'none';
       navTo('dashboard');
+      startGlobalJobsMonitor();
     }
 
     function updateSubProfileBar() {
@@ -3768,6 +4006,7 @@
     // NAVIGATION
     // ═══════════════════════════════════════
     function navTo(panel) {
+      if (panel !== 'production') _clearProdJobsPoll();
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
       document.querySelectorAll('.hub-panel').forEach(p => p.classList.remove('active'));
       const ni = document.querySelector(`[data-panel="${panel}"]`);
@@ -3794,10 +4033,20 @@
       if (panel === 'files') loadDocuments();
       if (panel === 'profile') loadProfile();
       if (panel === 'reporting') loadReport();
-      if (panel === 'production') loadProduction();
+      if (panel === 'production') {
+        if (prodViewMode === 'jobs') {
+          loadProductionJobs();
+          _startProdJobsPoll();
+        } else if (prodViewMode === 'report') {
+          if (document.getElementById('prodRptStart')?.value && document.getElementById('prodRptEnd')?.value) {
+            loadProductionReport();
+          }
+        } else {
+          loadProduction();
+        }
+      }
       if (panel === 'alerts') loadAlerts();
       if (panel === 'audit') loadAuditLog();
-      if (panel === 'leads') loadLeadsPanel();
     }
 
     // Open the panel referenced by URL hash on first load (e.g. /hub#production)
@@ -3807,7 +4056,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit','leads'];
+                       'production','alerts','audit'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
@@ -4920,6 +5169,49 @@
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         closeModal('clientModal'); loadClients(); toast('Client created', 'success');
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function openUserInviteModal() {
+      ['fUCompany','fUContact','fUEmail','fUPhone','fUUsername'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      document.getElementById('fURole').value = 'client';
+      document.getElementById('userInviteModal').classList.add('open');
+    }
+
+    async function sendUserInvite() {
+      const data = {
+        company: document.getElementById('fUCompany').value.trim(),
+        contact_name: document.getElementById('fUContact').value.trim(),
+        email: document.getElementById('fUEmail').value.trim(),
+        phone: document.getElementById('fUPhone').value.trim(),
+        role: document.getElementById('fURole').value,
+        username: document.getElementById('fUUsername').value.trim(),
+      };
+      if (!data.company) { toast('Display company/team is required', 'error'); return; }
+      if (!data.email || !data.email.includes('@')) { toast('Valid email is required', 'error'); return; }
+      try {
+        const r = await fetch('/hub/api/admin/users/invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Failed to invite user');
+        closeModal('userInviteModal');
+        await loadClients();
+        if (d.email_sent) {
+          toast(`Invite sent to ${d.email}`, 'success');
+        } else {
+          toast(`User created, but invite email failed (${d.delivery})`, 'warning');
+          if (d.setup_link) {
+            window.prompt('Copy this setup link and send it to the user:', d.setup_link);
+          }
+        }
+      } catch (e) {
+        toast(e.message || 'Failed to invite user', 'error');
+      }
     }
 
     // ═══════════════════════════════════════
@@ -6792,7 +7084,45 @@
     // ═══════════════════════════════════════
     // TEAM PRODUCTION
     // ═══════════════════════════════════════
-    let prodViewMode = 'log'; // 'log' or 'report'
+    let prodViewMode = 'log'; // 'log' or 'report' or 'jobs'
+    let prodJobsPollTimer = null;
+    let selectedProdJobId = null;
+
+    function _clearProdJobsPoll() {
+      if (prodJobsPollTimer) {
+        clearInterval(prodJobsPollTimer);
+        prodJobsPollTimer = null;
+      }
+    }
+
+    function _startProdJobsPoll() {
+      _clearProdJobsPoll();
+      prodJobsPollTimer = setInterval(() => {
+        if (prodViewMode === 'jobs' && document.getElementById('panel-production')?.classList.contains('active')) {
+          loadProductionJobs(true);
+        }
+      }, 4500);
+    }
+
+    function _jobStatusBadgeClass(status) {
+      if (status === 'done') return 'badge-green';
+      if (status === 'error') return 'badge-red';
+      if (status === 'running') return 'badge-blue';
+      return 'badge-purple';
+    }
+
+    function _jobTypeLabel(jobType) {
+      if (jobType === 'production_import') return 'Production Import';
+      if (jobType === 'production_report_pack') return 'Report Pack';
+      return jobType || 'Unknown';
+    }
+
+    function _fmtJobTime(ts) {
+      if (!ts) return '-';
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return String(ts).slice(0, 19).replace('T', ' ');
+      return d.toLocaleString();
+    }
 
     function _productionClientName(clientId) {
       const c = (clientsList || []).find(x => Number(x.id) === Number(clientId));
@@ -6817,9 +7147,157 @@
       prodViewMode = mode;
       document.getElementById('prodLogView').style.display = mode === 'log' ? '' : 'none';
       document.getElementById('prodReportView').style.display = mode === 'report' ? '' : 'none';
+      document.getElementById('prodJobsView').style.display = mode === 'jobs' ? '' : 'none';
       document.getElementById('btnProdLog').className = mode === 'log' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
       document.getElementById('btnProdReport').className = mode === 'report' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      document.getElementById('btnProdJobs').className = mode === 'jobs' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
       if (mode === 'log') loadProduction();
+      if (mode === 'jobs') {
+        loadProductionJobs();
+        _startProdJobsPoll();
+      } else {
+        _clearProdJobsPoll();
+      }
+    }
+
+    async function loadProductionJobs(silent = false) {
+      const status = document.getElementById('prodJobStatus')?.value || '';
+      const type = document.getElementById('prodJobType')?.value || '';
+      const params = new URLSearchParams({ limit: '100' });
+      if (status) params.set('status', status);
+      if (type) params.set('job_type', type);
+
+      try {
+        const r = await fetch('/hub/api/jobs?' + params.toString());
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Failed to load jobs');
+        const jobs = (d.jobs || []).filter(j => (j.job_type || '').startsWith('production_'));
+
+        const meta = document.getElementById('prodJobsMeta');
+        if (meta) {
+          const running = jobs.filter(j => j.status === 'running').length;
+          const queued = jobs.filter(j => j.status === 'queued').length;
+          meta.textContent = `${jobs.length} jobs • ${running} running • ${queued} queued`;
+        }
+
+        const tbody = document.getElementById('prodJobsTbody');
+        if (!tbody) return;
+        if (!jobs.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:24px">No jobs found for this filter.</td></tr>';
+          document.getElementById('prodJobDetail').innerHTML = 'Select a job to inspect timeline and results.';
+          document.getElementById('prodJobRetryBtn').style.display = 'none';
+          selectedProdJobId = null;
+          return;
+        }
+
+        tbody.innerHTML = jobs.map(j => {
+          const selected = String(j.id) === String(selectedProdJobId);
+          const progress = Number(j.progress || 0);
+          return `<tr style="cursor:pointer;${selected ? 'background:#eef6ff' : ''}" onclick="openProductionJob('${j.id}')">
+            <td style="white-space:nowrap;font-size:12px">${esc(_fmtJobTime(j.created_at))}</td>
+            <td><span class="badge badge-purple">${esc(_jobTypeLabel(j.job_type))}</span></td>
+            <td><span class="badge ${_jobStatusBadgeClass(j.status)}">${esc(j.status || 'unknown')}</span></td>
+            <td style="min-width:140px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="flex:1;height:7px;border-radius:999px;background:#e5e7eb;overflow:hidden"><div style="height:100%;background:#1d4ed8;width:${Math.max(0, Math.min(100, progress))}%"></div></div>
+                <span style="font-size:11px;color:var(--gray-500)">${progress}%</span>
+              </div>
+            </td>
+            <td style="font-size:12px">${esc(j.created_by || '-')}</td>
+          </tr>`;
+        }).join('');
+
+        const selectedExists = selectedProdJobId && jobs.some(j => String(j.id) === String(selectedProdJobId));
+        if (!selectedExists) selectedProdJobId = jobs[0].id;
+        if (selectedProdJobId) {
+          await openProductionJob(selectedProdJobId, true);
+        }
+      } catch (e) {
+        if (!silent) toast(e.message || 'Failed to load jobs', 'error');
+      }
+    }
+
+    async function openProductionJob(jobId, noToast = false) {
+      selectedProdJobId = jobId;
+      try {
+        const r = await fetch(`/hub/api/jobs/${jobId}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Failed to load job details');
+
+        const payload = d.payload || {};
+        const result = d.result || {};
+        const events = d.events || [];
+        const retryBtn = document.getElementById('prodJobRetryBtn');
+        const retryable = d.status === 'error' && d.job_type === 'production_report_pack';
+        if (retryBtn) retryBtn.style.display = retryable ? '' : 'none';
+
+        const summaryBits = [];
+        if (typeof result.imported === 'number') summaryBits.push(`Imported: ${result.imported}`);
+        if (typeof result.skipped === 'number') summaryBits.push(`Skipped: ${result.skipped}`);
+        if (result.report?.details?.length >= 0) summaryBits.push(`Rows in report: ${result.report.details.length}`);
+
+        document.getElementById('prodJobDetail').innerHTML = `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:10px">
+            <div><strong>ID:</strong> ${esc(d.id || '')}</div>
+            <div><strong>Type:</strong> ${esc(_jobTypeLabel(d.job_type))}</div>
+            <div><strong>Status:</strong> <span class="badge ${_jobStatusBadgeClass(d.status)}">${esc(d.status || '')}</span></div>
+            <div><strong>Progress:</strong> ${Number(d.progress || 0)}%</div>
+            <div><strong>Created:</strong> ${esc(_fmtJobTime(d.created_at))}</div>
+            <div><strong>Finished:</strong> ${esc(_fmtJobTime(d.finished_at || '-'))}</div>
+          </div>
+          <div style="font-size:12px;color:var(--gray-600);margin-bottom:8px"><strong>Payload:</strong> ${esc(JSON.stringify(payload || {}))}</div>
+          ${summaryBits.length ? `<div style="font-size:12px;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:8px;margin-bottom:10px">${esc(summaryBits.join(' • '))}</div>` : ''}
+          ${d.latest_error ? `<div style="font-size:12px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin-bottom:10px"><strong>Error:</strong> ${esc(d.latest_error)}</div>` : ''}
+          <div style="font-weight:700;font-size:12px;color:var(--gray-700);margin-bottom:6px">Timeline</div>
+          <div style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:8px;background:#fafafa">
+            ${events.length ? events.map(ev => `<div style="display:flex;gap:8px;font-size:12px;padding:6px 0;border-bottom:1px solid #f3f4f6">
+              <span style="color:var(--gray-400);min-width:120px">${esc(_fmtJobTime(ev.created_at))}</span>
+              <span style="min-width:70px"><span class="badge ${ev.level === 'error' ? 'badge-red' : 'badge-blue'}">${esc(ev.stage || ev.level || 'event')}</span></span>
+              <span style="color:var(--gray-700)">${esc(ev.message || '')}</span>
+            </div>`).join('') : '<div style="font-size:12px;color:var(--gray-400)">No events yet.</div>'}
+          </div>`;
+      } catch (e) {
+        if (!noToast) toast(e.message || 'Failed to load job detail', 'error');
+      }
+    }
+
+    async function retrySelectedProductionJob() {
+      if (!selectedProdJobId) return;
+      if (!confirm('Retry this failed job now?')) return;
+      try {
+        const r = await fetch(`/hub/api/jobs/${selectedProdJobId}/retry`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Retry failed');
+        toast('Job retry queued', 'success');
+        loadGlobalJobsStatus(true);
+        await loadProductionJobs();
+      } catch (e) {
+        toast(e.message || 'Retry failed', 'error');
+      }
+    }
+
+    async function queueProductionReportJob() {
+      const start = document.getElementById('prodRptStart').value;
+      const end = document.getElementById('prodRptEnd').value;
+      if (!start || !end) { toast('Set a report date range first', 'error'); return; }
+      const payload = { start_date: start, end_date: end };
+      if (activeClientId) payload.client_id = activeClientId;
+      try {
+        const r = await fetch('/hub/api/jobs/production-report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Could not queue report job');
+        toast('Report job queued in Job Center', 'success');
+        loadGlobalJobsStatus(true);
+        toggleProductionView('jobs');
+        selectedProdJobId = d.job_id;
+        await loadProductionJobs();
+      } catch (e) {
+        toast(e.message || 'Could not queue report job', 'error');
+      }
     }
 
     async function loadProduction() {
@@ -6908,16 +7386,50 @@
       if (!file) return;
       const fd = new FormData();
       fd.append('file', file);
-      const url = `/hub/api/production/import?client_id=${activeClientId}`;
+      const url = `/hub/api/production/import?client_id=${activeClientId}&async_job=true`;
       try {
         const r = await fetch(url, { method: 'POST', body: fd });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'Import failed');
-        toast(`✅ Imported ${d.imported} entries${d.skipped ? `, skipped ${d.skipped}` : ''}`, 'success');
-        if (d.errors && d.errors.length) console.warn('Import row errors:', d.errors);
+        if (d.job_id) {
+          toast('Import queued. Processing in background...', 'success');
+          selectedProdJobId = d.job_id;
+          if (prodViewMode !== 'jobs') toggleProductionView('jobs');
+          await loadProductionJobs(true);
+          const job = await waitForHubJob(d.job_id);
+          const result = (job && job.result) || {};
+          if (job.status !== 'done') {
+            throw new Error(job.latest_error || 'Import job failed');
+          }
+          toast(`✅ Imported ${result.imported || 0} entries${result.skipped ? `, skipped ${result.skipped}` : ''}`, 'success');
+          if (result.errors && result.errors.length) console.warn('Import row errors:', result.errors);
+        } else {
+          toast(`✅ Imported ${d.imported} entries${d.skipped ? `, skipped ${d.skipped}` : ''}`, 'success');
+          if (d.errors && d.errors.length) console.warn('Import row errors:', d.errors);
+        }
         input.value = '';
         loadProduction();
       } catch (e) { toast(e.message, 'error'); input.value = ''; }
+    }
+
+    async function waitForHubJob(jobId, timeoutMs = 120000, intervalMs = 1200) {
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        const r = await fetch(`/hub/api/jobs/${jobId}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Job status failed');
+        if (prodViewMode === 'jobs') {
+          const meta = document.getElementById('prodJobsMeta');
+          if (meta) meta.textContent = `Watching job ${jobId.slice(0, 8)}... ${Number(d.progress || 0)}%`;
+          if (selectedProdJobId === jobId) openProductionJob(jobId, true);
+        }
+        if (d.status === 'done' || d.status === 'error') {
+          loadGlobalJobsStatus(true);
+          return d;
+        }
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+      }
+      throw new Error('Import is still running. Check Jobs shortly.');
     }
 
     function setProdDatePreset(preset) {
@@ -7204,6 +7716,13 @@
       const dd = document.getElementById('searchDropdown');
       const input = document.getElementById('globalSearchInput');
       if (dd && !dd.contains(e.target) && e.target !== input) dd.style.display = 'none';
+
+      const drawer = document.getElementById('jobsDrawer');
+      const jobsBell = document.getElementById('jobsBell');
+      if (globalJobsDrawerOpen && drawer && jobsBell && !drawer.contains(e.target) && !jobsBell.contains(e.target)) {
+        globalJobsDrawerOpen = false;
+        drawer.style.display = 'none';
+      }
     });
 
     // ═══════════════════════════════════════
@@ -7281,19 +7800,6 @@
           <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.details || '')}</td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
-    }
-
-    // ═══════════════════════════════════════
-    // LAB LEADS PANEL
-    // ═══════════════════════════════════════
-    function loadLeadsPanel() {
-      const iframe = document.getElementById('leadsIframe');
-      if (!iframe) return;
-      // Force-reload every time the panel is opened so the iframe always uses
-      // the latest authenticated session (the iframe may have first loaded
-      // /admin/leads/ before login completed, which yields a stale page).
-      const target = '/admin/leads/?_=' + Date.now();
-      try { iframe.src = target; } catch (_) { iframe.setAttribute('src', target); }
     }
 
     // ═══════════════════════════════════════
