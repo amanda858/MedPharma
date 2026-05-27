@@ -1807,6 +1807,12 @@
                   <div class="login-card-brand">Med<span class="accent">Pharma</span></div>
                   <div class="login-card-title">Internal Client Hub</div>
                   <div class="login-card-secure">🔐 Secure Sign In</div>
+                  <div id="loginServerState"
+                    style="display:inline-flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;
+                    font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;margin-top:8px">
+                    <span id="loginServerDot" style="width:8px;height:8px;border-radius:50%;background:#9ca3af"></span>
+                    <span id="loginServerText">Server status: checking...</span>
+                  </div>
                 </div>
                 <div class="login-divider"></div>
                 <div id="loginFieldsWrap">
@@ -3505,6 +3511,7 @@
     let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
     let activeClientPracticeType = '';
     let setupToken = null;
+    let loginHealthTimer = null;
     let clientsList = [];
     let globalJobsTimer = null;
     let globalJobsDrawerOpen = false;
@@ -3553,6 +3560,7 @@
 
       const qp = new URLSearchParams(window.location.search);
       setupToken = (qp.get('setup_token') || '').trim();
+      startLoginServerMonitor();
       if (setupToken) {
         await showSetupPasswordMode(setupToken);
         return;
@@ -3571,6 +3579,65 @@
         }
       } catch (_) { }
     });
+
+    function setLoginServerState(kind, text) {
+      const wrap = document.getElementById('loginServerState');
+      const dot = document.getElementById('loginServerDot');
+      const msg = document.getElementById('loginServerText');
+      if (!wrap || !dot || !msg) return;
+      msg.textContent = text;
+      if (kind === 'awake') {
+        dot.style.background = '#10b981';
+        wrap.style.borderColor = '#a7f3d0';
+        wrap.style.background = '#ecfdf5';
+        wrap.style.color = '#065f46';
+        return;
+      }
+      if (kind === 'waking') {
+        dot.style.background = '#f59e0b';
+        wrap.style.borderColor = '#fde68a';
+        wrap.style.background = '#fffbeb';
+        wrap.style.color = '#92400e';
+        return;
+      }
+      if (kind === 'offline') {
+        dot.style.background = '#ef4444';
+        wrap.style.borderColor = '#fecaca';
+        wrap.style.background = '#fef2f2';
+        wrap.style.color = '#991b1b';
+        return;
+      }
+      dot.style.background = '#9ca3af';
+      wrap.style.borderColor = '#e2e8f0';
+      wrap.style.background = '#f8fafc';
+      wrap.style.color = '#64748b';
+    }
+
+    async function probeLoginServerState() {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 5000);
+        const r = await fetch('/buildz', { signal: controller.signal });
+        clearTimeout(tid);
+        if (r.ok) {
+          setLoginServerState('awake', 'Server status: awake');
+        } else {
+          setLoginServerState('waking', 'Server status: waking up');
+        }
+      } catch (_) {
+        setLoginServerState('offline', 'Server status: unreachable');
+      }
+    }
+
+    function startLoginServerMonitor() {
+      if (loginHealthTimer) clearInterval(loginHealthTimer);
+      probeLoginServerState();
+      loginHealthTimer = setInterval(() => {
+        if (document.getElementById('loginScreen')?.style.display !== 'none') {
+          probeLoginServerState();
+        }
+      }, 12000);
+    }
 
     async function showSetupPasswordMode(token) {
       document.getElementById('loginFieldsWrap').style.display = 'none';
@@ -3639,6 +3706,7 @@
           }
 
           if (attempt > 1) {
+            setLoginServerState('waking', `Server status: waking (retry ${attempt}/${MAX_ATTEMPTS})`);
             statusEl.textContent = `Waking server… retry ${attempt}/${MAX_ATTEMPTS}`;
           } else {
             statusEl.textContent = 'Connecting to server…';
@@ -3657,6 +3725,7 @@
           }
           const d = await r.json();
           currentUser = d.user;
+          setLoginServerState('awake', 'Server status: awake');
           statusEl.style.display = 'none';
           const next = getNextDestination();
           if (next && isStaffOrAdmin()) {
