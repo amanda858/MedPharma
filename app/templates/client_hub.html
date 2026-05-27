@@ -3558,7 +3558,8 @@
         return;
       }
 
-      // Ping server immediately so it wakes up before user hits Sign In
+      // Wake the service as early as possible so manual sign-in is fast.
+      fetch('/buildz').catch(() => { });
       fetch('/hub/api/me').catch(() => { });
 
       try {
@@ -3625,19 +3626,25 @@
       btn.textContent = 'Signing in…';
       statusEl.style.display = 'block';
 
-      // Retry logic for cold-start servers (Render free tier can take 60-90s to wake)
+      // Retry logic for cold-start servers with faster feedback and bounded wait.
       let lastErr = null;
-      const MAX_ATTEMPTS = 10;      // 10 × 10s = up to 100s of patience
+      const RETRY_DELAYS_MS = [0, 1200, 2500, 4000, 6000, 8000]; // ~22s total backoff
+      const ATTEMPT_TIMEOUT_MS = 9000;
+      const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
+          // Lightweight wake hint before login attempts.
+          if (attempt === 1) {
+            fetch('/buildz').catch(() => { });
+          }
+
           if (attempt > 1) {
-            const elapsed = (attempt - 1) * 10;
-            statusEl.textContent = `Server is waking up… (${elapsed}s elapsed) — please wait`;
+            statusEl.textContent = `Waking server… retry ${attempt}/${MAX_ATTEMPTS}`;
           } else {
             statusEl.textContent = 'Connecting to server…';
           }
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 12000); // 12s per attempt
+          const tid = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
           const r = await fetch('/hub/api/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -3662,12 +3669,12 @@
           lastErr = e;
           if (e.message === 'Invalid credentials') break; // Don't retry wrong passwords
           if (attempt === MAX_ATTEMPTS) break;
-          await new Promise(r => setTimeout(r, 10000)); // Wait 10s before next retry
+          await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
         }
       }
       statusEl.style.display = 'none';
       if (lastErr?.name === 'AbortError') {
-        showLoginError('Server took too long to respond. Please try clicking Sign In again.');
+        showLoginError('Server is still waking up. Please try again in a few seconds.');
       } else {
         showLoginError(lastErr?.message || 'Login failed. Check your username and password.');
       }
