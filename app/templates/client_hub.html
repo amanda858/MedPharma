@@ -1839,6 +1839,19 @@
                   </div>
                   <button class="btn-login" id="btnSetupPw" onclick="submitSetupPassword()">Save Password</button>
                 </div>
+                <div id="forcePwPanel" style="display:none">
+                  <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px">Change Temporary Password</div>
+                  <div style="font-size:12px;color:#64748b;margin-bottom:14px" id="forcePwMeta">You must set a new password before continuing.</div>
+                  <div class="login-field">
+                    <label>New Password</label>
+                    <input type="password" id="forcePw1" placeholder="At least 10 characters" autocomplete="new-password">
+                  </div>
+                  <div class="login-field">
+                    <label>Confirm Password</label>
+                    <input type="password" id="forcePw2" placeholder="Re-enter password" autocomplete="new-password">
+                  </div>
+                  <button class="btn-login" id="btnForcePw" onclick="submitForcedPasswordChange()">Update Password</button>
+                </div>
                 <div class="login-error" id="loginError"></div>
                 <div id="loginStatus"
                   style="text-align:center;font-size:13px;color:#94a3b8;margin-top:8px;display:none">
@@ -3513,6 +3526,7 @@
     let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
     let activeClientPracticeType = '';
     let setupToken = null;
+    let forceCurrentPassword = '';
     let clientsList = [];
     let globalJobsTimer = null;
     let globalJobsDrawerOpen = false;
@@ -3535,7 +3549,7 @@
         opts.credentials = opts.credentials || 'same-origin';
         const resp = await _nativeFetch(url, opts);
         // If 401 on any API call (except /me and /login), session is expired
-        if (resp.status === 401 && !url.includes('/login') && !url.includes('/me')) {
+        if (resp.status === 401 && !url.includes('/login') && !url.includes('/me') && !url.includes('/auth/change-password')) {
           toast('Session expired — please sign in again', 'error');
           setTimeout(() => doLogout(), 500);
           return resp;
@@ -3580,6 +3594,7 @@
 
     async function showSetupPasswordMode(token) {
       document.getElementById('loginFieldsWrap').style.display = 'none';
+      document.getElementById('forcePwPanel').style.display = 'none';
       document.getElementById('setupPwPanel').style.display = '';
       document.getElementById('loginStatus').style.display = 'none';
       document.getElementById('loginError').style.display = 'none';
@@ -3590,6 +3605,49 @@
         document.getElementById('setupPwMeta').textContent = `${d.username || ''} (${d.email || ''})`;
       } catch (e) {
         showLoginError(e.message || 'Could not validate setup token');
+      }
+    }
+
+    function showForcedPasswordMode(username) {
+      document.getElementById('loginFieldsWrap').style.display = 'none';
+      document.getElementById('setupPwPanel').style.display = 'none';
+      document.getElementById('forcePwPanel').style.display = '';
+      document.getElementById('loginStatus').style.display = 'none';
+      document.getElementById('loginError').style.display = 'none';
+      const meta = document.getElementById('forcePwMeta');
+      if (meta) meta.textContent = `${username || 'User'}: change your temporary password to continue.`;
+      const p1 = document.getElementById('forcePw1');
+      const p2 = document.getElementById('forcePw2');
+      if (p1) p1.value = '';
+      if (p2) p2.value = '';
+    }
+
+    async function submitForcedPasswordChange() {
+      const p1 = (document.getElementById('forcePw1').value || '');
+      const p2 = (document.getElementById('forcePw2').value || '');
+      const btn = document.getElementById('btnForcePw');
+      if (!forceCurrentPassword) { showLoginError('Missing temporary password context. Please sign in again.'); return; }
+      if (p1.length < 10) { showLoginError('Password must be at least 10 characters'); return; }
+      if (p1 !== p2) { showLoginError('Passwords do not match'); return; }
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+      try {
+        const r = await fetch('/hub/api/auth/change-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ current_password: forceCurrentPassword, new_password: p1 }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Could not change password');
+        forceCurrentPassword = '';
+        document.getElementById('forcePwPanel').style.display = 'none';
+        toast('Password updated successfully.', 'success');
+        await showAccountSelector();
+      } catch (e) {
+        showLoginError(e.message || 'Could not change password');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Update Password';
       }
     }
 
@@ -3659,6 +3717,12 @@
         if (!r.ok) throw new Error(d.detail || 'Invalid credentials');
 
         currentUser = d.user;
+        if (currentUser && currentUser.must_change_password) {
+          forceCurrentPassword = password;
+          showForcedPasswordMode(currentUser.username || username);
+          statusEl.style.display = 'none';
+          return;
+        }
         statusEl.style.display = 'none';
         const next = getNextDestination();
         if (next && isStaffOrAdmin()) {

@@ -22,6 +22,7 @@ from app.client_db import (
     authenticate, validate_session, logout_session,
     list_clients, create_client, update_client, delete_client,
     create_user_invite, get_password_setup_token_info, consume_password_setup_token,
+    set_must_change_password, change_password_with_current,
     get_profile, update_profile,
     get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
@@ -253,6 +254,11 @@ class SetupPasswordIn(BaseModel):
     password: str
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
 @router.post("/login")
 def login(body: LoginIn, request: Request, response: Response):
     user, token = authenticate(body.username, body.password)
@@ -344,6 +350,19 @@ def complete_setup_password(token: str, body: SetupPasswordIn):
     if not updated:
         raise HTTPException(status_code=404, detail="Invalid or expired setup token")
     return {"ok": True, "username": updated.get("username", "")}
+
+
+@router.post("/auth/change-password")
+def change_password(body: ChangePasswordIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    current_pw = (body.current_password or "").strip()
+    new_pw = (body.new_password or "").strip()
+    if len(new_pw) < 10:
+        raise HTTPException(status_code=400, detail="Password must be at least 10 characters")
+    ok = change_password_with_current(int(user.get("id", 0) or 0), current_pw, new_pw)
+    if not ok:
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    return {"ok": True}
 
 
 # ─── Accounts (for selector screen) ──────────────────────────────────────────
@@ -501,6 +520,8 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
         try:
             updated = consume_password_setup_token(invite.get("token", ""), initial_password)
             password_set = bool(updated)
+            if password_set:
+                set_must_change_password(int(invite.get("client_id", 0) or 0), True)
         except Exception:
             password_set = False
 

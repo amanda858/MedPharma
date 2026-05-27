@@ -108,6 +108,16 @@ def _ensure_password_setup_table(conn):
     )
 
 
+def _ensure_auth_columns(conn):
+    """Lazy-migrate auth columns needed by login/password flows."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(clients)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "must_change_password" not in cols:
+        cur.execute("ALTER TABLE clients ADD COLUMN must_change_password INTEGER DEFAULT 0")
+        conn.commit()
+
+
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -121,6 +131,7 @@ def init_client_hub_db():
             username         TEXT UNIQUE NOT NULL,
             password         TEXT NOT NULL,
             salt             TEXT NOT NULL,
+            must_change_password INTEGER DEFAULT 0,
             company          TEXT NOT NULL,
             contact_name     TEXT DEFAULT '',
             email            TEXT DEFAULT '',
@@ -499,6 +510,7 @@ def init_client_hub_db():
 
     # ── Migrate existing DBs: add profile columns if missing ──────────────
     profile_cols = [
+        ("must_change_password", "INTEGER DEFAULT 0"),
         ("tax_id", "TEXT DEFAULT ''"),
         ("group_npi", "TEXT DEFAULT ''"),
         ("individual_npi", "TEXT DEFAULT ''"),
@@ -691,6 +703,7 @@ def _seed_data(conn):
 def authenticate(username: str, password: str):
     conn = get_db()
     try:
+        _ensure_auth_columns(conn)
         cur = conn.cursor()
         cur.execute("SELECT * FROM clients WHERE username=? AND is_active=1", (username,))
         row = cur.fetchone()
@@ -706,7 +719,9 @@ def authenticate(username: str, password: str):
         cur.execute("UPDATE clients SET last_login=? WHERE id=?",
                     (datetime.now().isoformat(), c["id"]))
         conn.commit()
-        return {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}, token
+        out = {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}
+        out["must_change_password"] = bool(c.get("must_change_password", 0))
+        return out, token
     finally:
         conn.close()
 
@@ -716,6 +731,7 @@ def validate_session(token: str):
         return None
     conn = get_db()
     try:
+        _ensure_auth_columns(conn)
         cur = conn.cursor()
         cur.execute("""SELECT c.* FROM sessions s
                        JOIN clients c ON c.id=s.client_id
@@ -728,7 +744,9 @@ def validate_session(token: str):
     if not row:
         return None
     c = dict(row)
-    return {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}
+    out = {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}
+    out["must_change_password"] = bool(c.get("must_change_password", 0))
+    return out
 
 
 def logout_session(token: str):
@@ -911,6 +929,7 @@ def consume_password_setup_token(token: str, new_password: str) -> dict | None:
     conn = get_db()
     try:
         cur = conn.cursor()
+        _ensure_auth_columns(conn)
         _ensure_password_setup_table(conn)
         cur.execute(
             """SELECT t.id, t.client_id, t.expires_at, t.used_at, c.username
@@ -931,7 +950,7 @@ def consume_password_setup_token(token: str, new_password: str) -> dict | None:
         salt = secrets.token_hex(16)
         pw_hash = _hash_pw(new_password, salt)
         now_iso = datetime.now().isoformat()
-        cur.execute("UPDATE clients SET password=?, salt=? WHERE id=?", (pw_hash, salt, d["client_id"]))
+        cur.execute("UPDATE clients SET password=?, salt=?, must_change_password=0 WHERE id=?", (pw_hash, salt, d["client_id"]))
         cur.execute("UPDATE sessions SET expires_at=? WHERE client_id=?", (now_iso, d["client_id"]))
         cur.execute(
             "UPDATE password_setup_tokens SET used_at=? WHERE client_id=? AND used_at IS NULL",
@@ -939,6 +958,44 @@ def consume_password_setup_token(token: str, new_password: str) -> dict | None:
         )
         conn.commit()
         return {"client_id": d["client_id"], "username": d["username"]}
+    finally:
+        conn.close()
+
+
+def set_must_change_password(client_id: int, required: bool = True):
+    conn = get_db()
+    try:
+        _ensure_auth_columns(conn)
+        conn.execute(
+            "UPDATE clients SET must_change_password=? WHERE id=?",
+            (1 if required else 0, client_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def change_password_with_current(client_id: int, current_password: str, new_password: str) -> bool:
+    if not client_id or not current_password or not new_password:
+        return False
+    conn = get_db()
+    try:
+        _ensure_auth_columns(conn)
+        cur = conn.cursor()
+        cur.execute("SELECT password, salt FROM clients WHERE id=?", (client_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        d = dict(row)
+        if _hash_pw(current_password, d.get("salt", "")) != d.get("password", ""):
+            return False
+        salt = secrets.token_hex(16)
+        cur.execute(
+            "UPDATE clients SET password=?, salt=?, must_change_password=0 WHERE id=?",
+            (_hash_pw(new_password, salt), salt, client_id),
+        )
+        conn.commit()
+        return True
     finally:
         conn.close()
 
