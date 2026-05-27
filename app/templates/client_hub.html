@@ -1807,12 +1807,6 @@
                   <div class="login-card-brand">Med<span class="accent">Pharma</span></div>
                   <div class="login-card-title">Internal Client Hub</div>
                   <div class="login-card-secure">🔐 Secure Sign In</div>
-                  <div id="loginServerState"
-                    style="display:inline-flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;
-                    font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;margin-top:8px">
-                    <span id="loginServerDot" style="width:8px;height:8px;border-radius:50%;background:#9ca3af"></span>
-                    <span id="loginServerText">Server status: checking...</span>
-                  </div>
                 </div>
                 <div class="login-divider"></div>
                 <div id="loginFieldsWrap">
@@ -3514,7 +3508,6 @@
     let activeSubProfile = null;  // null = All, 'MHP', 'OMT'
     let activeClientPracticeType = '';
     let setupToken = null;
-    let loginHealthTimer = null;
     let clientsList = [];
     let globalJobsTimer = null;
     let globalJobsDrawerOpen = false;
@@ -3563,14 +3556,11 @@
 
       const qp = new URLSearchParams(window.location.search);
       setupToken = (qp.get('setup_token') || '').trim();
-      startLoginServerMonitor();
       if (setupToken) {
         await showSetupPasswordMode(setupToken);
         return;
       }
 
-      // Wake the service as early as possible so manual sign-in is fast.
-      fetch('/buildz').catch(() => { });
       fetch('/hub/api/me').catch(() => { });
 
       try {
@@ -3582,65 +3572,6 @@
         }
       } catch (_) { }
     });
-
-    function setLoginServerState(kind, text) {
-      const wrap = document.getElementById('loginServerState');
-      const dot = document.getElementById('loginServerDot');
-      const msg = document.getElementById('loginServerText');
-      if (!wrap || !dot || !msg) return;
-      msg.textContent = text;
-      if (kind === 'awake') {
-        dot.style.background = '#10b981';
-        wrap.style.borderColor = '#a7f3d0';
-        wrap.style.background = '#ecfdf5';
-        wrap.style.color = '#065f46';
-        return;
-      }
-      if (kind === 'waking') {
-        dot.style.background = '#f59e0b';
-        wrap.style.borderColor = '#fde68a';
-        wrap.style.background = '#fffbeb';
-        wrap.style.color = '#92400e';
-        return;
-      }
-      if (kind === 'offline') {
-        dot.style.background = '#ef4444';
-        wrap.style.borderColor = '#fecaca';
-        wrap.style.background = '#fef2f2';
-        wrap.style.color = '#991b1b';
-        return;
-      }
-      dot.style.background = '#9ca3af';
-      wrap.style.borderColor = '#e2e8f0';
-      wrap.style.background = '#f8fafc';
-      wrap.style.color = '#64748b';
-    }
-
-    async function probeLoginServerState() {
-      try {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), 5000);
-        const r = await fetch('/buildz', { signal: controller.signal });
-        clearTimeout(tid);
-        if (r.ok) {
-          setLoginServerState('awake', 'Server status: awake');
-        } else {
-          setLoginServerState('waking', 'Server status: waking up');
-        }
-      } catch (_) {
-        setLoginServerState('offline', 'Server status: unreachable');
-      }
-    }
-
-    function startLoginServerMonitor() {
-      if (loginHealthTimer) clearInterval(loginHealthTimer);
-      probeLoginServerState();
-      loginHealthTimer = setInterval(() => {
-        if (document.getElementById('loginScreen')?.style.display !== 'none') {
-          probeLoginServerState();
-        }
-      }, 12000);
-    }
 
     async function showSetupPasswordMode(token) {
       document.getElementById('loginFieldsWrap').style.display = 'none';
@@ -3696,62 +3627,38 @@
       btn.textContent = 'Signing in…';
       statusEl.style.display = 'block';
 
-      // Retry logic for cold-start servers with faster feedback and bounded wait.
-      let lastErr = null;
-      const RETRY_DELAYS_MS = [0, 1200, 2500, 4000, 6000, 8000]; // ~22s total backoff
-      const ATTEMPT_TIMEOUT_MS = 9000;
-      const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        try {
-          // Lightweight wake hint before login attempts.
-          if (attempt === 1) {
-            fetch('/buildz').catch(() => { });
-          }
+      try {
+        statusEl.textContent = 'Signing in...';
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 9000);
+        const r = await fetch('/hub/api/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+          signal: controller.signal
+        });
+        clearTimeout(tid);
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Invalid credentials');
 
-          if (attempt > 1) {
-            setLoginServerState('waking', `Server status: waking (retry ${attempt}/${MAX_ATTEMPTS})`);
-            statusEl.textContent = `Waking server… retry ${attempt}/${MAX_ATTEMPTS}`;
-          } else {
-            statusEl.textContent = 'Connecting to server…';
-          }
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
-          const r = await fetch('/hub/api/login', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-            signal: controller.signal
-          });
-          clearTimeout(tid);
-          if (!r.ok) {
-            const d = await r.json().catch(() => ({}));
-            throw new Error(d.detail || 'Invalid credentials');
-          }
-          const d = await r.json();
-          currentUser = d.user;
-          setLoginServerState('awake', 'Server status: awake');
-          statusEl.style.display = 'none';
-          const next = getNextDestination();
-          if (next && isStaffOrAdmin()) {
-            window.location.href = next;
-            return;
-          }
-          await showAccountSelector();
+        currentUser = d.user;
+        statusEl.style.display = 'none';
+        const next = getNextDestination();
+        if (next && isStaffOrAdmin()) {
+          window.location.href = next;
           return;
-        } catch (e) {
-          lastErr = e;
-          if (e.message === 'Invalid credentials') break; // Don't retry wrong passwords
-          if (attempt === MAX_ATTEMPTS) break;
-          await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
         }
+        await showAccountSelector();
+      } catch (e) {
+        statusEl.style.display = 'none';
+        if (e?.name === 'AbortError') {
+          showLoginError('Login timed out. Please try again.');
+        } else {
+          showLoginError(e?.message || 'Login failed. Check your username and password.');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In →';
       }
-      statusEl.style.display = 'none';
-      if (lastErr?.name === 'AbortError') {
-        showLoginError('Server is still waking up. Please try again in a few seconds.');
-      } else {
-        showLoginError(lastErr?.message || 'Login failed. Check your username and password.');
-      }
-      btn.disabled = false;
-      btn.textContent = 'Sign In →';
     }
 
     function showLoginError(msg) {
