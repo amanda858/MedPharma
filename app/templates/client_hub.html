@@ -5230,9 +5230,13 @@
         if (d.email_sent) {
           toast(`Invite sent to ${d.email}`, 'success');
         } else {
-          toast(`User created, but invite email failed (${d.delivery})`, 'warning');
+          toast(`Invite created, but email was not sent (${d.delivery})`, 'warning');
           if (d.setup_link) {
-            window.prompt('Copy this setup link and send it to the user:', d.setup_link);
+            try {
+              await navigator.clipboard.writeText(d.setup_link);
+              toast('Setup link copied to clipboard. Send it to the employee.', 'success');
+            } catch (_) { }
+            window.prompt('Invite created. Copy this setup link and send it to the employee:', d.setup_link);
           }
         }
       } catch (e) {
