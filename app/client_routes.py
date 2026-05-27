@@ -246,6 +246,7 @@ class InviteUserIn(BaseModel):
     phone: Optional[str] = ""
     role: Optional[str] = "staff"
     username: Optional[str] = ""
+    initial_password: Optional[str] = ""
 
 
 class SetupPasswordIn(BaseModel):
@@ -457,6 +458,9 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
 
     payload = body.model_dump()
     payload["email"] = email
+    initial_password = (payload.pop("initial_password", "") or "").strip()
+    if initial_password and len(initial_password) < 10:
+        raise HTTPException(status_code=400, detail="Initial password must be at least 10 characters")
     if not (payload.get("company") or "").strip():
         payload["company"] = (admin.get("company") or "").strip() or "MedPharma Team"
     # Staff can invite users but cannot create full-admin accounts.
@@ -492,6 +496,14 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
     )
     sent, via = _send_direct_email(email, subject, text_body, html_body)
 
+    password_set = False
+    if initial_password:
+        try:
+            updated = consume_password_setup_token(invite.get("token", ""), initial_password)
+            password_set = bool(updated)
+        except Exception:
+            password_set = False
+
     log_audit(
         None,
         admin.get("username", ""),
@@ -508,6 +520,7 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
         "email": email,
         "email_sent": sent,
         "delivery": via,
+        "password_set": password_set,
         "setup_link": setup_link,
         "expires_at": invite.get("expires_at"),
     }

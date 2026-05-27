@@ -3268,6 +3268,9 @@
         </div>
         <div class="form-group"><label>Username (optional)</label><input class="form-control" id="fUUsername" placeholder="auto-generated if blank"></div>
       </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Temporary Password (optional)</label><input class="form-control" type="password" id="fUInitialPassword" placeholder="Set now so they can login immediately"></div>
+      </div>
       <div style="font-size:12px;color:#64748b;margin-bottom:12px">The user will receive an email with a secure link to set their own password.</div>
       <button class="btn btn-primary" style="margin-top:6px" onclick="sendUserInvite()">Send Invite</button>
     </div>
@@ -5179,7 +5182,7 @@
     }
 
     function openUserInviteModal() {
-      ['fUContact','fUEmail','fUPhone','fUUsername'].forEach(id => {
+      ['fUContact','fUEmail','fUPhone','fUUsername','fUInitialPassword'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
@@ -5215,7 +5218,12 @@
         phone: document.getElementById('fUPhone').value.trim(),
         role: document.getElementById('fURole').value,
         username: document.getElementById('fUUsername').value.trim(),
+        initial_password: document.getElementById('fUInitialPassword').value || '',
       };
+      if (data.initial_password && data.initial_password.length < 10) {
+        toast('Temporary password must be at least 10 characters', 'error');
+        return;
+      }
       if (!data.email || !data.email.includes('@')) { toast('Valid email is required', 'error'); return; }
       try {
         const r = await fetch('/hub/api/admin/users/invite', {
@@ -5238,6 +5246,9 @@
             } catch (_) { }
             window.prompt('Invite created. Copy this setup link and send it to the employee:', d.setup_link);
           }
+        }
+        if (d.password_set) {
+          toast(`Employee created. Username: ${d.username}. They can login now with the temporary password.`, 'success');
         }
       } catch (e) {
         toast(e.message || 'Failed to invite user', 'error');
