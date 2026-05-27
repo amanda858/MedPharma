@@ -1867,6 +1867,8 @@
       <h2 id="accountGreeting">Select an Account</h2>
       <p id="accountSubtitle">Choose a client account to open the dashboard</p>
       <div style="margin-bottom:16px;text-align:right">
+        <button class="btn btn-secondary btn-sm" id="selectorAddUserBtn" onclick="openUserInviteModal()"
+          style="font-size:13px;padding:8px 18px;display:none">+ Add Employee</button>
         <button class="btn btn-primary btn-sm" id="selectorNewClientBtn" onclick="showNewClientFromSelector()"
           style="font-size:13px;padding:8px 18px">+ New Client</button>
       </div>
@@ -3810,6 +3812,8 @@
       if (subEl)   subEl.textContent   = 'Select a client account below to continue.';
       const newClientBtn = document.getElementById('selectorNewClientBtn');
       if (newClientBtn) newClientBtn.style.display = isFullAdmin() ? '' : 'none';
+      const addUserBtn = document.getElementById('selectorAddUserBtn');
+      if (addUserBtn) addUserBtn.style.display = isStaffOrAdmin() ? '' : 'none';
 
       // All users see all client accounts — with error handling for cold starts
       let loadError = null;
@@ -5188,7 +5192,7 @@
 
       const roleEl = document.getElementById('fURole');
       if (roleEl) {
-        roleEl.value = 'client';
+        roleEl.value = 'staff';
         const adminOpt = roleEl.querySelector('option[value="admin"]');
         if (adminOpt) adminOpt.style.display = isFullAdmin() ? '' : 'none';
       }
@@ -5212,7 +5216,6 @@
         role: document.getElementById('fURole').value,
         username: document.getElementById('fUUsername').value.trim(),
       };
-      if (!data.company) { toast('Please select an account first, then try Add Employee.', 'error'); return; }
       if (!data.email || !data.email.includes('@')) { toast('Valid email is required', 'error'); return; }
       try {
         const r = await fetch('/hub/api/admin/users/invite', {

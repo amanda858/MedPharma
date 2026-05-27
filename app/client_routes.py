@@ -240,11 +240,11 @@ class LoginIn(BaseModel):
 
 
 class InviteUserIn(BaseModel):
-    company: str
+    company: Optional[str] = ""
     contact_name: Optional[str] = ""
     email: str
     phone: Optional[str] = ""
-    role: Optional[str] = "client"
+    role: Optional[str] = "staff"
     username: Optional[str] = ""
 
 
@@ -457,6 +457,8 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
 
     payload = body.model_dump()
     payload["email"] = email
+    if not (payload.get("company") or "").strip():
+        payload["company"] = (admin.get("company") or "").strip() or "MedPharma Team"
     # Staff can invite users but cannot create full-admin accounts.
     if admin.get("role") != "admin" and (payload.get("role") or "client") == "admin":
         payload["role"] = "staff"
