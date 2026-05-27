@@ -984,6 +984,36 @@ def update_client(cid: int, data: dict):
 def delete_client(cid: int):
     conn = get_db()
     try:
+        # Remove dependent rows first to avoid FK violations when deleting users
+        # created via invite/setup-password flow.
+        dependent_tables = [
+            ("sessions", "client_id"),
+            ("password_setup_tokens", "client_id"),
+            ("claims_master", "client_id"),
+            ("payments", "client_id"),
+            ("notes_log", "client_id"),
+            ("providers", "client_id"),
+            ("credentialing", "client_id"),
+            ("enrollment", "client_id"),
+            ("edi_setup", "client_id"),
+            ("client_files", "client_id"),
+            ("sharefile_links", "client_id"),
+            ("practice_profiles", "client_id"),
+            ("team_production", "client_id"),
+            ("audit_log", "client_id"),
+            ("report_notes", "client_id"),
+            ("jobs", "account_id"),
+            ("activity_events", "client_id"),
+        ]
+        for table, col in dependent_tables:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE {col}=?", [cid])
+            except sqlite3.OperationalError as exc:
+                # Older DBs may not have every optional table yet.
+                msg = str(exc).lower()
+                if "no such table" in msg or "no such column" in msg:
+                    continue
+                raise
         conn.execute("DELETE FROM clients WHERE id=?", [cid])
         conn.commit()
     finally:
