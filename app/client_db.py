@@ -139,7 +139,8 @@ def init_client_hub_db():
             notes            TEXT DEFAULT '',
             doc_tab_names    TEXT DEFAULT '',
             practice_type    TEXT DEFAULT '',
-            report_tab_names TEXT DEFAULT ''
+            report_tab_names TEXT DEFAULT '',
+            enabled_modules  TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -509,6 +510,7 @@ def init_client_hub_db():
         ("doc_tab_names", "TEXT DEFAULT ''"),
         ("practice_type", "TEXT DEFAULT ''"),
         ("report_tab_names", "TEXT DEFAULT ''"),
+        ("enabled_modules", "TEXT DEFAULT ''"),
     ]
     cur.execute("PRAGMA table_info(clients)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -744,7 +746,7 @@ def list_clients():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type FROM clients ORDER BY company")
+        cur.execute("SELECT id,username,company,contact_name,email,phone,role,is_active,created_at,last_login,practice_type,enabled_modules FROM clients ORDER BY company")
         rows = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -963,7 +965,8 @@ def update_client(cid: int, data: dict):
         cur = conn.cursor()
         allowed = ["company", "contact_name", "email", "phone", "role", "is_active",
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
-                   "address", "specialty", "notes", "doc_tab_names", "practice_type"]
+                   "address", "specialty", "notes", "doc_tab_names", "practice_type",
+                   "report_tab_names", "enabled_modules"]
         parts, params = [], []
         for f in allowed:
             if f in data and data[f] is not None:
@@ -1022,6 +1025,16 @@ def delete_client(cid: int):
 
 DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
 DEFAULT_REPORT_TABS = ["Claims", "Credentialing", "EDI"]
+DEFAULT_ENABLED_MODULES = [
+    "claims",
+    "credentialing",
+    "enrollment",
+    "edi",
+    "providers",
+    "reporting",
+    "production",
+    "documents",
+]
 
 
 def get_profile(client_id: int) -> dict:
@@ -1032,7 +1045,7 @@ def get_profile(client_id: int) -> dict:
         cur.execute("""
             SELECT company, contact_name, email, phone,
                    tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
-                   address, specialty, notes, doc_tab_names, practice_type, report_tab_names
+                 address, specialty, notes, doc_tab_names, practice_type, report_tab_names, enabled_modules
             FROM clients WHERE id=?""", [client_id])
         row = cur.fetchone()
     finally:
@@ -1041,7 +1054,7 @@ def get_profile(client_id: int) -> dict:
         return {}
     cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
             "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-            "doc_tab_names", "practice_type", "report_tab_names"]
+            "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules"]
     d = {c: (row[i] or "") for i, c in enumerate(cols)}
     try:
         d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
@@ -1051,6 +1064,10 @@ def get_profile(client_id: int) -> dict:
         d["report_tabs"] = _json.loads(d["report_tab_names"]) if d["report_tab_names"] else DEFAULT_REPORT_TABS[:]
     except Exception:
         d["report_tabs"] = DEFAULT_REPORT_TABS[:]
+    try:
+        d["enabled_modules"] = _json.loads(d["enabled_modules"]) if d["enabled_modules"] else DEFAULT_ENABLED_MODULES[:]
+    except Exception:
+        d["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
     return d
 
 
@@ -1058,7 +1075,7 @@ def update_profile(client_id: int, data: dict):
     import json as _json
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-               "doc_tab_names", "practice_type", "report_tab_names"]
+               "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules"]
     update_client(client_id, {k: v for k, v in data.items() if k in allowed})
 
 

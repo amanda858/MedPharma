@@ -1899,6 +1899,9 @@
         <div id="searchDropdown" class="search-dropdown" style="display:none"></div>
       </div>
       <div class="topbar-right">
+        <button id="topAddUserBtn" class="btn btn-secondary btn-sm" onclick="openUserInviteModal()" style="display:none">
+          + Add Employee
+        </button>
         <button id="jobsBell" onclick="toggleJobsDrawer()" title="Recent Jobs"
           style="position:relative;background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">
           🧭<span id="jobsBadge"
@@ -3951,6 +3954,8 @@
       }
       // adminNav (Manage Clients / Audit Log) — full admin only
       document.getElementById('adminNav').style.display = isFullAdmin() ? 'block' : 'none';
+      const topAddUserBtn = document.getElementById('topAddUserBtn');
+      if (topAddUserBtn) topAddUserBtn.style.display = isStaffOrAdmin() ? '' : 'none';
       // Full ops nav for admin and staff; client nav for regular clients
       if (isStaffOrAdmin()) {
         document.getElementById('adminFullNav').style.display = 'block';
@@ -3980,6 +3985,8 @@
       document.getElementById('topUser').textContent = currentUser.username;
       const rolePill = document.getElementById('topRole');
       rolePill.style.display = 'none';
+      const topAddUserBtn = document.getElementById('topAddUserBtn');
+      if (topAddUserBtn) topAddUserBtn.style.display = '';
       document.getElementById('adminNav').style.display = 'block';
       document.getElementById('adminFullNav').style.display = 'block';
       document.getElementById('clientNav').style.display = 'none';

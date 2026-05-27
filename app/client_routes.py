@@ -417,6 +417,7 @@ class ProfileUpdate(BaseModel):
     practice_type: Optional[str] = None
     doc_tabs: Optional[list] = None
     report_tabs: Optional[list] = None
+    enabled_modules: Optional[list[str]] = None
 
 
 class PracticeProfileUpdate(BaseModel):
@@ -449,13 +450,16 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/admin/users/invite")
 def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str] = Cookie(None)):
-    admin = _require_full_admin(hub_session)
+    admin = _require_admin(hub_session)
     email = (body.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email is required")
 
     payload = body.model_dump()
     payload["email"] = email
+    # Staff can invite users but cannot create full-admin accounts.
+    if admin.get("role") != "admin" and (payload.get("role") or "client") == "admin":
+        payload["role"] = "staff"
 
     try:
         invite = create_user_invite(payload, invited_by=admin.get("username", "admin"), ttl_hours=72)
@@ -542,11 +546,13 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
     user = _require_user(hub_session)
     scope = _client_scope(user)
     cid = scope if scope is not None else user["id"]
-    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs")}
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs", "enabled_modules")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
     if body.report_tabs is not None:
         data["report_tab_names"] = _json.dumps(body.report_tabs)
+    if body.enabled_modules is not None:
+        data["enabled_modules"] = _json.dumps(body.enabled_modules)
     update_profile(cid, data)
     return {"ok": True}
 
@@ -554,11 +560,13 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 @router.put("/profile/{cid}")
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
     _require_admin(hub_session)
-    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs")}
+    data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs", "enabled_modules")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
     if body.report_tabs is not None:
         data["report_tab_names"] = _json.dumps(body.report_tabs)
+    if body.enabled_modules is not None:
+        data["enabled_modules"] = _json.dumps(body.enabled_modules)
     update_profile(cid, data)
     return {"ok": True}
 
