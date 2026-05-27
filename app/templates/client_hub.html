@@ -5175,24 +5175,44 @@
     }
 
     function openUserInviteModal() {
-      ['fUCompany','fUContact','fUEmail','fUPhone','fUUsername'].forEach(id => {
+      ['fUContact','fUEmail','fUPhone','fUUsername'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
-      document.getElementById('fURole').value = 'client';
+      const companyEl = document.getElementById('fUCompany');
+      const selectedClient = clientsList.find(c => c.id === activeClientId);
+      const defaultCompany = (selectedClient && selectedClient.company)
+        || (currentUser && currentUser.company)
+        || '';
+      if (companyEl) companyEl.value = defaultCompany;
+
+      const roleEl = document.getElementById('fURole');
+      if (roleEl) {
+        roleEl.value = 'client';
+        const adminOpt = roleEl.querySelector('option[value="admin"]');
+        if (adminOpt) adminOpt.style.display = isFullAdmin() ? '' : 'none';
+      }
+
       document.getElementById('userInviteModal').classList.add('open');
     }
 
     async function sendUserInvite() {
+      const companyInput = (document.getElementById('fUCompany').value || '').trim();
+      const selectedClient = clientsList.find(c => c.id === activeClientId);
+      const fallbackCompany = (selectedClient && selectedClient.company)
+        || (currentUser && currentUser.company)
+        || '';
+      const resolvedCompany = companyInput || fallbackCompany;
+
       const data = {
-        company: document.getElementById('fUCompany').value.trim(),
+        company: resolvedCompany,
         contact_name: document.getElementById('fUContact').value.trim(),
         email: document.getElementById('fUEmail').value.trim(),
         phone: document.getElementById('fUPhone').value.trim(),
         role: document.getElementById('fURole').value,
         username: document.getElementById('fUUsername').value.trim(),
       };
-      if (!data.company) { toast('Display company/team is required', 'error'); return; }
+      if (!data.company) { toast('Please select an account first, then try Add Employee.', 'error'); return; }
       if (!data.email || !data.email.includes('@')) { toast('Valid email is required', 'error'); return; }
       try {
         const r = await fetch('/hub/api/admin/users/invite', {
