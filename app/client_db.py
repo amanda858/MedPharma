@@ -18,24 +18,61 @@ _CLIENTS_SEED_PATH = os.path.join(
 )
 
 
+def _sanitize_seed_entry(entry: dict) -> dict:
+    return {
+        "username": (entry.get("username") or "").strip().lower(),
+        "company": entry.get("company", ""),
+        "contact_name": entry.get("contact_name", ""),
+        "email": entry.get("email", ""),
+        "phone": entry.get("phone", ""),
+        "role": entry.get("role", "client"),
+        "service_type": entry.get("service_type", ""),
+        "notes": entry.get("notes", ""),
+    }
+
+
 def _load_clients_seed() -> list[dict]:
     """Load clients_seed.json, return empty list on any error."""
     try:
         with open(_CLIENTS_SEED_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
+        if not isinstance(data, list):
+            return []
+        sanitized = [_sanitize_seed_entry(entry or {}) for entry in data]
+        if sanitized != data:
+            _save_clients_seed(sanitized)
+        return sanitized
+    except FileNotFoundError:
         return []
+    except Exception as e:
+        log.error("could not read clients_seed.json: %s", e)
+        raise
 
 
 def _save_clients_seed(clients: list[dict]):
-    """Overwrite clients_seed.json with the given list."""
+    """Overwrite clients_seed.json atomically with the given list."""
+    os.makedirs(os.path.dirname(_CLIENTS_SEED_PATH), exist_ok=True)
+    tmp_path = f"{_CLIENTS_SEED_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(clients, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, _CLIENTS_SEED_PATH)
+
+
+def _get_client_snapshot(cid: int) -> dict | None:
+    conn = get_db()
     try:
-        os.makedirs(os.path.dirname(_CLIENTS_SEED_PATH), exist_ok=True)
-        with open(_CLIENTS_SEED_PATH, "w", encoding="utf-8") as f:
-            json.dump(clients, f, indent=2)
-    except Exception as e:
-        log.warning("could not write clients_seed.json: %s", e)
+        row = conn.execute(
+            "SELECT company, contact_name, email, phone, role, is_active, "
+            "tax_id, group_npi, individual_npi, ptan_group, ptan_individual, "
+            "address, specialty, notes, doc_tab_names, practice_type, "
+            "report_tab_names, enabled_modules FROM clients WHERE id=?",
+            [cid],
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
 
 
 def _upsert_client_from_seed(conn, entry: dict):
@@ -50,26 +87,28 @@ def _upsert_client_from_seed(conn, entry: dict):
         # Client already exists — update non-sensitive fields only
         cur.execute(
             "UPDATE clients SET company=?, contact_name=?, email=?, phone=?, "
-            "role=?, practice_type=? WHERE username=?",
+            "role=?, practice_type=?, notes=? WHERE username=?",
             (
                 entry.get("company", ""), entry.get("contact_name", ""),
                 entry.get("email", ""), entry.get("phone", ""),
                 entry.get("role", "client"), entry.get("service_type", ""),
+                entry.get("notes", ""),
                 username,
             ),
         )
     else:
-        # Insert new client with a temp password (admin must reset via RESET_PW_ env var)
+        # Insert new client with a random password; admin must invite/reset after reseed.
         salt = secrets.token_hex(16)
-        raw_pw = entry.get("_temp_password") or secrets.token_urlsafe(12)
+        raw_pw = secrets.token_urlsafe(24)
         cur.execute(
-            "INSERT INTO clients (username,password,salt,company,contact_name,email,phone,role,practice_type) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO clients (username,password,salt,company,contact_name,email,phone,role,practice_type,notes) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 username, _hash_pw(raw_pw, salt), salt,
                 entry.get("company", ""), entry.get("contact_name", ""),
                 entry.get("email", ""), entry.get("phone", ""),
                 entry.get("role", "client"), entry.get("service_type", ""),
+                entry.get("notes", ""),
             ),
         )
         log.info("startup: seeded client '%s' from clients_seed.json", username)
@@ -116,6 +155,89 @@ def _ensure_auth_columns(conn):
     if "must_change_password" not in cols:
         cur.execute("ALTER TABLE clients ADD COLUMN must_change_password INTEGER DEFAULT 0")
         conn.commit()
+
+
+def _ensure_migration_table(conn):
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS app_migrations (
+               key         TEXT PRIMARY KEY,
+               applied_at  TEXT DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+
+
+def _run_migration_once(conn, key: str, fn):
+    _ensure_migration_table(conn)
+    row = conn.execute("SELECT 1 FROM app_migrations WHERE key=?", (key,)).fetchone()
+    if row:
+        return False
+    fn()
+    conn.execute("INSERT INTO app_migrations(key) VALUES (?)", (key,))
+    conn.commit()
+    return True
+
+
+def _apply_startup_user_migrations(conn):
+    cur = conn.cursor()
+
+    def _fix_legacy_profiles():
+        cur.execute(
+            "UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' "
+            "WHERE username='eric' AND contact_name='Eric'"
+        )
+
+    def _migrate_jessica_staff():
+        cur.execute(
+            "UPDATE clients SET role='staff', company='MedPharma SC' "
+            "WHERE username='jessica' AND role IN ('client','admin')"
+        )
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
+        if cur.fetchone()[0] == 0:
+            jsalt = secrets.token_hex(16)
+            cur.execute(
+                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
+            )
+
+    def _migrate_rcm_admin():
+        cur.execute(
+            "UPDATE clients SET role='admin', company='MedPharma SC' "
+            "WHERE username='rcm' AND role='client'"
+        )
+        cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
+        if cur.fetchone()[0] == 0:
+            rcm_salt = secrets.token_hex(16)
+            cur.execute(
+                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
+                ("rcm", _hash_pw("rcm123", rcm_salt), rcm_salt, "MedPharma SC", "RCM", "", "admin")
+            )
+
+    def _deactivate_placeholder_clients():
+        for _uname, _company in (("eric", "Luminary (OMT/MHP)"), ("trupath", "TruPath")):
+            cur.execute(
+                "SELECT id FROM clients WHERE username=? AND company=? AND role='client'",
+                (_uname, _company),
+            )
+            _row = cur.fetchone()
+            if not _row:
+                continue
+            _cid = _row[0]
+            cur.execute("SELECT COUNT(*) FROM claims_master WHERE client_id=?", (_cid,))
+            if cur.fetchone()[0] == 0:
+                cur.execute("UPDATE clients SET is_active=0 WHERE id=?", (_cid,))
+
+    def _clear_luminary_profile_fields():
+        cur.execute(
+            """UPDATE clients SET tax_id='', group_npi='', individual_npi='',
+                   ptan_group='', ptan_individual='', specialty=''
+                   WHERE username='eric' AND practice_type='MHP+OMT'"""
+        )
+
+    _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
+    _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
+    _run_migration_once(conn, "rcm_admin_v1", _migrate_rcm_admin)
+    _run_migration_once(conn, "placeholder_clients_inactive_v1", _deactivate_placeholder_clients)
+    _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
 
 
 
@@ -554,56 +676,7 @@ def init_client_hub_db():
     if total == 0:
         _seed_data(conn)
     else:
-        # Auto-migrate: fix client profile data
-        cur.execute("UPDATE clients SET contact_name='Luminary Practice', email='info@luminarypractice.com' WHERE username='eric' AND contact_name='Eric'")
-        # Migrate jessica from client → staff (MedPharma operations staff, NOT full admin)
-        cur.execute("UPDATE clients SET role='staff', company='MedPharma SC' WHERE username='jessica' AND role IN ('client','admin')")
-        # Ensure jessica account exists as staff
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username='jessica'")
-        if cur.fetchone()[0] == 0:
-            jsalt = secrets.token_hex(16)
-            cur.execute(
-                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
-            )
-        # Migrate rcm from client → admin (MedPharma staff who sees all accounts)
-        cur.execute("UPDATE clients SET role='admin', company='MedPharma SC' WHERE username='rcm' AND role='client'")
-        # Reset rcm password so login works
-        rcm_salt = secrets.token_hex(16)
-        cur.execute("UPDATE clients SET password=?, salt=? WHERE username='rcm'",
-                    (_hash_pw("rcm123", rcm_salt), rcm_salt))
-        # Ensure rcm account exists as admin
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
-        if cur.fetchone()[0] == 0:
-            rcm_salt2 = secrets.token_hex(16)
-            cur.execute(
-                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt2), rcm_salt2, "MedPharma SC", "RCM", "", "admin")
-            )
-        # ── Deactivate seeded placeholder clients (Luminary / TruPath) ──────────
-        # These were demo accounts. Hide them from the account selector unless
-        # they have real claim data attached — in that case leave them alone.
-        for _placeholder in (
-            ("eric",    "Luminary (OMT/MHP)"),
-            ("trupath", "TruPath"),
-        ):
-            _uname, _company = _placeholder
-            cur.execute(
-                "SELECT id FROM clients WHERE username=? AND company=? AND role='client'",
-                (_uname, _company),
-            )
-            _row = cur.fetchone()
-            if _row:
-                _cid = _row[0]
-                # Only deactivate if no real claim data exists for this client
-                cur.execute("SELECT COUNT(*) FROM claims_master WHERE client_id=?", (_cid,))
-                if cur.fetchone()[0] == 0:
-                    cur.execute("UPDATE clients SET is_active=0 WHERE id=?", (_cid,))
-        # Clear Luminary's own profile fields — only sub-profiles (MHP/OMT) hold profile data
-        cur.execute("""UPDATE clients SET tax_id='', group_npi='', individual_npi='',
-                       ptan_group='', ptan_individual='', specialty=''
-                       WHERE username='eric' AND practice_type='MHP+OMT'""")
-        conn.commit()
+        _apply_startup_user_migrations(conn)
 
     # ── Apply any password resets from environment variables ─────────────────
     # Set RESET_PW_<username>=<newpassword> in Render env vars to force-reset
@@ -796,29 +869,38 @@ def create_client(data: dict) -> int:
         service_type = (data.get("service_type") or "").strip()
         cur.execute(
             """INSERT INTO clients
-               (username, password, salt, company, contact_name, email, phone, role, practice_type)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (username, password, salt, company, contact_name, email, phone, role, practice_type, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (username, _hash_pw(raw_password, salt), salt,
              data.get("company", ""), data.get("contact_name", ""),
              data.get("email", ""), data.get("phone", ""),
-             data.get("role", "client"), service_type),
+                 data.get("role", "client"), service_type, data.get("notes", "")),
         )
         conn.commit()
         cid = cur.lastrowid
     finally:
         conn.close()
 
-    # Persist to clients_seed.json so client survives Render deploys
-    _persist_client_to_seed({
-        "username": username,
-        "company": data.get("company", ""),
-        "contact_name": data.get("contact_name", ""),
-        "email": data.get("email", ""),
-        "phone": data.get("phone", ""),
-        "role": data.get("role", "client"),
-        "service_type": service_type,
-        "_temp_password": raw_password,  # stored so re-seed can restore login
-    })
+    try:
+        # Persist to clients_seed.json so client survives Render deploys
+        _persist_client_to_seed({
+            "username": username,
+            "company": data.get("company", ""),
+            "contact_name": data.get("contact_name", ""),
+            "email": data.get("email", ""),
+            "phone": data.get("phone", ""),
+            "role": data.get("role", "client"),
+            "service_type": service_type,
+            "notes": data.get("notes", ""),
+        })
+    except Exception:
+        rollback = get_db()
+        try:
+            rollback.execute("DELETE FROM clients WHERE id=?", [cid])
+            rollback.commit()
+        finally:
+            rollback.close()
+        raise
     return cid
 
 
@@ -1003,20 +1085,78 @@ def change_password_with_current(client_id: int, current_password: str, new_pass
 def _persist_client_to_seed(entry: dict):
     """Append or update a client entry in clients_seed.json."""
     existing = _load_clients_seed()
-    username = (entry.get("username") or "").strip().lower()
+    sanitized_entry = _sanitize_seed_entry(entry)
+    username = sanitized_entry["username"]
     updated = False
     for i, e in enumerate(existing):
         if (e.get("username") or "").strip().lower() == username:
-            existing[i] = entry
+            existing[i] = sanitized_entry
             updated = True
             break
     if not updated:
-        existing.append(entry)
+        existing.append(sanitized_entry)
     _save_clients_seed(existing)
+
+
+def _remove_client_from_seed(username: str):
+    """Remove a client entry from clients_seed.json by username."""
+    normalized = (username or "").strip().lower()
+    if not normalized:
+        return
+    existing = _load_clients_seed()
+    filtered = [
+        entry for entry in existing
+        if (entry.get("username") or "").strip().lower() != normalized
+    ]
+    if len(filtered) != len(existing):
+        _save_clients_seed(filtered)
+
+
+def _sync_client_to_seed(cid: int):
+    """Update an existing seeded client entry after DB edits.
+
+    Only touches usernames that already exist in clients_seed.json so internal
+    bootstrap users do not get added implicitly.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT username, company, contact_name, email, phone, role, practice_type, notes "
+            "FROM clients WHERE id=?",
+            [cid],
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return
+
+    current = dict(row)
+    username = (current.get("username") or "").strip().lower()
+    if not username:
+        return
+
+    existing = _load_clients_seed()
+    for index, entry in enumerate(existing):
+        if (entry.get("username") or "").strip().lower() != username:
+            continue
+        updated = {
+            "username": current.get("username", ""),
+            "company": current.get("company", ""),
+            "contact_name": current.get("contact_name", ""),
+            "email": current.get("email", ""),
+            "phone": current.get("phone", ""),
+            "role": current.get("role", "client"),
+            "service_type": current.get("practice_type", ""),
+            "notes": current.get("notes", ""),
+        }
+        existing[index] = updated
+        _save_clients_seed(existing)
+        break
 
 
 
 def update_client(cid: int, data: dict):
+    previous = _get_client_snapshot(cid)
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -1039,45 +1179,86 @@ def update_client(cid: int, data: dict):
             conn.commit()
     finally:
         conn.close()
+    try:
+        _sync_client_to_seed(cid)
+    except Exception:
+        if previous is not None:
+            restore = dict(previous)
+            if "password" in data and data["password"]:
+                restore.pop("password", None)
+            rollback = get_db()
+            try:
+                cols = []
+                vals = []
+                for key, value in restore.items():
+                    cols.append(f"{key}=?")
+                    vals.append(value)
+                vals.append(cid)
+                rollback.execute(f"UPDATE clients SET {','.join(cols)} WHERE id=?", vals)
+                rollback.commit()
+            finally:
+                rollback.close()
+        raise
 
 
 def delete_client(cid: int):
+    """Hard-delete a client and every dependent row across the schema.
+
+    Dynamically discovers every user-table that references the client (via a
+    ``client_id`` or ``account_id`` column) so newly added tables don't silently
+    block deletion with a FOREIGN KEY error.
+    """
     conn = get_db()
     try:
-        # Remove dependent rows first to avoid FK violations when deleting users
-        # created via invite/setup-password flow.
-        dependent_tables = [
-            ("sessions", "client_id"),
-            ("password_setup_tokens", "client_id"),
-            ("claims_master", "client_id"),
-            ("payments", "client_id"),
-            ("notes_log", "client_id"),
-            ("providers", "client_id"),
-            ("credentialing", "client_id"),
-            ("enrollment", "client_id"),
-            ("edi_setup", "client_id"),
-            ("client_files", "client_id"),
-            ("sharefile_links", "client_id"),
-            ("practice_profiles", "client_id"),
-            ("team_production", "client_id"),
-            ("audit_log", "client_id"),
-            ("report_notes", "client_id"),
-            ("jobs", "account_id"),
-            ("activity_events", "client_id"),
+        row = conn.execute("SELECT username FROM clients WHERE id=?", [cid]).fetchone()
+        if not row:
+            # Nothing to delete; treat as success so the UI clears the row.
+            return
+        username = row["username"] or ""
+
+        # Discover all tables and the columns that point at clients.
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
         ]
-        for table, col in dependent_tables:
+        candidate_cols = ("client_id", "account_id")
+        cleanup: list[tuple[str, str]] = []
+        for table in tables:
+            if table == "clients":
+                continue
             try:
-                conn.execute(f"DELETE FROM {table} WHERE {col}=?", [cid])
-            except sqlite3.OperationalError as exc:
-                # Older DBs may not have every optional table yet.
-                msg = str(exc).lower()
-                if "no such table" in msg or "no such column" in msg:
-                    continue
-                raise
-        conn.execute("DELETE FROM clients WHERE id=?", [cid])
-        conn.commit()
+                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            except sqlite3.OperationalError:
+                continue
+            for col in candidate_cols:
+                if col in cols:
+                    cleanup.append((table, col))
+
+        # Disable FK enforcement for the duration of the delete so the cascade
+        # order doesn't matter even if future tables reference clients(id).
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            for table, col in cleanup:
+                try:
+                    conn.execute(f"DELETE FROM {table} WHERE {col}=?", [cid])
+                except sqlite3.OperationalError as exc:
+                    log.warning("delete_client: skipping %s.%s — %s", table, col, exc)
+            conn.execute("DELETE FROM clients WHERE id=?", [cid])
+            conn.commit()
+        finally:
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+            except Exception:
+                pass
     finally:
         conn.close()
+
+    # Seed-file maintenance must never block account removal — log and move on.
+    try:
+        _remove_client_from_seed(username)
+    except Exception as exc:
+        log.error("delete_client: failed to update clients_seed.json for %s: %s", username, exc)
 
 
 DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
@@ -2942,6 +3123,33 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         """, p)
         by_user = [dict(r) for r in cur.fetchall()]
 
+        # Include all active users in scope, even if they have zero rows in this period.
+        if client_id:
+            cur.execute("SELECT company FROM clients WHERE id=?", (client_id,))
+            scope_row = cur.fetchone()
+            if scope_row and (scope_row["company"] or "").strip():
+                cur.execute(
+                    "SELECT username FROM clients WHERE is_active=1 AND company=? ORDER BY username",
+                    (scope_row["company"],),
+                )
+            else:
+                cur.execute("SELECT username FROM clients WHERE is_active=1 AND id=?", (client_id,))
+        else:
+            cur.execute("SELECT username FROM clients WHERE is_active=1 ORDER BY username")
+        scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall() if (r["username"] or "").strip()]
+
+        by_user_map = {str(u.get("username") or "").strip(): u for u in by_user if str(u.get("username") or "").strip()}
+        for username in scoped_usernames:
+            if username not in by_user_map:
+                by_user_map[username] = {
+                    "username": username,
+                    "total_entries": 0,
+                    "total_quantity": 0,
+                    "total_hours": 0,
+                    "days_worked": 0,
+                }
+        by_user = [by_user_map[k] for k in sorted(by_user_map.keys(), key=lambda x: x.lower())]
+
         # Summary by category
         cur.execute(f"""
             SELECT category,
@@ -2964,13 +3172,19 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         # Time management flags — users averaging < 6 hrs/day worked
         flags = []
         for u in by_user:
+            u["total_entries"] = int(u.get("total_entries") or 0)
+            u["total_quantity"] = int(u.get("total_quantity") or 0)
+            u["total_hours"] = float(u.get("total_hours") or 0)
+            u["days_worked"] = int(u.get("days_worked") or 0)
             if u["days_worked"] > 0:
                 avg_hrs = round(u["total_hours"] / u["days_worked"], 1)
-                u["avg_hours_per_day"] = avg_hrs
-                if avg_hrs < 6:
-                    flags.append({"username": u["username"], "avg_hours_per_day": avg_hrs,
-                                  "days_worked": u["days_worked"],
-                                  "recommendation": "Below 6hr/day average — review time management"})
+            else:
+                avg_hrs = 0
+            u["avg_hours_per_day"] = avg_hrs
+            if u["days_worked"] > 0 and avg_hrs < 6:
+                flags.append({"username": u["username"], "avg_hours_per_day": avg_hrs,
+                              "days_worked": u["days_worked"],
+                              "recommendation": "Below 6hr/day average — review time management"})
     finally:
         conn.close()
     return {

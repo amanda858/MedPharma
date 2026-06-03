@@ -405,6 +405,7 @@ class ClientIn(BaseModel):
     email: Optional[str] = ""
     phone: Optional[str] = ""
     service_type: Optional[str] = ""   # rcm | payer_contracting | auditing | hybrid
+    notes: Optional[str] = ""
     role: Optional[str] = "client"
     # Legacy fields — still accepted if provided, auto-generated otherwise
     username: Optional[str] = None
@@ -457,7 +458,7 @@ class PracticeProfileUpdate(BaseModel):
 
 @router.get("/clients")
 def get_clients(hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     return list_clients()
 
 
@@ -470,7 +471,7 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/admin/users/invite")
 def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str] = Cookie(None)):
-    admin = _require_admin(hub_session)
+    admin = _require_full_admin(hub_session)
     email = (body.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email is required")
@@ -556,8 +557,16 @@ def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cooki
 
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_full_admin(hub_session)
-    delete_client(cid)
+    admin = _require_full_admin(hub_session)
+    # Don't let an admin nuke their own account out from under their session.
+    if int(admin.get("id") or 0) == int(cid):
+        raise HTTPException(status_code=400, detail="You cannot remove the account you are signed in as.")
+    try:
+        delete_client(cid)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).exception("delete_client failed for cid=%s", cid)
+        raise HTTPException(status_code=500, detail=f"Failed to remove account: {exc}")
     return {"ok": True}
 
 
@@ -573,7 +582,7 @@ def get_my_profile(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/profile/{cid}")
 def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     return get_profile(cid)
 
 
@@ -595,7 +604,7 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
 
 @router.put("/profile/{cid}")
 def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     data = {k: v for k, v in body.model_dump().items() if v is not None and k not in ("doc_tabs", "report_tabs", "enabled_modules")}
     if body.doc_tabs is not None:
         data["doc_tab_names"] = _json.dumps(body.doc_tabs)
@@ -620,28 +629,28 @@ class ReportNoteRenameBody(BaseModel):
 @router.get("/report-notes/{cid}")
 def get_client_report_notes(cid: int, tab_name: Optional[str] = None,
                              hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     notes = get_report_notes(cid, tab_name)
     return {"notes": notes}
 
 @router.put("/report-notes/{cid}")
 def save_report_note(cid: int, body: ReportNoteBody,
                      hub_session: Optional[str] = Cookie(None)):
-    user = _require_admin(hub_session)
+    user = _require_full_admin(hub_session)
     upsert_report_note(cid, body.tab_name, body.content, user.get("username", ""))
     return {"ok": True}
 
 @router.delete("/report-notes/{cid}/{tab_name}")
 def remove_report_note(cid: int, tab_name: str,
                        hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     delete_report_note(cid, tab_name)
     return {"ok": True}
 
 @router.put("/report-notes/{cid}/rename")
 def rename_report_note_endpoint(cid: int, body: ReportNoteRenameBody,
                                 hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     rename_report_note(cid, body.old_name, body.new_name)
     return {"ok": True}
 
@@ -658,7 +667,7 @@ def list_practice_profiles(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/practice-profiles/{cid}")
 def list_practice_profiles_admin(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     return {"profiles": get_practice_profiles(cid)}
 
 
@@ -675,7 +684,7 @@ def save_practice_profile(profile_name: str, body: PracticeProfileUpdate,
 @router.put("/practice-profiles/{cid}/{profile_name}")
 def save_practice_profile_admin(cid: int, profile_name: str, body: PracticeProfileUpdate,
                                 hub_session: Optional[str] = Cookie(None)):
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
     upsert_practice_profile(cid, profile_name, body.model_dump(exclude_none=True))
     return {"ok": True}
 
@@ -1447,8 +1456,8 @@ async def import_production_excel(
         raise HTTPException(status_code=422, detail="client_id is required")
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if ext not in {"xlsx", "xls", "csv", "pdf"}:
-        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, .csv, or .pdf")
+    if ext not in {"xlsx", "xls", "csv", "ods", "odf", "pdf"}:
+        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, .csv, .ods, .odf, or .pdf")
 
     content = await file.read()
     try:
@@ -1752,21 +1761,21 @@ def download_production_report(
     <img class="logo-img" src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma Logo" crossorigin="anonymous">
     <div class="header-text">
       <h1>MedPharma Internal Hub</h1>
-      <p>Team Production Report &nbsp;|&nbsp; {_esc(period_label)}</p>
+    <p>Work Production Report &nbsp;|&nbsp; {_esc(period_label)}</p>
     </div>
   </div>
 
   <div class="meta-bar">
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
-    <span><b>Team Members:</b> {len(by_user)}</span>
+    <span><b>Users:</b> {len(by_user)}</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
 
   {_flag_section()}
 
   <section class="section">
-    <h2>👥 Team Summary</h2>
+    <h2>👥 Work Production by User</h2>
     <table>
       <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
@@ -1782,7 +1791,7 @@ def download_production_report(
   </section>
 
   <section class="section">
-    <h2>📋 Detailed Daily Log</h2>
+    <h2>📋 Detailed Work Production</h2>
     <table>
       <thead><tr><th>Date</th><th>User</th><th>Category</th><th>Task Description</th><th>Qty</th><th>Hours</th><th>Notes</th></tr></thead>
       <tbody>{_detail_rows()}</tbody>
@@ -1803,8 +1812,8 @@ def download_production_report(
 
 @router.get("/notifications/status")
 def notifications_status_endpoint(hub_session: Optional[str] = Cookie(None)):
-    """Return the live notification channel configuration (admin only)."""
-    _require_admin(hub_session)
+    """Return the live notification channel configuration (full admin only)."""
+    _require_full_admin(hub_session)
     return get_notification_status()
 
 
@@ -1812,9 +1821,9 @@ def notifications_status_endpoint(hub_session: Optional[str] = Cookie(None)):
 def notifications_test_endpoint(hub_session: Optional[str] = Cookie(None)):
     """Fire a real test notification through configured email/SMS channels.
 
-    Admin only. Returns the per-channel delivery results plus current status.
+    Full admin only. Returns the per-channel delivery results plus current status.
     """
-    user = _require_admin(hub_session)
+    user = _require_full_admin(hub_session)
     return send_test_notification(triggered_by=user.get("username") or "admin")
 
 
@@ -1824,7 +1833,7 @@ def relink_kindercare_production(body: ProductionRelinkIn, hub_session: Optional
 
     This endpoint is idempotent: rows that already exist for KinderCare are skipped.
     """
-    _require_admin(hub_session)
+    _require_full_admin(hub_session)
 
     usernames = [str(u or "").strip().lower() for u in (body.usernames or []) if str(u or "").strip()]
     if not usernames:
@@ -1982,10 +1991,10 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .pdf, .doc, .docx files allowed")
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .ods, .odf, .pdf, .doc, .docx files allowed")
 
-    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv", ".ods", ".odf") else "pdf"
     unique_name = f"{uuid.uuid4().hex}{ext}"
     dest = os.path.join(UPLOAD_DIR, unique_name)
 
@@ -2009,14 +2018,7 @@ async def upload_file(
                 reader = csv.reader(io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
             else:
-                try:
-                    import openpyxl
-                    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-                    ws = wb.active
-                    row_count = max(0, ws.max_row - 1)  # minus header
-                    wb.close()
-                except Exception:
-                    row_count = 0
+                row_count = len(_parse_excel_rows(content, ext, combine_sheets=True))
         except Exception:
             row_count = 0
 
@@ -2257,8 +2259,8 @@ async def import_excel(
     scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
 
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv files supported for import")
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .ods, .odf files supported for import")
 
     content = await file.read()
 
@@ -2325,7 +2327,7 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     """Parse Excel/CSV bytes into list of dict rows with smart header detection.
     If combine_sheets=True and multiple sheets share the same header structure,
     rows from all matching sheets are combined (useful for multi-tab claim files).
-    Supports .xlsx (openpyxl), .xls (xlrd), and .csv."""
+    Supports .xlsx (openpyxl), .xls (xlrd), .ods/.odf (OpenDocument), and .csv."""
     import csv, io
     rows = []
     if ext == ".csv":
@@ -2384,6 +2386,90 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
                 rows = max(groups.values(), key=len)
             else:
                 rows = max(sheet_results, key=lambda x: len(x[2]))[2]
+    elif ext in (".ods", ".odf"):
+        # OpenDocument spreadsheets — parse content.xml from zip package.
+        import xml.etree.ElementTree as _et
+        import zipfile as _zipfile
+
+        ns = {
+            "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+            "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+            "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+        }
+        a_row_rep = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}number-rows-repeated"
+        a_col_rep = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}number-columns-repeated"
+        a_str = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}string-value"
+        a_date = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}date-value"
+        a_val = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}value"
+
+        try:
+            with _zipfile.ZipFile(io.BytesIO(content)) as zf:
+                xml_bytes = zf.read("content.xml")
+        except Exception as exc:
+            raise ValueError(f"Cannot read OpenDocument file: {exc}") from exc
+
+        root = _et.fromstring(xml_bytes)
+        sheet_results = []
+
+        for table in root.findall(".//table:table", ns):
+            all_sheet_rows = []
+            for tr in table.findall("table:table-row", ns):
+                row_repeat = int(tr.attrib.get(a_row_rep, "1") or "1")
+                row_vals = []
+                for cell in tr:
+                    if not (cell.tag.endswith("table-cell") or cell.tag.endswith("covered-table-cell")):
+                        continue
+                    col_repeat = int(cell.attrib.get(a_col_rep, "1") or "1")
+                    parts = []
+                    for p in cell.findall(".//text:p", ns):
+                        txt = "".join(p.itertext()).strip()
+                        if txt:
+                            parts.append(txt)
+                    v = " ".join(parts).strip()
+                    if not v:
+                        v = (cell.attrib.get(a_str) or cell.attrib.get(a_date) or cell.attrib.get(a_val) or "")
+                    row_vals.extend([v] * max(1, col_repeat))
+                if not row_vals:
+                    continue
+                for _ in range(max(1, row_repeat)):
+                    all_sheet_rows.append(tuple(row_vals))
+
+            if not all_sheet_rows:
+                continue
+
+            header_row_idx = 0
+            best_header_score = 0
+            for idx, row in enumerate(all_sheet_rows[:10]):
+                non_empty = sum(1 for c in row if c is not None and str(c).strip())
+                text_cells = sum(1 for c in row if c is not None and isinstance(c, str) and len(str(c).strip()) > 0)
+                score = text_cells * 2 + non_empty
+                if score > best_header_score and non_empty >= 3:
+                    best_header_score = score
+                    header_row_idx = idx
+
+            if header_row_idx < len(all_sheet_rows):
+                sheet_headers = [str(c).strip() if c is not None else "" for c in all_sheet_rows[header_row_idx]]
+                valid_cols = [i for i, h in enumerate(sheet_headers) if h]
+                if len(valid_cols) < 2:
+                    continue
+                sheet_rows = []
+                for row in all_sheet_rows[header_row_idx + 1:]:
+                    if any(c is not None and str(c).strip() for c in row):
+                        sheet_rows.append(dict(zip(sheet_headers, row)))
+                if sheet_rows:
+                    hdr_key = tuple(sorted(h.lower() for h in sheet_headers if h))
+                    sheet_results.append((hdr_key, sheet_headers, sheet_rows))
+
+        if sheet_results:
+            if combine_sheets:
+                from collections import defaultdict
+                groups = defaultdict(list)
+                for hdr_key, hdrs, srows in sheet_results:
+                    groups[hdr_key].extend(srows)
+                rows = max(groups.values(), key=len)
+            else:
+                best = max(sheet_results, key=lambda x: len(x[2]))
+                rows = best[2]
     else:
         # .xlsx — use openpyxl
         import openpyxl
@@ -3304,7 +3390,7 @@ async def replace_file(
     hub_session: Optional[str] = Cookie(None),
 ):
     """Replace an existing uploaded file with a new version.
-    The old file is deleted from disk and replaced with the new upload.
+    The old file remains until the new upload is validated and persisted.
     If it's an Excel in a data category, the data is re-imported."""
     user = _require_user(hub_session)
     scope = _client_scope(user)
@@ -3313,26 +3399,15 @@ async def replace_file(
         raise HTTPException(404, "File not found")
 
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".pdf", ".doc", ".docx"):
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
         raise HTTPException(400, "Unsupported file type")
 
     content = await file.read()
     file_size = len(content)
 
-    # Delete old file from disk
-    old_path = os.path.join(UPLOAD_DIR, rec["filename"])
-    if os.path.isfile(old_path):
-        os.remove(old_path)
-
-    # Save new file
-    new_unique = f"{uuid.uuid4().hex}{ext}"
-    new_path = os.path.join(UPLOAD_DIR, new_unique)
-    with open(new_path, "wb") as f:
-        f.write(content)
-
     # Count rows for Excel/CSV
     row_count = 0
-    file_type = "excel" if ext in (".xlsx", ".xls", ".csv") else "pdf"
+    file_type = "excel" if ext in (".xlsx", ".xls", ".csv", ".ods", ".odf") else "pdf"
     if file_type == "excel":
         try:
             import csv as _csv, io as _io
@@ -3340,10 +3415,7 @@ async def replace_file(
                 reader = _csv.reader(_io.StringIO(content.decode("utf-8", errors="replace")))
                 row_count = max(0, sum(1 for _ in reader) - 1)
             else:
-                import openpyxl
-                wb = openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
-                row_count = max(0, sum(ws.max_row - 1 for ws in wb.worksheets if ws.max_row))
-                wb.close()
+                row_count = len(_parse_excel_rows(content, ext, combine_sheets=True))
         except Exception:
             pass
 
@@ -3368,17 +3440,33 @@ async def replace_file(
                 },
             )
 
+    # Save new file after validation succeeds.
+    new_unique = f"{uuid.uuid4().hex}{ext}"
+    new_path = os.path.join(UPLOAD_DIR, new_unique)
+    with open(new_path, "wb") as f:
+        f.write(content)
+
     # Update DB record
-    update_file_record(file_id, {
-        "filename": new_unique,
-        "original_name": file.filename or rec["original_name"],
-        "file_type": file_type,
-        "file_size": file_size,
-        "row_count": row_count,
-        "uploaded_by": user["username"],
-        "status": "Replaced",
-        "category": effective_category,
-    }, scope)
+    try:
+        update_file_record(file_id, {
+            "filename": new_unique,
+            "original_name": file.filename or rec["original_name"],
+            "file_type": file_type,
+            "file_size": file_size,
+            "row_count": row_count,
+            "uploaded_by": user["username"],
+            "status": "Replaced",
+            "category": effective_category,
+        }, scope)
+    except Exception:
+        if os.path.isfile(new_path):
+            os.remove(new_path)
+        raise
+
+    # Delete old file from disk only after DB update succeeds.
+    old_path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if os.path.isfile(old_path):
+        os.remove(old_path)
 
     # Auto re-import if data category
     imported = 0

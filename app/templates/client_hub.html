@@ -1957,20 +1957,20 @@
       <div class="sidebar">
         <!-- CLIENT SIDEBAR: only Daily Production + Documents -->
         <div id="clientNav">
-          <div class="nav-item" data-panel="production" onclick="navTo('production')">📋 Daily Work Log</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production')">📋 Team Production</div>
           <div class="nav-item" data-panel="files" onclick="navTo('files')">📁 Documents</div>
         </div>
         <!-- ADMIN SIDEBAR: full access -->
         <div id="adminFullNav" style="display:none">
           <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
-          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📋 Daily Work Log</div>
+          <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Client Profile</div>
+          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📋 Team Production</div>
           <div class="nav-section">Operations</div>
           <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
           <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
           <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">Enrollment</div>
           <div class="nav-item" data-panel="edi" onclick="navTo('edi')">EDI Setup</div>
-          <div class="nav-item" data-panel="providers" onclick="navTo('providers')">Providers</div>
-          <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Profile</div>
+          <div class="nav-item" data-panel="providers" onclick="navTo('providers')">Client References</div>
           <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
           <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
           <div id="adminNav">
@@ -2119,7 +2119,7 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('claims')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('claimsExcelInput').click()">📥
                 Import Excel</button>
-              <input type="file" id="claimsExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+              <input type="file" id="claimsExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
                 onchange="importExcel(this,'Claims')">
               <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
             </div>
@@ -2205,7 +2205,7 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('credentialing')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('credExcelInput').click()">📥
                 Import Excel</button>
-              <input type="file" id="credExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+              <input type="file" id="credExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
                 onchange="importExcel(this,'Credentialing')">
               <button class="btn btn-primary btn-sm" onclick="openCredModal()">+ Add</button>
             </div>
@@ -2268,7 +2268,7 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('enrollment')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('enrollExcelInput').click()">📥
                 Import Excel</button>
-              <input type="file" id="enrollExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+              <input type="file" id="enrollExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
                 onchange="importExcel(this,'Enrollment')">
               <button class="btn btn-primary btn-sm" onclick="openEnrollModal()">+ Add</button>
             </div>
@@ -2307,7 +2307,7 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('edi_setup')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ediExcelInput').click()">📥
                 Import Excel</button>
-              <input type="file" id="ediExcelInput" accept=".xlsx,.xls,.csv" style="display:none"
+              <input type="file" id="ediExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
                 onchange="importExcel(this,'EDI')">
               <button class="btn btn-primary btn-sm" onclick="openEdiModal()">+ Add</button>
             </div>
@@ -2338,13 +2338,13 @@
           </div>
         </div>
 
-        <!-- ═══ PROVIDERS ═══ -->
+        <!-- ═══ CLIENT REFERENCES ═══ -->
         <div class="hub-panel" id="panel-providers">
           <div class="page-header">
-            <div class="page-title">Providers</div>
+            <div class="page-title">Client References</div>
             <div class="page-actions">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('providers')">📤 Export CSV</button>
-              <button class="btn btn-primary btn-sm" onclick="openProviderModal()">+ Add Provider</button>
+              <button class="btn btn-primary btn-sm" onclick="openProviderModal()">+ Add Client Reference</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -2691,7 +2691,7 @@
               <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
                 Upload File</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleSharefileForm()" style="background:#f0fdf4;border-color:#86efac;color:#15803d">🔗 Add Sharefile Link</button>
-              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" style="display:none"
+              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.ods,.odf,.pdf,.doc,.docx" style="display:none"
                 onchange="handleFileSelect(this)" multiple>
             </div>
           </div>
@@ -2899,17 +2899,16 @@
         <!-- ═══ TEAM PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">📋 Daily Work Log</div>
+            <div class="page-title">📋 Team Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-secondary btn-sm" style="background:#f0fdf4;border-color:#86efac;color:#15803d" onclick="eodReport()">🌙 End of Day Report</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('prodExcelInput').click()">📥 Import Excel</button>
-              <input type="file" id="prodExcelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importProductionExcel(this)">
+              <input type="file" id="prodExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="importProductionExcel(this)">
               <button class="btn btn-secondary btn-sm" onclick="exportSection('production')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('report')" id="btnProdReport">📊
                 Weekly Report</button>
               <button class="btn btn-secondary btn-sm" onclick="toggleProductionView('jobs')" id="btnProdJobs">🧭 Job Center</button>
-              <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Daily
-                Log</button>
+              <button class="btn btn-primary btn-sm" onclick="toggleProductionView('log')" id="btnProdLog">📝 Work Production</button>
             </div>
           </div>
 
@@ -5083,7 +5082,7 @@
       const items = d.providers || d || [];
       const tbody = document.getElementById('providerTbody');
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state"><div class="es-icon">👤</div><p>No providers</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state"><div class="es-icon">👤</div><p>No client references</p></div></td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(i => `<tr>
@@ -5111,7 +5110,7 @@
 
     function openProviderModal(item) {
       document.getElementById('providerEditId').value = item?.id || '';
-      document.getElementById('providerModalTitle').textContent = item ? 'Edit Provider' : 'New Provider';
+      document.getElementById('providerModalTitle').textContent = item ? 'Edit Client Reference' : 'New Client Reference';
       document.getElementById('fProvName').value = item?.ProviderName || '';
       document.getElementById('fProvNPI').value = item?.NPI || '';
       document.getElementById('fProvSpecialty').value = item?.Specialty || '';
@@ -5186,11 +5185,19 @@
     async function deleteClient(cid, username) {
       if (!confirm(`Remove account "${username}"? This cannot be undone.`)) return;
       try {
-        const r = await fetch(`/hub/api/clients/${cid}`, { method: 'DELETE' });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        const r = await fetch(`/hub/api/clients/${cid}`, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try { const j = await r.json(); if (j && j.detail) detail = j.detail; }
+          catch (_) { try { detail = (await r.text()) || detail; } catch (_) {} }
+          throw new Error(detail);
+        }
         toast('Account removed', 'success');
         loadClients();
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toast(`Remove failed: ${e.message}`, 'error'); }
     }
 
     function openClientModal() {
@@ -6885,7 +6892,7 @@
       // Verify session is still valid before uploading
       if (!(await checkSession())) return;
       const ext = (file.name || '').split('.').pop().toLowerCase();
-      const isExcel = ['xlsx', 'xls', 'csv'].includes(ext);
+      const isExcel = ['xlsx', 'xls', 'csv', 'ods', 'odf'].includes(ext);
 
       // Determine the category — for Excel files, ask the user where data should go
       let category = (activeDocTab && activeDocTab !== 'All') ? activeDocTab : (currentDocTabs[0] || 'General');
@@ -6986,7 +6993,7 @@
     function replaceFile(fileId) {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.xlsx,.xls,.csv,.pdf,.doc,.docx';
+      input.accept = '.xlsx,.xls,.csv,.ods,.odf,.pdf,.doc,.docx';
       input.style.display = 'none';
       input.onchange = async () => {
         if (!input.files || !input.files.length) return;
@@ -7632,7 +7639,7 @@
 
       // Summary by user
       html += `<div class="card" style="margin-bottom:18px">
-        <div class="card-header"><div class="card-title">👥 Team Summary (${esc(start)} to ${esc(end)})</div></div>
+        <div class="card-header"><div class="card-title">👥 Work Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
           <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Avg Hrs/Day</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
@@ -7662,7 +7669,7 @@
 
       // Detailed daily log
       html += `<div class="card">
-        <div class="card-header"><div class="card-title">📋 Detailed Daily Log</div></div>
+        <div class="card-header"><div class="card-title">📋 Detailed Work Production</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
           <thead><tr><th>Date</th><th>User</th><th>Category</th><th>Task</th><th>Qty</th><th>Hours</th><th>Notes</th></tr></thead>
           <tbody>${details.map(d => `<tr>
@@ -7732,6 +7739,7 @@
           email: document.getElementById('ncEmail').value.trim(),
           phone: document.getElementById('ncPhone').value.trim(),
           service_type,
+          notes: document.getElementById('ncNotes') ? document.getElementById('ncNotes').value.trim() : '',
         };
         if (!data.company) { toast('Company name is required', 'error'); return; }
         if (!service_type) { toast('Please select at least one service', 'error'); return; }
