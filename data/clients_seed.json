@@ -1,1 +1,22 @@
-[]
+[
+  {
+    "username": "susan@medprosc.com",
+    "company": "MedPharma SC",
+    "contact_name": "Susan",
+    "email": "susan@medprosc.com",
+    "phone": "",
+    "role": "staff",
+    "service_type": "",
+    "notes": ""
+  },
+  {
+    "username": "melissa@medprosc.com",
+    "company": "MedPharma SC",
+    "contact_name": "Melissa",
+    "email": "melissa@medprosc.com",
+    "phone": "",
+    "role": "staff",
+    "service_type": "",
+    "notes": ""
+  }
+]

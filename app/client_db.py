@@ -178,6 +178,8 @@ def _run_migration_once(conn, key: str, fn):
 
 
 def _apply_startup_user_migrations(conn):
+    # Defensive: ensure auth columns exist before any migration touches them.
+    _ensure_auth_columns(conn)
     cur = conn.cursor()
 
     def _fix_legacy_profiles():
@@ -233,11 +235,48 @@ def _apply_startup_user_migrations(conn):
                    WHERE username='eric' AND practice_type='MHP+OMT'"""
         )
 
+    def _provision_susan_melissa():
+        """Ensure susan@medprosc.com and melissa@medprosc.com exist with known
+        starter passwords. Also retires the old short-username seed rows
+        ('susan' / 'melissa') if they exist with a random seed password.
+        """
+        accounts = [
+            ("susan@medprosc.com",   "susan",   "Susan",   "susan123"),
+            ("melissa@medprosc.com", "melissa", "Melissa", "melissa123"),
+        ]
+        for email, legacy_username, contact, pw in accounts:
+            salt = secrets.token_hex(16)
+            pw_hash = _hash_pw(pw, salt)
+            # Upsert by email-style username
+            row = cur.execute(
+                "SELECT id FROM clients WHERE username=?", (email,)
+            ).fetchone()
+            if row:
+                cur.execute(
+                    "UPDATE clients SET password=?, salt=?, role='staff', "
+                    "company='MedPharma SC', contact_name=?, email=?, "
+                    "is_active=1, must_change_password=0 WHERE id=?",
+                    (pw_hash, salt, contact, email, row[0]),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO clients "
+                    "(username,password,salt,company,contact_name,email,role,is_active) "
+                    "VALUES (?,?,?,?,?,?,?,1)",
+                    (email, pw_hash, salt, "MedPharma SC", contact, email, "staff"),
+                )
+            # Deactivate the legacy short-username seed row (random password)
+            cur.execute(
+                "UPDATE clients SET is_active=0 WHERE username=? AND username<>?",
+                (legacy_username, email),
+            )
+
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
     _run_migration_once(conn, "rcm_admin_v1", _migrate_rcm_admin)
     _run_migration_once(conn, "placeholder_clients_inactive_v1", _deactivate_placeholder_clients)
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
+    _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
 
 
 
