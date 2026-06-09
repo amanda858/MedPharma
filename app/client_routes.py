@@ -41,6 +41,7 @@ from app.client_db import (
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
     list_sharefile_links, add_sharefile_link, delete_sharefile_link,
+    get_user_production_snapshot,
     create_job, append_job_event, set_job_running, update_job_progress,
     complete_job, fail_job, get_job, list_jobs, reset_job_for_retry,
     _load_clients_seed,
@@ -52,6 +53,8 @@ from app.notifications import (
     flush_and_notify,
     send_test_notification,
     get_notification_status,
+    get_notification_debug,
+    send_daily_account_summary,
 )
 from rule_intercept import intercept_excel_upload
 
@@ -1438,7 +1441,11 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    # Admin sees ALL production entries across all accounts (not scoped to selected client)
+    if user.get("role") == "admin":
+        scope = None  # no client filter — show all
+    else:
+        scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
     # Turnkey admin fallback: when a selected account has no rows,
     # return all production rows so the panel is never empty by mistake.
@@ -1856,6 +1863,33 @@ def notifications_test_endpoint(hub_session: Optional[str] = Cookie(None)):
     """
     user = _require_full_admin(hub_session)
     return send_test_notification(triggered_by=user.get("username") or "admin")
+
+
+@router.get("/notifications/debug")
+def notifications_debug(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: detailed diagnostic info for debugging notification delivery."""
+    _require_admin(hub_session)
+    return get_notification_debug()
+
+
+@router.post("/notifications/daily-report")
+def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: immediately send the daily account summary report (email + SMS)."""
+    user = _require_admin(hub_session)
+    try:
+        send_daily_account_summary()
+        return {"ok": True, "message": "Daily report sent to configured recipients"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send daily report: {e}")
+
+
+@router.get("/production/snapshot")
+def production_snapshot(work_date: Optional[str] = None,
+                        hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: get per-user production snapshot for a date (defaults to today)."""
+    _require_admin(hub_session)
+    snapshot = get_user_production_snapshot(work_date)
+    return snapshot
 
 
 @router.post("/admin/production/relink-kindercare")
@@ -3551,7 +3585,8 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    is_admin = user.get("role") == "admin"
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -3627,6 +3662,38 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
         if practice_type == "MHP+OMT":
             for sp_name in ["OMT", "MHP"]:
                 sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
+
+        # Gather user production data
+        # Admin sees ALL users' production across ALL accounts (oversight role)
+        # Non-admin sees only production for their client account
+        if is_admin:
+            prod_rows = conn.execute(
+                "SELECT p.username, p.category, p.task_description, p.quantity, p.time_spent, "
+                "p.work_date, p.notes, c.company as account_name "
+                "FROM team_production p LEFT JOIN clients c ON p.client_id = c.id "
+                "ORDER BY p.work_date DESC LIMIT 200"
+            ).fetchall()
+        else:
+            prod_rows = conn.execute(
+                "SELECT username, category, task_description, quantity, time_spent, work_date, notes "
+                "FROM team_production WHERE client_id=? ORDER BY work_date DESC LIMIT 100",
+                (client_id,)
+            ).fetchall()
+        production_data = [dict(r) for r in prod_rows]
+
+        # Aggregate production by user
+        prod_by_user = {}
+        for p in production_data:
+            u = p.get("username", "Unknown")
+            if u not in prod_by_user:
+                prod_by_user[u] = {"entries": 0, "total_qty": 0, "total_hours": 0.0, "dates": set(), "categories": set(), "accounts": set()}
+            prod_by_user[u]["entries"] += 1
+            prod_by_user[u]["total_qty"] += int(p.get("quantity") or 0)
+            prod_by_user[u]["total_hours"] += float(p.get("time_spent") or 0)
+            prod_by_user[u]["dates"].add(p.get("work_date", ""))
+            prod_by_user[u]["categories"].add(p.get("category", ""))
+            if p.get("account_name"):
+                prod_by_user[u]["accounts"].add(p.get("account_name"))
     finally:
         conn.close()
 
@@ -3666,6 +3733,12 @@ EDI SETUP: {len(edi.get('detail', []))} connections
 {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
 
 PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
+
+USER PRODUCTION LOG ({len(production_data)} recent entries{' — ALL ACCOUNTS (admin view)' if is_admin else ''}):
+{chr(10).join(f"  - {p.get('work_date','')} | {p.get('username','')} | {p.get('category','')} | {p.get('task_description','')} | qty:{p.get('quantity',0)} | {p.get('time_spent',0)}h{(' | acct: ' + p.get('account_name','')) if p.get('account_name') else ''}" for p in production_data[:30]) or '  No production data logged'}
+
+PRODUCTION SUMMARY BY TEAM MEMBER{' (ALL ACCOUNTS)' if is_admin else ''}:
+{chr(10).join(f"  - {u}: {d['entries']} entries, {d['total_qty']} items, {round(d['total_hours'],1)}h total across {len(d['dates'])} day(s), avg {round(d['total_hours']/max(len(d['dates']),1),1)}h/day, categories: {', '.join(d['categories'])}{(', accounts: ' + ', '.join(d['accounts'])) if d.get('accounts') else ''}" for u, d in prod_by_user.items()) or '  No user production data'}
 """
 
     # Sub-profile data
@@ -3691,7 +3764,8 @@ Your report should include:
 7. EDI CONNECTIVITY — Note setup status
 8. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
 9. RECOMMENDED ACTIONS — Specific, prioritized action items
-10. OUTLOOK — Brief forward-looking statement
+10. USER PRODUCTION ANALYSIS — Evaluate each team member's daily output, hours worked, task categories, and average hours per day. Flag any team members averaging under 6 hours/day or showing low output. Compare team members against each other. This section is critical — the report reader is the admin/owner who tracks what employees are doing, not a worker themselves.
+11. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
 Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).
