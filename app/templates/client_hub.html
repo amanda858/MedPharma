@@ -64,6 +64,83 @@
     }
 
     /* ══════════════════════════════════════════════════════════
+       LOGIN — Clean centered single-card design (2026 refresh)
+       Hides legacy split-screen / brand wordmark / "secure sign in" badge
+       ══════════════════════════════════════════════════════════ */
+
+    .login-shell {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      font-family: 'Inter', 'DM Sans', system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(29, 55, 79, .06), transparent 50%),
+        radial-gradient(circle at 80% 100%, rgba(255, 204, 83, .05), transparent 50%),
+        #f8fafc;
+    }
+
+    .login-card-clean {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 48px 40px 36px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 32px rgba(15, 23, 42, .06);
+    }
+
+    .login-logo-clean {
+      display: block;
+      margin: 0 auto 24px;
+      max-width: 220px;
+      width: 100%;
+      height: auto;
+    }
+
+    .login-subtitle-clean {
+      text-align: center;
+      font-size: 14px;
+      color: #64748b;
+      margin-bottom: 32px;
+      font-weight: 500;
+    }
+
+    /* Hide legacy login chrome that the refresh replaces */
+    .login-wrap,
+    .login-hero-panel,
+    .login-form-panel,
+    .login-container,
+    .login-bottom,
+    .login-card-col,
+    .login-card,
+    .login-card-header,
+    .login-card-brand,
+    .login-card-title,
+    .login-card-secure,
+    .login-divider,
+    .login-hero,
+    .login-hero-content,
+    .login-hero-logo,
+    .login-hero-tagline,
+    .login-hero-sub,
+    .login-hero-site,
+    .login-bg,
+    .login-bg-overlay,
+    .login-grid-pattern {
+      all: unset;
+    }
+
+    @media (max-width: 540px) {
+      .login-card-clean {
+        padding: 36px 24px 28px;
+        border-radius: 14px;
+      }
+      .login-logo-clean { max-width: 180px; }
+    }
+
+    /* ══════════════════════════════════════════════════════════
        LOGIN — Premium Split-Screen Medical Design (medpharmasc.com)
        ══════════════════════════════════════════════════════════ */
 
@@ -1774,60 +1851,33 @@
 
   <!-- ══════════════ LOGIN ══════════════ -->
   <div id="loginScreen">
-    <div class="login-wrap">
+    <div class="login-shell">
+      <div class="login-card-clean">
+        <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
+             alt="MedPharma" class="login-logo-clean"
+             onerror="this.onerror=null;this.src='https://medpharmasc.com/wp-content/uploads/2023/03/MedPharma-Logo.png';">
+        <div class="login-subtitle-clean">Sign in to continue</div>
 
-      <!-- LEFT — Hero / Brand Panel -->
-      <div class="login-hero-panel">
-        <div class="login-hero-content">
-          <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma"
-            class="login-hero-logo">
-
-          <div class="login-hero-tagline">
-            Empowering Healthcare with <span class="gold">Strategic Solutions</span>
+        <div id="loginFieldsWrap">
+          <div class="login-field">
+            <label>Email or username</label>
+            <input type="text" id="loginUser" placeholder="name@medprosc.com" autofocus
+                   autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false">
           </div>
-          <div class="login-hero-sub">
-            Your trusted partner in revenue cycle management, payor contracting, credentialing, and compliance auditing.
+          <div class="login-field">
+            <label>Password</label>
+            <div style="position:relative">
+              <input type="password" id="loginPass" placeholder="Enter password"
+                     autocomplete="current-password" style="width:100%;padding-right:60px">
+              <button type="button" onclick="togglePw()" id="btnShowPw"
+                style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;color:#334155;font-size:11px;font-weight:600;padding:5px 10px;letter-spacing:.3px;transition:all .2s">SHOW</button>
+            </div>
           </div>
-
-
-
-          <div class="login-hero-site">
-            🌐 <a href="https://medpharmasc.com" target="blank">medpharmasc.com</a>
-          </div>
+          <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign in</button>
         </div>
-      </div>
 
-      <!-- RIGHT — Login Form -->
-      <div class="login-form-panel">
-        <div class="login-container">
-          <div class="login-bottom">
-            <div class="login-card-col">
-              <div class="login-card">
-                <div class="login-card-header">
-                  <div class="login-card-brand">Med<span class="accent">Pharma</span></div>
-                  <div class="login-card-title">Internal Client Hub</div>
-                  <div class="login-card-secure">🔐 Secure Sign In</div>
-                </div>
-                <div class="login-divider"></div>
-                <div id="loginFieldsWrap">
-                <div class="login-field">
-                  <label>Username</label>
-                  <input type="text" id="loginUser" placeholder="Enter username" autofocus autocomplete="username"
-                    autocorrect="off" autocapitalize="none" spellcheck="false">
-                </div>
-                <div class="login-field">
-                  <label>Password</label>
-                  <div style="position:relative">
-                    <input type="password" id="loginPass" placeholder="Enter password" autocomplete="current-password"
-                      style="width:100%;padding-right:60px">
-                    <button type="button" onclick="togglePw()" id="btnShowPw"
-                      style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:linear-gradient(135deg,#EEF6FA,#dbeafe);border:1px solid #c8dfe8;border-radius:6px;cursor:pointer;color:#1D374F;font-size:11px;font-weight:700;padding:5px 10px;letter-spacing:.3px;transition:all .2s">SHOW</button>
-                  </div>
-                </div>
-                <button class="btn-login" id="btnLogin" onclick="doLogin()">Sign In →</button>
-                </div>
-                <div id="setupPwPanel" style="display:none">
-                  <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px">Set Your Password</div>
+        <div id="setupPwPanel" style="display:none">
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px">Set Your Password</div>
                   <div style="font-size:12px;color:#64748b;margin-bottom:14px" id="setupPwMeta"></div>
                   <div class="login-field">
                     <label>New Password</label>
@@ -1858,12 +1908,7 @@
                   Connecting to server…</div>
                 <div class="login-footer">MedPharma © 2026 · medpharmasc.com · <span
                     style="color:#FFCC53;font-weight:700">v2.3</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
-
     </div>
   </div>
 
