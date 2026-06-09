@@ -812,6 +812,48 @@ def _seed_data(conn):
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
+def force_set_password(username: str, new_password: str) -> dict:
+    """Admin-only: overwrite a user's password + salt, clear must_change_password.
+    Returns a status dict describing what happened. Does NOT require knowing
+    the old password.
+    """
+    uname = (username or "").strip().lower()
+    pw = (new_password or "").strip()
+    if not uname or not pw:
+        return {"ok": False, "error": "username and new_password required"}
+    conn = get_db()
+    try:
+        _ensure_auth_columns(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT id, username, is_active FROM clients WHERE username=?", (uname,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": f"no user with username '{uname}'"}
+        salt = secrets.token_hex(16)
+        pw_hash = _hash_pw(pw, salt)
+        cur.execute(
+            "UPDATE clients SET password=?, salt=?, is_active=1, "
+            "must_change_password=0 WHERE id=?",
+            (pw_hash, salt, row["id"]),
+        )
+        conn.commit()
+        # Verify roundtrip
+        check = cur.execute(
+            "SELECT password, salt FROM clients WHERE id=?", (row["id"],)
+        ).fetchone()
+        ok = (_hash_pw(pw, check["salt"]) == check["password"])
+        return {
+            "ok": ok,
+            "user_id": row["id"],
+            "username": uname,
+            "previous_is_active": row["is_active"],
+            "hash_roundtrip_ok": ok,
+        }
+    finally:
+        conn.close()
+
+
 def authenticate(username: str, password: str):
     conn = get_db()
     try:

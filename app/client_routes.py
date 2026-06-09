@@ -23,6 +23,7 @@ from app.client_db import (
     list_clients, create_client, update_client, delete_client,
     create_user_invite, get_password_setup_token_info, consume_password_setup_token,
     set_must_change_password, change_password_with_current,
+    force_set_password,
     get_profile, update_profile,
     get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
@@ -553,6 +554,36 @@ def edit_client(cid: int, body: ClientUpdate, hub_session: Optional[str] = Cooki
     _require_full_admin(hub_session)
     update_client(cid, {k: v for k, v in body.model_dump().items() if v is not None})
     return {"ok": True}
+
+
+class ForcePasswordIn(BaseModel):
+    username: str
+    new_password: str
+
+
+@router.post("/admin/users/force-password")
+def admin_force_password(
+    body: ForcePasswordIn,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Admin-only: hard reset a user's password without knowing the old one.
+    Intended for unlocking accounts whose hashes drifted out of sync with
+    expected starter passwords. Logs an audit row."""
+    admin = _require_full_admin(hub_session)
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="new_password must be at least 6 characters")
+    result = force_set_password(body.username, body.new_password)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "force-reset failed"))
+    log_audit(
+        None,
+        admin.get("username", ""),
+        "force_password_reset",
+        "client",
+        result.get("user_id"),
+        f"Force-reset password for {result.get('username')}",
+    )
+    return result
 
 
 @router.delete("/clients/{cid}")
