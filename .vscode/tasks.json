@@ -2,108 +2,74 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "lineby-audit",
+            "label": "push-landing-fix",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/lineby_audit.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/push_landing_fix.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "wait-full-tally",
+            "label": "cleanup-dead-files",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/wait_full_tally.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/cleanup_dead_files.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "patient-enrich",
+            "label": "cleanup-diff-snapshot",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/patient_enrich.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/cleanup_diff_snapshot.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "enrich-top-states",
+            "label": "restore-landing-inspect",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/enrich_top_states.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/restore_landing_inspect.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "poll-enrich",
+            "label": "push-susan-fix",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/poll_enrich.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/push_susan_fix.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "push-lab-enrich",
+            "label": "probe-login-live",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_lab_enrich.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/probe_login_live.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "final-audit",
+            "label": "dump-live-clients",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/final_audit.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/dump_live_clients.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
-            "label": "push-search-v2",
+            "label": "force-fix-logins",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_search_v2.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "check-live-html",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/check_live_html.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "push-search-fix",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_search_fix.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/CVOPro/.vscode/force_fix_logins.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
         },
         {
             "label": "full-admin-smoke",
             "type": "shell",
             "command": "python3",
             "args": ["/workspaces/CVOPro/.vscode/full_admin_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "verify-a262869",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/verify_a262869.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "push-autorestore",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_autorestore.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "verify-autoimport",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/verify_autoimport.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "push-and-verify-autoimport",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_and_verify_autoimport.py"],
             "options": {"cwd": "/workspaces/CVOPro"}
         },
         {
@@ -126,62 +92,6 @@
             "command": "python3",
             "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
             "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "list-routes",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/list_routes.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
-        },
-        {
-            "label": "wait-for-search-endpoint",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_search_endpoint.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "check-national-search",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/check_national_search.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "trigger-national-pull",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/trigger_national_pull.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "diag-pull-state",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/diag_pull_state.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "wait-and-test-search",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/wait_and_test_search.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "smoke-pull-changes",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/smoke_pull_changes.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "find-enrich-request",
-            "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/find_enrich_request.sh",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
         },
         {
             "label": "inspect-seed",
@@ -219,13 +129,6 @@
             "problemMatcher": []
         },
         {
-            "label": "push-search-fix-v2",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/national_pull.py app/templates/index.html .vscode/tasks.json .vscode/check_national_search.py .vscode/trigger_national_pull.py .vscode/wait_for_search_endpoint.py .vscode/push_search_ui.sh && git commit -m 'fix: per-state CSV checkpoint + disk-fallback search + correct column names' && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
             "label": "local-hunt-FL-quality",
             "type": "shell",
             "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=50 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
@@ -236,55 +139,6 @@
             "label": "local-hunt-FL-quality-25",
             "type": "shell",
             "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 VERIFY_DELIVERABILITY=0 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-national-quality-first",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/national_pull.py app/bulk_prospector.py && git commit -m 'feat: daily national pull defaults to QUALITY_FIRST + REQUIRE_EMAIL' -- app/national_pull.py app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-national-ui",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/templates/index.html && git commit -m 'feat: add hub UI controls for national pull (run/status/download)' -- app/leads_app.py app/templates/index.html && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "trigger-national-pull",
-            "type": "shell",
-            "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo attempt $i; out=$(curl -s --max-time 15 https://medpharma-hub.onrender.com/buildz); echo \"$out\"; if echo \"$out\" | grep -q '\\\"ok\\\":true'; then echo BUILDZ_OK; fi; sleep 25; done; echo; echo '--- triggering national pull ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/api/national-pull/status",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "national-pull-now",
-            "type": "shell",
-            "command": "echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "national-pull-status",
-            "type": "shell",
-            "command": "curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-pull-bypass",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/hub_app.py && git commit -m 'fix: allow unauthenticated national-pull endpoints' -- app/hub_app.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "trigger-pull-after-deploy",
-            "type": "shell",
-            "command": "for i in 1 2 3 4 5 6 7 8; do out=$(curl -s --max-time 10 https://medpharma-hub.onrender.com/buildz); echo \"$i $out\"; if echo \"$out\" | grep -q 8cb328a; then echo READY; break; fi; sleep 25; done; echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; echo '--- status ---'; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
@@ -313,13 +167,6 @@
             "label": "push-mega-accuracy",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && set -e && git add app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git commit -m 'feat: multi-state SoS + wayback + person-site + verified LI + SMTP deliverability' -- app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "deploy-and-trigger",
-            "type": "shell",
-            "command": "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do out=$(curl -s --max-time 10 https://medpharma-hub.onrender.com/buildz); echo \"$i $out\"; sha=$(git -C /workspaces/CVOPro rev-parse HEAD); if echo \"$out\" | grep -q \"$sha\"; then echo READY; break; fi; sleep 25; done; echo '--- triggering ---'; curl -s -X POST --max-time 30 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/run; echo; sleep 3; curl -s --max-time 15 https://medpharma-hub.onrender.com/admin/leads/api/national-pull/status; echo",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
@@ -366,13 +213,6 @@
             "problemMatcher": []
         },
         {
-            "label": "verify-live-e2e",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py 2>&1 | tee /tmp/verify_live_e2e.log",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
             "label": "probe-accounts",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/probe_accounts.py",
@@ -390,13 +230,6 @@
             "label": "probe-hub-html",
             "type": "shell",
             "command": "python3 /workspaces/CVOPro/.vscode/probe_hub_html.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "probe-hunt-output",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_hunt_output.py",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
@@ -439,27 +272,6 @@
             "label": "local-hunt-FL-pathology",
             "type": "shell",
             "command": "HUNT_STATE=FL HUNT_SPECIALTY=pathology HUNT_LIMIT=25 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "national-daily-clinical",
-            "type": "shell",
-            "command": "SPECIALTY=clinical PER_STATE=50 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "national-daily-all-labs",
-            "type": "shell",
-            "command": "SPECIALTY=all_labs PER_STATE=40 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "national-daily-new-only",
-            "type": "shell",
-            "command": "SPECIALTY=clinical PER_STATE=80 NEW_ONLY=1 NEW_DAYS=90 TOP_N=500 python3 /workspaces/CVOPro/run_national_daily.py",
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
@@ -513,20 +325,6 @@
             "problemMatcher": []
         },
         {
-            "label": "deep-sweep",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/deep_sweep.py 2>&1 | tee /tmp/deep_sweep.log",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-optimization",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add -f app/bulk_prospector.py .github/workflows/health-monitor.yml .vscode/deep_sweep.py .vscode/verify_live_e2e.py .vscode/tasks.json && git commit -m 'fix: broaden specialty taxonomy + add hourly health monitor' --allow-empty && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
             "label": "push-keepalive",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git add -f .github/workflows/keep-alive.yml app/templates/client_hub.html && git status --short && git commit -m 'fix: keep service warm via GH Actions cron + 60s login retry' --allow-empty && git push origin main",
@@ -569,28 +367,11 @@
             "problemMatcher": []
         },
         {
-            "label": "diag-live-hunt",
-            "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/diag_live_hunt.py 2>&1 | tee /tmp/live_hunt.log",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
             "label": "probe-urls",
             "type": "shell",
             "command": "python3",
             "args": ["/workspaces/CVOPro/.vscode/probe_urls.py"],
             "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "check-live-ui-now",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/check_live_ui.py"],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
             "problemMatcher": []
         },
         {
@@ -664,49 +445,10 @@
             "problemMatcher": []
         },
         {
-            "label": "diag-e2e-verify",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_e2e_verify.py"],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "diag-verify-local",
             "type": "shell",
             "command": "python3",
             "args": ["/workspaces/CVOPro/.vscode/diag_verify_local.py"],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "diag-verify-now",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_verify.py"],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "diag-scrub-now",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_scrub.py"],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "release-push-main",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app run.py run_daily_pull_now.py run_national_daily.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py .vscode/diag_npi_local.py && git commit -m \"chore: release update\" -- app run.py run_daily_pull_now.py run_national_daily.py render.yaml requirements.txt rule_intercept.py verify_csv.py .vscode/tasks.json .vscode/diag_scrub.py .vscode/check_live_ui.py .vscode/diag_verify.py .vscode/diag_verify_local.py .vscode/diag_e2e_verify.py .vscode/diag_npi_local.py && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -725,15 +467,6 @@
             "label": "git-status-short",
             "type": "shell",
             "command": "cd /workspaces/CVOPro && git status --short --branch",
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "push-hotfix-fast-poll",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/leads_app.py app/templates/index.html && git commit -m \"fix: prevent poll UI pinwheel and speed manual poll\" -- app/leads_app.py app/templates/index.html && git push origin main",
             "options": {
                 "cwd": "/workspaces/CVOPro"
             },
@@ -804,22 +537,6 @@
             "problemMatcher": []
         },
         {
-            "label": "git-push-now",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/git_push_now.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "deploy-and-import",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/deploy_and_import.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
             "label": "auth-smoke",
             "type": "shell",
             "command": "python3",
@@ -833,57 +550,6 @@
             "command": "python3",
             "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
             "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "push-startup-autoimport",
-            "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git commit -m \"fix: auto-import rule-intercept CSV on startup so leads survive restarts\" -- app/leads_app.py .vscode/auth_smoke.py .vscode/tasks.json && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "wait-and-smoke",
-            "type": "shell",
-            "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/wait_and_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-        {
-            "label": "bundle-seed",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/bundle_seed.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "lead-soft-test-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/lead_soft_test.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "lead-reality-check-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/reality_check.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
             "problemMatcher": []
         },
         {
@@ -899,73 +565,13 @@
             "problemMatcher": []
         },
         {
-            "label": "check-live-hub-ui-now",
+            "label": "probe-urls",
             "type": "shell",
             "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/check_live_hub_ui.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
+            "args": ["/workspaces/CVOPro/.vscode/probe_urls.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
-        {
-            "label": "run-daily-pull-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/run_daily_pull_now.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "enrich-emails-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/enrich_emails_now.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "daily-ops-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/run_daily_ops_now.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "db-kinder-check-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/db_kinder_check.py"
-            ],
-            "options": {
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "relink-kindercare-now",
-            "type": "shell",
-            "command": "python3",
-            "args": [
-                "/workspaces/CVOPro/.vscode/relink_kindercare_now.py"
-            ],
-            "options": {
                 "cwd": "/workspaces/CVOPro"
             },
             "problemMatcher": []
