@@ -64,9 +64,85 @@ def detect_columns(headers: list[str]) -> dict[str, Optional[str]]:
 # ─── File parsing ───────────────────────────────────────────────────────
 
 def parse_uploaded(content: bytes, filename: str) -> tuple[list[str], list[dict]]:
-    """Return (headers, rows) from CSV/XLSX/XLS bytes."""
+    """Return (headers, rows) from CSV/XLSX/XLS/ODS bytes."""
     name = (filename or "").lower()
-    if name.endswith((".xlsx", ".xls")):
+    if name.endswith((".ods", ".odf")):
+        import xml.etree.ElementTree as _et
+        import zipfile as _zipfile
+
+        ns = {
+            "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+            "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+            "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+        }
+        a_row_rep = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}number-rows-repeated"
+        a_col_rep = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}number-columns-repeated"
+        a_str = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}string-value"
+        a_date = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}date-value"
+        a_val = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}value"
+
+        with _zipfile.ZipFile(io.BytesIO(content)) as zf:
+            xml_bytes = zf.read("content.xml")
+        root = _et.fromstring(xml_bytes)
+
+        table = root.find(".//table:table", ns)
+        if table is None:
+            return [], []
+
+        all_rows: list[list[str]] = []
+        for tr in table.findall("table:table-row", ns):
+            row_repeat = int(tr.attrib.get(a_row_rep, "1") or "1")
+            row_vals: list[str] = []
+            for cell in tr:
+                if not (cell.tag.endswith("table-cell") or cell.tag.endswith("covered-table-cell")):
+                    continue
+                col_repeat = int(cell.attrib.get(a_col_rep, "1") or "1")
+                parts = []
+                for p in cell.findall(".//text:p", ns):
+                    txt = "".join(p.itertext()).strip()
+                    if txt:
+                        parts.append(txt)
+                v = " ".join(parts).strip()
+                if not v:
+                    v = (cell.attrib.get(a_str) or cell.attrib.get(a_date) or cell.attrib.get(a_val) or "")
+                row_vals.extend([str(v).strip()] * max(1, col_repeat))
+            if not row_vals:
+                continue
+            for _ in range(max(1, row_repeat)):
+                all_rows.append(list(row_vals))
+
+        if not all_rows:
+            return [], []
+        headers = [str(c).strip() if c is not None else "" for c in all_rows[0]]
+        rows: list[dict] = []
+        for r in all_rows[1:]:
+            row = {headers[i]: ("" if i >= len(r) or r[i] is None else str(r[i]).strip()) for i in range(len(headers)) if headers[i]}
+            if any(v for v in row.values()):
+                rows.append(row)
+        return headers, rows
+
+    if name.endswith(".xls"):
+        try:
+            import xlrd
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError(f"xlrd required for .xls uploads: {e}")
+
+        wb = xlrd.open_workbook(file_contents=content)
+        if wb.nsheets < 1:
+            return [], []
+        ws = wb.sheet_by_index(0)
+        if ws.nrows < 1:
+            return [], []
+        headers = [str(ws.cell_value(0, ci)).strip() if ws.cell_value(0, ci) is not None else "" for ci in range(ws.ncols)]
+        rows: list[dict] = []
+        for ri in range(1, ws.nrows):
+            vals = [ws.cell_value(ri, ci) for ci in range(ws.ncols)]
+            row = {headers[i]: ("" if vals[i] is None else str(vals[i]).strip()) for i in range(min(len(headers), len(vals))) if headers[i]}
+            if any(v for v in row.values()):
+                rows.append(row)
+        return headers, rows
+
+    if name.endswith(".xlsx"):
         try:
             from openpyxl import load_workbook
         except Exception as e:  # pragma: no cover

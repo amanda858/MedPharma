@@ -128,7 +128,9 @@ def _live_config() -> dict:
 # Owner (Eric) should receive reports, not be tracked as a worker by default.
 # Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
 # Use NOTIFY_ON_USERS="*" to enable for all users.
-_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "jess,jessica,rcm").strip()
+# Default is "*" so every staff/client action funnels to the admin inbox; set
+# NOTIFY_ON_USERS in the environment to restrict it to a specific allowlist.
+_notify_on_users_env = os.getenv("NOTIFY_ON_USERS", "*").strip()
 NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
@@ -1820,20 +1822,6 @@ def start_daily_scheduler():
             name="6 PM EST Overall Account Summary",
             replace_existing=True,
         )
-
-        # 5:00 AM EST — National lead pull (all 50 states + DC + PR)
-        try:
-            from app.national_pull import run_national_pull_job
-            scheduler.add_job(
-                run_national_pull_job,
-                CronTrigger(hour=5, minute=0, timezone=est),
-                id="national_lead_pull",
-                name="5 AM EST National Lead Pull (50 states)",
-                replace_existing=True,
-            )
-            log.info("Scheduled national lead pull job — 5:00 AM EST daily")
-        except Exception as _e:
-            log.warning(f"National lead pull job not scheduled: {_e}")
 
         scheduler.start()
         log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary")

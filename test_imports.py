@@ -9,12 +9,6 @@ ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, ROOT_DIR)
 
 try:
-    from app.leads_app import app as leads_app
-    print("✅ leads_app imported successfully")
-except Exception as e:
-    print(f"❌ Error importing leads_app: {e}")
-
-try:
     from app.hub_app import app as hub_app
     print("✅ hub_app imported successfully")
 except Exception as e:

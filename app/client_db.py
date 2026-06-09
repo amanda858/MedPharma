@@ -271,12 +271,37 @@ def _apply_startup_user_migrations(conn):
                 (legacy_username, email),
             )
 
+    def _provision_rcm_email():
+        """Ensure rcm@medprosc.com exists as an admin login with password
+        rcm123 (per operator request). Keeps the legacy short 'rcm' admin
+        login working in parallel."""
+        email = "rcm@medprosc.com"
+        pw = "rcm123"
+        salt = secrets.token_hex(16)
+        pw_hash = _hash_pw(pw, salt)
+        row = cur.execute("SELECT id FROM clients WHERE username=?", (email,)).fetchone()
+        if row:
+            cur.execute(
+                "UPDATE clients SET password=?, salt=?, role='admin', "
+                "company='MedPharma SC', contact_name=COALESCE(NULLIF(contact_name,''),'RCM'), "
+                "email=?, is_active=1, must_change_password=0 WHERE id=?",
+                (pw_hash, salt, email, row[0]),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO clients "
+                "(username,password,salt,company,contact_name,email,role,is_active) "
+                "VALUES (?,?,?,?,?,?,?,1)",
+                (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
+            )
+
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
     _run_migration_once(conn, "rcm_admin_v1", _migrate_rcm_admin)
     _run_migration_once(conn, "placeholder_clients_inactive_v1", _deactivate_placeholder_clients)
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
+    _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
 
 
 
@@ -603,6 +628,67 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_rn_client ON report_notes(client_id);
+
+        -- ── Chat rooms (admin-managed) ───────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS chat_rooms (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            client_id   INTEGER,                 -- optional: anchor room to a client account
+            created_by  TEXT DEFAULT '',
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            archived    INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_rooms_client ON chat_rooms(client_id);
+
+        CREATE TABLE IF NOT EXISTS chat_room_members (
+            room_id     INTEGER NOT NULL,
+            user_id     INTEGER NOT NULL,
+            role        TEXT DEFAULT 'member',   -- 'admin' | 'member'
+            added_by    TEXT DEFAULT '',
+            added_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id),
+            FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_room_members_user ON chat_room_members(user_id);
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id     INTEGER NOT NULL,
+            sender_id   INTEGER,
+            sender_name TEXT DEFAULT '',
+            sender_role TEXT DEFAULT 'member',
+            body        TEXT NOT NULL,
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_chatmsg_room ON chat_messages(room_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS chat_reads (
+            room_id              INTEGER NOT NULL,
+            user_id              INTEGER NOT NULL,
+            last_read_message_id INTEGER DEFAULT 0,
+            updated_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id),
+            FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+
+        -- ── Client access grants (which staff/admin users can open a given client) ──
+        -- Used by /accounts to filter the selector for staff users.
+        -- Admins always see every client regardless of rows here.
+        CREATE TABLE IF NOT EXISTS client_user_access (
+            client_id   INTEGER NOT NULL,
+            user_id     INTEGER NOT NULL,
+            granted_by  TEXT DEFAULT '',
+            granted_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (client_id, user_id),
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_cua_user ON client_user_access(user_id);
+        CREATE INDEX IF NOT EXISTS idx_cua_client ON client_user_access(client_id);
 
         -- ── Activity events (timestamped team-tracking firehose) ─────────────
         CREATE TABLE IF NOT EXISTS activity_events (
@@ -982,6 +1068,10 @@ def create_client(data: dict) -> int:
         finally:
             rollback.close()
         raise
+    # Stash the credentials the route just used so the API layer can show them
+    # once to the admin (so a real client login can be handed off).
+    data["_created_username"] = username
+    data["_created_password"] = raw_password
     return cid
 
 
@@ -1353,6 +1443,7 @@ DEFAULT_ENABLED_MODULES = [
     "reporting",
     "production",
     "documents",
+    "chat",
 ]
 
 
@@ -3448,5 +3539,397 @@ def delete_sharefile_link(link_id: int, client_id: int):
     try:
         conn.execute("DELETE FROM sharefile_links WHERE id=? AND client_id=?", (link_id, client_id))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Chat rooms (admin-managed) ────────────────────────────────────────────────
+
+def _row_to_room(row) -> dict:
+    if not row:
+        return {}
+    d = dict(row)
+    d["archived"] = bool(d.get("archived"))
+    return d
+
+
+def list_rooms_for_user(user_id: int, is_admin: bool = False,
+                        include_archived: bool = False) -> list[dict]:
+    """Return rooms visible to this user, with unread count + last message preview.
+    Admins see every room; members see only rooms they belong to."""
+    conn = get_db()
+    try:
+        where = []
+        params: list = []
+        if not is_admin:
+            where.append("r.id IN (SELECT room_id FROM chat_room_members WHERE user_id=?)")
+            params.append(user_id)
+        if not include_archived:
+            where.append("COALESCE(r.archived,0)=0")
+        sql = """
+            SELECT r.id, r.name, r.description, r.client_id, r.created_by,
+                   r.created_at, r.archived,
+                   c.company AS client_company,
+                   (SELECT COUNT(*) FROM chat_room_members rm WHERE rm.room_id=r.id) AS member_count,
+                   (SELECT body FROM chat_messages m
+                      WHERE m.room_id=r.id
+                      ORDER BY datetime(m.created_at) DESC, m.id DESC LIMIT 1) AS last_body,
+                   (SELECT created_at FROM chat_messages m
+                      WHERE m.room_id=r.id
+                      ORDER BY datetime(m.created_at) DESC, m.id DESC LIMIT 1) AS last_at,
+                   (SELECT sender_name FROM chat_messages m
+                      WHERE m.room_id=r.id
+                      ORDER BY datetime(m.created_at) DESC, m.id DESC LIMIT 1) AS last_sender,
+                   (SELECT COUNT(*) FROM chat_messages m
+                      WHERE m.room_id=r.id
+                        AND m.id > COALESCE(
+                            (SELECT last_read_message_id FROM chat_reads
+                              WHERE room_id=r.id AND user_id=?), 0)
+                        AND COALESCE(m.sender_id,0) <> ?) AS unread
+            FROM chat_rooms r
+            LEFT JOIN clients c ON c.id = r.client_id
+        """
+        params = [user_id, user_id] + params
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY (last_at IS NULL), datetime(last_at) DESC, r.created_at DESC"
+        rows = conn.execute(sql, params).fetchall()
+        return [_row_to_room(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_room(room_id: int) -> dict | None:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT r.*, c.company AS client_company
+               FROM chat_rooms r LEFT JOIN clients c ON c.id=r.client_id
+               WHERE r.id=?""",
+            (room_id,),
+        ).fetchone()
+        return _row_to_room(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_room(name: str, description: str = "", client_id: int | None = None,
+                created_by: str = "", member_user_ids: list[int] | None = None,
+                creator_user_id: int | None = None) -> int:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Room name is required")
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO chat_rooms (name, description, client_id, created_by)
+               VALUES (?,?,?,?)""",
+            (name, (description or "").strip(), client_id, created_by),
+        )
+        room_id = cur.lastrowid
+        seen: set[int] = set()
+        # Creator becomes an admin member (so admins see their own rooms too).
+        if creator_user_id:
+            conn.execute(
+                """INSERT OR IGNORE INTO chat_room_members
+                   (room_id, user_id, role, added_by) VALUES (?,?,?,?)""",
+                (room_id, int(creator_user_id), "admin", created_by),
+            )
+            seen.add(int(creator_user_id))
+        for uid in (member_user_ids or []):
+            try:
+                uid_i = int(uid)
+            except Exception:
+                continue
+            if uid_i in seen:
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO chat_room_members
+                   (room_id, user_id, role, added_by) VALUES (?,?,?,?)""",
+                (room_id, uid_i, "member", created_by),
+            )
+            seen.add(uid_i)
+        conn.commit()
+        return room_id
+    finally:
+        conn.close()
+
+
+def update_room(room_id: int, data: dict) -> bool:
+    allowed = {"name", "description", "client_id", "archived"}
+    fields = {k: v for k, v in (data or {}).items() if k in allowed}
+    if not fields:
+        return False
+    sets = ", ".join(f"{k}=?" for k in fields)
+    params = list(fields.values()) + [room_id]
+    conn = get_db()
+    try:
+        conn.execute(f"UPDATE chat_rooms SET {sets} WHERE id=?", params)
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_room(room_id: int):
+    conn = get_db()
+    try:
+        # ON DELETE CASCADE handles members/messages/reads
+        conn.execute("DELETE FROM chat_rooms WHERE id=?", (room_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_room_members(room_id: int) -> list[dict]:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT rm.user_id, rm.role AS member_role, rm.added_by, rm.added_at,
+                      c.username, c.company, c.contact_name, c.email, c.role AS user_role
+               FROM chat_room_members rm
+               JOIN clients c ON c.id=rm.user_id
+               WHERE rm.room_id=?
+               ORDER BY c.company, c.username""",
+            (room_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def add_room_member(room_id: int, user_id: int, role: str = "member",
+                    added_by: str = "") -> bool:
+    role = (role or "member").lower()
+    if role not in ("admin", "member"):
+        role = "member"
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO chat_room_members
+               (room_id, user_id, role, added_by) VALUES (?,?,?,?)""",
+            (room_id, user_id, role, added_by),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def remove_room_member(room_id: int, user_id: int) -> bool:
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM chat_room_members WHERE room_id=? AND user_id=?",
+            (room_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def user_can_access_room(room_id: int, user_id: int, is_admin: bool = False) -> bool:
+    if is_admin:
+        return True
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
+            (room_id, user_id),
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def add_room_message(room_id: int, sender_id: int, sender_name: str,
+                     sender_role: str, body: str) -> int:
+    body = (body or "").strip()
+    if not body:
+        raise ValueError("Message body is required")
+    role = (sender_role or "member").lower()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO chat_messages
+               (room_id, sender_id, sender_name, sender_role, body)
+               VALUES (?,?,?,?,?)""",
+            (room_id, sender_id, sender_name, role, body),
+        )
+        # Sender has implicitly read their own message
+        conn.execute(
+            """INSERT INTO chat_reads (room_id, user_id, last_read_message_id, updated_at)
+               VALUES (?,?,?,CURRENT_TIMESTAMP)
+               ON CONFLICT(room_id, user_id) DO UPDATE SET
+                 last_read_message_id=excluded.last_read_message_id,
+                 updated_at=excluded.updated_at""",
+            (room_id, sender_id, cur.lastrowid),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_room_messages(room_id: int, limit: int = 200,
+                       before_id: int | None = None) -> list[dict]:
+    conn = get_db()
+    try:
+        if before_id:
+            rows = conn.execute(
+                """SELECT id, room_id, sender_id, sender_name, sender_role, body, created_at
+                   FROM chat_messages
+                   WHERE room_id=? AND id<?
+                   ORDER BY id DESC LIMIT ?""",
+                (room_id, before_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, room_id, sender_id, sender_name, sender_role, body, created_at
+                   FROM chat_messages
+                   WHERE room_id=?
+                   ORDER BY id DESC LIMIT ?""",
+                (room_id, limit),
+            ).fetchall()
+        # Return oldest → newest
+        return [dict(r) for r in reversed(rows)]
+    finally:
+        conn.close()
+
+
+def mark_room_read(room_id: int, user_id: int) -> int:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT MAX(id) FROM chat_messages WHERE room_id=?",
+            (room_id,),
+        ).fetchone()
+        last_id = int((row[0] if row else 0) or 0)
+        conn.execute(
+            """INSERT INTO chat_reads (room_id, user_id, last_read_message_id, updated_at)
+               VALUES (?,?,?,CURRENT_TIMESTAMP)
+               ON CONFLICT(room_id, user_id) DO UPDATE SET
+                 last_read_message_id=MAX(last_read_message_id, excluded.last_read_message_id),
+                 updated_at=excluded.updated_at""",
+            (room_id, user_id, last_id),
+        )
+        conn.commit()
+        return last_id
+    finally:
+        conn.close()
+
+
+def chat_unread_total(user_id: int, is_admin: bool = False) -> int:
+    """Total unread messages across rooms visible to this user."""
+    conn = get_db()
+    try:
+        if is_admin:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM chat_messages m
+                   WHERE COALESCE(m.sender_id,0) <> ?
+                     AND m.id > COALESCE(
+                         (SELECT last_read_message_id FROM chat_reads
+                            WHERE room_id=m.room_id AND user_id=?), 0)""",
+                (user_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM chat_messages m
+                   JOIN chat_room_members rm ON rm.room_id=m.room_id
+                   WHERE rm.user_id=?
+                     AND COALESCE(m.sender_id,0) <> ?
+                     AND m.id > COALESCE(
+                         (SELECT last_read_message_id FROM chat_reads
+                            WHERE room_id=m.room_id AND user_id=?), 0)""",
+                (user_id, user_id, user_id),
+            ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def list_chat_eligible_users() -> list[dict]:
+    """All active users that can be added to a chat room."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT id, username, company, contact_name, email, role
+               FROM clients
+               WHERE COALESCE(is_active,1)=1
+               ORDER BY role DESC, company, username"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─── Client access (which users can open a given client) ─────────────────────
+
+def list_client_access(client_id: int) -> list[dict]:
+    """Return active users currently granted access to ``client_id``."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT c.id, c.username, c.company, c.contact_name, c.email, c.role,
+                      cua.granted_by, cua.granted_at
+               FROM client_user_access cua
+               JOIN clients c ON c.id = cua.user_id
+               WHERE cua.client_id=? AND COALESCE(c.is_active,1)=1
+               ORDER BY c.role DESC, c.contact_name, c.username""",
+            (int(client_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_client_access(client_id: int, user_ids: list[int], granted_by: str = "") -> int:
+    """Replace the access list for ``client_id`` with exactly ``user_ids``.
+    Returns the number of users now granted access."""
+    cid = int(client_id)
+    cleaned: list[int] = []
+    for raw in (user_ids or []):
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if uid > 0 and uid not in cleaned:
+            cleaned.append(uid)
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM client_user_access WHERE client_id=?", (cid,))
+        for uid in cleaned:
+            # Skip rows where the user_id doesn't exist (defensive)
+            exists = cur.execute(
+                "SELECT 1 FROM clients WHERE id=? AND COALESCE(is_active,1)=1",
+                (uid,),
+            ).fetchone()
+            if not exists:
+                continue
+            cur.execute(
+                "INSERT OR IGNORE INTO client_user_access (client_id, user_id, granted_by) "
+                "VALUES (?,?,?)",
+                (cid, uid, granted_by or ""),
+            )
+        conn.commit()
+        return cur.execute(
+            "SELECT COUNT(*) FROM client_user_access WHERE client_id=?", (cid,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def list_clients_for_user(user_id: int) -> list[int]:
+    """Client IDs that ``user_id`` has been explicitly granted access to."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT client_id FROM client_user_access WHERE user_id=?",
+            (int(user_id),),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
     finally:
         conn.close()

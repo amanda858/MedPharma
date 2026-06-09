@@ -8,11 +8,9 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 
-from app.client_db import init_client_hub_db, normalize_claim_statuses, validate_session
+from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session
 from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler, get_notification_status
-from app.database import init_db
-from app.leads_app import app as leads_subapp
 from app.config import DATABASE_PATH
 from app.build_info import BUILD_MARKER
 
@@ -24,6 +22,8 @@ app = FastAPI(
     description="MedPharma Revenue Cycle Management — Client Portal",
     version="2.0.0",
 )
+app.state.startup_ready = False
+app.state.startup_status = {"db": False, "scheduler": False}
 
 
 def _backup_db():
@@ -62,6 +62,8 @@ def _backup_db():
 @app.on_event("startup")
 async def startup():
     logging.basicConfig(level=logging.INFO)
+    app.state.startup_ready = False
+    app.state.startup_status = {"db": False, "scheduler": False}
 
     # ── Safety: check persistent disk on production ──
     if IS_PROD:
@@ -79,101 +81,13 @@ async def startup():
     except Exception as e:
         log.error(f"Startup error: DB backup failed: {e}")
 
-    # Keep service available even if secondary startup tasks fail.
-    try:
-        init_db()
-        log.info("✅ Leads database initialized")
-        # Seed demo leads if database is empty
-        from app.database import seed_demo_leads
-        seed_demo_leads()
-        log.info("✅ Demo leads seeded")
-    except Exception as e:
-        log.error(f"Startup error: leads DB init failed: {e}")
-
-    # ── Auto-restore bundled rule-intercept lab leads (free-tier safety) ──
-    # Render free-tier wipes /data on redeploys, so we re-populate saved_leads
-    # from the bundled CSV in a background thread so boot stays fast.
-    def _bulk_restore_rule_intercept():
-        import csv as _csv
-        import sqlite3 as _sql
-        from datetime import datetime as _dt
-        from app.database import get_db as _get_db
-        try:
-            conn = _get_db()
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM saved_leads WHERE source = 'rule-intercept'")
-            existing = cur.fetchone()[0]
-            if existing >= 1000:
-                conn.close()
-                log.info(f"[auto-restore] rule-intercept already populated ({existing}); skipping")
-                return
-            csv_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "output", "labs_routed_full.csv",
-            )
-            if not os.path.exists(csv_path):
-                conn.close()
-                log.warning(f"[auto-restore] bundled CSV missing at {csv_path}")
-                return
-            now = _dt.now().isoformat()
-            rows = []
-            with open(csv_path, encoding="utf-8") as f:
-                for r in _csv.DictReader(f):
-                    npi = (r.get("npi") or "").strip()
-                    tier = (r.get("tier") or "").strip()
-                    if not npi or tier not in ("A", "B", "C"):
-                        continue
-                    try:
-                        score = int(r.get("rule_score") or 0)
-                    except ValueError:
-                        score = 0
-                    rows.append((
-                        npi, r.get("org_name", ""), "", "", "", "",
-                        r.get("lab_type", ""), "", "",
-                        r.get("city", ""), r.get("state", ""), r.get("zip", ""),
-                        "", "", "", now,
-                        score, "new",
-                        f"Tier {tier} | RuleScore {score} | Lab Type: {r.get('lab_type','')} | Signals: {r.get('signals','')}",
-                        f"tier-{tier};lab;rule-intercept",
-                        "rule-intercept", now,
-                    ))
-            try:
-                cur.executemany(
-                    """
-                    INSERT OR REPLACE INTO saved_leads (
-                        npi, organization_name, first_name, last_name, credential,
-                        taxonomy_code, taxonomy_desc, address_line1, address_line2,
-                        city, state, zip_code, phone, fax, enumeration_date,
-                        last_updated, lead_score, lead_status, notes, tags, source, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
-                conn.commit()
-                log.info(f"[auto-restore] rule-intercept leads restored: {len(rows)}")
-            except _sql.OperationalError as oe:
-                conn.rollback()
-                log.error(f"[auto-restore] bulk insert failed: {oe}")
-            finally:
-                conn.close()
-        except Exception as e:
-            log.error(f"[auto-restore] skipped: {e}")
-
-    try:
-        import threading as _threading
-        _threading.Thread(
-            target=_bulk_restore_rule_intercept,
-            name="rule-intercept-restore",
-            daemon=True,
-        ).start()
-    except Exception as e:
-        log.error(f"[auto-restore] could not spawn thread: {e}")
-
     try:
         init_client_hub_db()
         log.info("✅ Client hub database initialized")
+        app.state.startup_status["db"] = True
     except Exception as e:
         log.error(f"Startup error: client DB init failed: {e}")
+        raise RuntimeError("Client hub database initialization failed") from e
 
     try:
         normalize_claim_statuses()
@@ -184,43 +98,15 @@ async def startup():
     try:
         start_daily_scheduler()
         log.info("✅ Daily scheduler started")
+        app.state.startup_status["scheduler"] = True
     except Exception as e:
         log.error(f"Startup error: notification scheduler failed: {e}")
 
+    app.state.startup_ready = True
     log.info("🚀 Hub service startup complete")
 
 
 app.include_router(client_hub_router)
-app.mount("/admin/leads", leads_subapp)
-
-
-@app.middleware("http")
-async def admin_only_leads_guard(request: Request, call_next):
-    path = request.url.path or ""
-    if path.startswith("/admin/leads"):
-        # Allow selected endpoints without authentication for operational checks.
-        if (
-            path.startswith("/admin/leads/api/admin/")
-            or path.startswith("/admin/leads/api/export/")
-            or path.startswith("/admin/leads/api/leads/poll-daily")
-            or path.startswith("/admin/leads/api/leads/poll-status")
-            # Scrub status/download — job_id is a UUID secret, no need for re-auth
-            or path.startswith("/admin/leads/api/scrub/status/")
-            or path.startswith("/admin/leads/api/scrub/download/")
-            # Hunt mode (prospect bulk): read-only NPPES queries on public data
-            or path.startswith("/admin/leads/api/prospect/")
-            # National pull: idempotent run trigger + status + download (public data)
-            or path.startswith("/admin/leads/api/national-pull/")
-        ):
-            return await call_next(request)
-
-        token = request.cookies.get("hub_session")
-        user = validate_session(token) if token else None
-        if not user:
-            if "/api/" in path:
-                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-            return RedirectResponse(url="/hub?next=/admin/leads/", status_code=307)
-    return await call_next(request)
 
 
 def _serve_hub():
@@ -270,20 +156,55 @@ async def mphub2026_redirect(request: Request):
     return RedirectResponse(url="/hub", status_code=301)
 
 
-@app.get("/admin/leads", include_in_schema=False)
-async def admin_leads_root():
-    return RedirectResponse(url="/admin/leads/", status_code=307)
+@app.api_route("/admin/leads", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+@app.api_route("/admin/leads/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+async def removed_leads_surface(request: Request, path: str = ""):
+    if request.url.path.startswith("/admin/leads/api/"):
+        return Response(
+            content='{"detail":"Leads module has been removed"}',
+            media_type="application/json",
+            status_code=410,
+        )
+    return RedirectResponse(url="/hub", status_code=307)
 
 
 @app.get("/leads", include_in_schema=False)
 async def leads_shortcut():
-    # Human-friendly single link users can bookmark/share.
-    return RedirectResponse(url="/admin/leads/", status_code=307)
+    return RedirectResponse(url="/hub", status_code=307)
 
 
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "service": "hub"}
+
+
+@app.get("/readyz")
+async def readyz():
+    if not app.state.startup_ready or not app.state.startup_status.get("db"):
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "service": "hub", "ready": False, "status": app.state.startup_status},
+        )
+
+    try:
+        conn = get_db()
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "service": "hub",
+                "ready": False,
+                "status": app.state.startup_status,
+                "detail": str(e),
+            },
+        )
+
+    return {"ok": True, "service": "hub", "ready": True, "status": app.state.startup_status}
 
 
 @app.get("/buildz")

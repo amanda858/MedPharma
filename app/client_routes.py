@@ -44,6 +44,11 @@ from app.client_db import (
     create_job, append_job_event, set_job_running, update_job_progress,
     complete_job, fail_job, get_job, list_jobs, reset_job_for_retry,
     _load_clients_seed,
+    list_rooms_for_user, get_room, create_room, update_room, delete_room,
+    list_room_members, add_room_member, remove_room_member,
+    user_can_access_room, add_room_message, list_room_messages,
+    mark_room_read, chat_unread_total, list_chat_eligible_users,
+    list_client_access, set_client_access, list_clients_for_user,
 )
 
 from app.notifications import (
@@ -234,6 +239,18 @@ def _client_scope(user: dict) -> Optional[int]:
     return user["id"]
 
 
+def _assert_client_can_view(user: dict, client_id: int) -> None:
+    """Reject if a client-role user tries to read another client's data.
+
+    Admin/staff users keep their existing cross-client access.
+    """
+    role = (user.get("role") or "").lower()
+    if role in ("admin", "staff"):
+        return
+    if int(user.get("id", 0) or 0) != int(client_id or 0):
+        raise HTTPException(status_code=403, detail="You can only view your own account.")
+
+
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 class LoginIn(BaseModel):
@@ -372,18 +389,36 @@ def change_password(body: ChangePasswordIn, hub_session: Optional[str] = Cookie(
 def accounts(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
 
+    role = (user.get("role") or "").lower()
+    uid = int(user.get("id", 0) or 0)
+
     # Account selector should show client companies only (not internal/admin users),
     # and avoid duplicate cards for the same company.
-    if user.get("role") in ("admin", "staff"):
+    if role == "admin":
+        # Full admins always see every active client account.
         clients = [
             c for c in list_clients()
             if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
         ]
+    elif role == "staff":
+        # Staff users see only client accounts they've been explicitly granted
+        # access to via the Add/Edit Client picker. If they have no grants yet,
+        # fall back to the legacy behavior (see all) so existing staff are not
+        # suddenly locked out by the new schema.
+        granted_ids = set(list_clients_for_user(uid))
+        all_active = [
+            c for c in list_clients()
+            if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
+        ]
+        if granted_ids:
+            clients = [c for c in all_active if int(c.get("id", 0) or 0) in granted_ids]
+        else:
+            clients = all_active
     else:
         # Client users should only see their own account card.
         clients = [
             c for c in list_clients()
-            if int(c.get("id", 0) or 0) == int(user.get("id", 0) or 0)
+            if int(c.get("id", 0) or 0) == uid
         ]
 
     deduped: dict[str, dict] = {}
@@ -408,9 +443,15 @@ class ClientIn(BaseModel):
     service_type: Optional[str] = ""   # rcm | payer_contracting | auditing | hybrid
     notes: Optional[str] = ""
     role: Optional[str] = "client"
-    # Legacy fields — still accepted if provided, auto-generated otherwise
+    # Optional login credentials for the client. If omitted, the server
+    # auto-generates a username (slug from company) and a strong random
+    # password — both are returned in the response so the admin can hand
+    # them to the client. If provided, both are honored as the client's
+    # initial sign-in credentials.
     username: Optional[str] = None
     password: Optional[str] = None
+    # Optional: pre-grant access to this new client for a list of existing users
+    user_ids: Optional[list[int]] = None
 
 
 class ClientUpdate(BaseModel):
@@ -465,9 +506,59 @@ def get_clients(hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/clients")
 def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
+    admin = _require_full_admin(hub_session)
+    payload = body.model_dump()
+    user_ids = payload.pop("user_ids", None) or []
+    # Optional client password — require minimum length when one is provided.
+    supplied_pw = (payload.get("password") or "").strip()
+    if supplied_pw and len(supplied_pw) < 8:
+        raise HTTPException(status_code=400, detail="Client password must be at least 8 characters")
+    cid = create_client(payload)
+    # Grant the selected staff/admin users access to this newly-created client
+    granted = 0
+    if user_ids:
+        try:
+            granted = set_client_access(cid, user_ids, granted_by=admin.get("username", ""))
+        except Exception as e:
+            log.warning("client_user_access seed failed for %s: %s", cid, e)
+    # Surface the client login credentials exactly once so the admin can
+    # hand them off. payload mutation in create_client adds these keys.
+    return {
+        "id": cid,
+        "ok": True,
+        "access_granted": granted,
+        "login": {
+            "username": payload.get("_created_username") or "",
+            "password": payload.get("_created_password") or "",
+            "url": "/hub",
+            "auto_generated": not bool(supplied_pw),
+        },
+    }
+
+
+@router.get("/clients/{cid}/access")
+def get_client_access(cid: int, hub_session: Optional[str] = Cookie(None)):
     _require_full_admin(hub_session)
-    cid = create_client(body.model_dump())
-    return {"id": cid, "ok": True}
+    return {"client_id": cid, "users": list_client_access(cid)}
+
+
+class ClientAccessIn(BaseModel):
+    user_ids: list[int] = []
+
+
+@router.put("/clients/{cid}/access")
+def put_client_access(cid: int, body: ClientAccessIn, hub_session: Optional[str] = Cookie(None)):
+    admin = _require_full_admin(hub_session)
+    count = set_client_access(cid, body.user_ids or [], granted_by=admin.get("username", ""))
+    return {"ok": True, "count": count}
+
+
+@router.get("/admin/users")
+def list_admin_users(hub_session: Optional[str] = Cookie(None)):
+    """All active admin/staff users available to be granted client access."""
+    _require_full_admin(hub_session)
+    users = [u for u in list_chat_eligible_users() if (u.get("role") or "").lower() in ("admin", "staff")]
+    return users
 
 
 @router.post("/admin/users/invite")
@@ -630,6 +721,7 @@ def update_my_profile(body: ProfileUpdate, hub_session: Optional[str] = Cookie(N
     if body.enabled_modules is not None:
         data["enabled_modules"] = _json.dumps(body.enabled_modules)
     update_profile(cid, data)
+    _notify_profile_change(cid, user, body, scope_label="self-service")
     return {"ok": True}
 
 
@@ -644,7 +736,48 @@ def update_client_profile(cid: int, body: ProfileUpdate, hub_session: Optional[s
     if body.enabled_modules is not None:
         data["enabled_modules"] = _json.dumps(body.enabled_modules)
     update_profile(cid, data)
+    admin = _get_user(hub_session) or {}
+    _notify_profile_change(cid, admin, body, scope_label="admin")
     return {"ok": True}
+
+
+def _notify_profile_change(client_id: int, actor: dict, body: ProfileUpdate, scope_label: str = ""):
+    """Send an audit + admin notification whenever a profile or its module
+    opt-outs change. Module changes are highlighted because they affect what
+    the client sees in the hub."""
+    try:
+        changed_fields = [k for k, v in body.model_dump().items() if v is not None]
+        details_parts = []
+        if body.enabled_modules is not None:
+            mods = ", ".join(sorted(body.enabled_modules)) or "(none)"
+            details_parts.append(f"enabled_modules=[{mods}]")
+        if changed_fields:
+            details_parts.append("fields=" + ",".join(sorted(changed_fields)))
+        details = " | ".join(details_parts) or "no changes"
+        actor_name = actor.get("username", "?") if actor else "?"
+        log_audit(client_id, actor_name, "profile_update",
+                  "clients", client_id, details)
+        notify_activity(actor_name, "updated", "Client Profile",
+                        f"client #{client_id} ({scope_label}) — {details}")
+        # Module opt-outs change what the client sees — always send an
+        # immediate email to admin regardless of digest whitelist.
+        if body.enabled_modules is not None:
+            try:
+                from app.notifications import _send_email  # type: ignore
+                import threading as _th
+                subject = f"[CVOPro Hub] Module opt-outs updated — client #{client_id}"
+                text = (
+                    f"Actor: {actor_name} ({scope_label})\n"
+                    f"Client: #{client_id}\n"
+                    f"Enabled modules: {', '.join(sorted(body.enabled_modules)) or '(none)'}\n"
+                )
+                _th.Thread(target=_send_email,
+                           args=(subject, text, ""),
+                           daemon=True).start()
+            except Exception:
+                log.exception("immediate module-change email failed")
+    except Exception:
+        log.exception("profile change notification failed")
 
 
 # ─── Report Notes (custom report tab content) ──────────────────────────────────
@@ -660,7 +793,8 @@ class ReportNoteRenameBody(BaseModel):
 @router.get("/report-notes/{cid}")
 def get_client_report_notes(cid: int, tab_name: Optional[str] = None,
                              hub_session: Optional[str] = Cookie(None)):
-    _require_full_admin(hub_session)
+    user = _require_user(hub_session)
+    _assert_client_can_view(user, cid)
     notes = get_report_notes(cid, tab_name)
     return {"notes": notes}
 
@@ -1203,6 +1337,7 @@ def dashboard(hub_session: Optional[str] = Cookie(None)):
 def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
                         hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    _assert_client_can_view(user, client_id)
     data = get_dashboard(client_id, sub_profile=sub_profile)
     data["user"] = user
     return data
@@ -2106,6 +2241,25 @@ async def upload_file(
         except Exception as e:
             import_errors = [str(e)]
 
+    # ── Funnel notification to admin (every upload, regardless of category) ──
+    try:
+        size_kb = max(1, file_size // 1024)
+        nice_name = file.filename or unique_name
+        detail_bits = [f'"{nice_name}" ({size_kb} KB, {ext.lstrip(".") or "file"})',
+                       f"category={effective_category}"]
+        if row_count:
+            detail_bits.append(f"{row_count} rows")
+        if imported:
+            detail_bits.append(f"auto-imported {imported} into {import_category}")
+        if import_errors:
+            detail_bits.append(f"{len(import_errors)} import warning(s)")
+        notify_activity(user["username"], "uploaded", "Documents", " · ".join(detail_bits))
+        if imported and import_category:
+            notify_bulk_activity(user["username"], "imported", import_category, imported,
+                                 f'from upload "{nice_name}"')
+    except Exception as _e:
+        log.warning("upload notify failed: %s", _e)
+
     return {
         "id": file_id,
         "filename": unique_name,
@@ -2238,7 +2392,8 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
                hub_session: Optional[str] = Cookie(None)):
     """Generate a comprehensive cross-section report for CSV / print, with sub-profile breakdowns."""
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    _assert_client_can_view(user, client_id)
     from app.client_db import get_db
     from datetime import date, datetime
 
@@ -3551,7 +3706,8 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    _assert_client_can_view(user, client_id)
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -3723,7 +3879,8 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                               hub_session: Optional[str] = Cookie(None),
                               request: Request = None):
     """Generate and return a branded PDF report."""
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    _assert_client_can_view(user, client_id)
     from app.client_db import get_db
     from datetime import date
     from io import BytesIO
@@ -4038,46 +4195,215 @@ def audit_log_endpoint(client_id: Optional[int] = None, limit: int = 100,
     return {"entries": entries}
 
 
-# ─── Export to CSV ────────────────────────────────────────────────────────────
+# ─── Export to CSV / Excel / PDF ─────────────────────────────────────────────
+
+_SECTION_LABELS = {
+    "claims": "Claims",
+    "credentialing": "Credentialing",
+    "enrollment": "Enrollment",
+    "edi_setup": "EDI Setup",
+    "providers": "Providers",
+    "production": "Team Production",
+}
+
+
+def _rows_to_csv_bytes(rows: list[dict], headers: list[str]) -> bytes:
+    import csv, io
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=headers, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({h: ("" if r.get(h) is None else r.get(h)) for h in headers})
+    return out.getvalue().encode("utf-8")
+
+
+def _rows_to_xlsx_bytes(rows: list[dict], headers: list[str], sheet_title: str) -> bytes:
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active
+    ws.title = (sheet_title or "Sheet1")[:31]
+    header_fill = PatternFill("solid", fgColor="0D47A1")
+    header_font = Font(bold=True, color="FFFFFF")
+    ws.append(headers)
+    for c in ws[1]:
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="left", vertical="center")
+    for r in rows:
+        ws.append([("" if r.get(h) is None else r.get(h)) for h in headers])
+    # Best-effort column auto-width
+    for i, h in enumerate(headers, start=1):
+        col_letter = ws.cell(row=1, column=i).column_letter
+        max_len = len(str(h))
+        for r in rows[:500]:
+            v = r.get(h)
+            if v is None:
+                continue
+            ln = len(str(v))
+            if ln > max_len:
+                max_len = ln
+        ws.column_dimensions[col_letter].width = min(60, max(10, max_len + 2))
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _rows_to_pdf_bytes(rows: list[dict], headers: list[str], title: str) -> bytes:
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
+                            topMargin=0.4 * inch, bottomMargin=0.4 * inch,
+                            leftMargin=0.4 * inch, rightMargin=0.4 * inch)
+    styles = getSampleStyleSheet()
+    blue = HexColor("#0d47a1")
+    light = HexColor("#e3f2fd")
+    grey = HexColor("#6b7280")
+    styles.add(ParagraphStyle("ExportTitle", parent=styles["Title"], fontSize=16,
+                              textColor=blue, alignment=TA_LEFT, spaceAfter=6))
+    styles.add(ParagraphStyle("ExportSub", parent=styles["Normal"], fontSize=9,
+                              textColor=grey, spaceAfter=12))
+    story = [
+        Paragraph(title or "Export", styles["ExportTitle"]),
+        Paragraph(
+            f"Generated {datetime.now().strftime('%B %d, %Y %I:%M %p')} — "
+            f"{len(rows)} row(s)",
+            styles["ExportSub"],
+        ),
+    ]
+    if not rows:
+        story.append(Paragraph(
+            "No records to export for the current selection.",
+            styles["Normal"],
+        ))
+    else:
+        # Limit columns to keep the PDF readable
+        max_cols = 10
+        cols = headers[:max_cols]
+        data = [cols]
+        for r in rows[:1000]:
+            data.append([str(r.get(h, "") if r.get(h) is not None else "")[:80] for h in cols])
+        col_w = max(0.7 * inch, (doc.width / max(1, len(cols))))
+        table = Table(data, repeatRows=1, colWidths=[col_w] * len(cols))
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), blue),
+            ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#ffffff")),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
+            ("FONTSIZE", (0, 1), (-1, -1), 7),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [HexColor("#ffffff"), light]),
+            ("GRID", (0, 0), (-1, -1), 0.25, HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(table)
+        if len(rows) > 1000:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(
+                f"Showing first 1,000 of {len(rows)} rows — use CSV/Excel for full data.",
+                styles["ExportSub"],
+            ))
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _resolve_export_rows(section: str, scope: Optional[int], sub_profile: Optional[str]) -> list[dict]:
+    if section == "claims":
+        return export_claims(scope, sub_profile)
+    if section in ("credentialing", "enrollment", "edi_setup", "providers"):
+        return export_table(section, scope)
+    if section == "production":
+        return list_production_logs(scope)
+    raise HTTPException(400, f"Unknown section: {section}")
+
+
+_SECTION_FALLBACK_HEADERS = {
+    "claims": [
+        "id", "client_id", "ClaimKey", "PatientID", "PatientName", "Payor",
+        "ProviderName", "NPI", "DOS", "CPTCode", "Description", "ChargeAmount",
+        "AllowedAmount", "PaidAmount", "Balance", "ClaimStatus", "Owner",
+        "NextAction", "NextActionDueDate", "sub_profile",
+    ],
+    "credentialing": [
+        "id", "client_id", "ProviderName", "Payor", "CredType", "Status",
+        "SubmittedDate", "ApprovedDate", "ExpirationDate", "Owner", "Notes",
+    ],
+    "enrollment": [
+        "id", "client_id", "ProviderName", "Payor", "EnrollType", "Status",
+        "SubmittedDate", "EffectiveDate", "Owner", "Notes",
+    ],
+    "edi_setup": [
+        "id", "client_id", "ProviderName", "Payor", "PayerID", "EDIStatus",
+        "ERAStatus", "EFTStatus", "GoLiveDate", "Owner", "Notes",
+    ],
+    "providers": [
+        "id", "client_id", "ProviderName", "NPI", "Specialty", "Email",
+        "Phone", "Notes",
+    ],
+    "production": [
+        "id", "client_id", "work_date", "username", "category",
+        "task_description", "quantity", "time_spent", "notes",
+    ],
+}
+
 
 @router.get("/export/{section}")
 def export_section(section: str, client_id: Optional[int] = None,
                    sub_profile: Optional[str] = None,
+                   format: str = "csv",
                    hub_session: Optional[str] = Cookie(None)):
-    """Export a section (claims, credentialing, enrollment, edi, providers, production) as CSV."""
-    import csv, io
+    """Export a section as CSV / Excel / PDF. Empty data returns a file with
+    only headers (or an empty PDF) instead of a 404 so the UI buttons always
+    succeed."""
     from fastapi.responses import StreamingResponse
+    import io
 
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    fmt = (format or "csv").lower().strip()
+    if fmt not in ("csv", "xlsx", "pdf"):
+        raise HTTPException(400, "format must be csv, xlsx, or pdf")
 
-    if section == "claims":
-        rows = export_claims(scope, sub_profile)
-    elif section in ("credentialing", "enrollment", "edi_setup", "providers"):
-        rows = export_table(section, scope)
-    elif section == "production":
-        logs = list_production_logs(scope)
-        rows = logs
-    else:
-        raise HTTPException(400, f"Unknown section: {section}")
-
-    if not rows:
-        raise HTTPException(404, "No data to export")
-
-    # Build CSV
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-    writer.writeheader()
-    writer.writerows(rows)
-    output.seek(0)
+    rows = _resolve_export_rows(section, scope, sub_profile)
+    headers = (
+        list(rows[0].keys()) if rows
+        else _SECTION_FALLBACK_HEADERS.get(section, ["id"])
+    )
+    label = _SECTION_LABELS.get(section, section.title())
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    base_name = f"{section}_{stamp}"
 
     log_audit(scope, user.get("username", ""), "export",
-              section, None, f"Exported {len(rows)} rows")
+              section, None, f"Exported {len(rows)} rows as {fmt}")
 
+    if fmt == "csv":
+        payload = _rows_to_csv_bytes(rows, headers)
+        return StreamingResponse(
+            io.BytesIO(payload),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={base_name}.csv"},
+        )
+    if fmt == "xlsx":
+        payload = _rows_to_xlsx_bytes(rows, headers, sheet_title=label)
+        return StreamingResponse(
+            io.BytesIO(payload),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={base_name}.xlsx"},
+        )
+    # pdf
+    payload = _rows_to_pdf_bytes(rows, headers, title=f"{label} Export")
     return StreamingResponse(
-        io.BytesIO(output.getvalue().encode("utf-8")),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={section}_export.csv"}
+        io.BytesIO(payload),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={base_name}.pdf"},
     )
 
 
@@ -4144,6 +4470,246 @@ def remove_sharefile_link(link_id: int, client_id: Optional[int] = None, hub_ses
     scope = client_id or _client_scope(user)
     delete_sharefile_link(link_id, scope)
     return {"ok": True}
+
+
+# ─── Chat: Admin-managed rooms with member management ───────────────────────
+
+class ChatMessageIn(BaseModel):
+    body: str
+
+
+class ChatRoomCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    client_id: Optional[int] = None
+    member_user_ids: Optional[list[int]] = None
+
+
+class ChatRoomUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    client_id: Optional[int] = None
+    archived: Optional[int] = None
+
+
+class ChatMemberIn(BaseModel):
+    user_id: int
+    role: Optional[str] = "member"
+
+
+def _is_admin_user(user: dict) -> bool:
+    return (user or {}).get("role") in ("admin", "staff")
+
+
+def _require_room_access(user: dict, room_id: int) -> dict:
+    room = get_room(room_id)
+    if not room:
+        raise HTTPException(404, "Chat room not found")
+    if not user_can_access_room(room_id, int(user.get("id") or 0), _is_admin_user(user)):
+        raise HTTPException(403, "You are not a member of this chat room")
+    return room
+
+
+@router.get("/chat/rooms")
+def chat_list_rooms(include_archived: int = 0,
+                    hub_session: Optional[str] = Cookie(None)):
+    """List chat rooms visible to the current user."""
+    user = _require_user(hub_session)
+    rooms = list_rooms_for_user(
+        int(user["id"]),
+        is_admin=_is_admin_user(user),
+        include_archived=bool(int(include_archived or 0)),
+    )
+    return {"rooms": rooms, "is_admin": _is_admin_user(user)}
+
+
+@router.post("/chat/rooms")
+def chat_create_room(body: ChatRoomCreate, hub_session: Optional[str] = Cookie(None)):
+    """Admin/staff only: create a chat room and seed members."""
+    user = _require_admin(hub_session)
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Room name is required")
+    room_id = create_room(
+        name=name,
+        description=(body.description or "").strip(),
+        client_id=body.client_id,
+        created_by=user.get("username", ""),
+        member_user_ids=body.member_user_ids or [],
+        creator_user_id=int(user.get("id") or 0),
+    )
+    log_audit(body.client_id, user.get("username", ""), "chat_room_create",
+              "chat_rooms", room_id,
+              f"Created room '{name}' with {len(body.member_user_ids or [])} member(s)")
+    notify_activity(user.get("username", ""), "created", "Chat Room",
+                    f"room #{room_id} '{name}'")
+    return {"ok": True, "id": room_id}
+
+
+@router.get("/chat/rooms/{room_id}")
+def chat_get_room(room_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    room = _require_room_access(user, room_id)
+    return {
+        "room": room,
+        "members": list_room_members(room_id),
+        "is_admin": _is_admin_user(user),
+    }
+
+
+@router.put("/chat/rooms/{room_id}")
+def chat_update_room(room_id: int, body: ChatRoomUpdate,
+                     hub_session: Optional[str] = Cookie(None)):
+    user = _require_admin(hub_session)
+    if not get_room(room_id):
+        raise HTTPException(404, "Chat room not found")
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not fields:
+        return {"ok": True, "updated": 0}
+    update_room(room_id, fields)
+    log_audit(None, user.get("username", ""), "chat_room_update",
+              "chat_rooms", room_id, f"Updated: {','.join(sorted(fields))}")
+    return {"ok": True}
+
+
+@router.delete("/chat/rooms/{room_id}")
+def chat_delete_room(room_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_admin(hub_session)
+    if not get_room(room_id):
+        raise HTTPException(404, "Chat room not found")
+    delete_room(room_id)
+    log_audit(None, user.get("username", ""), "chat_room_delete",
+              "chat_rooms", room_id, "Deleted room")
+    notify_activity(user.get("username", ""), "deleted", "Chat Room",
+                    f"room #{room_id}")
+    return {"ok": True}
+
+
+@router.get("/chat/rooms/{room_id}/members")
+def chat_room_members(room_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    _require_room_access(user, room_id)
+    return {"members": list_room_members(room_id)}
+
+
+@router.post("/chat/rooms/{room_id}/members")
+def chat_add_member(room_id: int, body: ChatMemberIn,
+                    hub_session: Optional[str] = Cookie(None)):
+    """Admin/staff only: add a user to a chat room."""
+    user = _require_admin(hub_session)
+    if not get_room(room_id):
+        raise HTTPException(404, "Chat room not found")
+    add_room_member(room_id, int(body.user_id),
+                    role=(body.role or "member"),
+                    added_by=user.get("username", ""))
+    log_audit(None, user.get("username", ""), "chat_member_add",
+              "chat_rooms", room_id, f"Added user #{body.user_id}")
+    return {"ok": True}
+
+
+@router.delete("/chat/rooms/{room_id}/members/{user_id}")
+def chat_remove_member(room_id: int, user_id: int,
+                       hub_session: Optional[str] = Cookie(None)):
+    """Admin/staff only: remove a user from a chat room."""
+    actor = _require_admin(hub_session)
+    if not get_room(room_id):
+        raise HTTPException(404, "Chat room not found")
+    removed = remove_room_member(room_id, int(user_id))
+    log_audit(None, actor.get("username", ""), "chat_member_remove",
+              "chat_rooms", room_id,
+              f"Removed user #{user_id} (existed={removed})")
+    return {"ok": True, "removed": removed}
+
+
+@router.get("/chat/rooms/{room_id}/messages")
+def chat_get_messages(room_id: int, limit: int = 200,
+                      before_id: Optional[int] = None,
+                      mark_read: int = 1,
+                      hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    _require_room_access(user, room_id)
+    msgs = list_room_messages(
+        room_id,
+        limit=max(1, min(int(limit or 200), 1000)),
+        before_id=before_id,
+    )
+    last_read = 0
+    if mark_read and not before_id:
+        last_read = mark_room_read(room_id, int(user["id"]))
+    return {
+        "room_id": room_id,
+        "messages": msgs,
+        "last_read_message_id": last_read,
+    }
+
+
+@router.post("/chat/rooms/{room_id}/messages")
+def chat_post_message(room_id: int, body: ChatMessageIn,
+                      hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    room = _require_room_access(user, room_id)
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(400, "Message body is required")
+    if len(text) > 4000:
+        raise HTTPException(400, "Message too long (max 4000 characters)")
+    try:
+        msg_id = add_room_message(
+            room_id=room_id,
+            sender_id=int(user.get("id") or 0),
+            sender_name=user.get("username", ""),
+            sender_role=user.get("role", "member"),
+            body=text,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    log_audit(room.get("client_id"), user.get("username", ""), "chat_message",
+              "chat_rooms", room_id, text[:200])
+    try:
+        notify_activity(user.get("username", ""), "sent message",
+                        "Chat", f"room '{room.get('name','?')}': {text[:120]}")
+        # Forward client-originated messages directly to admin email so they
+        # don't have to wait for the daily digest.
+        if not _is_admin_user(user):
+            from app.notifications import _send_email  # type: ignore
+            subject = f"💬 New chat message in '{room.get('name','room')}' from {user.get('username','client')}"
+            html = (
+                f"<p><b>{user.get('username','client')}</b> sent a new message "
+                f"in chat room <b>{room.get('name','room')}</b> (#{room_id}):</p>"
+                f"<blockquote style='border-left:3px solid #2563eb;padding:6px 12px;color:#1f2937'>"
+                f"{text[:1500]}</blockquote>"
+            )
+            threading.Thread(
+                target=_send_email,
+                args=(subject, text[:1500], html),
+                daemon=True,
+            ).start()
+    except Exception:
+        log.exception("chat notify failed")
+    return {"ok": True, "id": msg_id}
+
+
+@router.post("/chat/rooms/{room_id}/mark-read")
+def chat_mark_read_endpoint(room_id: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    _require_room_access(user, room_id)
+    last_id = mark_room_read(room_id, int(user["id"]))
+    return {"ok": True, "last_read_message_id": last_id}
+
+
+@router.get("/chat/unread-count")
+def chat_unread_count_endpoint(hub_session: Optional[str] = Cookie(None)):
+    """Total unread messages for the current user across all visible rooms."""
+    user = _require_user(hub_session)
+    n = chat_unread_total(int(user["id"]), is_admin=_is_admin_user(user))
+    return {"unread": n}
+
+
+@router.get("/chat/users")
+def chat_eligible_users(hub_session: Optional[str] = Cookie(None)):
+    """Admin/staff only: list users that can be added to a chat room."""
+    _require_admin(hub_session)
+    return {"users": list_chat_eligible_users()}
 
 
 # ─── Client Seed Backup ───────────────────────────────────────────────────────

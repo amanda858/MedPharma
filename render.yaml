@@ -1,11 +1,11 @@
 services:
   - type: web
     name: medpharma-hub
-    env: python
+    runtime: python
     region: oregon
     plan: free
     branch: main
-    autoDeploy: yes
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: python run.py
     healthCheckPath: /healthz
@@ -49,26 +49,4 @@ services:
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS
-        sync: false
-
-  - type: web
-    name: medpharma-leads
-    env: python
-    region: oregon
-    plan: free
-    branch: main
-    autoDeploy: yes
-    buildCommand: pip install -r requirements.txt
-    startCommand: python run.py
-    healthCheckPath: /healthz
-    disk:
-      name: medpharma-leads-data
-      mountPath: /data
-      sizeGB: 1
-    envVars:
-      - key: SERVICE
-        value: leads
-      - key: DB_PATH
-        value: /data/leads.db
-      - key: HUNTER_API_KEY
         sync: false
