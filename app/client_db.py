@@ -295,53 +295,54 @@ def _apply_startup_user_migrations(conn):
                 (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
             )
 
-    def _purge_legacy_placeholders():
-        """Hard-delete legacy placeholder clients (Luminary 'eric', TruPath)
-        and any junk demo users from older builds. The deactivation migration
-        only set is_active=0, but they were still visible to admins.
+    def _purge_legacy_placeholder_clients():
+        """Hard-delete the legacy placeholder accounts (Luminary, TruPath) and
+        the example/demo accounts that should never appear in production.
+
+        Removes the client row, their practice sub-profiles, and any rows in
+        tables that reference client_id so they cannot resurface in the
+        Manage Clients list or the account selector. Real customer data is
+        never touched — only the hardcoded placeholder usernames listed below.
         """
-        legacy_usernames = (
-            "eric",                # Luminary placeholder
-            "trupath",             # TruPath placeholder
-            "admin1",              # demo fixture
-            "staff1",              # demo fixture
-            "client1",             # demo fixture
-            "outsider",            # demo fixture
-            "admin@example.com",   # demo fixture
-            "staff@example.com",   # demo fixture
-            "client@example.com",  # demo fixture
-            "x@x.com",             # demo fixture
+        placeholder_usernames = (
+            "eric", "trupath", "luminary", "luminary_practice",
+            "admin1", "staff1", "client1", "outsider",
+            "admin@example.com", "staff@example.com", "client@example.com", "x@x.com",
         )
-        for uname in legacy_usernames:
-            row = cur.execute("SELECT id FROM clients WHERE username=?", (uname,)).fetchone()
-            if not row:
-                continue
-            cid = row[0]
-            # Discover and clear every table that references this client id so
-            # the final DELETE FROM clients can't FK-fail.
-            tables = [
-                r[0] for r in cur.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                ).fetchall()
-            ]
-            for table in tables:
-                if table == "clients":
-                    continue
-                try:
-                    cols = {r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()}
-                except sqlite3.OperationalError:
-                    continue
-                for col in ("client_id", "account_id"):
-                    if col in cols:
-                        try:
-                            cur.execute(f"DELETE FROM {table} WHERE {col}=?", (cid,))
-                        except sqlite3.OperationalError:
-                            pass
+        placeholder_companies = (
+            "Luminary (OMT/MHP)", "Luminary", "Luminary Practice",
+            "TruPath", "Admin Co", "Demo Lab", "Outsider",
+        )
+        # Collect ids to remove
+        cur.execute(
+            "SELECT id FROM clients WHERE LOWER(username) IN ("
+            + ",".join("?" * len(placeholder_usernames))
+            + ") OR company IN ("
+            + ",".join("?" * len(placeholder_companies))
+            + ")",
+            (*placeholder_usernames, *placeholder_companies),
+        )
+        ids = [r[0] for r in cur.fetchall()]
+        if not ids:
+            return
+        qs = ",".join("?" * len(ids))
+        # Best-effort cascade across tables that reference client_id. Wrapped
+        # individually so a missing/legacy table does not abort the purge.
+        for tbl in (
+            "practice_profiles", "claims_master", "claim_notes", "claim_payments",
+            "credentialing", "enrollments", "edi_setup", "providers",
+            "documents", "production_log", "alerts", "audit_log",
+            "client_access", "chat_room_members", "chat_messages", "chat_rooms",
+            "notifications",
+        ):
             try:
-                cur.execute("DELETE FROM clients WHERE id=?", (cid,))
-                log.info("purge_legacy_placeholders_v1: removed user %s (id=%s)", uname, cid)
-            except sqlite3.OperationalError as _e:
-                log.warning("purge_legacy_placeholders_v1: could not delete %s: %s", uname, _e)
+                cur.execute(f"DELETE FROM {tbl} WHERE client_id IN ({qs})", ids)
+            except Exception:
+                pass
+        try:
+            cur.execute(f"DELETE FROM clients WHERE id IN ({qs})", ids)
+        except Exception as _e:
+            log.warning("purge_legacy_placeholders: delete clients failed: %s", _e)
 
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
@@ -350,7 +351,7 @@ def _apply_startup_user_migrations(conn):
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
     _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
-    _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholders)
+    _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholder_clients)
 
 
 
@@ -891,19 +892,23 @@ def _seed_data(conn):
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
     )
 
-    # Jessica — MedPharma operations staff, NOT a full admin (no leads/audit/manage clients)
+    # Jessica — MedPharma operations staff (kept as a working staff login).
     jsalt = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
     )
 
-    # RCM — MedPharma staff user (admin), sees all client accounts
+    # RCM — MedPharma admin login (sees all client accounts).
     rsalt = secrets.token_hex(16)
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
     )
+
+    # NOTE: Real client accounts (Luminary, TruPath, etc.) are no longer
+    # hardcoded here. Use Manage Clients in the UI — anything created there
+    # is persisted to data/clients_seed.json and survives Render deploys.
 
     conn.commit()
     # No fake claims, providers, credentialing, or payments seeded.
