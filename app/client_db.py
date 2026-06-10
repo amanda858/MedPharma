@@ -295,26 +295,53 @@ def _apply_startup_user_migrations(conn):
                 (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
             )
 
-    def _force_retire_legacy_demo_clients():
-        """Hard-deactivate legacy placeholder clients (Luminary, TruPath,
-        and the throwaway demo logins admin1/staff1/client1/outsider)
-        regardless of whether they have any historic claims rows. The earlier
-        `placeholder_clients_inactive_v1` migration skipped them if any
-        claims existed, which left Luminary visible on production demos.
+    def _purge_legacy_placeholders():
+        """Hard-delete legacy placeholder clients (Luminary 'eric', TruPath)
+        and any junk demo users from older builds. The deactivation migration
+        only set is_active=0, but they were still visible to admins.
         """
-        # Deactivate by username (covers seed rows and any duplicates)
-        for _uname in ("eric", "trupath", "admin1", "staff1", "client1", "outsider"):
-            cur.execute(
-                "UPDATE clients SET is_active=0 WHERE username=?",
-                (_uname,),
-            )
-        # Also deactivate any row whose company matches a known legacy label,
-        # in case the username drifted (e.g. seeded with a different handle).
-        for _company in ("Luminary (OMT/MHP)", "TruPath", "Admin Co", "Demo Lab", "Outsider"):
-            cur.execute(
-                "UPDATE clients SET is_active=0 WHERE company=? AND role='client'",
-                (_company,),
-            )
+        legacy_usernames = (
+            "eric",                # Luminary placeholder
+            "trupath",             # TruPath placeholder
+            "admin1",              # demo fixture
+            "staff1",              # demo fixture
+            "client1",             # demo fixture
+            "outsider",            # demo fixture
+            "admin@example.com",   # demo fixture
+            "staff@example.com",   # demo fixture
+            "client@example.com",  # demo fixture
+            "x@x.com",             # demo fixture
+        )
+        for uname in legacy_usernames:
+            row = cur.execute("SELECT id FROM clients WHERE username=?", (uname,)).fetchone()
+            if not row:
+                continue
+            cid = row[0]
+            # Discover and clear every table that references this client id so
+            # the final DELETE FROM clients can't FK-fail.
+            tables = [
+                r[0] for r in cur.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            ]
+            for table in tables:
+                if table == "clients":
+                    continue
+                try:
+                    cols = {r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()}
+                except sqlite3.OperationalError:
+                    continue
+                for col in ("client_id", "account_id"):
+                    if col in cols:
+                        try:
+                            cur.execute(f"DELETE FROM {table} WHERE {col}=?", (cid,))
+                        except sqlite3.OperationalError:
+                            pass
+            try:
+                cur.execute("DELETE FROM clients WHERE id=?", (cid,))
+                log.info("purge_legacy_placeholders_v1: removed user %s (id=%s)", uname, cid)
+            except sqlite3.OperationalError as _e:
+                log.warning("purge_legacy_placeholders_v1: could not delete %s: %s", uname, _e)
 
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
@@ -323,7 +350,7 @@ def _apply_startup_user_migrations(conn):
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
     _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
-    _run_migration_once(conn, "force_retire_legacy_demo_clients_v1", _force_retire_legacy_demo_clients)
+    _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholders)
 
 
 
@@ -864,26 +891,6 @@ def _seed_data(conn):
         ("admin", _hash_pw("admin123", asalt), asalt, "MedPharma SC", "Admin", "admin@medpharmasc.com", "admin")
     )
 
-    # Client 1 — Luminary (Ancillary practice: OMT + MHP as sub-profiles)
-    # Luminary and TruPath are legacy placeholder clients — seeded as inactive
-    # so they don't appear in the account selector for new installs.
-    s1 = secrets.token_hex(16)
-    cur.execute(
-        """INSERT INTO clients
-           (username,password,salt,company,contact_name,email,role,practice_type,is_active)
-           VALUES (?,?,?,?,?,?,?,?,0)""",
-        ("eric", _hash_pw("eric123", s1), s1, "Luminary (OMT/MHP)", "Luminary Practice", "info@luminarypractice.com", "client",
-         "MHP+OMT")
-    )
-    luminary_id = cur.lastrowid
-
-    # TruPath — inactive placeholder
-    s2 = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role,is_active) VALUES (?,?,?,?,?,?,?,0)",
-        ("trupath", _hash_pw("trupath123", s2), s2, "TruPath", "TruPath", "", "client")
-    )
-
     # Jessica — MedPharma operations staff, NOT a full admin (no leads/audit/manage clients)
     jsalt = secrets.token_hex(16)
     cur.execute(
@@ -896,21 +903,6 @@ def _seed_data(conn):
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
-    )
-
-    # Sub-profiles for Luminary: MHP and OMT (both Ancillary)
-    cur.execute(
-        """INSERT INTO practice_profiles
-           (client_id,profile_name,practice_type,specialty,tax_id,group_npi,individual_npi,ptan_group,ptan_individual)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (luminary_id, "MHP", "Ancillary", "Michigan Health Partners",
-         "334707784", "1033901723", "1497174478", "MI120440", "MI20440001")
-    )
-    cur.execute(
-        """INSERT INTO practice_profiles
-           (client_id,profile_name,practice_type,specialty)
-           VALUES (?,?,?,?)""",
-        (luminary_id, "OMT", "Ancillary", "Occupational / Manual Therapy")
     )
 
     conn.commit()
