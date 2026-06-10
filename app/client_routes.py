@@ -240,13 +240,22 @@ def _client_scope(user: dict) -> Optional[int]:
 
 
 def _assert_client_can_view(user: dict, client_id: int) -> None:
-    """Reject if a client-role user tries to read another client's data.
+    """Reject if the user is not allowed to view this client's data.
 
-    Admin/staff users keep their existing cross-client access.
+    - admin (role='admin'): always allowed.
+    - staff: allowed only if the staff user has been explicitly granted
+      access to client_id via Manage Clients → Access. Staff with no grant
+      for this client are rejected so cross-client data is not visible.
+    - client: allowed only for their own account.
     """
-    role = (user.get("role") or "").lower()
-    if role in ("admin", "staff"):
+    role = (user.get("user_role") or user.get("role") or "").lower()
+    if role == "admin":
         return
+    if role == "staff":
+        granted = set(list_clients_for_user(int(user.get("id", 0) or 0)))
+        if int(client_id or 0) in granted:
+            return
+        raise HTTPException(status_code=403, detail="You don’t have access to that account.")
     if int(user.get("id", 0) or 0) != int(client_id or 0):
         raise HTTPException(status_code=403, detail="You can only view your own account.")
 
@@ -402,18 +411,15 @@ def accounts(hub_session: Optional[str] = Cookie(None)):
         ]
     elif role == "staff":
         # Staff users see only client accounts they've been explicitly granted
-        # access to via the Add/Edit Client picker. If they have no grants yet,
-        # fall back to the legacy behavior (see all) so existing staff are not
-        # suddenly locked out by the new schema.
+        # access to via the Add/Edit Client picker. Staff with zero grants see
+        # an empty selector by design — grants are how MedPharma controls who
+        # works which account. (Admins still see every account.)
         granted_ids = set(list_clients_for_user(uid))
         all_active = [
             c for c in list_clients()
             if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
         ]
-        if granted_ids:
-            clients = [c for c in all_active if int(c.get("id", 0) or 0) in granted_ids]
-        else:
-            clients = all_active
+        clients = [c for c in all_active if int(c.get("id", 0) or 0) in granted_ids]
     else:
         # Client users should only see their own account card.
         clients = [
@@ -4498,7 +4504,11 @@ class ChatMemberIn(BaseModel):
 
 
 def _is_admin_user(user: dict) -> bool:
-    return (user or {}).get("role") in ("admin", "staff")
+    # Only full admins can see/manage every chat room. Staff are regular
+    # members — they only see rooms they’ve been explicitly added to. This
+    # keeps internal MedPharma rooms private from staff who weren’t invited
+    # and stops external client rooms from being visible to unrelated staff.
+    return (user or {}).get("role") == "admin"
 
 
 def _require_room_access(user: dict, room_id: int) -> dict:
