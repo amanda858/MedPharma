@@ -1695,11 +1695,16 @@ def send_production_reminders():
             log.error(f"Failed to send production reminder to {username}: {e}")
 
 
-def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
+def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") -> tuple[bool, str]:
     """Send email to a specific recipient via SendGrid v3 API.
-    Uses _live_config() to read credentials fresh."""
+    Uses _live_config() to read credentials fresh.
+
+    Returns (sent, via) where ``via`` is 'sendgrid', 'smtp', or a reason
+    string when nothing went out. The previous signature returned None;
+    callers that ignore the tuple still work fine.
+    """
     if not to_email:
-        return
+        return False, "missing recipient"
     cfg = _live_config()
 
     # Primary: SendGrid
@@ -1733,7 +1738,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
             )
             if resp.status_code in (200, 202):
                 log.info(f"Email sent to {to_email}: {subject}")
-                return
+                return True, "sendgrid"
             log.error(f"SendGrid failed ({resp.status_code}): {resp.text}")
         except Exception as e:
             log.error(f"Failed to send email to {to_email} via SendGrid: {e}")
@@ -1745,7 +1750,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
     smtp_pw = cfg["SMTP_PASS"]
     if not smtp_h or not smtp_u or not smtp_pw:
         log.error("Email skipped — no working provider configured (SendGrid/SMTP)")
-        return
+        return False, "no provider configured (SendGrid/SMTP env vars missing)"
 
     try:
         msg = MIMEMultipart("alternative")
@@ -1762,8 +1767,10 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = ""):
             server.login(smtp_u, smtp_pw)
             server.sendmail(msg["From"], [to_email], msg.as_string())
         log.info(f"Email sent via SMTP to {to_email}: {subject}")
+        return True, "smtp"
     except Exception as e:
         log.error(f"Failed to send email to {to_email} via SMTP: {e}")
+        return False, f"smtp error: {e}"
 
 
 def send_team_progress_reports():
@@ -2104,11 +2111,15 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
 
     for to_email in recipients:
         try:
-            _send_email_to(to_email, subject, text_body, html_body)
-            sent.append(to_email)
+            ok_sent, via = _send_email_to(to_email, subject, text_body, html_body)
         except Exception as e:
-            log.error(f"EOD report send to {to_email} failed: {e}")
-            failed.append({"email": to_email, "error": str(e)})
+            log.error(f"EOD report send to {to_email} crashed: {e}")
+            failed.append({"email": to_email, "error": str(e), "via": "exception"})
+            continue
+        if ok_sent:
+            sent.append({"email": to_email, "via": via})
+        else:
+            failed.append({"email": to_email, "via": via})
 
     log.info(
         f"EOD report dispatched for {report_date}: sent={len(sent)} failed={len(failed)} "
