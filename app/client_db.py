@@ -403,26 +403,30 @@ def _ensure_medpharma_team_accounts(cur):
     aliases. De-duplication for the UI (chat picker, Manage Clients team
     list) happens at the API layer in list_chat_eligible_users() so the
     user only sees one entry per real person.
+
+    Email addresses ARE force-updated to the canonical values on every
+    startup — that's what the chat-invite emails, EOD report distribution
+    and any future notifications depend on. Per operator: admin maps to
+    lexi@medprosc.com because Lexi IS the admin.
     """
     team = [
-        # (canonical username, role, contact, starter_password)
-        ("admin@medprosc.com",   "admin", "Admin",   "admin123"),
-        ("rcm@medprosc.com",     "admin", "RCM",     "rcm123"),
-        ("eric@medprosc.com",    "admin", "Eric",    "eric123"),
-        ("susan@medprosc.com",   "staff", "Susan",   "susan123"),
-        ("melissa@medprosc.com", "staff", "Melissa", "melissa123"),
-        ("jessica@medprosc.com", "staff", "Jessica", "jessica123"),
+        # (canonical username, role, contact, starter_password, notify_email)
+        ("admin@medprosc.com",   "admin", "Lexi",    "admin123",   "lexi@medprosc.com"),
+        ("rcm@medprosc.com",     "admin", "RCM",     "rcm123",     "rcm@medprosc.com"),
+        ("eric@medprosc.com",    "admin", "Eric",    "eric123",    "eric@medprosc.com"),
+        ("susan@medprosc.com",   "staff", "Susan",   "susan123",   "susan@medprosc.com"),
+        ("melissa@medprosc.com", "staff", "Melissa", "melissa123", "melissa@medprosc.com"),
+        ("jessica@medprosc.com", "staff", "Jessica", "jessica123", "jessica@medprosc.com"),
     ]
-    for username, role, contact, pw in team:
+    for username, role, contact, pw, notify_email in team:
         row = cur.execute(
             "SELECT id, salt FROM clients WHERE username=?", (username,)
         ).fetchone()
         if row:
             cur.execute(
                 "UPDATE clients SET role=?, company='MedPharma SC', "
-                "contact_name=?, "
-                "email=COALESCE(NULLIF(email,''),?), is_active=1 WHERE id=?",
-                (role, contact, username, row[0]),
+                "contact_name=?, email=?, is_active=1 WHERE id=?",
+                (role, contact, notify_email, row[0]),
             )
         else:
             salt = secrets.token_hex(16)
@@ -431,7 +435,7 @@ def _ensure_medpharma_team_accounts(cur):
                 "INSERT INTO clients "
                 "(username,password,salt,company,contact_name,email,role,is_active) "
                 "VALUES (?,?,?,?,?,?,?,1)",
-                (username, pw_hash, salt, "MedPharma SC", contact, username, role),
+                (username, pw_hash, salt, "MedPharma SC", contact, notify_email, role),
             )
 
     # Self-heal: reactivate legacy short logins that an earlier buggy
@@ -442,6 +446,22 @@ def _ensure_medpharma_team_accounts(cur):
         "WHERE username IN ('admin','rcm','jessica','susan','melissa','eric') "
         "AND COALESCE(is_active,1)=0"
     )
+
+    # Keep the email on the legacy short rows in sync too so reports/alerts
+    # sent under the short username still reach the right inbox.
+    legacy_email_map = {
+        "admin":   "lexi@medprosc.com",
+        "rcm":     "rcm@medprosc.com",
+        "eric":    "eric@medprosc.com",
+        "susan":   "susan@medprosc.com",
+        "melissa": "melissa@medprosc.com",
+        "jessica": "jessica@medprosc.com",
+    }
+    for uname, em in legacy_email_map.items():
+        cur.execute(
+            "UPDATE clients SET email=? WHERE username=?",
+            (em, uname),
+        )
 
 
 
@@ -2710,6 +2730,379 @@ def log_activity(username: str,
     finally:
         if conn:
             conn.close()
+
+
+# Map URL path prefix -> human tab/module name. Used by the EOD report
+# to translate the activity_events firehose into "what tabs did each
+# person actually work on".
+EOD_PATH_TO_TAB = (
+    ("/hub/api/claims",           "Claims"),
+    ("/hub/api/credentialing",    "Credentialing"),
+    ("/hub/api/enrollment",       "Enrollment"),
+    ("/hub/api/edi",              "EDI"),
+    ("/hub/api/payments",         "Payments"),
+    ("/hub/api/notes",            "Notes"),
+    ("/hub/api/files",            "Documents"),
+    ("/hub/api/import-excel",     "Imports"),
+    ("/hub/api/production",       "Production"),
+    ("/hub/api/report-notes",     "Report Tabs"),
+    ("/hub/api/report/",          "Reports"),
+    ("/hub/api/dashboard",        "Dashboard"),
+    ("/hub/api/practice-profiles","Practice Profiles"),
+    ("/hub/api/providers",        "Providers"),
+    ("/hub/api/chat",             "Chat"),
+    ("/hub/api/profile",          "Profile"),
+    ("/hub/api/admin",            "Admin"),
+    ("/hub/api/clients",          "Clients"),
+    ("/hub/api/accounts",         "Accounts"),
+)
+
+
+def _tab_for_path(path: str) -> str:
+    p = (path or "").lower()
+    for prefix, tab in EOD_PATH_TO_TAB:
+        if p.startswith(prefix):
+            return tab
+    return "Other"
+
+
+def get_eod_team_report(report_date: str = None) -> dict:
+    """End-of-day team report aggregated by USER × CLIENT × TAB.
+
+    Pulls from four sources for one calendar day:
+      - team_production  → manually logged work entries (categories,
+                           quantities, hours, task descriptions)
+      - audit_log        → CRUD actions on real entities (created/updated
+                           claims, notes, credentialing rows, files, etc.)
+      - activity_events  → HTTP request firehose, used to list which
+                           tabs/modules each user opened today
+      - user_presence    → total active minutes / first-seen / last-seen
+
+    Returns one dict per user with a `by_client` breakdown so the EOD
+    email can show 'Susan — Acme Lab → Claims (12 entries, 3.5 hrs,
+    edited 4 claims, uploaded 1 file)'.
+    """
+    if not report_date:
+        report_date = datetime.now().strftime("%Y-%m-%d")
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        # Build lookup: client_id -> display name (company).
+        cur.execute("SELECT id, company, username FROM clients")
+        client_lookup: dict[int, str] = {}
+        for r in cur.fetchall():
+            label = (r["company"] or r["username"] or f"Client #{r['id']}").strip()
+            client_lookup[int(r["id"])] = label or f"Client #{r['id']}"
+
+        def _client_name(cid):
+            if cid is None:
+                return "(unassigned)"
+            try:
+                return client_lookup.get(int(cid), f"Client #{cid}")
+            except (TypeError, ValueError):
+                return "(unassigned)"
+
+        # ── Per-user / per-client production entries (the meat) ──
+        cur.execute(
+            "SELECT username, client_id, category, task_description, "
+            "       COALESCE(quantity,0) AS quantity, "
+            "       COALESCE(time_spent,0) AS time_spent, "
+            "       COALESCE(notes,'') AS notes "
+            "FROM team_production WHERE work_date=? "
+            "ORDER BY username, client_id, category",
+            (report_date,),
+        )
+        production_rows = [dict(r) for r in cur.fetchall()]
+
+        # ── Audit-log CRUD activity for the day ──
+        cur.execute(
+            "SELECT username, client_id, action, entity_type, "
+            "       COALESCE(details,'') AS details, created_at "
+            "FROM audit_log "
+            "WHERE date(created_at)=? "
+            "ORDER BY username, client_id, created_at",
+            (report_date,),
+        )
+        audit_rows = [dict(r) for r in cur.fetchall()]
+
+        # ── Activity-events firehose for tab visibility ──
+        # Use date(occurred_at) because log_activity writes ISO timestamps
+        # with a 'T' separator, so a literal 'YYYY-MM-DD 23:59:59' upper
+        # bound compares LESS than 'YYYY-MM-DDT12:00:00' lexicographically
+        # and silently drops every record. date() normalises that away.
+        cur.execute(
+            "SELECT username, client_id, path, method, "
+            "       COUNT(*) AS hits "
+            "FROM activity_events "
+            "WHERE date(occurred_at)=? "
+            "  AND event_type='request' "
+            "  AND upper(method) NOT IN ('GET','HEAD','OPTIONS') "
+            "GROUP BY username, client_id, path, method",
+            (report_date,),
+        )
+        write_rows = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT username, client_id, path, COUNT(*) AS hits "
+            "FROM activity_events "
+            "WHERE date(occurred_at)=? "
+            "  AND event_type='request' "
+            "  AND upper(method) IN ('GET','HEAD','OPTIONS') "
+            "GROUP BY username, client_id, path",
+            (report_date,),
+        )
+        read_rows = [dict(r) for r in cur.fetchall()]
+
+        # ── Today's user_presence rollup ──
+        cur.execute(
+            "SELECT username, first_seen_at, last_seen_at, "
+            "       active_seconds, idle_seconds, action_count "
+            "FROM user_presence WHERE work_date=?",
+            (report_date,),
+        )
+        presence_rows = {r["username"].lower(): dict(r) for r in cur.fetchall()}
+
+        # ── File uploads logged today ──
+        cur.execute(
+            "SELECT uploaded_by AS username, client_id, COUNT(*) AS uploads, "
+            "       SUM(COALESCE(row_count,0)) AS rows "
+            "FROM client_files "
+            "WHERE date(created_at)=? "
+            "GROUP BY uploaded_by, client_id",
+            (report_date,),
+        )
+        upload_rows = [dict(r) for r in cur.fetchall()]
+
+        # ── Chat messages sent today (basic engagement signal) ──
+        try:
+            cur.execute(
+                "SELECT lower(c.username) AS username, COUNT(*) AS messages "
+                "FROM chat_messages m "
+                "LEFT JOIN clients c ON c.id=m.user_id "
+                "WHERE date(m.created_at)=? AND c.username IS NOT NULL "
+                "GROUP BY lower(c.username)",
+                (report_date,),
+            )
+            chat_counts = {r["username"]: int(r["messages"] or 0)
+                           for r in cur.fetchall()}
+        except Exception:
+            chat_counts = {}
+    finally:
+        conn.close()
+
+    # ── Compose per-user breakdown ──
+    users: dict[str, dict] = {}
+
+    def _user_bucket(username: str) -> dict:
+        u = (username or "").strip().lower()
+        if not u:
+            u = "(unknown)"
+        if u not in users:
+            users[u] = {
+                "username": u,
+                "by_client": {},
+                "totals": {
+                    "production_entries": 0,
+                    "production_hours": 0.0,
+                    "production_quantity": 0,
+                    "audit_actions": 0,
+                    "writes": 0,
+                    "uploads": 0,
+                    "upload_rows": 0,
+                    "tabs_touched": set(),
+                    "active_minutes": 0.0,
+                    "idle_minutes": 0.0,
+                    "first_seen": "",
+                    "last_seen": "",
+                    "chat_messages": 0,
+                },
+                "production_detail": [],
+                "audit_detail": [],
+            }
+        return users[u]
+
+    def _client_bucket(user: dict, client_id) -> dict:
+        cname = _client_name(client_id)
+        key = (str(client_id) if client_id is not None else "_")
+        bucket = user["by_client"].setdefault(key, {
+            "client_id": (int(client_id) if client_id is not None else None),
+            "client_name": cname,
+            "tabs": {},          # tab name -> {writes, gets, total}
+            "production_entries": 0,
+            "production_hours": 0.0,
+            "production_quantity": 0,
+            "audit_actions": 0,
+            "uploads": 0,
+            "upload_rows": 0,
+            "categories": {},    # category -> {entries, hours, quantity}
+            "tasks": [],         # short list of human-readable tasks
+        })
+        return bucket
+
+    # Roll in production entries
+    for r in production_rows:
+        u = _user_bucket(r["username"])
+        c = _client_bucket(u, r["client_id"])
+        hrs = float(r["time_spent"] or 0)
+        qty = int(r["quantity"] or 0)
+        cat = (r["category"] or "Other").strip() or "Other"
+        c["production_entries"] += 1
+        c["production_hours"] += hrs
+        c["production_quantity"] += qty
+        catbucket = c["categories"].setdefault(cat, {"entries": 0, "hours": 0.0, "quantity": 0})
+        catbucket["entries"] += 1
+        catbucket["hours"] += hrs
+        catbucket["quantity"] += qty
+        if r["task_description"]:
+            c["tasks"].append({
+                "category": cat,
+                "task": r["task_description"][:140],
+                "quantity": qty,
+                "hours": round(hrs, 2),
+            })
+        u["totals"]["production_entries"] += 1
+        u["totals"]["production_hours"] += hrs
+        u["totals"]["production_quantity"] += qty
+        u["production_detail"].append({
+            "client": _client_name(r["client_id"]),
+            "category": cat,
+            "task": (r["task_description"] or "")[:160],
+            "quantity": qty,
+            "hours": round(hrs, 2),
+        })
+
+    # Roll in audit log
+    for r in audit_rows:
+        u = _user_bucket(r["username"])
+        c = _client_bucket(u, r["client_id"])
+        c["audit_actions"] += 1
+        u["totals"]["audit_actions"] += 1
+        # Group audit detail into the closest tab name based on entity_type
+        ent = (r["entity_type"] or "").lower()
+        tab_guess = (
+            "Claims" if "claim" in ent
+            else "Credentialing" if "credential" in ent
+            else "Enrollment" if "enroll" in ent
+            else "EDI" if "edi" in ent
+            else "Documents" if "file" in ent
+            else "Notes" if "note" in ent
+            else "Chat" if "chat" in ent
+            else "Production" if "production" in ent
+            else "Admin"
+        )
+        tab = c["tabs"].setdefault(tab_guess, {"writes": 0, "gets": 0, "total": 0})
+        tab["writes"] += 1
+        tab["total"] += 1
+        u["totals"]["tabs_touched"].add(tab_guess)
+        u["audit_detail"].append({
+            "client": _client_name(r["client_id"]),
+            "action": r["action"],
+            "entity": r["entity_type"],
+            "details": (r["details"] or "")[:160],
+            "at": r["created_at"],
+        })
+
+    # Roll in write-side request hits (POST/PUT/PATCH/DELETE)
+    for r in write_rows:
+        u = _user_bucket(r["username"])
+        c = _client_bucket(u, r["client_id"])
+        tab = _tab_for_path(r["path"])
+        bucket = c["tabs"].setdefault(tab, {"writes": 0, "gets": 0, "total": 0})
+        bucket["writes"] += int(r["hits"] or 0)
+        bucket["total"] += int(r["hits"] or 0)
+        u["totals"]["writes"] += int(r["hits"] or 0)
+        u["totals"]["tabs_touched"].add(tab)
+
+    # Roll in read hits (so a tab still shows up if the user just viewed it)
+    for r in read_rows:
+        u = _user_bucket(r["username"])
+        c = _client_bucket(u, r["client_id"])
+        tab = _tab_for_path(r["path"])
+        bucket = c["tabs"].setdefault(tab, {"writes": 0, "gets": 0, "total": 0})
+        bucket["gets"] += int(r["hits"] or 0)
+        bucket["total"] = bucket["writes"] + bucket["gets"]
+        u["totals"]["tabs_touched"].add(tab)
+
+    # Roll in file uploads
+    for r in upload_rows:
+        u = _user_bucket(r["username"])
+        c = _client_bucket(u, r["client_id"])
+        c["uploads"] += int(r["uploads"] or 0)
+        c["upload_rows"] += int(r["rows"] or 0)
+        u["totals"]["uploads"] += int(r["uploads"] or 0)
+        u["totals"]["upload_rows"] += int(r["rows"] or 0)
+        tab = c["tabs"].setdefault("Documents", {"writes": 0, "gets": 0, "total": 0})
+        tab["writes"] += int(r["uploads"] or 0)
+        tab["total"] += int(r["uploads"] or 0)
+        u["totals"]["tabs_touched"].add("Documents")
+
+    # Layer in presence + chat counts
+    for uname, bucket in users.items():
+        p = presence_rows.get(uname, {})
+        bucket["totals"]["active_minutes"] = round(int(p.get("active_seconds") or 0) / 60.0, 1)
+        bucket["totals"]["idle_minutes"] = round(int(p.get("idle_seconds") or 0) / 60.0, 1)
+        bucket["totals"]["first_seen"] = p.get("first_seen_at") or ""
+        bucket["totals"]["last_seen"] = p.get("last_seen_at") or ""
+        bucket["totals"]["chat_messages"] = int(chat_counts.get(uname, 0))
+        bucket["totals"]["tabs_touched"] = sorted(bucket["totals"]["tabs_touched"])
+        bucket["totals"]["production_hours"] = round(bucket["totals"]["production_hours"], 2)
+        # Convert by_client dict to a sorted list for stable email output
+        client_list = []
+        for c in bucket["by_client"].values():
+            c["production_hours"] = round(c["production_hours"], 2)
+            # Top 3 categories descending by hours
+            c["top_categories"] = sorted(
+                ({"name": k, **v, "hours": round(v["hours"], 2)}
+                 for k, v in c["categories"].items()),
+                key=lambda x: (-x["hours"], -x["entries"], x["name"]),
+            )
+            # Top 5 tabs by total touches
+            c["top_tabs"] = sorted(
+                ({"name": k, **v} for k, v in c["tabs"].items()),
+                key=lambda x: (-x["total"], x["name"]),
+            )
+            # Truncate task list so emails stay readable
+            c["tasks"] = c["tasks"][:8]
+            client_list.append(c)
+        client_list.sort(key=lambda x: (-x["production_hours"], -x["production_entries"], x["client_name"]))
+        bucket["by_client"] = client_list
+        # Trim long detail lists
+        bucket["production_detail"] = bucket["production_detail"][:20]
+        bucket["audit_detail"] = bucket["audit_detail"][:20]
+
+    # Sort users by productivity for the email summary
+    user_list = sorted(
+        users.values(),
+        key=lambda x: (
+            -(x["totals"]["production_hours"]),
+            -(x["totals"]["audit_actions"] + x["totals"]["writes"]),
+            x["username"],
+        ),
+    )
+
+    # Aggregate totals across everyone (for the email header line)
+    grand = {
+        "users": len(user_list),
+        "production_entries": sum(u["totals"]["production_entries"] for u in user_list),
+        "production_hours": round(sum(u["totals"]["production_hours"] for u in user_list), 2),
+        "audit_actions": sum(u["totals"]["audit_actions"] for u in user_list),
+        "writes": sum(u["totals"]["writes"] for u in user_list),
+        "uploads": sum(u["totals"]["uploads"] for u in user_list),
+        "active_minutes": round(sum(u["totals"]["active_minutes"] for u in user_list), 1),
+        "clients_touched": len({
+            c["client_id"] for u in user_list for c in u["by_client"]
+            if c.get("client_id") is not None
+        }),
+    }
+
+    return {
+        "report_date": report_date,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "totals": grand,
+        "users": user_list,
+    }
 
 
 def list_activity_events(username: str = None,

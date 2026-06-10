@@ -132,6 +132,103 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
     return False, "no provider configured or send failed"
 
 
+def _lookup_users_by_ids(user_ids: list[int]) -> list[dict]:
+    """Fetch active user rows (id, username, contact_name, email, role) for
+    the given ids. Skips rows without an email so we don't try to send to
+    nobody."""
+    if not user_ids:
+        return []
+    from app.client_db import get_db
+    placeholders = ",".join("?" * len(user_ids))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            f"SELECT id, username, contact_name, email, role FROM clients "
+            f"WHERE id IN ({placeholders}) AND COALESCE(is_active,1)=1",
+            tuple(int(i) for i in user_ids),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _send_chat_invite_emails(
+    request: Request,
+    room_id: int,
+    room_name: str,
+    user_ids: list[int],
+    inviter_name: str,
+    skip_user_id: int | None = None,
+) -> list[dict]:
+    """Email every user that was just added to a chat room. Returns a per-
+    user delivery report so the API can surface what actually went out."""
+    report: list[dict] = []
+    targets = _lookup_users_by_ids(user_ids)
+    if not targets:
+        return report
+
+    base_url = str(request.base_url).rstrip("/")
+    # Deep-link straight into the chat panel for that room.
+    setup_link = f"{base_url}/hub?chat={room_id}"
+    inviter = (inviter_name or "Your team").strip() or "Your team"
+    safe_room = (room_name or "a chat room").strip() or "a chat room"
+
+    for u in targets:
+        if skip_user_id and int(u["id"]) == int(skip_user_id):
+            # Don't email the person who just created the room about
+            # themselves.
+            report.append({
+                "user_id": u["id"], "username": u["username"],
+                "email": u.get("email") or "", "sent": False,
+                "via": "skipped (creator)",
+            })
+            continue
+        email = (u.get("email") or "").strip()
+        if not email or "@" not in email:
+            report.append({
+                "user_id": u["id"], "username": u["username"],
+                "email": "", "sent": False, "via": "no email on file",
+            })
+            continue
+        display = (u.get("contact_name") or u.get("username") or "there").strip()
+        subject = f"💬 You were added to MedPharma chat: {safe_room}"
+        text_body = (
+            f"Hi {display},\n\n"
+            f"{inviter} added you to the chat room \"{safe_room}\" on the "
+            f"MedPharma Hub.\n\n"
+            f"Open the room directly:\n{setup_link}\n\n"
+            f"You'll see new messages with the 💬 badge in the sidebar "
+            f"once you sign in.\n\n"
+            "If you weren't expecting this, contact your administrator."
+        )
+        html_body = (
+            f"<div style=\"font-family:system-ui,Segoe UI,Arial,sans-serif;"
+            f"max-width:540px;margin:0 auto;color:#0f172a\">"
+            f"<h2 style=\"margin:0 0 12px;color:#1d4ed8\">💬 You were added "
+            f"to a MedPharma chat</h2>"
+            f"<p>Hi {display},</p>"
+            f"<p><b>{inviter}</b> added you to the chat room "
+            f"<b>\"{safe_room}\"</b> on the MedPharma Hub.</p>"
+            f"<p style=\"margin:18px 0\">"
+            f"<a href=\"{setup_link}\" style=\"display:inline-block;"
+            f"padding:10px 22px;background:#1d4ed8;color:#fff;"
+            f"text-decoration:none;border-radius:8px;font-weight:600\">"
+            f"Open the chat room →</a></p>"
+            f"<p style=\"font-size:12px;color:#64748b\">Or copy this link: "
+            f"{setup_link}</p>"
+            f"<p style=\"font-size:12px;color:#64748b\">You'll see new "
+            f"messages with the 💬 badge in the sidebar once you sign in. "
+            f"If you weren't expecting this, contact your administrator.</p>"
+            f"</div>"
+        )
+        sent, via = _send_direct_email(email, subject, text_body, html_body)
+        report.append({
+            "user_id": u["id"], "username": u["username"],
+            "email": email, "sent": sent, "via": via,
+        })
+    return report
+
+
 def _norm_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
@@ -743,6 +840,41 @@ def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     finally:
         conn.close()
     return {"ok": err is None, "error": err, "trace": trace, "before": before, "after": after, "team_usernames": usernames}
+
+
+@router.get("/admin/eod-report/preview")
+def admin_eod_report_preview(date: Optional[str] = None,
+                             hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: return the raw EOD report payload (JSON) for ``date``
+    so leadership can audit the numbers before/instead of the email."""
+    _require_full_admin(hub_session)
+    from .client_db import get_eod_team_report
+    return get_eod_team_report(date)
+
+
+@router.post("/admin/eod-report/send-now")
+def admin_eod_report_send_now(
+    request: Request,
+    date: Optional[str] = None,
+    recipients: Optional[str] = None,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Admin-only: build the EOD report and send it RIGHT NOW.
+
+    Query params:
+      ``date``       — YYYY-MM-DD (default = today, US/Eastern)
+      ``recipients`` — comma-separated emails (default = lexi+eric or
+                       whatever EOD_REPORT_EMAIL env var is set to)
+    Returns the delivery report so the operator can see exactly which
+    provider sent it.
+    """
+    _require_full_admin(hub_session)
+    from app.notifications import send_eod_team_report
+    to_list = None
+    if recipients:
+        to_list = [r.strip() for r in recipients.split(",") if r.strip()]
+    result = send_eod_team_report(date, recipients=to_list)
+    return result
 
 
 @router.delete("/clients/{cid}")
@@ -4596,26 +4728,44 @@ def chat_list_rooms(include_archived: int = 0,
 
 
 @router.post("/chat/rooms")
-def chat_create_room(body: ChatRoomCreate, hub_session: Optional[str] = Cookie(None)):
-    """Admin/staff only: create a chat room and seed members."""
+def chat_create_room(body: ChatRoomCreate, request: Request, hub_session: Optional[str] = Cookie(None)):
+    """Admin/staff only: create a chat room and seed members.
+
+    Sends each new member a "you were added to chat" email with a
+    deep link directly to the room. Returns a per-user delivery report
+    so the UI can warn the operator if any emails didn't go out.
+    """
     user = _require_admin(hub_session)
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Room name is required")
+    member_ids = body.member_user_ids or []
     room_id = create_room(
         name=name,
         description=(body.description or "").strip(),
         client_id=body.client_id,
         created_by=user.get("username", ""),
-        member_user_ids=body.member_user_ids or [],
+        member_user_ids=member_ids,
         creator_user_id=int(user.get("id") or 0),
     )
     log_audit(body.client_id, user.get("username", ""), "chat_room_create",
               "chat_rooms", room_id,
-              f"Created room '{name}' with {len(body.member_user_ids or [])} member(s)")
+              f"Created room '{name}' with {len(member_ids)} member(s)")
     notify_activity(user.get("username", ""), "created", "Chat Room",
                     f"room #{room_id} '{name}'")
-    return {"ok": True, "id": room_id}
+    invite_report: list[dict] = []
+    try:
+        invite_report = _send_chat_invite_emails(
+            request=request,
+            room_id=room_id,
+            room_name=name,
+            user_ids=member_ids,
+            inviter_name=(user.get("contact_name") or user.get("username") or ""),
+            skip_user_id=int(user.get("id") or 0),
+        )
+    except Exception:
+        log.exception("chat invite email failed for room %s", room_id)
+    return {"ok": True, "id": room_id, "invites": invite_report}
 
 
 @router.get("/chat/rooms/{room_id}")
@@ -4665,18 +4815,37 @@ def chat_room_members(room_id: int, hub_session: Optional[str] = Cookie(None)):
 
 
 @router.post("/chat/rooms/{room_id}/members")
-def chat_add_member(room_id: int, body: ChatMemberIn,
+def chat_add_member(room_id: int, body: ChatMemberIn, request: Request,
                     hub_session: Optional[str] = Cookie(None)):
-    """Admin/staff only: add a user to a chat room."""
+    """Admin/staff only: add a user to a chat room.
+
+    Sends the new member a "you were added to chat" email with a deep
+    link. Returns delivery status so the UI can confirm or warn.
+    """
     user = _require_admin(hub_session)
-    if not get_room(room_id):
+    room = get_room(room_id)
+    if not room:
         raise HTTPException(404, "Chat room not found")
     add_room_member(room_id, int(body.user_id),
                     role=(body.role or "member"),
                     added_by=user.get("username", ""))
     log_audit(None, user.get("username", ""), "chat_member_add",
               "chat_rooms", room_id, f"Added user #{body.user_id}")
-    return {"ok": True}
+    invite_report: list[dict] = []
+    try:
+        invite_report = _send_chat_invite_emails(
+            request=request,
+            room_id=room_id,
+            room_name=room.get("name", "") or "",
+            user_ids=[int(body.user_id)],
+            inviter_name=(user.get("contact_name") or user.get("username") or ""),
+            skip_user_id=int(user.get("id") or 0),
+        )
+    except Exception:
+        log.exception("chat invite email failed for room %s user %s",
+                      room_id, body.user_id)
+    invite = invite_report[0] if invite_report else {}
+    return {"ok": True, "invite": invite}
 
 
 @router.delete("/chat/rooms/{room_id}/members/{user_id}")
