@@ -683,6 +683,60 @@ def admin_force_password(
     return result
 
 
+@router.get("/admin/diag/users")
+def admin_diag_users(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: dump ALL rows in clients (active + inactive) + the
+    app_migrations table. Used to diagnose why a seed/ensure step didn't
+    create a row (purged, mark-applied-but-row-missing, etc.)."""
+    _require_full_admin(hub_session)
+    from .client_db import get_db
+    conn = get_db()
+    try:
+        users = [
+            dict(r) for r in conn.execute(
+                "SELECT id, username, role, company, contact_name, email, "
+                "COALESCE(is_active,1) AS is_active "
+                "FROM clients ORDER BY id"
+            ).fetchall()
+        ]
+        migrations = [
+            dict(r) for r in conn.execute(
+                "SELECT key, applied_at FROM app_migrations ORDER BY applied_at"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    return {"users": users, "user_count": len(users), "migrations": migrations}
+
+
+@router.post("/admin/diag/ensure-team")
+def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: re-run _ensure_medpharma_team_accounts immediately on the
+    live DB so we don't have to wait for a restart to seed missing rows."""
+    _require_full_admin(hub_session)
+    from .client_db import get_db, _ensure_medpharma_team_accounts
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        before = cur.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        try:
+            _ensure_medpharma_team_accounts(cur)
+            conn.commit()
+            err = None
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            conn.rollback()
+        after = cur.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        usernames = [
+            r[0] for r in cur.execute(
+                "SELECT username FROM clients WHERE company='MedPharma SC' ORDER BY username"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    return {"ok": err is None, "error": err, "before": before, "after": after, "team_usernames": usernames}
+
+
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
