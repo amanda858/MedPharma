@@ -2136,6 +2136,277 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
     }
 
 
+def _build_demo_eod_report() -> dict:
+    """Fabricate a realistic EOD report so the email preview shows what
+    the final product looks like even when the live DB is quiet. Same
+    shape as get_eod_team_report() — fed directly to the renderer.
+    """
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+    tab_keys = ["Claims", "Credentialing", "Enrollment", "EDI", "Production",
+                "Documents", "Notes", "Chat", "Audit", "Pageviews"]
+
+    def _tabs(**vals):
+        out = {k: 0 for k in tab_keys}
+        out.update(vals)
+        return out
+
+    users = [
+        {
+            "username": "jessica@medprosc.com",
+            "contact_name": "Jessica",
+            "email": "jessica@medprosc.com",
+            "role": "staff",
+            "active_hours": 6.4,
+            "idle_hours": 1.1,
+            "actions": 142,
+            "first_seen": f"{today}T08:53:12",
+            "last_seen": f"{today}T17:18:44",
+            "totals": _tabs(Claims=18, Notes=7, Production=3, Pageviews=92, Audit=4),
+            "total_actions": 124,
+            "highlights": [
+                "claim_status_update claims_master — moved CLM-44218 from A/R Follow-Up → Paid",
+                "note_added notes_log — Aetna confirmed reprocess; eta 14 days",
+            ],
+            "clients": {
+                "Apex Pain Management": {
+                    "totals": _tabs(Claims=12, Notes=4, Pageviews=58, Audit=2),
+                    "items": [
+                        {"tab": "Claims",     "action": "created", "title": "CLM-44218 (Billed/Submitted)"},
+                        {"tab": "Claims",     "action": "updated", "title": "CLM-44109 (Paid)"},
+                        {"tab": "Claims",     "action": "updated", "title": "CLM-44091 (Appeals)"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44091 — sent reconsideration packet to Cigna"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44218 — Aetna confirmed receipt"},
+                    ],
+                },
+                "Coastal Orthopedics": {
+                    "totals": _tabs(Claims=6, Notes=3, Production=3, Pageviews=34, Audit=2),
+                    "items": [
+                        {"tab": "Claims",     "action": "updated", "title": "CLM-22107 (Denied → Appeals)"},
+                        {"tab": "Production", "action": "logged",  "title": "A/R Follow-Up: Worked Cigna denials batch (12 · 2.5h)"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-22107 — Cigna requires CPT modifier docs"},
+                    ],
+                },
+            },
+        },
+        {
+            "username": "susan@medprosc.com",
+            "contact_name": "Susan",
+            "email": "susan@medprosc.com",
+            "role": "staff",
+            "active_hours": 5.8,
+            "idle_hours": 0.7,
+            "actions": 96,
+            "first_seen": f"{today}T09:02:50",
+            "last_seen": f"{today}T16:44:18",
+            "totals": _tabs(Credentialing=9, Enrollment=4, Documents=2, Notes=5, Pageviews=61, Audit=3),
+            "total_actions": 84,
+            "highlights": [
+                "credentialing_submit credentialing — Dr Chen / BCBS-SC initial app submitted",
+                "file_upload client_files — uploaded CAQH attestation PDF",
+            ],
+            "clients": {
+                "Apex Pain Management": {
+                    "totals": _tabs(Credentialing=6, Notes=3, Documents=1, Pageviews=38, Audit=2),
+                    "items": [
+                        {"tab": "Credentialing", "action": "created", "title": "Dr Chen · BCBS-SC (Submitted)"},
+                        {"tab": "Credentialing", "action": "updated", "title": "Dr Patel · Aetna (Approved)"},
+                        {"tab": "Documents",     "action": "uploaded","title": "Patel-CAQH-attestation.pdf · Credentialing"},
+                        {"tab": "Notes",         "action": "noted",   "title": "Credentialing Dr Chen — recruiter packet forwarded"},
+                    ],
+                },
+                "Magnolia Imaging": {
+                    "totals": _tabs(Credentialing=3, Enrollment=4, Documents=1, Notes=2, Pageviews=23, Audit=1),
+                    "items": [
+                        {"tab": "Enrollment",   "action": "created", "title": "Dr Lee · Humana (Submitted)"},
+                        {"tab": "Enrollment",   "action": "updated", "title": "Dr Lee · Cigna (Approved)"},
+                        {"tab": "Credentialing","action": "updated", "title": "Dr Lee · BCBS-SC (Follow-up scheduled)"},
+                    ],
+                },
+            },
+        },
+        {
+            "username": "rcm@medprosc.com",
+            "contact_name": "RCM",
+            "email": "rcm@medprosc.com",
+            "role": "admin",
+            "active_hours": 4.2,
+            "idle_hours": 0.6,
+            "actions": 71,
+            "first_seen": f"{today}T10:11:09",
+            "last_seen": f"{today}T15:33:51",
+            "totals": _tabs(Production=5, EDI=3, Notes=2, Chat=4, Pageviews=40, Audit=2),
+            "total_actions": 56,
+            "highlights": [
+                "production_log team_production — 4.5h posted (ERA reconciliation)",
+                "edi_status edi_setup — Apex GoLive confirmed for 06/12",
+            ],
+            "clients": {
+                "Apex Pain Management": {
+                    "totals": _tabs(Production=3, EDI=2, Notes=1, Chat=2, Pageviews=24, Audit=1),
+                    "items": [
+                        {"tab": "Production", "action": "logged", "title": "ERA Reconciliation: Tied out Aetna 06/03 ERA (28 · 2.0h)"},
+                        {"tab": "EDI",        "action": "updated","title": "Apex · UHC (ERA Active, EFT Active)"},
+                        {"tab": "Chat",       "action": "messaged","title": "room 'Apex — RCM Daily Standup'"},
+                    ],
+                },
+                "Coastal Orthopedics": {
+                    "totals": _tabs(Production=2, EDI=1, Notes=1, Chat=2, Pageviews=16, Audit=1),
+                    "items": [
+                        {"tab": "Production", "action": "logged",  "title": "Posting: BCBS-SC EOB batch (14 · 1.0h)"},
+                        {"tab": "EDI",        "action": "updated", "title": "Coastal · Aetna (ERA Pending → Active)"},
+                        {"tab": "Chat",       "action": "messaged","title": "room 'Coastal — Posting Queue'"},
+                    ],
+                },
+            },
+        },
+        {
+            "username": "eric@medprosc.com",
+            "contact_name": "Eric",
+            "email": "eric@medprosc.com",
+            "role": "admin",
+            "active_hours": 2.3,
+            "idle_hours": 0.4,
+            "actions": 38,
+            "first_seen": f"{today}T11:24:01",
+            "last_seen": f"{today}T15:08:22",
+            "totals": _tabs(Chat=11, Pageviews=27, Audit=2),
+            "total_actions": 40,
+            "highlights": [
+                "client_review clients — opened Apex profile; reviewed open AR queue",
+                "chat_room_create chat_rooms — created 'Apex — RCM Daily Standup'",
+            ],
+            "clients": {
+                "Apex Pain Management": {
+                    "totals": _tabs(Chat=7, Pageviews=18, Audit=1),
+                    "items": [
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex — RCM Daily Standup'"},
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex — Credentialing Sync'"},
+                    ],
+                },
+                "Coastal Orthopedics": {
+                    "totals": _tabs(Chat=4, Pageviews=9, Audit=1),
+                    "items": [
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Coastal — Posting Queue'"},
+                    ],
+                },
+            },
+        },
+        {
+            "username": "admin@medprosc.com",
+            "contact_name": "Lexi",
+            "email": "lexi@medprosc.com",
+            "role": "admin",
+            "active_hours": 1.7,
+            "idle_hours": 0.2,
+            "actions": 24,
+            "first_seen": f"{today}T13:02:11",
+            "last_seen": f"{today}T15:42:00",
+            "totals": _tabs(Audit=6, Pageviews=18),
+            "total_actions": 24,
+            "highlights": [
+                "client_create clients — Magnolia Imaging onboarded",
+                "user_invite clients — invited admin@magnoliaimg.com (staff)",
+                "module_toggle clients — enabled Documents + Chat for Coastal",
+            ],
+            "clients": {
+                "Magnolia Imaging": {
+                    "totals": _tabs(Audit=4, Pageviews=11),
+                    "items": [
+                        {"tab": "Audit", "action": "created", "title": "client_create — Magnolia Imaging onboarded"},
+                        {"tab": "Audit", "action": "updated", "title": "user_invite — admin@magnoliaimg.com"},
+                    ],
+                },
+                "Coastal Orthopedics": {
+                    "totals": _tabs(Audit=2, Pageviews=7),
+                    "items": [
+                        {"tab": "Audit", "action": "updated", "title": "module_toggle — enabled Documents + Chat"},
+                    ],
+                },
+            },
+        },
+    ]
+
+    team_totals = {k: 0 for k in tab_keys}
+    for u in users:
+        for k, v in u["totals"].items():
+            team_totals[k] = team_totals.get(k, 0) + v
+
+    headlines = {
+        "claims_new": 18,
+        "claims_touched": 23,
+        "cred_new": 9,
+        "enroll_new": 4,
+        "edi_new": 3,
+        "production_rows": 5,
+        "production_hours": 8.5,
+        "notes_new": 14,
+        "files_uploaded": 3,
+        "chat_messages": 15,
+        "audit_events": 17,
+        "active_users": len(users),
+    }
+
+    return {
+        "report_date": today,
+        "generated_at": _dt.now().isoformat(timespec="seconds"),
+        "tab_keys": tab_keys,
+        "users": users,
+        "team_totals": team_totals,
+        "headlines": headlines,
+        "client_count": 3,
+    }
+
+
+def send_eod_team_report_demo() -> dict:
+    """Render & email a fully-populated DEMO end-of-day report.
+
+    Same recipients as the real one (lexi@medprosc.com + eric@medprosc.com
+    by default, overridable via EOD_REPORT_EMAIL). Use this when the live
+    DB is quiet but you want to verify the email actually looks right.
+    """
+    report = _build_demo_eod_report()
+    text_body, html_body = _render_eod_report_html(report)
+    headlines = report["headlines"]
+    try:
+        from datetime import datetime as _dt
+        d_long = _dt.strptime(report["report_date"], "%Y-%m-%d").strftime("%a %b %d, %Y")
+    except Exception:
+        d_long = report["report_date"]
+    subject = (
+        f"📋 MedPharma EOD [DEMO] — {d_long} — "
+        f"{headlines['active_users']} active, "
+        f"{headlines['claims_new']} new claims, "
+        f"{headlines['production_hours']}h logged"
+    )
+
+    recipients = _eod_recipients()
+    sent, failed = [], []
+    for to_email in recipients:
+        try:
+            ok_sent, via = _send_email_to(to_email, subject, text_body, html_body)
+        except Exception as e:
+            log.error(f"EOD demo send to {to_email} crashed: {e}")
+            failed.append({"email": to_email, "via": f"exception: {e}"})
+            continue
+        if ok_sent:
+            sent.append({"email": to_email, "via": via})
+        else:
+            failed.append({"email": to_email, "via": via})
+
+    log.info(f"EOD DEMO dispatched: sent={len(sent)} failed={len(failed)}")
+    return {
+        "ok": True,
+        "demo": True,
+        "date": report["report_date"],
+        "recipients": recipients,
+        "sent": sent,
+        "failed": failed,
+        "user_count": len(report["users"]),
+        "headlines": headlines,
+    }
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:

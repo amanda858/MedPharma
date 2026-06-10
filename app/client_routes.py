@@ -858,15 +858,23 @@ def admin_eod_preview(report_date: Optional[str] = None,
 @router.post("/admin/reports/eod/send-now")
 def admin_eod_send_now(report_date: Optional[str] = None,
                        force: bool = True,
+                       demo: bool = False,
                        hub_session: Optional[str] = Cookie(None)):
     """Admin-only: dispatch the end-of-day team report immediately.
 
     Sends to EOD_REPORT_EMAIL (defaults to lexi@medprosc.com +
     eric@medprosc.com). Returns the delivery report so you can see
     who it went to.
+
+    Set ``demo=true`` to send a fully-populated showcase email with
+    fabricated activity so the recipient can see what the real report
+    will look like once the team is using the hub (handy on quiet days
+    when the actual report would just say "no activity").
     """
     _require_full_admin(hub_session)
-    from app.notifications import send_eod_team_report
+    from app.notifications import send_eod_team_report, send_eod_team_report_demo
+    if demo:
+        return send_eod_team_report_demo()
     return send_eod_team_report(report_date=report_date, force=bool(force))
 
 
