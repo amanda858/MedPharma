@@ -690,20 +690,25 @@ def admin_diag_users(hub_session: Optional[str] = Cookie(None)):
     create a row (purged, mark-applied-but-row-missing, etc.)."""
     _require_full_admin(hub_session)
     from .client_db import get_db
+    import traceback
     conn = get_db()
     try:
-        users = [
-            dict(r) for r in conn.execute(
+        users = []
+        try:
+            for r in conn.execute(
                 "SELECT id, username, role, company, contact_name, email, "
                 "COALESCE(is_active,1) AS is_active "
                 "FROM clients ORDER BY id"
-            ).fetchall()
-        ]
-        migrations = [
-            dict(r) for r in conn.execute(
-                "SELECT key, applied_at FROM app_migrations ORDER BY applied_at"
-            ).fetchall()
-        ]
+            ).fetchall():
+                users.append({k: r[k] for k in r.keys()})
+        except Exception as e:
+            return {"error": "users_query", "detail": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()}
+        migrations = []
+        try:
+            for r in conn.execute("SELECT key, applied_at FROM app_migrations").fetchall():
+                migrations.append({k: r[k] for k in r.keys()})
+        except Exception as e:
+            migrations = [{"error": f"{type(e).__name__}: {e}"}]
     finally:
         conn.close()
     return {"users": users, "user_count": len(users), "migrations": migrations}
@@ -715,16 +720,19 @@ def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     live DB so we don't have to wait for a restart to seed missing rows."""
     _require_full_admin(hub_session)
     from .client_db import get_db, _ensure_medpharma_team_accounts
+    import traceback
     conn = get_db()
     try:
         cur = conn.cursor()
         before = cur.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        err = None
+        trace = None
         try:
             _ensure_medpharma_team_accounts(cur)
             conn.commit()
-            err = None
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
+            trace = traceback.format_exc()
             conn.rollback()
         after = cur.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
         usernames = [
@@ -734,7 +742,7 @@ def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
         ]
     finally:
         conn.close()
-    return {"ok": err is None, "error": err, "before": before, "after": after, "team_usernames": usernames}
+    return {"ok": err is None, "error": err, "trace": trace, "before": before, "after": after, "team_usernames": usernames}
 
 
 @router.delete("/clients/{cid}")
