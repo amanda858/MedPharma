@@ -931,6 +931,18 @@ def init_client_hub_db():
     else:
         _apply_startup_user_migrations(conn)
 
+    # ── ALWAYS ensure the canonical MedPharma SC team is present ─────────────
+    # Lives OUTSIDE the if/else so it runs even on a fresh DB (right after
+    # _seed_data) and even if _apply_startup_user_migrations was bypassed
+    # for any reason. Idempotent: only INSERTs missing rows, preserves any
+    # existing passwords.
+    try:
+        cur2 = conn.cursor()
+        _ensure_medpharma_team_accounts(cur2)
+        conn.commit()
+    except Exception as _team_e:
+        log.error("ensure_medpharma_team_accounts at startup failed: %s", _team_e)
+
     # ── Apply any password resets from environment variables ─────────────────
     # Set RESET_PW_<username>=<newpassword> in Render env vars to force-reset
     # a password on next startup. Remove the env var after logging in.
