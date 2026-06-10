@@ -398,26 +398,32 @@ def _ensure_medpharma_team_accounts(cur):
     state, regardless of what the historical migrations did. Passwords are
     only (re)set when the row is missing or has no salt; existing logins
     are preserved so operators can change them.
+
+    Also deactivates the legacy short-username duplicates ('admin', 'rcm',
+    'jessica', 'susan', 'melissa', 'eric') so the chat picker and Manage
+    Clients table don't show every person twice. Deactivation (not delete)
+    preserves any historical references in audit_log / sessions / etc.
     """
     team = [
-        # (username, role, contact, starter_password)
-        ("admin@medprosc.com",   "admin", "Admin",   "admin123"),
-        ("rcm@medprosc.com",     "admin", "RCM",     "rcm123"),
-        ("eric@medprosc.com",    "admin", "Eric",    "eric123"),
-        ("susan@medprosc.com",   "staff", "Susan",   "susan123"),
-        ("melissa@medprosc.com", "staff", "Melissa", "melissa123"),
-        ("jessica@medprosc.com", "staff", "Jessica", "jessica123"),
+        # (canonical username, legacy short username, role, contact, starter_password)
+        ("admin@medprosc.com",   "admin",   "admin", "Admin",   "admin123"),
+        ("rcm@medprosc.com",     "rcm",     "admin", "RCM",     "rcm123"),
+        ("eric@medprosc.com",    "eric",    "admin", "Eric",    "eric123"),
+        ("susan@medprosc.com",   "susan",   "staff", "Susan",   "susan123"),
+        ("melissa@medprosc.com", "melissa", "staff", "Melissa", "melissa123"),
+        ("jessica@medprosc.com", "jessica", "staff", "Jessica", "jessica123"),
     ]
-    for username, role, contact, pw in team:
+    for username, legacy, role, contact, pw in team:
         row = cur.execute(
             "SELECT id, salt FROM clients WHERE username=?", (username,)
         ).fetchone()
         if row:
-            # Row exists: only ensure role / company / contact / active.
-            # Preserve any operator-changed password.
+            # Row exists: ensure role / company / contact / active. Force the
+            # contact_name so the chat picker shows "Admin" instead of an
+            # empty / stale value. Preserve any operator-changed password.
             cur.execute(
                 "UPDATE clients SET role=?, company='MedPharma SC', "
-                "contact_name=COALESCE(NULLIF(contact_name,''),?), "
+                "contact_name=?, "
                 "email=COALESCE(NULLIF(email,''),?), is_active=1 WHERE id=?",
                 (role, contact, username, row[0]),
             )
@@ -430,6 +436,13 @@ def _ensure_medpharma_team_accounts(cur):
                 "VALUES (?,?,?,?,?,?,?,1)",
                 (username, pw_hash, salt, "MedPharma SC", contact, username, role),
             )
+        # Deactivate the legacy short-username duplicate so the chat /
+        # Manage Clients lists do not show the same person twice. The
+        # canonical email-style row above is the source of truth.
+        cur.execute(
+            "UPDATE clients SET is_active=0 WHERE username=? AND username<>?",
+            (legacy, username),
+        )
 
 
 
