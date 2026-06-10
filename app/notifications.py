@@ -1786,11 +1786,11 @@ def send_team_progress_reports():
     log.info(f"Team progress dispatch completed for {sent} user(s): {', '.join(sorted(users))}")
 
 
-# ─── End-of-day team report ──────────────────────────────────────────────────
+# ─── End-of-Day Team Report (Lexi & Eric) ────────────────────────────────
 
-# Hard-coded leadership distribution per operator. Override at runtime by
-# setting EOD_REPORT_EMAIL=lexi@medprosc.com,eric@medprosc.com,... in env.
-EOD_REPORT_DEFAULT_RECIPIENTS = ("lexi@medprosc.com", "eric@medprosc.com")
+# Default recipients for the EOD per-user / per-client breakdown email.
+# Override at runtime with the EOD_REPORT_EMAIL env var (comma-separated).
+EOD_REPORT_DEFAULT_RECIPIENTS = ["lexi@medprosc.com", "eric@medprosc.com"]
 
 
 def _eod_recipients() -> list[str]:
@@ -1800,349 +1800,328 @@ def _eod_recipients() -> list[str]:
     return list(EOD_REPORT_DEFAULT_RECIPIENTS)
 
 
-def _send_email_to(to_emails: list[str], subject: str, body: str,
-                   html_body: str = "") -> tuple[bool, str]:
-    """Send an email to a SPECIFIC list of recipients (bypasses NOTIFY_EMAIL).
+def _esc_html(s) -> str:
+    """Minimal HTML escape — we're building markup with f-strings."""
+    return (
+        str(s if s is not None else "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
-    Tries SendGrid first, then SMTP fallback. Returns (sent, via_string).
-    Used by the EOD report so leadership inbox isn't tied to the broadcast
-    NOTIFY_EMAIL env var.
+
+# Friendly per-tab icons (matches the sidebar in client_hub.html).
+_EOD_TAB_ICONS = {
+    "Claims":        "💼",
+    "Credentialing": "🎓",
+    "Enrollment":    "📝",
+    "EDI":           "🔌",
+    "Production":    "⏱️",
+    "Documents":     "📁",
+    "Notes":         "🗒️",
+    "Chat":          "💬",
+    "Audit":         "🔍",
+    "Pageviews":     "👁️",
+}
+
+
+def _render_eod_report_html(report: dict) -> tuple[str, str]:
+    """Render the EOD report dict into (text_body, html_body).
+
+    The report dict comes from app.client_db.get_eod_team_report().
     """
-    cleaned = [e.strip() for e in (to_emails or []) if e and "@" in e]
-    if not cleaned:
-        return False, "no recipients"
-
-    cfg = _live_config()
-    sg_key = cfg["SENDGRID_API_KEY"]
-    sg_from = cfg["SENDGRID_FROM"]
-    smtp_h = cfg["SMTP_HOST"]
-    smtp_p = cfg["SMTP_PORT"]
-    smtp_u = cfg["SMTP_USER"]
-    smtp_pw = cfg["SMTP_PASS"]
-
-    if sg_key:
-        try:
-            import httpx
-            content = []
-            if body:
-                content.append({"type": "text/plain", "value": body})
-            if html_body:
-                content.append({"type": "text/html", "value": html_body})
-            if not content:
-                content.append({"type": "text/plain", "value": "(no content)"})
-            payload = {
-                "personalizations": [{"to": [{"email": addr} for addr in cleaned]}],
-                "from": {"email": sg_from, "name": "MedPharma Hub"},
-                "subject": subject,
-                "content": content,
-            }
-            resp = httpx.post(
-                "https://api.sendgrid.com/v3/mail/send",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {sg_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=20,
-            )
-            if resp.status_code in (200, 202):
-                log.info(f"EOD email sent via SendGrid to {', '.join(cleaned)}: {subject}")
-                return True, "sendgrid"
-            log.error(f"EOD SendGrid failed ({resp.status_code}): {resp.text}")
-        except Exception as e:
-            log.error(f"EOD SendGrid send error: {e}")
-
-    if smtp_h and smtp_u and smtp_pw:
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = smtp_u
-            msg["To"] = ", ".join(cleaned)
-            msg.attach(MIMEText(body or "(no content)", "plain"))
-            if html_body:
-                msg.attach(MIMEText(html_body, "html"))
-            with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
-                server.starttls()
-                server.login(smtp_u, smtp_pw)
-                server.sendmail(msg["From"], cleaned, msg.as_string())
-            log.info(f"EOD email sent via SMTP to {', '.join(cleaned)}: {subject}")
-            return True, "smtp"
-        except Exception as e:
-            log.error(f"EOD SMTP send error: {e}")
-
-    return False, "no provider configured"
-
-
-def _eod_fmt_minutes(m) -> str:
+    date_iso = report.get("report_date", "")
     try:
-        m = float(m or 0)
-    except (TypeError, ValueError):
-        return "0m"
-    if m >= 60:
-        return f"{m/60:.1f}h"
-    return f"{int(round(m))}m"
-
-
-def _eod_fmt_time(iso: str) -> str:
-    if not iso:
-        return "—"
-    try:
-        return datetime.fromisoformat(iso).strftime("%-I:%M %p")
+        from datetime import datetime as _dt
+        d = _dt.strptime(date_iso, "%Y-%m-%d")
+        date_long = d.strftime("%A, %B %d, %Y")
     except Exception:
-        return iso[-8:-3] if len(iso) >= 8 else iso
+        date_long = date_iso
 
+    headlines = report.get("headlines", {}) or {}
+    tabs = report.get("tab_keys", []) or []
+    users = report.get("users", []) or []
+    team_totals = report.get("team_totals", {}) or {}
 
-def _build_eod_report_html(data: dict) -> tuple[str, str]:
-    """Render the EOD report payload (from get_eod_team_report) into a
-    plain-text summary plus a full HTML email body."""
-    report_date = data.get("report_date", "")
-    try:
-        pretty_date = datetime.strptime(report_date, "%Y-%m-%d").strftime("%A, %B %-d, %Y")
-    except Exception:
-        pretty_date = report_date
-    totals = data.get("totals", {})
-    users = data.get("users", [])
-
-    # ── Plain text fallback (mobile / spam filters / accessibility) ──
+    # ── plain-text fallback ──
     text_lines = [
-        f"MedPharma End-of-Day Team Report — {pretty_date}",
+        f"MedPharma End-of-Day Team Report — {date_long}",
         "",
-        f"Active people: {totals.get('users', 0)}   "
-        f"Clients touched: {totals.get('clients_touched', 0)}",
-        f"Production entries: {totals.get('production_entries', 0)}   "
-        f"Logged hours: {totals.get('production_hours', 0)}",
-        f"CRUD actions: {totals.get('audit_actions', 0)}   "
-        f"Write requests: {totals.get('writes', 0)}   "
-        f"Files uploaded: {totals.get('uploads', 0)}",
+        f"Active team members today: {headlines.get('active_users', 0)}",
+        f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
+        f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
+        f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
+        f"Notes: {headlines.get('notes_new', 0)} · Files uploaded: {headlines.get('files_uploaded', 0)} · Chat messages: {headlines.get('chat_messages', 0)} · Audit events: {headlines.get('audit_events', 0)}",
         "",
+        "Per-user breakdown:",
     ]
-    if not users:
-        text_lines.append("No tracked activity for this date.")
     for u in users:
-        t = u["totals"]
-        text_lines.append(f"— {u['username']} —")
         text_lines.append(
-            f"  Active {_eod_fmt_minutes(t['active_minutes'])}, "
-            f"first seen {_eod_fmt_time(t['first_seen'])}, "
-            f"last seen {_eod_fmt_time(t['last_seen'])}"
+            f"\n* {u.get('contact_name') or u.get('username')} "
+            f"<{u.get('email','')}> — {u.get('active_hours',0)}h active / "
+            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions"
         )
-        text_lines.append(
-            f"  Production: {t['production_entries']} entries / "
-            f"{t['production_hours']} hrs / qty {t['production_quantity']}"
-        )
-        text_lines.append(
-            f"  CRUD: {t['audit_actions']}  Writes: {t['writes']}  "
-            f"Uploads: {t['uploads']}  Chat msgs: {t['chat_messages']}"
-        )
-        if t["tabs_touched"]:
-            text_lines.append(f"  Tabs worked: {', '.join(t['tabs_touched'])}")
-        for c in u["by_client"]:
-            text_lines.append(f"  • {c['client_name']}:")
-            if c["top_categories"]:
-                cats = ", ".join(
-                    f"{cat['name']} ({cat['entries']} entries / {cat['hours']}h)"
-                    for cat in c["top_categories"][:4]
-                )
-                text_lines.append(f"      categories: {cats}")
-            if c["top_tabs"]:
-                tabs = ", ".join(
-                    f"{tab['name']} ({tab['total']})"
-                    for tab in c["top_tabs"][:5]
-                )
-                text_lines.append(f"      tabs touched: {tabs}")
-            if c["uploads"]:
-                text_lines.append(f"      uploads: {c['uploads']} file(s), {c['upload_rows']} rows")
-            for tk in c["tasks"][:5]:
-                text_lines.append(
-                    f"      task: [{tk['category']}] {tk['task']} "
-                    f"(qty {tk['quantity']}, {tk['hours']}h)"
-                )
-        text_lines.append("")
+        for cname, cb in (u.get("clients") or {}).items():
+            chunks = [f"{k}={v}" for k, v in cb["totals"].items() if v]
+            if not chunks:
+                continue
+            text_lines.append(f"    - {cname}: {', '.join(chunks)}")
+            for it in cb["items"][:5]:
+                text_lines.append(f"        · [{it['tab']}] {it['action']} — {it['title']}")
     text_body = "\n".join(text_lines)
 
-    # ── HTML email ──
-    def esc(s):
-        return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-                       .replace(">", "&gt;"))
+    # ── HTML ──
+    headline_card = lambda label, value, color="#1d4ed8": f"""
+        <div style="flex:1;min-width:140px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin:6px">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:600">{label}</div>
+            <div style="font-size:22px;color:{color};font-weight:800;margin-top:4px">{value}</div>
+        </div>
+    """
 
-    user_cards_html = []
+    headlines_html = "".join([
+        headline_card("Active team", headlines.get("active_users", 0)),
+        headline_card("Claims new",     headlines.get("claims_new", 0)),
+        headline_card("Claims touched", headlines.get("claims_touched", 0), "#2563eb"),
+        headline_card("Credentialing",  headlines.get("cred_new", 0), "#7c3aed"),
+        headline_card("Enrollment",     headlines.get("enroll_new", 0), "#7c3aed"),
+        headline_card("EDI",            headlines.get("edi_new", 0), "#0891b2"),
+        headline_card("Production hrs", f"{headlines.get('production_hours', 0)}", "#16a34a"),
+        headline_card("Notes",          headlines.get("notes_new", 0), "#0f766e"),
+        headline_card("Files",          headlines.get("files_uploaded", 0), "#0f766e"),
+        headline_card("Chat msgs",      headlines.get("chat_messages", 0), "#db2777"),
+    ])
+
+    # Per-user blocks (with per-client per-tab breakdown).
+    user_blocks_html = ""
     if not users:
-        user_cards_html.append(
-            "<div style=\"padding:24px;text-align:center;color:#64748b;"
-            "background:#f8fafc;border-radius:10px\">"
-            "No tracked activity for this date — nobody has logged in, "
-            "submitted production entries, or touched a tab yet."
+        user_blocks_html = (
+            "<div style=\"padding:18px;color:#94a3b8;font-size:14px;text-align:center\">"
+            "No team activity recorded today. Either the team didn't log in, "
+            "or the tracker missed events. Check the Audit Log to confirm."
             "</div>"
         )
-    for u in users:
-        t = u["totals"]
-        client_rows_html = []
-        for c in u["by_client"]:
-            cat_html = "".join(
-                f"<tr>"
-                f"<td style=\"padding:4px 8px;border-bottom:1px solid #f1f5f9;font-size:12px\">{esc(cat['name'])}</td>"
-                f"<td style=\"padding:4px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px\">{cat['entries']}</td>"
-                f"<td style=\"padding:4px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px\">{cat['quantity']}</td>"
-                f"<td style=\"padding:4px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px;font-weight:600;color:#1d4ed8\">{cat['hours']}h</td>"
-                f"</tr>"
-                for cat in c["top_categories"][:6]
-            )
-            cat_table = (
-                "<table style=\"width:100%;border-collapse:collapse;margin-top:8px\">"
-                "<thead><tr style=\"background:#f8fafc\">"
-                "<th style=\"padding:6px 8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px\">Category</th>"
-                "<th style=\"padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px\">Entries</th>"
-                "<th style=\"padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px\">Qty</th>"
-                "<th style=\"padding:6px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px\">Hours</th>"
-                "</tr></thead><tbody>" + cat_html + "</tbody></table>"
-            ) if cat_html else ""
-            tab_pills = "".join(
-                f"<span style=\"display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:3px 10px;margin:2px;font-size:11px;font-weight:600\">"
-                f"{esc(tab['name'])} · {tab['total']}"
-                f"</span>"
-                for tab in c["top_tabs"][:8]
-            )
-            tasks_html = ""
-            if c["tasks"]:
-                items = "".join(
-                    f"<li style=\"margin:2px 0;font-size:12px;color:#334155\">"
-                    f"<b>[{esc(tk['category'])}]</b> {esc(tk['task'])} "
-                    f"<span style=\"color:#64748b\">— qty {tk['quantity']}, {tk['hours']}h</span>"
-                    f"</li>"
-                    for tk in c["tasks"][:6]
+    else:
+        for u in users:
+            uname = _esc_html(u.get("contact_name") or u.get("username", ""))
+            email = _esc_html(u.get("email", ""))
+            role  = _esc_html((u.get("role") or "").title())
+            hrs_a = u.get("active_hours", 0)
+            hrs_i = u.get("idle_hours", 0)
+            acts  = u.get("total_actions", 0)
+            highlights = u.get("highlights") or []
+
+            # Per-user tab strip
+            tab_strip = ""
+            for t in tabs:
+                v = u["totals"].get(t, 0)
+                if v == 0:
+                    continue
+                tab_strip += (
+                    f'<span style="display:inline-block;background:#eef2ff;'
+                    f'color:#1d4ed8;border-radius:6px;padding:4px 10px;'
+                    f'margin:2px 4px 2px 0;font-size:12px;font-weight:600">'
+                    f'{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
                 )
-                tasks_html = (
-                    "<ul style=\"margin:8px 0 0;padding-left:18px\">" + items + "</ul>"
+            if not tab_strip:
+                tab_strip = (
+                    '<span style="color:#94a3b8;font-size:12px;font-style:italic">'
+                    'Logged in but no tracked tab activity</span>'
                 )
-            upload_chip = (
-                f"<span style=\"display:inline-block;background:#dcfce7;color:#166534;"
-                f"border-radius:999px;padding:3px 10px;margin:2px;font-size:11px;font-weight:600\">"
-                f"📎 {c['uploads']} file(s) · {c['upload_rows']} rows"
-                f"</span>"
-            ) if c["uploads"] else ""
-            client_rows_html.append(
-                f"<div style=\"border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin:10px 0;background:#fff\">"
-                f"  <div style=\"display:flex;justify-content:space-between;align-items:center\">"
-                f"    <div style=\"font-weight:700;color:#0f172a;font-size:14px\">{esc(c['client_name'])}</div>"
-                f"    <div style=\"font-size:12px;color:#64748b\">"
-                f"      <b style=\"color:#1d4ed8\">{c['production_hours']}h</b> · "
-                f"      {c['production_entries']} entries · "
-                f"      {c['audit_actions']} CRUD"
-                f"    </div>"
-                f"  </div>"
-                f"  <div style=\"margin-top:8px\">{tab_pills}{upload_chip}</div>"
-                f"  {cat_table}"
-                f"  {tasks_html}"
-                f"</div>"
-            )
-        if not client_rows_html:
-            client_rows_html.append(
-                "<div style=\"padding:12px;color:#94a3b8;font-size:13px;font-style:italic\">"
-                "No client-tagged work today — only general/dashboard activity."
-                "</div>"
+
+            # Per-client rows
+            client_rows = ""
+            for cname, cb in (u.get("clients") or {}).items():
+                tab_cells = ""
+                any_nonzero = False
+                for t in tabs:
+                    v = cb["totals"].get(t, 0)
+                    if v:
+                        any_nonzero = True
+                    cell_style = "padding:4px 8px;border:1px solid #f1f5f9;text-align:center;font-size:12px"
+                    if v:
+                        cell_style += ";background:#eef2ff;color:#1d4ed8;font-weight:700"
+                    else:
+                        cell_style += ";color:#cbd5e1"
+                    tab_cells += f'<td style="{cell_style}">{v or "·"}</td>'
+                if not any_nonzero:
+                    continue
+                # Sample items (max 6) so the reader sees what was actually done.
+                items_html = ""
+                for it in cb["items"][:6]:
+                    items_html += (
+                        f'<div style="font-size:12px;color:#475569;'
+                        f'padding:2px 0;border-bottom:1px dashed #f1f5f9">'
+                        f'<span style="display:inline-block;min-width:96px;color:#1d4ed8;font-weight:600">'
+                        f'{_EOD_TAB_ICONS.get(it["tab"],"")} {_esc_html(it["tab"])}</span> '
+                        f'{_esc_html(it["action"])} — {_esc_html(it["title"])}</div>'
+                    )
+                client_rows += f"""
+                <tr><td colspan="{len(tabs)+1}" style="padding:10px 8px 4px;font-weight:700;color:#0f172a;font-size:13px;border-top:1px solid #e2e8f0">{_esc_html(cname)}</td></tr>
+                <tr>
+                    <td style="padding:4px 8px;font-size:12px;color:#64748b;border:1px solid #f1f5f9">Tabs touched</td>
+                    {tab_cells}
+                </tr>
+                <tr>
+                    <td colspan="{len(tabs)+1}" style="padding:6px 8px 12px;border:1px solid #f8fafc;background:#fafafa">{items_html or '<span style="color:#94a3b8;font-size:12px">No itemised changes captured.</span>'}</td>
+                </tr>
+                """
+
+            if not client_rows:
+                client_rows = (
+                    f'<tr><td colspan="{len(tabs)+1}" '
+                    f'style="padding:10px;color:#94a3b8;font-size:12px;font-style:italic">'
+                    f'No per-client work captured — see "Tabs Touched" badges above for raw page activity.</td></tr>'
+                )
+
+            tab_header_cells = "".join(
+                f'<th style="padding:6px 8px;background:#f8fafc;border:1px solid #f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569">{_EOD_TAB_ICONS.get(t,"")} {t}</th>'
+                for t in tabs
             )
 
-        user_cards_html.append(
-            f"<div style=\"border:1px solid #cbd5e1;border-radius:14px;padding:18px 22px;margin:18px 0;background:#f8fafc\">"
-            f"  <div style=\"display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px\">"
-            f"    <div>"
-            f"      <div style=\"font-size:18px;font-weight:800;color:#0f172a\">{esc(u['username'].title())}</div>"
-            f"      <div style=\"font-size:12px;color:#64748b\">"
-            f"        Active {_eod_fmt_minutes(t['active_minutes'])} · "
-            f"        {_eod_fmt_time(t['first_seen'])} → {_eod_fmt_time(t['last_seen'])} · "
-            f"        {len(t['tabs_touched'])} tab(s) touched"
-            f"      </div>"
-            f"    </div>"
-            f"    <div style=\"text-align:right\">"
-            f"      <div style=\"font-size:22px;font-weight:800;color:#1d4ed8\">{t['production_hours']}h</div>"
-            f"      <div style=\"font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px\">logged production</div>"
-            f"    </div>"
-            f"  </div>"
-            f"  <div style=\"display:flex;gap:8px;flex-wrap:wrap;margin-top:10px\">"
-            f"    <span style=\"background:#1e3a8a;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">{t['production_entries']} entries</span>"
-            f"    <span style=\"background:#15803d;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">qty {t['production_quantity']}</span>"
-            f"    <span style=\"background:#7c2d12;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">{t['audit_actions']} CRUD</span>"
-            f"    <span style=\"background:#1e293b;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">{t['writes']} writes</span>"
-            f"    <span style=\"background:#9333ea;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">{t['uploads']} uploads</span>"
-            f"    <span style=\"background:#0e7490;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700\">{t['chat_messages']} chat msgs</span>"
-            f"  </div>"
-            f"  <div style=\"margin-top:12px\">{''.join(client_rows_html)}</div>"
-            f"</div>"
+            highlights_html = ""
+            if highlights:
+                hi_list = "".join(f"<li style=\"font-size:12px;color:#475569;padding:2px 0\">{_esc_html(h)}</li>" for h in highlights)
+                highlights_html = (
+                    f'<div style="margin-top:10px"><div style="font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Audit highlights</div>'
+                    f'<ul style="margin:6px 0 0;padding-left:20px">{hi_list}</ul></div>'
+                )
+
+            user_blocks_html += f"""
+            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(15,23,42,.04)">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+                    <div>
+                        <div style="font-size:17px;font-weight:800;color:#0f172a">{uname} <span style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-left:6px">{role}</span></div>
+                        <div style="font-size:12px;color:#64748b;margin-top:2px">{email}</div>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:12px;color:#64748b">Time on hub today</div>
+                        <div style="font-size:18px;font-weight:800;color:#16a34a">{hrs_a}h <span style="color:#94a3b8;font-weight:600;font-size:12px">active</span></div>
+                        <div style="font-size:12px;color:#64748b">{hrs_i}h idle · {acts} actions</div>
+                    </div>
+                </div>
+                <div style="margin-top:12px">{tab_strip}</div>
+                {highlights_html}
+                <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:system-ui,Segoe UI,Arial,sans-serif">
+                    <thead><tr><th style="padding:6px 8px;background:#f8fafc;border:1px solid #f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569;text-align:left">Client</th>{tab_header_cells}</tr></thead>
+                    <tbody>{client_rows}</tbody>
+                </table>
+            </div>
+            """
+
+    # Team-wide tab totals strip
+    team_strip = ""
+    for t in tabs:
+        v = team_totals.get(t, 0)
+        if v == 0:
+            continue
+        team_strip += (
+            f'<span style="display:inline-block;background:rgba(255,255,255,.18);'
+            f'color:#fff;border-radius:6px;padding:6px 12px;margin:3px 4px;'
+            f'font-size:13px;font-weight:600">{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
         )
+    if not team_strip:
+        team_strip = '<span style="color:rgba(255,255,255,.65);font-style:italic">No tab activity recorded today.</span>'
 
-    html_body = f"""<!doctype html>
-<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;padding:24px;color:#0f172a;margin:0">
-  <div style="max-width:780px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0">
-    <div style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:24px 28px;color:#fff">
-      <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;opacity:0.8">MedPharma Hub · End-of-Day Report</div>
-      <div style="font-size:24px;font-weight:800;margin-top:4px">{pretty_date}</div>
-      <div style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
-        <span><b style="font-size:18px">{totals.get('users', 0)}</b> active people</span>
-        <span><b style="font-size:18px">{totals.get('clients_touched', 0)}</b> clients touched</span>
-        <span><b style="font-size:18px">{totals.get('production_hours', 0)}h</b> logged</span>
-        <span><b style="font-size:18px">{totals.get('production_entries', 0)}</b> entries</span>
-        <span><b style="font-size:18px">{totals.get('audit_actions', 0)}</b> CRUD</span>
-        <span><b style="font-size:18px">{totals.get('uploads', 0)}</b> uploads</span>
+    html_body = f"""<html>
+    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:18px;color:#0f172a;background:#f1f5f9">
+      <div style="max-width:760px;margin:0 auto">
+
+        <div style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:24px 28px;border-radius:14px 14px 0 0">
+            <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;letter-spacing:.3px">📋 End-of-Day Team Report</h1>
+            <p style="color:rgba(255,255,255,.85);margin:6px 0 0;font-size:14px">{_esc_html(date_long)} — per user, per client, per tab</p>
+            <div style="margin-top:12px">{team_strip}</div>
+        </div>
+
+        <div style="background:#fff;padding:14px 16px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0">
+            <div style="display:flex;flex-wrap:wrap">{headlines_html}</div>
+        </div>
+
+        <div style="background:#f8fafc;padding:16px;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px">
+            <h2 style="margin:0 0 10px;font-size:15px;color:#0f172a">Per-User Breakdown</h2>
+            {user_blocks_html}
+        </div>
+
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:18px">
+            MedPharma Hub · Auto-sent end-of-day · Configure with EOD_REPORT_EMAIL env var
+        </p>
       </div>
-    </div>
-    <div style="padding:20px 24px 28px">
-      <p style="margin:0 0 12px;font-size:13px;color:#475569">
-        Below is the per-user, per-client, per-tab breakdown for {pretty_date}.
-        Production entries come from the <b>Daily Production</b> tab.
-        CRUD actions come from the audit log (claims, credentialing,
-        enrollment, EDI, notes, files). Tab activity is pulled from the
-        request firehose.
-      </p>
-      {''.join(user_cards_html)}
-      <div style="margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center">
-        Generated {data.get('generated_at','')} · MedPharma Hub auto-report ·
-        Manage recipients with the <code>EOD_REPORT_EMAIL</code> environment variable.
-      </div>
-    </div>
-  </div>
-</body></html>"""
+    </body></html>"""
     return text_body, html_body
 
 
-def send_eod_team_report(report_date: str = None,
-                         recipients: list[str] = None) -> dict:
-    """Build and email the End-of-Day team report for ``report_date``
-    (defaults to today). Returns a dict with delivery status — safe for
-    both the scheduler and the manual admin trigger to consume.
+def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
+    """Compose and email the end-of-day team report.
+
+    Default recipients: lexi@medprosc.com + eric@medprosc.com
+    (override with EOD_REPORT_EMAIL, comma-separated).
+
+    Each recipient is sent individually via _send_email_to so SendGrid
+    delivery is per-recipient (we can see who bounced).
+
+    Returns a delivery report dict {date, recipients, sent, failed,
+    headlines, user_count}.
     """
+    from datetime import datetime as _dt
     try:
         from app.client_db import get_eod_team_report
-        data = get_eod_team_report(report_date)
     except Exception as e:
-        log.exception("EOD report aggregation failed")
-        return {"ok": False, "error": f"aggregation failed: {e}"}
+        log.error(f"EOD report aggregator import failed: {e}")
+        return {"ok": False, "error": str(e)}
 
-    to_list = recipients if recipients is not None else _eod_recipients()
-    text_body, html_body = _build_eod_report_html(data)
+    if not report_date:
+        report_date = _dt.now().strftime("%Y-%m-%d")
+
     try:
-        pretty = datetime.strptime(data["report_date"], "%Y-%m-%d").strftime("%a %b %-d")
+        report = get_eod_team_report(report_date)
+    except Exception as e:
+        log.error(f"EOD report aggregation failed: {e}")
+        return {"ok": False, "error": str(e), "date": report_date}
+
+    headlines = report.get("headlines", {}) or {}
+    if not force and not report.get("users") and sum(headlines.values()) == 0:
+        log.info(f"EOD report skipped — zero activity for {report_date}")
+        return {"ok": True, "skipped": "no activity", "date": report_date}
+
+    text_body, html_body = _render_eod_report_html(report)
+    try:
+        from datetime import datetime as _dt2
+        d_long = _dt2.strptime(report_date, "%Y-%m-%d").strftime("%a %b %d, %Y")
     except Exception:
-        pretty = data["report_date"]
-    totals = data.get("totals", {})
+        d_long = report_date
     subject = (
-        f"📊 MedPharma EOD — {pretty} · "
-        f"{totals.get('users', 0)} ppl · "
-        f"{totals.get('production_hours', 0)}h · "
-        f"{totals.get('production_entries', 0)} entries"
+        f"📋 MedPharma EOD — {d_long} — "
+        f"{headlines.get('active_users', 0)} active, "
+        f"{headlines.get('claims_new', 0)} new claims, "
+        f"{headlines.get('production_hours', 0)}h logged"
     )
 
-    sent, via = _send_email_to(to_list, subject, text_body, html_body)
+    recipients = _eod_recipients()
+    sent, failed = [], []
+    if not recipients:
+        log.error("EOD report has no recipients configured")
+        return {"ok": False, "error": "no recipients", "date": report_date}
+
+    for to_email in recipients:
+        try:
+            _send_email_to(to_email, subject, text_body, html_body)
+            sent.append(to_email)
+        except Exception as e:
+            log.error(f"EOD report send to {to_email} failed: {e}")
+            failed.append({"email": to_email, "error": str(e)})
+
     log.info(
-        f"EOD report dispatched: ok={sent} via={via} to={to_list} "
-        f"users={totals.get('users')} hours={totals.get('production_hours')}"
+        f"EOD report dispatched for {report_date}: sent={len(sent)} failed={len(failed)} "
+        f"users={len(report.get('users', []))}"
     )
     return {
-        "ok": sent,
-        "via": via,
-        "subject": subject,
-        "recipients": to_list,
-        "report_date": data["report_date"],
-        "totals": totals,
+        "ok": True,
+        "date": report_date,
+        "recipients": recipients,
+        "sent": sent,
+        "failed": failed,
+        "user_count": len(report.get("users", [])),
+        "headlines": headlines,
     }
 
 
@@ -2184,17 +2163,17 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # 6:30 PM EST — End-of-day per-user-per-client-per-tab report
+        # 6:30 PM EST — End-of-Day per-user / per-client / per-tab team report
         scheduler.add_job(
             send_eod_team_report,
             CronTrigger(hour=18, minute=30, timezone=est),
             id="daily_eod_team_report",
-            name="6:30 PM EST End-of-Day Team Report (lexi+eric)",
+            name="6:30 PM EST EOD Team Report (lexi+eric)",
             replace_existing=True,
         )
 
         scheduler.start()
-        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD report")
+        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD team report")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -2239,14 +2218,11 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # 6:30 PM — End-of-day team report (lexi + eric)
+                # 6:30 PM — End-of-Day per-user / per-client / per-tab report
                 if now_est.hour == 18 and 30 <= now_est.minute < 35 and last_eod_date != today:
                     last_eod_date = today
                     log.info("Thread scheduler firing EOD team report")
-                    try:
-                        send_eod_team_report()
-                    except Exception as ex:
-                        log.error(f"EOD report dispatch failed: {ex}")
+                    send_eod_team_report()
 
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")
@@ -2254,4 +2230,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders, 6:00 summary, 6:30 EOD report")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 EOD team report")

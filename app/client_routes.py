@@ -842,39 +842,32 @@ def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     return {"ok": err is None, "error": err, "trace": trace, "before": before, "after": after, "team_usernames": usernames}
 
 
-@router.get("/admin/eod-report/preview")
-def admin_eod_report_preview(date: Optional[str] = None,
-                             hub_session: Optional[str] = Cookie(None)):
-    """Admin-only: return the raw EOD report payload (JSON) for ``date``
-    so leadership can audit the numbers before/instead of the email."""
+@router.get("/admin/reports/eod/preview")
+def admin_eod_preview(report_date: Optional[str] = None,
+                      hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: dry-run the EOD report aggregator without sending email.
+
+    Useful to debug what would land in lexi@/eric@'s inbox before the
+    scheduler fires at 6:30 PM EST.
+    """
     _require_full_admin(hub_session)
     from .client_db import get_eod_team_report
-    return get_eod_team_report(date)
+    return get_eod_team_report(report_date)
 
 
-@router.post("/admin/eod-report/send-now")
-def admin_eod_report_send_now(
-    request: Request,
-    date: Optional[str] = None,
-    recipients: Optional[str] = None,
-    hub_session: Optional[str] = Cookie(None),
-):
-    """Admin-only: build the EOD report and send it RIGHT NOW.
+@router.post("/admin/reports/eod/send-now")
+def admin_eod_send_now(report_date: Optional[str] = None,
+                       force: bool = True,
+                       hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: dispatch the end-of-day team report immediately.
 
-    Query params:
-      ``date``       — YYYY-MM-DD (default = today, US/Eastern)
-      ``recipients`` — comma-separated emails (default = lexi+eric or
-                       whatever EOD_REPORT_EMAIL env var is set to)
-    Returns the delivery report so the operator can see exactly which
-    provider sent it.
+    Sends to EOD_REPORT_EMAIL (defaults to lexi@medprosc.com +
+    eric@medprosc.com). Returns the delivery report so you can see
+    who it went to.
     """
     _require_full_admin(hub_session)
     from app.notifications import send_eod_team_report
-    to_list = None
-    if recipients:
-        to_list = [r.strip() for r in recipients.split(",") if r.strip()]
-    result = send_eod_team_report(date, recipients=to_list)
-    return result
+    return send_eod_team_report(report_date=report_date, force=bool(force))
 
 
 @router.delete("/clients/{cid}")
