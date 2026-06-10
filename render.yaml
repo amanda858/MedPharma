@@ -27,7 +27,9 @@ services:
       - key: SENDGRID_API_KEY
         sync: false
       - key: SENDGRID_FROM
-        value: notifications@medprosc.com
+        # Must match a SendGrid Verified Sender or authenticated domain.
+        # lexi@medprosc.com was verified via Single Sender on 2026-06-10.
+        value: lexi@medprosc.com
       - key: NOTIFY_EMAIL
         value: eric@medprosc.com
       - key: NOTIFY_PHONE
