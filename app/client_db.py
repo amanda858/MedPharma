@@ -295,6 +295,27 @@ def _apply_startup_user_migrations(conn):
                 (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
             )
 
+    def _force_retire_legacy_demo_clients():
+        """Hard-deactivate legacy placeholder clients (Luminary, TruPath,
+        and the throwaway demo logins admin1/staff1/client1/outsider)
+        regardless of whether they have any historic claims rows. The earlier
+        `placeholder_clients_inactive_v1` migration skipped them if any
+        claims existed, which left Luminary visible on production demos.
+        """
+        # Deactivate by username (covers seed rows and any duplicates)
+        for _uname in ("eric", "trupath", "admin1", "staff1", "client1", "outsider"):
+            cur.execute(
+                "UPDATE clients SET is_active=0 WHERE username=?",
+                (_uname,),
+            )
+        # Also deactivate any row whose company matches a known legacy label,
+        # in case the username drifted (e.g. seeded with a different handle).
+        for _company in ("Luminary (OMT/MHP)", "TruPath", "Admin Co", "Demo Lab", "Outsider"):
+            cur.execute(
+                "UPDATE clients SET is_active=0 WHERE company=? AND role='client'",
+                (_company,),
+            )
+
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
     _run_migration_once(conn, "rcm_admin_v1", _migrate_rcm_admin)
@@ -302,6 +323,7 @@ def _apply_startup_user_migrations(conn):
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
     _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
+    _run_migration_once(conn, "force_retire_legacy_demo_clients_v1", _force_retire_legacy_demo_clients)
 
 
 
@@ -961,6 +983,14 @@ def authenticate(username: str, password: str):
         conn.commit()
         out = {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}
         out["must_change_password"] = bool(c.get("must_change_password", 0))
+        raw_mods = (c.get("enabled_modules") or "").strip()
+        if raw_mods:
+            try:
+                out["enabled_modules"] = json.loads(raw_mods)
+            except Exception:
+                out["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
+        else:
+            out["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
         return out, token
     finally:
         conn.close()
@@ -986,6 +1016,14 @@ def validate_session(token: str):
     c = dict(row)
     out = {k: c[k] for k in ("id", "username", "company", "contact_name", "email", "phone", "role", "practice_type")}
     out["must_change_password"] = bool(c.get("must_change_password", 0))
+    raw_mods = (c.get("enabled_modules") or "").strip()
+    if raw_mods:
+        try:
+            out["enabled_modules"] = json.loads(raw_mods)
+        except Exception:
+            out["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
+    else:
+        out["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
     return out
 
 

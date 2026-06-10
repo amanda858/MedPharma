@@ -4707,9 +4707,23 @@ def chat_unread_count_endpoint(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/chat/users")
 def chat_eligible_users(hub_session: Optional[str] = Cookie(None)):
-    """Admin/staff only: list users that can be added to a chat room."""
-    _require_admin(hub_session)
-    return {"users": list_chat_eligible_users()}
+    """List users that can be added to a chat room.
+
+    Admin/staff see everyone. Clients see only the staff/admin users that
+    have been granted access to their own account (so they can DM their team).
+    """
+    user = _require_user(hub_session)
+    if _is_admin_user(user):
+        return {"users": list_chat_eligible_users()}
+    # Client view: limit to staff/admin assigned to this client.
+    uid = int(user.get("id") or 0)
+    assigned = list_client_access(uid)
+    # Filter to active staff/admin only.
+    out = [
+        u for u in assigned
+        if (u.get("role") or "").lower() in ("admin", "staff")
+    ]
+    return {"users": out}
 
 
 # ─── Client Seed Backup ───────────────────────────────────────────────────────

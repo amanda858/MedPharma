@@ -1955,24 +1955,30 @@
     <div class="app-body">
       <!-- Sidebar -->
       <div class="sidebar">
-        <!-- CLIENT SIDEBAR: only Daily Production + Documents -->
+        <!-- CLIENT SIDEBAR: only Daily Production + Documents + Chat -->
         <div id="clientNav">
-          <div class="nav-item" data-panel="production" onclick="navTo('production')">📋 Team Production</div>
-          <div class="nav-item" data-panel="files" onclick="navTo('files')">📁 Documents</div>
+          <div class="nav-item" data-panel="production" data-module="production" onclick="navTo('production')">📋 Team Production</div>
+          <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">📁 Documents</div>
+          <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
+            <span id="navChatBadgeClient" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
+          </div>
         </div>
         <!-- ADMIN SIDEBAR: full access -->
         <div id="adminFullNav" style="display:none">
-          <div class="nav-item active" data-panel="dashboard" onclick="navTo('dashboard')">Dashboard</div>
-          <div class="nav-item" data-panel="profile" onclick="navTo('profile')">Client Profile</div>
-          <div class="nav-item" data-panel="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📋 Team Production</div>
+          <div class="nav-item active" data-panel="dashboard" data-module="dashboard" onclick="navTo('dashboard')">Dashboard</div>
+          <div class="nav-item" data-panel="profile" data-module="profile" onclick="navTo('profile')">Client Profile</div>
+          <div class="nav-item" data-panel="production" data-module="production" onclick="navTo('production');setProdDatePreset('today')" style="font-weight:600">📋 Team Production</div>
           <div class="nav-section">Operations</div>
-          <div class="nav-item" data-panel="claims" onclick="navTo('claims')">Claims Queue</div>
-          <div class="nav-item" data-panel="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
-          <div class="nav-item" data-panel="enrollment" onclick="navTo('enrollment')">Enrollment</div>
-          <div class="nav-item" data-panel="edi" onclick="navTo('edi')">EDI Setup</div>
-          <div class="nav-item" data-panel="providers" onclick="navTo('providers')">Client References</div>
-          <div class="nav-item" data-panel="reporting" onclick="navTo('reporting')">Reporting</div>
-          <div class="nav-item" data-panel="files" onclick="navTo('files')">Documents</div>
+          <div class="nav-item" data-panel="claims" data-module="claims" onclick="navTo('claims')">Claims Queue</div>
+          <div class="nav-item" data-panel="credentialing" data-module="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
+          <div class="nav-item" data-panel="enrollment" data-module="enrollment" onclick="navTo('enrollment')">Enrollment</div>
+          <div class="nav-item" data-panel="edi" data-module="edi" onclick="navTo('edi')">EDI Setup</div>
+          <div class="nav-item" data-panel="providers" data-module="providers" onclick="navTo('providers')">Client References</div>
+          <div class="nav-item" data-panel="reporting" data-module="reporting" onclick="navTo('reporting')">Reporting</div>
+          <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">Documents</div>
+          <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
+            <span id="navChatBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
+          </div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -2398,6 +2404,54 @@
                 </thead>
                 <tbody id="clientTbody"></tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ TEAM CHAT ═══ -->
+        <div class="hub-panel" id="panel-chat">
+          <div class="page-header">
+            <div class="page-title">💬 Team Chat</div>
+            <div class="page-actions" id="chatPageActions" style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="loadChatRooms()">↻ Refresh</button>
+              <button class="btn btn-primary btn-sm" id="chatNewRoomBtn" style="display:none" onclick="openChatRoomModal()">+ New Room</button>
+            </div>
+          </div>
+          <div class="card" style="padding:0;overflow:hidden">
+            <div style="display:grid;grid-template-columns:280px 1fr;min-height:560px">
+              <!-- Rooms list -->
+              <div id="chatRoomsList"
+                style="border-right:1px solid var(--gray-200);overflow-y:auto;max-height:75vh;background:#fafbfc">
+                <div style="padding:18px;color:var(--gray-500);font-size:13px">Loading rooms…</div>
+              </div>
+              <!-- Active room: header + messages + composer -->
+              <div style="display:flex;flex-direction:column;min-height:560px">
+                <div id="chatRoomHeader"
+                  style="padding:14px 18px;border-bottom:1px solid var(--gray-200);background:#fff;display:flex;justify-content:space-between;align-items:center;gap:12px">
+                  <div>
+                    <div id="chatRoomTitle" style="font-weight:700;font-size:15px;color:var(--gray-900)">Select a room</div>
+                    <div id="chatRoomSubtitle" style="font-size:12px;color:var(--gray-500);margin-top:2px"></div>
+                  </div>
+                  <div style="display:flex;gap:6px" id="chatRoomActions"></div>
+                </div>
+                <div id="chatMessages"
+                  style="flex:1;overflow-y:auto;padding:18px;background:#f9fafb;min-height:340px;max-height:60vh">
+                  <div style="color:var(--gray-500);font-size:13px;text-align:center;padding:40px 20px">
+                    Pick a chat room on the left to view messages.
+                  </div>
+                </div>
+                <div id="chatComposer" style="padding:12px;border-top:1px solid var(--gray-200);background:#fff;display:none">
+                  <div style="display:flex;gap:8px;align-items:flex-end">
+                    <textarea id="chatInput" rows="2" placeholder="Type a message and press Enter to send…"
+                      style="flex:1;padding:10px 12px;border:1px solid var(--gray-300);border-radius:8px;resize:vertical;font:inherit"
+                      onkeydown="chatHandleKey(event)"></textarea>
+                    <button class="btn btn-primary" id="chatSendBtn" onclick="chatSendMessage()">Send</button>
+                  </div>
+                  <div id="chatSendHint" style="font-size:11px;color:var(--gray-500);margin-top:4px">
+                    Enter to send · Shift+Enter for newline
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3507,11 +3561,115 @@
         </div>
         <div style="margin-top:8px;font-size:12px;color:#64748b">Selecting multiple services creates a hybrid account with open fields for all selected services.</div>
       </div>
+
+      <!-- ── Modules this client should see (opt-in/opt-out) ── -->
+      <div class="form-group" style="margin-top:10px">
+        <label style="font-weight:600;margin-bottom:6px;display:block">Enabled Modules
+          <span style="font-size:11px;color:#94a3b8;font-weight:400">(uncheck to hide from this client)</span>
+        </label>
+        <div id="fCModulesWrap"
+          style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px">
+          <!-- Populated by populateClientModuleChecks() -->
+        </div>
+      </div>
+
+      <!-- ── Which staff/admin users get access to this client ── -->
+      <div class="form-group" style="margin-top:10px">
+        <label style="font-weight:600;margin-bottom:6px;display:block">Grant Access To
+          <span style="font-size:11px;color:#94a3b8;font-weight:400">(admins always have access)</span>
+        </label>
+        <div id="fCAccessWrap"
+          style="max-height:160px;overflow-y:auto;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
+          <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading users…</div>
+        </div>
+      </div>
+
       <div class="form-group" id="fCNotesWrap" style="display:none;margin-top:4px">
         <label>Additional Notes <span style="font-size:11px;color:#94a3b8">(hybrid accounts — describe scope)</span></label>
         <textarea class="form-control" id="fCNotes" rows="2" placeholder="e.g. Full RCM + quarterly payer contract audits for 3 providers"></textarea>
       </div>
       <button class="btn btn-primary" style="margin-top:12px" onclick="saveClient()">Create Client</button>
+    </div>
+  </div>
+
+  <!-- ═══ CHAT ROOM MODAL (admin: create / edit a room) ═══ -->
+  <div class="modal-overlay" id="chatRoomModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="chatRoomModalTitle">New Chat Room</h2>
+        <button class="modal-close" onclick="closeModal('chatRoomModal')">&times;</button>
+      </div>
+      <div class="form-group"><label>Room name *</label>
+        <input class="form-control" id="fRoomName" placeholder="e.g. Billing Team — ABC Medical">
+      </div>
+      <div class="form-group"><label>Description</label>
+        <input class="form-control" id="fRoomDesc" placeholder="Optional, shown under the room name">
+      </div>
+      <div class="form-group">
+        <label>Anchor to client (optional)</label>
+        <select class="form-control" id="fRoomClient">
+          <option value="">— No client anchor —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Initial members <span style="font-size:11px;color:#94a3b8">(admins always have access)</span></label>
+        <div id="fRoomMembersWrap"
+          style="max-height:200px;overflow-y:auto;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
+          <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading users…</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:8px" id="chatRoomSaveBtn" onclick="chatSaveRoom()">Create Room</button>
+    </div>
+  </div>
+
+  <!-- ═══ CHAT MEMBERS MODAL (admin: manage members of an existing room) ═══ -->
+  <div class="modal-overlay" id="chatMembersModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="chatMembersTitle">Room Members</h2>
+        <button class="modal-close" onclick="closeModal('chatMembersModal')">&times;</button>
+      </div>
+      <div id="chatMembersBody" style="min-height:160px">
+        <div style="color:#94a3b8;font-size:12px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ CLIENT ACCESS MODAL (admin: grant staff to a single client) ═══ -->
+  <div class="modal-overlay" id="clientAccessModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="clientAccessTitle">Client Access</h2>
+        <button class="modal-close" onclick="closeModal('clientAccessModal')">&times;</button>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px">
+        Only the selected staff users will see this client when they switch accounts.
+        Admins always have access. Removing all checks falls back to legacy "see all".
+      </div>
+      <div id="clientAccessUsersWrap"
+        style="max-height:280px;overflow-y:auto;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px">
+        <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading users…</div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="saveClientAccess()">Save Access</button>
+    </div>
+  </div>
+
+  <!-- ═══ CLIENT MODULES MODAL (admin: opt-in/out modules for an existing client) ═══ -->
+  <div class="modal-overlay" id="clientModulesModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="clientModulesTitle">Enabled Modules</h2>
+        <button class="modal-close" onclick="closeModal('clientModulesModal')">&times;</button>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px">
+        Toggle which sections this client can see when they sign in. Admins always
+        see every section regardless of this list.
+      </div>
+      <div id="clientModulesWrap"
+        style="padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
+        <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading…</div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="saveClientModules()">Save Modules</button>
     </div>
   </div>
 
@@ -3960,6 +4118,8 @@
       activeClientPracticeType = pt;
       updateNavForPracticeType(pt);
       updateSubProfileBar();
+      // Apply per-client module opt-out (admins see everything regardless).
+      refreshActiveClientModules();
       // Clients land on Daily Production; admin/staff go to dashboard
       navTo(isStaffOrAdmin() ? 'dashboard' : 'production');
       startGlobalJobsMonitor();
@@ -3984,6 +4144,10 @@
       updateNavForPracticeType('');
       const bar = document.getElementById('subProfileBar');
       if (bar) bar.style.display = 'none';
+      // Admin sees every module — clear the per-client cache so visibility
+      // is reset before navigating.
+      activeClientModules = null;
+      applyModuleVisibility();
       navTo('dashboard');
       startGlobalJobsMonitor();
     }
@@ -4120,6 +4284,7 @@
       }
       if (panel === 'alerts') loadAlerts();
       if (panel === 'audit') loadAuditLog();
+      if (panel === 'chat') loadChatRooms();
     }
 
     // Open the panel referenced by URL hash on first load (e.g. /hub#production)
@@ -4129,7 +4294,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit'];
+                       'production','alerts','audit','chat'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
@@ -5178,7 +5343,11 @@
     <td><span class="badge ${c.role === 'admin' ? 'badge-purple' : 'badge-blue'}">${c.role}</span></td>
     <td style="font-size:12px">${c.last_login || 'Never'}</td>
     <td>${c.is_active ? '✅' : '❌'}</td>
-    <td><button class="btn btn-danger-outline btn-sm" onclick="deleteClient(${c.id},'${esc(c.username)}')">🗑 Remove</button></td>
+    <td style="white-space:nowrap;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="openClientAccessModal(${c.id},'${esc(c.username)}')">👥 Access</button>
+      <button class="btn btn-secondary btn-sm" onclick="openClientModulesModal(${c.id},'${esc(c.username)}')">🧩 Modules</button>
+      <button class="btn btn-danger-outline btn-sm" onclick="deleteClient(${c.id},'${esc(c.username)}')">🗑 Remove</button>
+    </td>
   </tr>`).join('');
     }
 
@@ -5205,6 +5374,9 @@
       ['fCCompany','fCContact','fCEmail','fCPhone','fCNotes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
       document.querySelectorAll('.fCService').forEach(cb => cb.checked = false);
       document.getElementById('fCNotesWrap').style.display = 'none';
+      // Populate the new module + access pickers fresh each time.
+      populateClientModuleChecks('fCModulesWrap', null /* all enabled by default */);
+      populateClientAccessChecks('fCAccessWrap', [] /* no pre-grants */);
       document.getElementById('clientModal').classList.add('open');
     }
 
@@ -5232,6 +5404,13 @@
     async function saveClient() {
       const services = Array.from(document.querySelectorAll('.fCService:checked')).map(cb => cb.value);
       const service_type = services.length > 1 ? 'hybrid:' + services.join(',') : (services[0] || '');
+      // NEW: read selected modules + access user ids out of the in-modal pickers.
+      const user_ids = Array.from(
+        document.querySelectorAll('#fCAccessWrap input.fCAccessCb:checked')
+      ).map(cb => parseInt(cb.value, 10)).filter(Number.isFinite);
+      const enabled_modules = Array.from(
+        document.querySelectorAll('#fCModulesWrap input.fCModCb:checked')
+      ).map(cb => cb.value);
       const data = {
         company: document.getElementById('fCCompany').value.trim(),
         contact_name: document.getElementById('fCContact').value.trim(),
@@ -5240,6 +5419,7 @@
         service_type,
         notes: document.getElementById('fCNotes') ? document.getElementById('fCNotes').value.trim() : '',
       };
+      if (user_ids.length) data.user_ids = user_ids;
       if (!data.company) { toast('Company name is required', 'error'); return; }
       if (!service_type) { toast('Please select at least one service', 'error'); return; }
       try {
@@ -5248,7 +5428,24 @@
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        const result = await r.json().catch(() => ({}));
+        // Persist module opt-out if anything was unchecked (default = all modules).
+        if (result && result.id && Array.isArray(enabled_modules)) {
+          try {
+            await fetch(`/hub/api/profile/${result.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled_modules })
+            });
+          } catch (_) { /* non-fatal: client already created */ }
+        }
         closeModal('clientModal'); loadClients(); toast('Client created', 'success');
+        if (result && result.login && result.login.password) {
+          const u = result.login.username || data.company;
+          const p = result.login.password;
+          // Show credentials so the admin can hand them off.
+          alert(`Client login created:\n\nUsername: ${u}\nPassword: ${p}\n\nCopy these now — the password won't be shown again.`);
+        }
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -7983,6 +8180,561 @@
       if (activeSubProfile) params.set('sub_profile', activeSubProfile);
       window.location.href = `/hub/api/export/${section}?${params}`;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // MODULE OPT-IN/OUT  +  PER-CLIENT USER ACCESS  +  TEAM CHAT
+    // (all glue between existing backend endpoints and the sidebar/modals)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Catalog of modules that can be toggled per-client. Keep value in sync
+    // with DEFAULT_ENABLED_MODULES in app/client_db.py.
+    const MODULE_CATALOG = [
+      { key: 'dashboard',     label: 'Dashboard' },
+      { key: 'profile',       label: 'Client Profile' },
+      { key: 'production',    label: 'Team Production' },
+      { key: 'claims',        label: 'Claims Queue' },
+      { key: 'credentialing', label: 'Credentialing' },
+      { key: 'enrollment',    label: 'Enrollment' },
+      { key: 'edi',           label: 'EDI Setup' },
+      { key: 'providers',     label: 'Client References' },
+      { key: 'reporting',     label: 'Reporting' },
+      { key: 'documents',     label: 'Documents' },
+      { key: 'chat',          label: 'Team Chat' },
+    ];
+
+    // Cache for the active client's enabled_modules. null = "no opt-out, show all"
+    let activeClientModules = null;
+
+    function _renderModuleCheckboxGrid(targetId, selectedSet, cssClass) {
+      const wrap = document.getElementById(targetId);
+      if (!wrap) return;
+      wrap.innerHTML = MODULE_CATALOG.map(m => {
+        const checked = selectedSet ? selectedSet.has(m.key) : true;
+        return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;font-size:13px">
+          <input type="checkbox" class="${cssClass}" value="${m.key}" ${checked ? 'checked' : ''}>
+          ${esc(m.label)}
+        </label>`;
+      }).join('');
+    }
+
+    function populateClientModuleChecks(targetId, currentList) {
+      // currentList: array of module keys, or null for "all enabled"
+      const sel = currentList ? new Set(currentList) : null;
+      _renderModuleCheckboxGrid(targetId, sel, 'fCModCb');
+    }
+
+    async function populateClientAccessChecks(targetId, grantedIds) {
+      const wrap = document.getElementById(targetId);
+      if (!wrap) return;
+      wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading users…</div>';
+      try {
+        const r = await fetch('/hub/api/admin/users');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const users = (d.users || d || []).filter(u => u.role === 'staff' || u.role === 'admin');
+        const set = new Set((grantedIds || []).map(x => parseInt(x, 10)));
+        if (!users.length) {
+          wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">No staff or admin users found.</div>';
+          return;
+        }
+        wrap.innerHTML = users.map(u => {
+          const isAdmin = u.role === 'admin';
+          const checked = isAdmin || set.has(parseInt(u.id, 10));
+          const label = `${esc(u.contact_name || u.username)} <span style="color:#94a3b8;font-size:11px">(${esc(u.role)})</span>`;
+          return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;cursor:${isAdmin ? 'not-allowed' : 'pointer'}">
+            <input type="checkbox" class="fCAccessCb" value="${u.id}" ${checked ? 'checked' : ''} ${isAdmin ? 'disabled' : ''}>
+            ${label}
+          </label>`;
+        }).join('');
+      } catch (e) {
+        wrap.innerHTML = `<div style="grid-column:1/-1;color:#ef4444;font-size:12px">Could not load users: ${esc(e.message)}</div>`;
+      }
+    }
+
+    // ── Manage Clients table row helpers ─────────────────────────────────
+    let _accessModalClientId = null;
+    let _modulesModalClientId = null;
+
+    async function openClientAccessModal(cid, username) {
+      _accessModalClientId = cid;
+      document.getElementById('clientAccessTitle').textContent = `Client Access — ${username}`;
+      document.getElementById('clientAccessModal').classList.add('open');
+      // Pre-check users already granted access.
+      try {
+        const r = await fetch(`/hub/api/clients/${cid}/access`);
+        const d = await r.json();
+        const ids = (d.users || []).map(u => u.id);
+        await populateClientAccessChecks('clientAccessUsersWrap', ids);
+      } catch (e) {
+        await populateClientAccessChecks('clientAccessUsersWrap', []);
+        toast(`Could not load current access: ${e.message}`, 'error');
+      }
+    }
+
+    async function saveClientAccess() {
+      if (!_accessModalClientId) return;
+      const user_ids = Array.from(
+        document.querySelectorAll('#clientAccessUsersWrap input.fCAccessCb:checked')
+      ).map(cb => parseInt(cb.value, 10)).filter(Number.isFinite);
+      try {
+        const r = await fetch(`/hub/api/clients/${_accessModalClientId}/access`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_ids })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Access updated', 'success');
+        closeModal('clientAccessModal');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function openClientModulesModal(cid, username) {
+      _modulesModalClientId = cid;
+      document.getElementById('clientModulesTitle').textContent = `Enabled Modules — ${username}`;
+      document.getElementById('clientModulesModal').classList.add('open');
+      try {
+        const r = await fetch(`/hub/api/profile/${cid}`);
+        const d = await r.json();
+        const mods = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
+        populateClientModuleChecks('clientModulesWrap', mods);
+      } catch (e) {
+        populateClientModuleChecks('clientModulesWrap', null);
+        toast(`Could not load modules: ${e.message}`, 'error');
+      }
+    }
+
+    async function saveClientModules() {
+      if (!_modulesModalClientId) return;
+      const enabled_modules = Array.from(
+        document.querySelectorAll('#clientModulesWrap input.fCModCb:checked')
+      ).map(cb => cb.value);
+      try {
+        const r = await fetch(`/hub/api/profile/${_modulesModalClientId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled_modules })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Modules updated', 'success');
+        closeModal('clientModulesModal');
+        // If the currently selected client is the one being edited, re-apply.
+        if (activeClientId === _modulesModalClientId) {
+          activeClientModules = enabled_modules.slice();
+          applyModuleVisibility();
+        }
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ── Sidebar nav visibility per enabled_modules ───────────────────────
+    function applyModuleVisibility() {
+      // Admins/staff always see everything; only constrain for clients.
+      const navItems = document.querySelectorAll('.nav-item[data-module]');
+      if (isStaffOrAdmin()) {
+        navItems.forEach(n => n.style.display = '');
+        return;
+      }
+      const enabled = activeClientModules
+        ? new Set(activeClientModules)
+        : null; // null = no opt-out recorded → show defaults
+      navItems.forEach(n => {
+        const key = n.getAttribute('data-module');
+        if (!enabled) { n.style.display = ''; return; }
+        n.style.display = enabled.has(key) ? '' : 'none';
+      });
+    }
+
+    // Called from selectAccount() / loadProfile() etc. to refresh the cache
+    // and re-apply nav visibility for the active client.
+    async function refreshActiveClientModules() {
+      if (!activeClientId) { activeClientModules = null; applyModuleVisibility(); return; }
+      // Admins/staff hit /profile/{cid}; clients only have permission for /profile
+      const url = isStaffOrAdmin()
+        ? `/hub/api/profile/${activeClientId}`
+        : '/hub/api/profile';
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        activeClientModules = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
+      } catch (_) {
+        activeClientModules = null;
+      }
+      applyModuleVisibility();
+    }
+
+    // ═══════════════════════════════════════
+    // TEAM CHAT
+    // ═══════════════════════════════════════
+    const CHAT = {
+      rooms: [],
+      activeRoomId: null,
+      activeRoom: null,
+      isAdmin: false,
+      pollMs: 8000,
+      _pollHandle: null,
+      _badgeHandle: null,
+      _lastMsgId: 0,
+    };
+
+    function chatHandleKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatSendMessage();
+      }
+    }
+
+    async function loadChatRooms() {
+      try {
+        const r = await fetch('/hub/api/chat/rooms');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        CHAT.rooms = d.rooms || [];
+        CHAT.isAdmin = !!d.is_admin;
+        const newBtn = document.getElementById('chatNewRoomBtn');
+        if (newBtn) newBtn.style.display = CHAT.isAdmin ? '' : 'none';
+        renderChatRoomsList();
+        // If the previously-selected room is still in the list, re-select it.
+        if (CHAT.activeRoomId && CHAT.rooms.some(r => r.id === CHAT.activeRoomId)) {
+          selectChatRoom(CHAT.activeRoomId, { silent: true });
+        }
+      } catch (e) {
+        const list = document.getElementById('chatRoomsList');
+        if (list) list.innerHTML = `<div style="padding:18px;color:#ef4444;font-size:13px">Could not load rooms: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderChatRoomsList() {
+      const list = document.getElementById('chatRoomsList');
+      if (!list) return;
+      if (!CHAT.rooms.length) {
+        list.innerHTML = `<div style="padding:24px 18px;color:#94a3b8;font-size:13px">
+          No chat rooms yet.${CHAT.isAdmin ? ' Click <b>+ New Room</b> to create one.' : ''}
+        </div>`;
+        return;
+      }
+      list.innerHTML = CHAT.rooms.map(r => {
+        const unread = parseInt(r.unread || r.unread_count || 0, 10);
+        const isActive = r.id === CHAT.activeRoomId;
+        const sub = r.client_company ? esc(r.client_company) : (r.description ? esc(r.description) : '');
+        return `<div onclick="selectChatRoom(${r.id})"
+          style="padding:12px 14px;border-bottom:1px solid #eef2f7;cursor:pointer;${isActive ? 'background:#eef4ff;border-left:3px solid #2563eb' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div style="font-weight:600;font-size:13px;color:#0f172a;${unread ? 'font-weight:700' : ''}">${esc(r.name)}</div>
+            ${unread ? `<span class="badge badge-red" style="font-size:10px">${unread}</span>` : ''}
+          </div>
+          ${sub ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${sub}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    async function selectChatRoom(roomId, opts = {}) {
+      CHAT.activeRoomId = roomId;
+      CHAT.activeRoom = CHAT.rooms.find(r => r.id === roomId) || null;
+      renderChatRoomsList();
+      if (!opts.silent) {
+        document.getElementById('chatMessages').innerHTML =
+          '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">Loading messages…</div>';
+      }
+      const titleEl = document.getElementById('chatRoomTitle');
+      const subEl = document.getElementById('chatRoomSubtitle');
+      const actsEl = document.getElementById('chatRoomActions');
+      const composer = document.getElementById('chatComposer');
+      if (CHAT.activeRoom) {
+        titleEl.textContent = CHAT.activeRoom.name;
+        const bits = [];
+        if (CHAT.activeRoom.description) bits.push(CHAT.activeRoom.description);
+        if (CHAT.activeRoom.client_company) bits.push('Client: ' + CHAT.activeRoom.client_company);
+        subEl.textContent = bits.join(' · ');
+        composer.style.display = '';
+        actsEl.innerHTML = CHAT.isAdmin ? `
+          <button class="btn btn-secondary btn-sm" onclick="openChatMembersModal(${CHAT.activeRoomId})">👥 Members</button>
+          <button class="btn btn-danger-outline btn-sm" onclick="deleteChatRoom(${CHAT.activeRoomId})">🗑 Delete</button>
+        ` : '';
+      }
+      await loadChatMessages();
+      _startChatPoll();
+    }
+
+    async function loadChatMessages() {
+      if (!CHAT.activeRoomId) return;
+      try {
+        const r = await fetch(`/hub/api/chat/rooms/${CHAT.activeRoomId}/messages?limit=200`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        renderChatMessages(d.messages || []);
+        // Refresh badges since marking read may change the count.
+        refreshChatBadge();
+      } catch (e) {
+        document.getElementById('chatMessages').innerHTML =
+          `<div style="color:#ef4444;font-size:13px;padding:20px">Could not load messages: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderChatMessages(msgs) {
+      const box = document.getElementById('chatMessages');
+      if (!box) return;
+      const myId = currentUser ? parseInt(currentUser.id, 10) : -1;
+      if (!msgs.length) {
+        box.innerHTML = '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">No messages yet. Be the first to say hi 👋</div>';
+        return;
+      }
+      box.innerHTML = msgs.map(m => {
+        const mine = parseInt(m.sender_id, 10) === myId;
+        const align = mine ? 'flex-end' : 'flex-start';
+        const bg = mine ? '#dbeafe' : '#ffffff';
+        const border = mine ? '#bfdbfe' : '#e5e7eb';
+        const roleBadge = m.sender_role && m.sender_role !== 'member'
+          ? `<span style="background:#e0e7ff;color:#3730a3;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px">${esc(m.sender_role)}</span>` : '';
+        const ts = m.created_at ? esc(m.created_at) : '';
+        return `<div style="display:flex;justify-content:${align};margin-bottom:10px">
+          <div style="max-width:78%;padding:8px 12px;border:1px solid ${border};background:${bg};border-radius:12px">
+            <div style="font-size:11px;color:#64748b;margin-bottom:2px">
+              <b style="color:#1f2937">${esc(m.sender_name || 'unknown')}</b>${roleBadge}
+              <span style="margin-left:6px;color:#94a3b8">${ts}</span>
+            </div>
+            <div style="font-size:13px;color:#111827;white-space:pre-wrap;word-break:break-word">${esc(m.body || '')}</div>
+          </div>
+        </div>`;
+      }).join('');
+      const last = msgs[msgs.length - 1];
+      if (last) CHAT._lastMsgId = parseInt(last.id, 10) || CHAT._lastMsgId;
+      // Scroll to bottom
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function chatSendMessage() {
+      const input = document.getElementById('chatInput');
+      const text = (input.value || '').trim();
+      if (!text || !CHAT.activeRoomId) return;
+      const btn = document.getElementById('chatSendBtn');
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/hub/api/chat/rooms/${CHAT.activeRoomId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body: text })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        input.value = '';
+        await loadChatMessages();
+      } catch (e) { toast(e.message, 'error'); }
+      finally { btn.disabled = false; input.focus(); }
+    }
+
+    function _startChatPoll() {
+      if (CHAT._pollHandle) clearInterval(CHAT._pollHandle);
+      CHAT._pollHandle = setInterval(() => {
+        const panel = document.getElementById('panel-chat');
+        if (panel && panel.classList.contains('active') && CHAT.activeRoomId) {
+          loadChatMessages();
+        }
+      }, CHAT.pollMs);
+    }
+
+    // ── Chat Room create/edit modal ──
+    async function openChatRoomModal() {
+      document.getElementById('chatRoomModalTitle').textContent = 'New Chat Room';
+      document.getElementById('chatRoomSaveBtn').textContent = 'Create Room';
+      document.getElementById('fRoomName').value = '';
+      document.getElementById('fRoomDesc').value = '';
+      // Make sure we have a client list to anchor against (staff may not have
+      // visited the Manage Clients panel yet).
+      if (!clientsList || !clientsList.length) {
+        try { await loadClients(); } catch (_) { /* non-fatal */ }
+      }
+      // Populate the client picker from clientsList.
+      const sel = document.getElementById('fRoomClient');
+      sel.innerHTML = '<option value="">— No client anchor —</option>' +
+        (clientsList || []).filter(c => c.role === 'client')
+          .map(c => `<option value="${c.id}">${esc(c.company || c.username)}</option>`).join('');
+      // Populate member picker (all eligible users incl. clients).
+      const wrap = document.getElementById('fRoomMembersWrap');
+      wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading users…</div>';
+      try {
+        const r = await fetch('/hub/api/chat/users');
+        const d = await r.json();
+        const users = d.users || [];
+        wrap.innerHTML = users.map(u => {
+          const tag = u.role === 'client' ? esc(u.company || u.username) : esc(u.contact_name || u.username);
+          return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;cursor:pointer">
+            <input type="checkbox" class="fRoomMember" value="${u.id}">
+            ${tag} <span style="color:#94a3b8;font-size:11px">(${esc(u.role)})</span>
+          </label>`;
+        }).join('');
+      } catch (e) {
+        wrap.innerHTML = `<div style="grid-column:1/-1;color:#ef4444;font-size:12px">Could not load users: ${esc(e.message)}</div>`;
+      }
+      // If a client picker is selected, auto-tick that client's user account
+      // so the staff doesn't have to remember.
+      const clientSel = document.getElementById('fRoomClient');
+      clientSel.onchange = () => {
+        const cid = parseInt(clientSel.value, 10);
+        if (!cid) return;
+        const cb = document.querySelector(`#fRoomMembersWrap input.fRoomMember[value="${cid}"]`);
+        if (cb) cb.checked = true;
+      };
+      document.getElementById('chatRoomModal').classList.add('open');
+    }
+
+    async function chatSaveRoom() {
+      const name = document.getElementById('fRoomName').value.trim();
+      const description = document.getElementById('fRoomDesc').value.trim();
+      const clientVal = document.getElementById('fRoomClient').value;
+      const client_id = clientVal ? parseInt(clientVal, 10) : null;
+      const member_user_ids = Array.from(
+        document.querySelectorAll('#fRoomMembersWrap input.fRoomMember:checked')
+      ).map(cb => parseInt(cb.value, 10)).filter(Number.isFinite);
+      if (!name) { toast('Room name is required', 'error'); return; }
+      try {
+        const r = await fetch('/hub/api/chat/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description, client_id, member_user_ids })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        const j = await r.json();
+        closeModal('chatRoomModal');
+        toast('Room created', 'success');
+        await loadChatRooms();
+        if (j && j.id) selectChatRoom(j.id);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteChatRoom(roomId) {
+      if (!confirm('Delete this chat room and ALL its messages? This cannot be undone.')) return;
+      try {
+        const r = await fetch(`/hub/api/chat/rooms/${roomId}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        CHAT.activeRoomId = null;
+        CHAT.activeRoom = null;
+        document.getElementById('chatMessages').innerHTML =
+          '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">Room deleted.</div>';
+        document.getElementById('chatComposer').style.display = 'none';
+        document.getElementById('chatRoomActions').innerHTML = '';
+        document.getElementById('chatRoomTitle').textContent = 'Select a room';
+        document.getElementById('chatRoomSubtitle').textContent = '';
+        await loadChatRooms();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ── Chat Members modal ──
+    let _membersModalRoomId = null;
+
+    async function openChatMembersModal(roomId) {
+      _membersModalRoomId = roomId;
+      const room = CHAT.rooms.find(r => r.id === roomId);
+      document.getElementById('chatMembersTitle').textContent =
+        room ? `Members — ${room.name}` : 'Room Members';
+      document.getElementById('chatMembersModal').classList.add('open');
+      await refreshMembersModal();
+    }
+
+    async function refreshMembersModal() {
+      const body = document.getElementById('chatMembersBody');
+      body.innerHTML = '<div style="color:#94a3b8;font-size:12px">Loading…</div>';
+      try {
+        const [memR, usrR] = await Promise.all([
+          fetch(`/hub/api/chat/rooms/${_membersModalRoomId}/members`),
+          fetch('/hub/api/chat/users')
+        ]);
+        const memD = await memR.json();
+        const usrD = await usrR.json();
+        const members = memD.members || [];
+        const allUsers = usrD.users || [];
+        const memberIds = new Set(members.map(m => parseInt(m.user_id || m.id, 10)));
+        const nonMembers = allUsers.filter(u => !memberIds.has(parseInt(u.id, 10)));
+
+        const memberRows = members.map(m => {
+          const userRole = m.user_role || m.role || 'member';
+          const memberRole = m.member_role || 'member';
+          const label = userRole === 'client'
+            ? esc(m.company || m.username)
+            : esc(m.contact_name || m.username);
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #f1f5f9;font-size:13px">
+            <span>${label} <span style="color:#94a3b8;font-size:11px">(${esc(userRole)}${memberRole !== 'member' ? ' · ' + esc(memberRole) : ''})</span></span>
+            <button class="btn btn-danger-outline btn-sm" onclick="chatRemoveMember(${m.user_id || m.id})">Remove</button>
+          </div>`;
+        }).join('') || '<div style="color:#94a3b8;font-size:12px;padding:8px">No members yet.</div>';
+
+        const addOptions = nonMembers.map(u => {
+          const tag = u.role === 'client' ? esc(u.company || u.username) : esc(u.contact_name || u.username);
+          return `<option value="${u.id}">${tag} (${esc(u.role)})</option>`;
+        }).join('');
+
+        body.innerHTML = `
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px">Current members</div>
+          <div style="border:1px solid #e5e7eb;border-radius:6px;background:#fff;margin-bottom:14px">${memberRows}</div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px">Add member</div>
+          <div style="display:flex;gap:8px">
+            <select id="addMemberSel" class="form-control" style="flex:1">
+              <option value="">— Pick a user —</option>${addOptions}
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="chatAddMember()">Add</button>
+          </div>
+        `;
+      } catch (e) {
+        body.innerHTML = `<div style="color:#ef4444;font-size:12px">Could not load members: ${esc(e.message)}</div>`;
+      }
+    }
+
+    async function chatAddMember() {
+      const sel = document.getElementById('addMemberSel');
+      const uid = parseInt(sel.value, 10);
+      if (!uid) { toast('Pick a user first', 'error'); return; }
+      try {
+        const r = await fetch(`/hub/api/chat/rooms/${_membersModalRoomId}/members`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: uid, role: 'member' })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        toast('Member added', 'success');
+        await refreshMembersModal();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function chatRemoveMember(uid) {
+      if (!confirm('Remove this member from the room?')) return;
+      try {
+        const r = await fetch(`/hub/api/chat/rooms/${_membersModalRoomId}/members/${uid}`, {
+          method: 'DELETE'
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await refreshMembersModal();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ── Unread badge in sidebar ──
+    async function refreshChatBadge() {
+      try {
+        const r = await fetch('/hub/api/chat/unread-count');
+        if (!r.ok) return;
+        const d = await r.json();
+        const n = parseInt(d.unread || 0, 10);
+        ['navChatBadge', 'navChatBadgeClient'].forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          if (n > 0) { el.textContent = n > 99 ? '99+' : String(n); el.style.display = ''; }
+          else { el.style.display = 'none'; }
+        });
+      } catch (_) { /* silent */ }
+    }
+
+    function startChatBadgePolling() {
+      if (CHAT._badgeHandle) clearInterval(CHAT._badgeHandle);
+      refreshChatBadge();
+      CHAT._badgeHandle = setInterval(refreshChatBadge, 30000);
+    }
+
+    // Kick off badge polling once the app shell is shown.
+    // (selectAccount/enterAsAdmin both end with showing #appShell.)
+    document.addEventListener('DOMContentLoaded', () => {
+      const tryStart = () => {
+        if (currentUser) { startChatBadgePolling(); return; }
+        setTimeout(tryStart, 1000);
+      };
+      tryStart();
+    });
   </script>
 </body>
 
