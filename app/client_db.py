@@ -3988,7 +3988,22 @@ def chat_unread_total(user_id: int, is_admin: bool = False) -> int:
 
 
 def list_chat_eligible_users() -> list[dict]:
-    """All active users that can be added to a chat room."""
+    """All active users that can be added to a chat room.
+
+    De-duplicates legacy short-username rows ('admin', 'rcm', 'jessica',
+    'susan', 'melissa', 'eric') against their canonical email-style row
+    ('admin@medprosc.com', etc.) so each real person only appears once in
+    the New Room picker. Both rows still authenticate for login.
+    """
+    # legacy short username -> canonical email-style username
+    _LEGACY_TO_CANONICAL = {
+        "admin":   "admin@medprosc.com",
+        "rcm":     "rcm@medprosc.com",
+        "eric":    "eric@medprosc.com",
+        "susan":   "susan@medprosc.com",
+        "melissa": "melissa@medprosc.com",
+        "jessica": "jessica@medprosc.com",
+    }
     conn = get_db()
     try:
         rows = conn.execute(
@@ -3997,7 +4012,18 @@ def list_chat_eligible_users() -> list[dict]:
                WHERE COALESCE(is_active,1)=1
                ORDER BY role DESC, company, username"""
         ).fetchall()
-        return [dict(r) for r in rows]
+        # Build the set of canonical usernames present so we can hide the
+        # matching legacy short rows. If the canonical row doesn't exist,
+        # keep the legacy row so the person isn't dropped from the picker.
+        present = {r["username"] for r in rows}
+        deduped = []
+        for r in rows:
+            uname = r["username"]
+            canonical = _LEGACY_TO_CANONICAL.get(uname)
+            if canonical and canonical in present and canonical != uname:
+                continue  # hide legacy short row, canonical is in the list
+            deduped.append(dict(r))
+        return deduped
     finally:
         conn.close()
 
