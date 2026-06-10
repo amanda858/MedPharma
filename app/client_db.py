@@ -380,6 +380,57 @@ def _apply_startup_user_migrations(conn):
     _run_migration_once(conn, "provision_eric_medprosc_v1", _provision_eric_medprosc)
     _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholder_clients)
 
+    # ── ALWAYS-ENSURE: real MedPharma team accounts ──────────────────────────
+    # `_run_migration_once` records its key in `app_migrations` and never runs
+    # again. If the row was later deleted by a different migration / manual
+    # cleanup / fresh persistent-disk DB, we end up with the migration marked
+    # "applied" but the user missing. For our core team accounts that is
+    # unacceptable, so re-assert them on every startup. UPDATE-or-INSERT is
+    # cheap and idempotent.
+    _ensure_medpharma_team_accounts(cur)
+    conn.commit()
+
+
+def _ensure_medpharma_team_accounts(cur):
+    """Upsert the canonical MedPharma SC team accounts on every startup.
+
+    Runs after the one-shot migrations so it always reflects the latest
+    state, regardless of what the historical migrations did. Passwords are
+    only (re)set when the row is missing or has no salt; existing logins
+    are preserved so operators can change them.
+    """
+    team = [
+        # (username, role, contact, starter_password)
+        ("admin@medprosc.com",   "admin", "Admin",   "admin123"),
+        ("rcm@medprosc.com",     "admin", "RCM",     "rcm123"),
+        ("eric@medprosc.com",    "admin", "Eric",    "eric123"),
+        ("susan@medprosc.com",   "staff", "Susan",   "susan123"),
+        ("melissa@medprosc.com", "staff", "Melissa", "melissa123"),
+        ("jessica@medprosc.com", "staff", "Jessica", "jessica123"),
+    ]
+    for username, role, contact, pw in team:
+        row = cur.execute(
+            "SELECT id, salt FROM clients WHERE username=?", (username,)
+        ).fetchone()
+        if row:
+            # Row exists: only ensure role / company / contact / active.
+            # Preserve any operator-changed password.
+            cur.execute(
+                "UPDATE clients SET role=?, company='MedPharma SC', "
+                "contact_name=COALESCE(NULLIF(contact_name,''),?), "
+                "email=COALESCE(NULLIF(email,''),?), is_active=1 WHERE id=?",
+                (role, contact, username, row[0]),
+            )
+        else:
+            salt = secrets.token_hex(16)
+            pw_hash = _hash_pw(pw, salt)
+            cur.execute(
+                "INSERT INTO clients "
+                "(username,password,salt,company,contact_name,email,role,is_active) "
+                "VALUES (?,?,?,?,?,?,?,1)",
+                (username, pw_hash, salt, "MedPharma SC", contact, username, role),
+            )
+
 
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
