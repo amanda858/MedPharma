@@ -1880,6 +1880,14 @@
     <div class="account-body">
       <h2 id="accountGreeting">Select an Account</h2>
       <p id="accountSubtitle">Choose a client account to open the dashboard</p>
+      <div id="selectorTeamLine" style="margin:-4px 0 12px;font-size:13px;color:#64748b;display:none">
+        <span id="selectorTeamCount" style="font-weight:600;color:#0f172a"></span>
+        <span id="selectorTeamNames" style="margin-left:6px"></span>
+        <button class="btn btn-link btn-sm" onclick="enterAsAdminAndOpenClients()"
+          style="margin-left:8px;color:#4338ca;font-weight:600;background:none;border:none;cursor:pointer;font-size:13px">
+          View / Manage Team →
+        </button>
+      </div>
       <div style="margin-bottom:16px;text-align:right">
         <button class="btn btn-secondary btn-sm" id="selectorAddUserBtn" onclick="openUserInviteModal()"
           style="font-size:13px;padding:8px 18px;display:none">+ Add Employee</button>
@@ -4040,6 +4048,9 @@
       const addUserBtn = document.getElementById('selectorAddUserBtn');
       if (addUserBtn) addUserBtn.style.display = isStaffOrAdmin() ? '' : 'none';
 
+      // Show "N team members on this hub" line so the screen never looks empty.
+      refreshSelectorTeamLine();
+
       // All users see all client accounts — with error handling for cold starts
       let loadError = null;
       try {
@@ -4070,6 +4081,7 @@
           <div style="font-size:18px;font-weight:600;color:#0f172a;margin-bottom:8px;">No client accounts yet</div>
           <div style="color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Click <strong>+ New Client</strong> above to create your first client workspace, or jump straight to admin tools.</div>
           ${isFullAdmin() ? `<button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>` : ''}
+          ${isStaffOrAdmin() ? `<button onclick="enterAsAdminAndOpenClients()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#fff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">👥 View / Manage Team</button>` : ''}
           ${currentUser && currentUser.role === 'admin' ? `<button onclick="enterAsAdmin()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#eef2ff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">Enter as Admin →</button>` : ''}
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
@@ -4151,6 +4163,36 @@
       applyModuleVisibility();
       navTo('dashboard');
       startGlobalJobsMonitor();
+    }
+
+    // Admin shortcut: jump straight from the empty selector into Manage Clients.
+    function enterAsAdminAndOpenClients() {
+      enterAsAdmin();
+      // navTo('clients') is gated to admin in the sidebar; call after enterAsAdmin
+      // so adminFullNav is visible and the panel can mount.
+      setTimeout(() => { try { navTo('clients'); } catch(_){} }, 0);
+    }
+
+    // Show a "5 team members" line on the empty selector so admins/staff
+    // can see at a glance that the system already has people in it.
+    async function refreshSelectorTeamLine() {
+      const line = document.getElementById('selectorTeamLine');
+      if (!line) return;
+      if (!isStaffOrAdmin()) { line.style.display = 'none'; return; }
+      try {
+        const r = await fetch('/hub/api/admin/users');
+        if (!r.ok) { line.style.display = 'none'; return; }
+        const d = await r.json();
+        const users = Array.isArray(d) ? d : (d.users || []);
+        const cnt = users.length;
+        document.getElementById('selectorTeamCount').textContent =
+          `${cnt} team member${cnt === 1 ? '' : 's'} on this hub`;
+        const names = users.slice(0, 5).map(u => esc(u.contact_name || u.username)).join(', ');
+        const more = users.length > 5 ? ` +${users.length - 5} more` : '';
+        document.getElementById('selectorTeamNames').textContent =
+          users.length ? `· ${names}${more}` : '';
+        line.style.display = '';
+      } catch (_) { line.style.display = 'none'; }
     }
 
     function updateSubProfileBar() {

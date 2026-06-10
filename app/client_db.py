@@ -295,6 +295,32 @@ def _apply_startup_user_migrations(conn):
                 (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
             )
 
+    def _provision_eric_medprosc():
+        """Ensure eric@medprosc.com exists as a real MedPharma admin login.
+
+        The short 'eric' username was a legacy Luminary placeholder and is
+        purged by purge_legacy_placeholders_v1. This is the real Eric.
+        """
+        email = "eric@medprosc.com"
+        pw = "eric123"
+        salt = secrets.token_hex(16)
+        pw_hash = _hash_pw(pw, salt)
+        row = cur.execute("SELECT id FROM clients WHERE username=?", (email,)).fetchone()
+        if row:
+            cur.execute(
+                "UPDATE clients SET password=?, salt=?, role='admin', "
+                "company='MedPharma SC', contact_name=COALESCE(NULLIF(contact_name,''),'Eric'), "
+                "email=?, is_active=1, must_change_password=0 WHERE id=?",
+                (pw_hash, salt, email, row[0]),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO clients "
+                "(username,password,salt,company,contact_name,email,role,is_active) "
+                "VALUES (?,?,?,?,?,?,?,1)",
+                (email, pw_hash, salt, "MedPharma SC", "Eric", email, "admin"),
+            )
+
     def _purge_legacy_placeholder_clients():
         """Hard-delete the legacy placeholder accounts (Luminary, TruPath) and
         the example/demo accounts that should never appear in production.
@@ -351,6 +377,7 @@ def _apply_startup_user_migrations(conn):
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
     _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
+    _run_migration_once(conn, "provision_eric_medprosc_v1", _provision_eric_medprosc)
     _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholder_clients)
 
 
