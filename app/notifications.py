@@ -1695,9 +1695,15 @@ def send_production_reminders():
             log.error(f"Failed to send production reminder to {username}: {e}")
 
 
-def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") -> tuple[bool, str]:
+def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "",
+                   attachments: list = None) -> tuple[bool, str]:
     """Send email to a specific recipient via SendGrid v3 API.
     Uses _live_config() to read credentials fresh.
+
+    ``attachments`` (optional) is a list of dicts with keys:
+        - filename: str           (e.g. "report.xlsx")
+        - content:  bytes         (raw file bytes; will be base64-encoded)
+        - mime:     str           (e.g. "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     Returns (sent, via) where ``via`` is 'sendgrid', 'smtp', or a reason
     string when nothing went out. The previous signature returned None;
@@ -1706,13 +1712,14 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") 
     if not to_email:
         return False, "missing recipient"
     cfg = _live_config()
+    attachments = attachments or []
 
     # Primary: SendGrid
     sg_key = cfg["SENDGRID_API_KEY"]
     sg_from = cfg["SENDGRID_FROM"]
     if sg_key:
         try:
-            import httpx
+            import httpx, base64 as _b64
             content = []
             if body:
                 content.append({"type": "text/plain", "value": body})
@@ -1727,6 +1734,16 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") 
                 "subject": subject,
                 "content": content,
             }
+            if attachments:
+                payload["attachments"] = [
+                    {
+                        "content": _b64.b64encode(a["content"]).decode("ascii"),
+                        "filename": a["filename"],
+                        "type": a.get("mime", "application/octet-stream"),
+                        "disposition": "attachment",
+                    }
+                    for a in attachments if a.get("content")
+                ]
             resp = httpx.post(
                 "https://api.sendgrid.com/v3/mail/send",
                 json=payload,
@@ -1734,7 +1751,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") 
                     "Authorization": f"Bearer {sg_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=15,
+                timeout=30,
             )
             if resp.status_code in (200, 202):
                 log.info(f"Email sent to {to_email}: {subject}")
@@ -1753,16 +1770,44 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "") 
         return False, "no provider configured (SendGrid/SMTP env vars missing)"
 
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = smtp_u or sg_from
-        msg["To"] = to_email
-        plain = body or "(no content)"
-        msg.attach(MIMEText(plain, "plain"))
-        if html_body:
-            msg.attach(MIMEText(html_body, "html"))
+        # If we have attachments, use a mixed multipart wrapper so the
+        # text+html alternative still renders inline while the file rides
+        # alongside it.
+        if attachments:
+            from email.mime.base import MIMEBase
+            from email import encoders as _encoders
+            outer = MIMEMultipart("mixed")
+            outer["Subject"] = subject
+            outer["From"] = smtp_u or sg_from
+            outer["To"] = to_email
+            alt = MIMEMultipart("alternative")
+            alt.attach(MIMEText(body or "(no content)", "plain"))
+            if html_body:
+                alt.attach(MIMEText(html_body, "html"))
+            outer.attach(alt)
+            for a in attachments:
+                if not a.get("content"):
+                    continue
+                part = MIMEBase(*a.get("mime", "application/octet-stream").split("/", 1))
+                part.set_payload(a["content"])
+                _encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{a["filename"]}"',
+                )
+                outer.attach(part)
+            msg = outer
+        else:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = smtp_u or sg_from
+            msg["To"] = to_email
+            plain = body or "(no content)"
+            msg.attach(MIMEText(plain, "plain"))
+            if html_body:
+                msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(smtp_h, smtp_p, timeout=20) as server:
+        with smtplib.SMTP(smtp_h, smtp_p, timeout=30) as server:
             server.starttls()
             server.login(smtp_u, smtp_pw)
             server.sendmail(msg["From"], [to_email], msg.as_string())
@@ -1793,11 +1838,26 @@ def send_team_progress_reports():
     log.info(f"Team progress dispatch completed for {sent} user(s): {', '.join(sorted(users))}")
 
 
-# ─── End-of-Day Team Report (Lexi & Eric) ────────────────────────────────
+# ─── End-of-Day Team Report (internal — Lexi only) ───────────────────────
 
 # Default recipients for the EOD per-user / per-client breakdown email.
 # Override at runtime with the EOD_REPORT_EMAIL env var (comma-separated).
-EOD_REPORT_DEFAULT_RECIPIENTS = ["lexi@medprosc.com", "eric@medprosc.com"]
+# Per Lexi's directive (2026-06-10): only lexi@medprosc.com receives the
+# internal team breakdown.
+EOD_REPORT_DEFAULT_RECIPIENTS = ["lexi@medprosc.com"]
+
+# Users to suppress from the per-user breakdown (admins, observers, etc).
+# Override with EOD_REPORT_EXCLUDE_USERS env (comma-separated usernames).
+_EOD_EXCLUDE_USERS_DEFAULT = {
+    "lexi@medprosc.com", "admin@medprosc.com", "admin",
+    "eric@medprosc.com", "eric",
+}
+
+# MedPharma brand assets — used in every email header so it always
+# looks like a real product, not a debug dump.
+_MEDPHARMA_LOGO_URL = "https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
+_MEDPHARMA_SITE_URL = "https://medpharmasc.com"
+_MEDPHARMA_HUB_URL  = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
 
 
 def _eod_recipients() -> list[str]:
@@ -1805,6 +1865,13 @@ def _eod_recipients() -> list[str]:
     if raw:
         return [e.strip() for e in raw.split(",") if e.strip()]
     return list(EOD_REPORT_DEFAULT_RECIPIENTS)
+
+
+def _eod_excluded_users() -> set:
+    raw = os.getenv("EOD_REPORT_EXCLUDE_USERS", "").strip()
+    if raw:
+        return {u.strip().lower() for u in raw.split(",") if u.strip()}
+    return set(_EOD_EXCLUDE_USERS_DEFAULT)
 
 
 def _esc_html(s) -> str:
@@ -1832,11 +1899,127 @@ _EOD_TAB_ICONS = {
     "Pageviews":     "👁️",
 }
 
+# Map a tab name → the client `enabled_modules` slug that gates it.
+# When a client doesn't have the module enabled, we suppress the column.
+_TAB_TO_MODULE = {
+    "Claims":        "claims",
+    "Credentialing": "credentialing",
+    "Enrollment":    "enrollment",
+    "EDI":           "edi",
+    "Production":    "production",
+    "Documents":     "documents",
+    "Notes":         "claims",   # notes ride with claims
+    "Chat":          "chat",
+    "Audit":         None,        # always shown
+    "Pageviews":     None,        # always shown
+}
+
+
+def _filter_tabs_for_client(tabs: list, enabled_modules: list) -> list:
+    """Drop tabs whose underlying module isn't enabled for this client.
+    Tabs with module=None are always kept.
+    """
+    if not enabled_modules:
+        return list(tabs)
+    en = {m.lower() for m in enabled_modules}
+    out = []
+    for t in tabs:
+        mod = _TAB_TO_MODULE.get(t)
+        if mod is None or mod in en:
+            out.append(t)
+    return out
+
+
+def _brand_email_shell(title: str, subtitle: str, accent: str, inner_html: str,
+                       footer_note: str = "") -> str:
+    """Wraps inner HTML in a consistent MedPharma-branded email frame.
+
+    Uses table-based layout (not flexbox) for maximum email-client
+    compatibility (Gmail, Outlook, Apple Mail).
+    """
+    title = _esc_html(title)
+    subtitle = _esc_html(subtitle)
+    accent = accent or "#2563eb"
+    footer = footer_note or (
+        "MedPharma Hub · Auto-generated · "
+        f'<a href="{_MEDPHARMA_HUB_URL}" style="color:#94a3b8">Open Hub</a> · '
+        f'<a href="{_MEDPHARMA_SITE_URL}" style="color:#94a3b8">medpharmasc.com</a>'
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title></head>
+<body style="margin:0;padding:0;background:#eef2f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eef2f7;padding:24px 12px">
+  <tr><td align="center">
+    <table role="presentation" width="720" cellpadding="0" cellspacing="0" border="0" style="max-width:720px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,.08)">
+
+      <!-- BRAND BAR -->
+      <tr><td style="background:linear-gradient(135deg,#0b1733 0%,{accent} 100%);padding:22px 28px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="vertical-align:middle">
+              <img src="{_MEDPHARMA_LOGO_URL}" alt="MedPharma" height="44" style="display:block;height:44px;width:auto;border:0;outline:none;text-decoration:none">
+            </td>
+            <td align="right" style="vertical-align:middle">
+              <div style="color:#ffffff;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;opacity:.78">MedPharma SC</div>
+              <div style="color:#ffffff;font-size:11px;opacity:.65;margin-top:2px">medpharmasc.com</div>
+            </td>
+          </tr>
+        </table>
+        <div style="color:#ffffff;font-size:22px;font-weight:800;letter-spacing:.2px;margin:14px 0 2px">{title}</div>
+        <div style="color:rgba(255,255,255,.85);font-size:13px">{subtitle}</div>
+      </td></tr>
+
+      <!-- BODY -->
+      <tr><td style="padding:24px 28px 28px;background:#ffffff">
+{inner_html}
+      </td></tr>
+
+      <!-- FOOTER -->
+      <tr><td style="background:#0b1733;padding:14px 28px;text-align:center;color:#94a3b8;font-size:11px;line-height:1.5">
+        {footer}
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
+</body></html>"""
+
+
+def _ts_short(value) -> str:
+    """Format a timestamp/datetime/iso-string as 'HH:MM' (24h)."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        # Try ISO-ish first, then common SQL "YYYY-MM-DD HH:MM:SS"
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M"):
+            try:
+                from datetime import datetime as _dt
+                return _dt.strptime(value[:19], fmt).strftime("%H:%M")
+            except Exception:
+                continue
+        # As a fallback, slice the time portion if it looks like 'YYYY-MM-DD HH:MM'
+        if len(value) >= 16 and value[10] in (" ", "T"):
+            return value[11:16]
+        return ""
+    try:
+        return value.strftime("%H:%M")
+    except Exception:
+        return ""
+
 
 def _render_eod_report_html(report: dict) -> tuple[str, str]:
     """Render the EOD report dict into (text_body, html_body).
 
     The report dict comes from app.client_db.get_eod_team_report().
+
+    Design rules (after Lexi feedback 2026-06-10):
+      * Branded shell with MedPharma logo header
+      * Admins (Lexi/Eric) suppressed by default — operators only
+      * Per-client section uses a vertical card (no giant 11-col table)
+      * Module-filtered badges so EDI/Credentialing don't show for clients
+        who haven't enabled those services
+      * Every activity row is timestamped (HH:MM 24h)
     """
     date_iso = report.get("report_date", "")
     try:
@@ -1847,21 +2030,28 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         date_long = date_iso
 
     headlines = report.get("headlines", {}) or {}
-    tabs = report.get("tab_keys", []) or []
-    users = report.get("users", []) or []
-    team_totals = report.get("team_totals", {}) or {}
+    tabs_all = report.get("tab_keys", []) or list(_EOD_TAB_ICONS.keys())
+    users_all = report.get("users", []) or []
+    excluded = _eod_excluded_users()
+
+    # Filter out admins/observers (default: Lexi + Eric + admin@).
+    users = [
+        u for u in users_all
+        if (u.get("username") or "").strip().lower() not in excluded
+        and (u.get("email") or "").strip().lower() not in excluded
+    ]
 
     # ── plain-text fallback ──
     text_lines = [
         f"MedPharma End-of-Day Team Report — {date_long}",
         "",
-        f"Active team members today: {headlines.get('active_users', 0)}",
+        f"Active operators today: {len(users)}",
         f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
         f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
         f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
         f"Notes: {headlines.get('notes_new', 0)} · Files uploaded: {headlines.get('files_uploaded', 0)} · Chat messages: {headlines.get('chat_messages', 0)} · Audit events: {headlines.get('audit_events', 0)}",
         "",
-        "Per-user breakdown:",
+        "Per-operator breakdown:",
     ]
     for u in users:
         text_lines.append(
@@ -1870,190 +2060,197 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions"
         )
         for cname, cb in (u.get("clients") or {}).items():
-            chunks = [f"{k}={v}" for k, v in cb["totals"].items() if v]
+            chunks = [f"{k}={v}" for k, v in cb.get("totals", {}).items() if v]
             if not chunks:
                 continue
             text_lines.append(f"    - {cname}: {', '.join(chunks)}")
-            for it in cb["items"][:5]:
-                text_lines.append(f"        · [{it['tab']}] {it['action']} — {it['title']}")
+            for it in (cb.get("items") or [])[:6]:
+                ts = _ts_short(it.get("ts") or it.get("at") or "")
+                ts_prefix = f"[{ts}] " if ts else ""
+                text_lines.append(
+                    f"        · {ts_prefix}[{it.get('tab')}] {it.get('action','')} — {it.get('title','')}"
+                )
     text_body = "\n".join(text_lines)
 
-    # ── HTML ──
-    headline_card = lambda label, value, color="#1d4ed8": f"""
-        <div style="flex:1;min-width:140px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin:6px">
-            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:600">{label}</div>
-            <div style="font-size:22px;color:{color};font-weight:800;margin-top:4px">{value}</div>
-        </div>
-    """
+    # ── HTML headline ribbon (single row, table-based so Outlook is happy) ──
+    def _ribbon_cell(label, value, color="#1d4ed8"):
+        return (
+            f'<td align="center" valign="top" width="20%" style="padding:14px 6px">'
+            f'<div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;font-weight:700">{label}</div>'
+            f'<div style="font-size:24px;color:{color};font-weight:800;margin-top:4px;line-height:1.1">{value}</div>'
+            f'</td>'
+        )
 
-    headlines_html = "".join([
-        headline_card("Active team", headlines.get("active_users", 0)),
-        headline_card("Claims new",     headlines.get("claims_new", 0)),
-        headline_card("Claims touched", headlines.get("claims_touched", 0), "#2563eb"),
-        headline_card("Credentialing",  headlines.get("cred_new", 0), "#7c3aed"),
-        headline_card("Enrollment",     headlines.get("enroll_new", 0), "#7c3aed"),
-        headline_card("EDI",            headlines.get("edi_new", 0), "#0891b2"),
-        headline_card("Production hrs", f"{headlines.get('production_hours', 0)}", "#16a34a"),
-        headline_card("Notes",          headlines.get("notes_new", 0), "#0f766e"),
-        headline_card("Files",          headlines.get("files_uploaded", 0), "#0f766e"),
-        headline_card("Chat msgs",      headlines.get("chat_messages", 0), "#db2777"),
-    ])
+    ribbon_row1 = (
+        _ribbon_cell("Operators", len(users)) +
+        _ribbon_cell("Claims new", headlines.get("claims_new", 0)) +
+        _ribbon_cell("Claims touched", headlines.get("claims_touched", 0), "#2563eb") +
+        _ribbon_cell("Credentialing", headlines.get("cred_new", 0), "#7c3aed") +
+        _ribbon_cell("Enrollment", headlines.get("enroll_new", 0), "#7c3aed")
+    )
+    ribbon_row2 = (
+        _ribbon_cell("EDI", headlines.get("edi_new", 0), "#0891b2") +
+        _ribbon_cell("Prod hrs", f"{headlines.get('production_hours', 0)}", "#16a34a") +
+        _ribbon_cell("Notes", headlines.get("notes_new", 0), "#0f766e") +
+        _ribbon_cell("Files", headlines.get("files_uploaded", 0), "#0f766e") +
+        _ribbon_cell("Chat", headlines.get("chat_messages", 0), "#db2777")
+    )
 
-    # Per-user blocks (with per-client per-tab breakdown).
-    user_blocks_html = ""
+    ribbon_html = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:0 0 18px">'
+        f'<tr>{ribbon_row1}</tr>'
+        '<tr><td colspan="5" style="border-top:1px solid #e2e8f0;padding:0;line-height:0">&nbsp;</td></tr>'
+        f'<tr>{ribbon_row2}</tr>'
+        '</table>'
+    )
+
+    # ── Per-operator cards ──
+    def _badges_for(totals_dict, only_tabs=None):
+        out = ""
+        chips = only_tabs if only_tabs is not None else tabs_all
+        for t in chips:
+            v = (totals_dict or {}).get(t, 0)
+            if not v:
+                continue
+            out += (
+                f'<span style="display:inline-block;background:#eef2ff;'
+                f'color:#1d4ed8;border-radius:6px;padding:4px 9px;'
+                f'margin:2px 4px 2px 0;font-size:12px;font-weight:600">'
+                f'{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
+            )
+        return out
+
+    def _client_block(cname, cb):
+        """Render ONE client section inside an operator card.
+        Drops modules the client doesn't have enabled.
+        """
+        enabled = cb.get("enabled_modules") or []
+        visible_tabs = _filter_tabs_for_client(tabs_all, enabled)
+        # Suppress sections that are entirely zero for this client.
+        if not any((cb.get("totals", {}) or {}).get(t, 0) for t in visible_tabs):
+            return ""
+        badges = _badges_for(cb.get("totals", {}), only_tabs=visible_tabs) or (
+            '<span style="color:#94a3b8;font-size:12px;font-style:italic">No tracked work captured</span>'
+        )
+        # Items (chronologically) — already trimmed/sorted by aggregator.
+        items_html = ""
+        items_iter = cb.get("items") or []
+        # Sort by ts if available
+        try:
+            items_iter = sorted(items_iter, key=lambda it: (it.get("ts") or "") , reverse=False)
+        except Exception:
+            pass
+        for it in items_iter[:10]:
+            tab = it.get("tab", "")
+            if visible_tabs and tab not in visible_tabs:
+                continue
+            ts = _ts_short(it.get("ts") or it.get("at") or "")
+            ts_html = (
+                f'<span style="display:inline-block;background:#0f172a;color:#fff;'
+                f'border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;'
+                f'font-family:Menlo,Consolas,monospace;margin-right:8px;letter-spacing:.5px">{ts}</span>'
+                if ts else ''
+            )
+            items_html += (
+                f'<tr><td style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:12px;color:#334155">'
+                f'{ts_html}'
+                f'<span style="color:#1d4ed8;font-weight:600;margin-right:6px">{_EOD_TAB_ICONS.get(tab,"")} {_esc_html(tab)}</span>'
+                f'<span style="color:#64748b">{_esc_html(it.get("action","")) }</span> '
+                f'— {_esc_html(it.get("title",""))}'
+                f'</td></tr>'
+            )
+        if not items_html:
+            items_html = (
+                '<tr><td style="padding:8px 0;color:#94a3b8;font-size:12px;font-style:italic">'
+                'No itemised changes captured for this client today.</td></tr>'
+            )
+        return f"""
+        <div style="margin:14px 0 0;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+          <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:6px">{_esc_html(cname)}</div>
+          <div style="margin:2px 0 10px">{badges}</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{items_html}</table>
+        </div>"""
+
+    cards_html = ""
     if not users:
-        user_blocks_html = (
-            "<div style=\"padding:18px;color:#94a3b8;font-size:14px;text-align:center\">"
-            "No team activity recorded today. Either the team didn't log in, "
-            "or the tracker missed events. Check the Audit Log to confirm."
-            "</div>"
+        cards_html = (
+            '<div style="padding:22px;color:#94a3b8;font-size:14px;text-align:center;'
+            'background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px">'
+            'No operator activity recorded today.</div>'
         )
     else:
         for u in users:
             uname = _esc_html(u.get("contact_name") or u.get("username", ""))
             email = _esc_html(u.get("email", ""))
-            role  = _esc_html((u.get("role") or "").title())
+            role  = _esc_html((u.get("role") or "staff").title())
             hrs_a = u.get("active_hours", 0)
             hrs_i = u.get("idle_hours", 0)
             acts  = u.get("total_actions", 0)
-            highlights = u.get("highlights") or []
-
-            # Per-user tab strip
-            tab_strip = ""
-            for t in tabs:
-                v = u["totals"].get(t, 0)
-                if v == 0:
-                    continue
-                tab_strip += (
-                    f'<span style="display:inline-block;background:#eef2ff;'
-                    f'color:#1d4ed8;border-radius:6px;padding:4px 10px;'
-                    f'margin:2px 4px 2px 0;font-size:12px;font-weight:600">'
-                    f'{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
-                )
-            if not tab_strip:
-                tab_strip = (
-                    '<span style="color:#94a3b8;font-size:12px;font-style:italic">'
-                    'Logged in but no tracked tab activity</span>'
-                )
-
-            # Per-client rows
-            client_rows = ""
-            for cname, cb in (u.get("clients") or {}).items():
-                tab_cells = ""
-                any_nonzero = False
-                for t in tabs:
-                    v = cb["totals"].get(t, 0)
-                    if v:
-                        any_nonzero = True
-                    cell_style = "padding:4px 8px;border:1px solid #f1f5f9;text-align:center;font-size:12px"
-                    if v:
-                        cell_style += ";background:#eef2ff;color:#1d4ed8;font-weight:700"
-                    else:
-                        cell_style += ";color:#cbd5e1"
-                    tab_cells += f'<td style="{cell_style}">{v or "·"}</td>'
-                if not any_nonzero:
-                    continue
-                # Sample items (max 6) so the reader sees what was actually done.
-                items_html = ""
-                for it in cb["items"][:6]:
-                    items_html += (
-                        f'<div style="font-size:12px;color:#475569;'
-                        f'padding:2px 0;border-bottom:1px dashed #f1f5f9">'
-                        f'<span style="display:inline-block;min-width:96px;color:#1d4ed8;font-weight:600">'
-                        f'{_EOD_TAB_ICONS.get(it["tab"],"")} {_esc_html(it["tab"])}</span> '
-                        f'{_esc_html(it["action"])} — {_esc_html(it["title"])}</div>'
-                    )
-                client_rows += f"""
-                <tr><td colspan="{len(tabs)+1}" style="padding:10px 8px 4px;font-weight:700;color:#0f172a;font-size:13px;border-top:1px solid #e2e8f0">{_esc_html(cname)}</td></tr>
-                <tr>
-                    <td style="padding:4px 8px;font-size:12px;color:#64748b;border:1px solid #f1f5f9">Tabs touched</td>
-                    {tab_cells}
-                </tr>
-                <tr>
-                    <td colspan="{len(tabs)+1}" style="padding:6px 8px 12px;border:1px solid #f8fafc;background:#fafafa">{items_html or '<span style="color:#94a3b8;font-size:12px">No itemised changes captured.</span>'}</td>
-                </tr>
-                """
-
-            if not client_rows:
-                client_rows = (
-                    f'<tr><td colspan="{len(tabs)+1}" '
-                    f'style="padding:10px;color:#94a3b8;font-size:12px;font-style:italic">'
-                    f'No per-client work captured — see "Tabs Touched" badges above for raw page activity.</td></tr>'
-                )
-
-            tab_header_cells = "".join(
-                f'<th style="padding:6px 8px;background:#f8fafc;border:1px solid #f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569">{_EOD_TAB_ICONS.get(t,"")} {t}</th>'
-                for t in tabs
+            first = _ts_short(u.get("first_seen") or "")
+            last  = _ts_short(u.get("last_seen") or "")
+            session_line = (
+                f"{first}–{last}" if first and last else (first or last or "—")
             )
-
+            tab_badges = _badges_for(u.get("totals", {})) or (
+                '<span style="color:#94a3b8;font-size:12px;font-style:italic">Logged in but no tracked work</span>'
+            )
+            highlights = u.get("highlights") or []
             highlights_html = ""
             if highlights:
-                hi_list = "".join(f"<li style=\"font-size:12px;color:#475569;padding:2px 0\">{_esc_html(h)}</li>" for h in highlights)
-                highlights_html = (
-                    f'<div style="margin-top:10px"><div style="font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Audit highlights</div>'
-                    f'<ul style="margin:6px 0 0;padding-left:20px">{hi_list}</ul></div>'
+                hi_list = "".join(
+                    f'<li style="font-size:12px;color:#475569;padding:2px 0">{_esc_html(h)}</li>'
+                    for h in highlights[:6]
                 )
-
-            user_blocks_html += f"""
-            <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(15,23,42,.04)">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
-                    <div>
-                        <div style="font-size:17px;font-weight:800;color:#0f172a">{uname} <span style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-left:6px">{role}</span></div>
-                        <div style="font-size:12px;color:#64748b;margin-top:2px">{email}</div>
-                    </div>
-                    <div style="text-align:right">
-                        <div style="font-size:12px;color:#64748b">Time on hub today</div>
-                        <div style="font-size:18px;font-weight:800;color:#16a34a">{hrs_a}h <span style="color:#94a3b8;font-weight:600;font-size:12px">active</span></div>
-                        <div style="font-size:12px;color:#64748b">{hrs_i}h idle · {acts} actions</div>
-                    </div>
-                </div>
-                <div style="margin-top:12px">{tab_strip}</div>
-                {highlights_html}
-                <table style="width:100%;border-collapse:collapse;margin-top:14px;font-family:system-ui,Segoe UI,Arial,sans-serif">
-                    <thead><tr><th style="padding:6px 8px;background:#f8fafc;border:1px solid #f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569;text-align:left">Client</th>{tab_header_cells}</tr></thead>
-                    <tbody>{client_rows}</tbody>
-                </table>
+                highlights_html = (
+                    f'<div style="margin-top:10px;padding:10px 12px;background:#fff7ed;border-left:3px solid #f59e0b;border-radius:6px">'
+                    f'<div style="font-size:11px;color:#92400e;font-weight:800;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Audit highlights</div>'
+                    f'<ul style="margin:4px 0 0;padding-left:20px">{hi_list}</ul></div>'
+                )
+            client_blocks = ""
+            for cname, cb in (u.get("clients") or {}).items():
+                client_blocks += _client_block(cname, cb)
+            if not client_blocks:
+                client_blocks = (
+                    '<div style="padding:14px;color:#94a3b8;font-size:12px;font-style:italic;'
+                    'background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;margin-top:12px">'
+                    'No per-client work captured — only page visits.</div>'
+                )
+            cards_html += f"""
+            <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(15,23,42,.04)">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="vertical-align:top">
+                    <div style="font-size:17px;font-weight:800;color:#0f172a">{uname} <span style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-left:6px">{role}</span></div>
+                    <div style="font-size:12px;color:#64748b;margin-top:2px">{email}</div>
+                  </td>
+                  <td align="right" style="vertical-align:top;white-space:nowrap">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;font-weight:700">Time on hub</div>
+                    <div style="font-size:18px;font-weight:800;color:#16a34a;line-height:1.1">{hrs_a}h <span style="color:#94a3b8;font-size:11px;font-weight:600">active</span></div>
+                    <div style="font-size:11px;color:#64748b;margin-top:2px">{hrs_i}h idle · {acts} actions</div>
+                    <div style="font-size:11px;color:#64748b;margin-top:2px">{session_line}</div>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin-top:12px">{tab_badges}</div>
+              {highlights_html}
+              {client_blocks}
             </div>
             """
 
-    # Team-wide tab totals strip
-    team_strip = ""
-    for t in tabs:
-        v = team_totals.get(t, 0)
-        if v == 0:
-            continue
-        team_strip += (
-            f'<span style="display:inline-block;background:rgba(255,255,255,.18);'
-            f'color:#fff;border-radius:6px;padding:6px 12px;margin:3px 4px;'
-            f'font-size:13px;font-weight:600">{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
-        )
-    if not team_strip:
-        team_strip = '<span style="color:rgba(255,255,255,.65);font-style:italic">No tab activity recorded today.</span>'
+    inner = (
+        ribbon_html +
+        '<h2 style="margin:6px 0 4px;font-size:15px;color:#0f172a;font-weight:800;letter-spacing:.2px">Operator Breakdown</h2>'
+        '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Workers only — admins suppressed (configure with <code>EOD_REPORT_EXCLUDE_USERS</code>).</div>' +
+        cards_html
+    )
 
-    html_body = f"""<html>
-    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:18px;color:#0f172a;background:#f1f5f9">
-      <div style="max-width:760px;margin:0 auto">
-
-        <div style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:24px 28px;border-radius:14px 14px 0 0">
-            <h1 style="color:#fff;margin:0;font-size:22px;font-weight:800;letter-spacing:.3px">📋 End-of-Day Team Report</h1>
-            <p style="color:rgba(255,255,255,.85);margin:6px 0 0;font-size:14px">{_esc_html(date_long)} — per user, per client, per tab</p>
-            <div style="margin-top:12px">{team_strip}</div>
-        </div>
-
-        <div style="background:#fff;padding:14px 16px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0">
-            <div style="display:flex;flex-wrap:wrap">{headlines_html}</div>
-        </div>
-
-        <div style="background:#f8fafc;padding:16px;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px">
-            <h2 style="margin:0 0 10px;font-size:15px;color:#0f172a">Per-User Breakdown</h2>
-            {user_blocks_html}
-        </div>
-
-        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:18px">
-            MedPharma Hub · Auto-sent end-of-day · Configure with EOD_REPORT_EMAIL env var
-        </p>
-      </div>
-    </body></html>"""
+    html_body = _brand_email_shell(
+        title="End-of-Day Team Report",
+        subtitle=f"{date_long} — per operator, per client, per module",
+        accent="#2563eb",
+        inner_html=inner,
+    )
     return text_body, html_body
 
 
@@ -2407,6 +2604,683 @@ def send_eod_team_report_demo() -> dict:
     }
 
 
+# ─── Client-facing daily production report ──────────────────────────────
+
+# Friendly section headers + ordering for the client email + Excel sheet.
+_CLIENT_SECTION_META = [
+    ("claims",        "Claims Activity",      "claims",        "💼", "#2563eb"),
+    ("credentialing", "Credentialing",        "credentialing", "🎓", "#7c3aed"),
+    ("enrollment",    "Payor Enrollment",     "enrollment",    "📝", "#7c3aed"),
+    ("edi",           "EDI / ERA / EFT",      "edi",           "🔌", "#0891b2"),
+    ("production",    "Production Hours",     "production",    "⏱️", "#16a34a"),
+    ("notes",         "Notes",                "claims",        "🗒️", "#0f766e"),
+    ("documents",     "Documents Uploaded",   "documents",     "📁", "#0f766e"),
+]
+
+
+def _client_section_visible(section_key: str, enabled_modules: list) -> bool:
+    """Skip a section when the client hasn't enabled its module."""
+    for k, _label, mod, _ico, _c in _CLIENT_SECTION_META:
+        if k == section_key:
+            if not enabled_modules:
+                return True
+            return mod in {m.lower() for m in enabled_modules}
+    return True
+
+
+def _ts_long(value) -> str:
+    """Format 'HH:MM' (24h) — same logic as _ts_short but exposed for symmetry."""
+    return _ts_short(value)
+
+
+def _render_client_daily_report_html(report: dict) -> tuple[str, str]:
+    """Render the per-client daily production report into (text_body, html_body).
+
+    Layout: stacked vertical sections, organised by production area
+    (claims movement → credentialing → enrollment → EDI → production
+    hours → notes → documents). Skips sections the client hasn't
+    enabled. Every row is timestamped.
+    """
+    company  = report.get("company") or ""
+    date_iso = report.get("report_date") or ""
+    contact  = report.get("contact_name") or ""
+    try:
+        from datetime import datetime as _dt
+        d = _dt.strptime(date_iso, "%Y-%m-%d")
+        date_long = d.strftime("%A, %B %d, %Y")
+    except Exception:
+        date_long = date_iso
+
+    headlines = report.get("headlines", {}) or {}
+    sections  = report.get("sections", {}) or {}
+    operators = report.get("operators", []) or []
+    enabled   = report.get("enabled_modules") or []
+
+    # ── plain-text fallback ──
+    txt = [
+        f"MedPharma Daily Production Report — {company}",
+        f"{date_long}",
+        "",
+        f"Claims: {headlines.get('claims_new',0)} new · {headlines.get('claims_touched',0)} touched · "
+        f"{headlines.get('claims_paid',0)} paid · {headlines.get('claims_denied',0)} denied/appealed",
+        f"Credentialing new: {headlines.get('cred_new',0)} · Enrollment new: {headlines.get('enroll_new',0)} · "
+        f"EDI new: {headlines.get('edi_new',0)}",
+        f"Production hours: {headlines.get('production_hours',0)} · Notes: {headlines.get('notes_new',0)} · "
+        f"Files: {headlines.get('files_uploaded',0)}",
+        f"Operators on your account: {headlines.get('operators',0)}",
+        "",
+    ]
+    for key, label, _mod, ico, _color in _CLIENT_SECTION_META:
+        if not _client_section_visible(key, enabled):
+            continue
+        rows = sections.get(key) or []
+        if not rows:
+            continue
+        txt.append(f"== {label} ({len(rows)}) ==")
+        for r in rows[:50]:
+            ts = _ts_short(r.get("ts") or "")
+            ts_prefix = f"[{ts}] " if ts else ""
+            if key == "claims":
+                txt.append(f"  {ts_prefix}{r.get('ClaimKey','')} — {r.get('ClaimStatus','')} ({r.get('action','')}) by {r.get('Owner','')}")
+            elif key in ("credentialing", "enrollment", "edi"):
+                txt.append(f"  {ts_prefix}{r.get('ProviderName','')} · {r.get('Payor','')} — {r.get('Status','')} ({r.get('action','')}) by {r.get('Owner','')}")
+            elif key == "production":
+                txt.append(f"  {ts_prefix}{r.get('Owner','')}: {r.get('Category','')} — {r.get('Task','')} ({r.get('Qty',0)} · {r.get('Hours',0)}h)")
+            elif key == "notes":
+                txt.append(f"  {ts_prefix}{r.get('Author','')}: {r.get('Subject','')} — {r.get('Note','')}")
+            elif key == "documents":
+                txt.append(f"  {ts_prefix}{r.get('Filename','')} ({r.get('Category','')}) by {r.get('UploadedBy','')}")
+        txt.append("")
+
+    text_body = "\n".join(txt)
+
+    # ── headline ribbon ──
+    def _ribbon(label, value, color="#1d4ed8"):
+        return (
+            f'<td align="center" valign="top" width="16.66%" style="padding:14px 6px">'
+            f'<div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;font-weight:700">{label}</div>'
+            f'<div style="font-size:22px;color:{color};font-weight:800;margin-top:4px;line-height:1.1">{value}</div>'
+            f'</td>'
+        )
+    ribbon_html = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:0 0 18px">'
+        '<tr>'
+        + _ribbon("Claims new",     headlines.get("claims_new", 0))
+        + _ribbon("Claims touched", headlines.get("claims_touched", 0), "#2563eb")
+        + _ribbon("Paid",           headlines.get("claims_paid", 0), "#16a34a")
+        + _ribbon("Denied / Appeals", headlines.get("claims_denied", 0), "#dc2626")
+        + _ribbon("Cred / Enroll",  f"{headlines.get('cred_new',0)} / {headlines.get('enroll_new',0)}", "#7c3aed")
+        + _ribbon("Prod hrs",       f"{headlines.get('production_hours', 0)}", "#16a34a")
+        + '</tr></table>'
+    )
+
+    # ── per-section tables ──
+    def _row(cells, td_style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#334155"):
+        return "<tr>" + "".join(f'<td style="{td_style}">{c}</td>' for c in cells) + "</tr>"
+
+    def _section_table(key, label, ico, color):
+        rows = sections.get(key) or []
+        if not _client_section_visible(key, enabled) or not rows:
+            return ""
+        # Header row varies per section
+        if key == "claims":
+            header = ["Time", "Claim", "Status", "Action", "Owner"]
+            body_rows = "".join(_row([
+                _ts_short(r.get("ts","")),
+                _esc_html(r.get("ClaimKey","")),
+                _esc_html(r.get("ClaimStatus","")),
+                _esc_html(r.get("action","")),
+                _esc_html(r.get("Owner","")),
+            ]) for r in rows[:30])
+        elif key in ("credentialing", "enrollment", "edi"):
+            header = ["Time", "Provider", "Payor", "Status", "Action", "Owner"]
+            body_rows = "".join(_row([
+                _ts_short(r.get("ts","")),
+                _esc_html(r.get("ProviderName","")),
+                _esc_html(r.get("Payor","")),
+                _esc_html(r.get("Status","")),
+                _esc_html(r.get("action","")),
+                _esc_html(r.get("Owner","")),
+            ]) for r in rows[:30])
+        elif key == "production":
+            header = ["Time", "Owner", "Category", "Task", "Qty", "Hours"]
+            body_rows = "".join(_row([
+                _ts_short(r.get("ts","")),
+                _esc_html(r.get("Owner","")),
+                _esc_html(r.get("Category","")),
+                _esc_html(r.get("Task","")),
+                _esc_html(r.get("Qty","")),
+                _esc_html(r.get("Hours","")),
+            ]) for r in rows[:30])
+        elif key == "notes":
+            header = ["Time", "Author", "Subject", "Note"]
+            body_rows = "".join(_row([
+                _ts_short(r.get("ts","")),
+                _esc_html(r.get("Author","")),
+                _esc_html(r.get("Subject","")),
+                _esc_html(r.get("Note","")),
+            ]) for r in rows[:30])
+        elif key == "documents":
+            header = ["Time", "File", "Category", "Uploaded by"]
+            body_rows = "".join(_row([
+                _ts_short(r.get("ts","")),
+                _esc_html(r.get("Filename","")),
+                _esc_html(r.get("Category","")),
+                _esc_html(r.get("UploadedBy","")),
+            ]) for r in rows[:30])
+        else:
+            return ""
+        header_html = "<tr>" + "".join(
+            f'<th align="left" style="padding:8px 10px;background:#f8fafc;border-bottom:2px solid {color};'
+            f'font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:#475569;font-weight:700">{h}</th>'
+            for h in header
+        ) + "</tr>"
+        more_note = ""
+        if len(rows) > 30:
+            more_note = (
+                f'<div style="font-size:11px;color:#64748b;padding:6px 12px;font-style:italic">'
+                f'…and {len(rows) - 30} more rows — see the attached Excel for the full list.</div>'
+            )
+        return f"""
+        <div style="margin:18px 0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+          <div style="padding:10px 14px;background:linear-gradient(90deg,{color}10,#ffffff);border-bottom:1px solid #e2e8f0">
+            <span style="font-size:14px;font-weight:800;color:{color}">{ico} {label}</span>
+            <span style="font-size:11px;color:#64748b;font-weight:600;margin-left:6px">({len(rows)} {'row' if len(rows)==1 else 'rows'})</span>
+          </div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <thead>{header_html}</thead>
+            <tbody>{body_rows}</tbody>
+          </table>
+          {more_note}
+        </div>"""
+
+    sections_html = ""
+    for key, label, _mod, ico, color in _CLIENT_SECTION_META:
+        sections_html += _section_table(key, label, ico, color)
+
+    if not sections_html:
+        sections_html = (
+            '<div style="padding:30px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;'
+            'text-align:center;color:#64748b;font-size:13px">'
+            'No production activity recorded today for your account. '
+            'Tomorrow\'s report will resume automatically.</div>'
+        )
+
+    # Operator footer
+    ops_html = ""
+    if operators:
+        rows_html = ""
+        for op in operators:
+            rows_html += (
+                f'<tr><td style="padding:6px 10px;font-size:12px;color:#334155">'
+                f'<b>{_esc_html(op.get("contact_name") or op.get("username"))}</b> '
+                f'<span style="color:#94a3b8">({_esc_html(op.get("role") or "staff")})</span>'
+                f'</td><td align="right" style="padding:6px 10px;font-size:12px;color:#475569">'
+                f'{op.get("actions", 0)} actions · {op.get("hours", 0)}h</td></tr>'
+            )
+        ops_html = f"""
+        <div style="margin:18px 0 0;padding:14px 16px;background:#0b1733;border-radius:12px">
+          <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:8px">
+            MedPharma operators on your account today
+          </div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:8px">
+            {rows_html}
+          </table>
+        </div>"""
+
+    intro = (
+        f'<div style="font-size:13px;color:#334155;margin-bottom:16px">'
+        f'Hi {_esc_html(contact.split()[0]) if contact else "team"}, here\'s a summary of what '
+        f'<b>MedPharma</b> handled on your account today. A spreadsheet with the full row-level '
+        f'detail is attached. Reply to this email to reach your account team.'
+        f'</div>'
+    )
+
+    inner = intro + ribbon_html + sections_html + ops_html
+
+    html_body = _brand_email_shell(
+        title=f"Daily Production Report — {company}",
+        subtitle=date_long,
+        accent="#16a34a",
+        inner_html=inner,
+        footer_note=(
+            f"Sent to {_esc_html(report.get('email',''))} · "
+            f'<a href="{_MEDPHARMA_HUB_URL}" style="color:#94a3b8">Open Hub</a> · '
+            f'<a href="{_MEDPHARMA_SITE_URL}" style="color:#94a3b8">medpharmasc.com</a><br>'
+            f'To stop receiving this email, contact your MedPharma account manager.'
+        ),
+    )
+    return text_body, html_body
+
+
+def _build_client_report_xlsx(report: dict) -> bytes:
+    """Build an .xlsx workbook with one sheet per non-empty production
+    section. Returns the raw bytes so the email layer can attach it.
+
+    Falls back gracefully (returns empty bytes) when openpyxl isn't
+    installed — the email still ships, just without the attachment.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from io import BytesIO
+    except Exception as e:
+        log.warning(f"openpyxl unavailable, skipping XLSX attachment: {e}")
+        return b""
+
+    wb = Workbook()
+    # Replace the default sheet with our Summary
+    summary = wb.active
+    summary.title = "Summary"
+    summary.append(["MedPharma Daily Production Report"])
+    summary.append([f"Client: {report.get('company','')}"])
+    summary.append([f"Date:   {report.get('report_date','')}"])
+    summary.append([f"Generated: {report.get('generated_at','')}"])
+    summary.append([])
+    summary.append(["Headline", "Value"])
+    h = report.get("headlines", {}) or {}
+    summary.append(["Claims new",     h.get("claims_new", 0)])
+    summary.append(["Claims touched", h.get("claims_touched", 0)])
+    summary.append(["Claims paid",    h.get("claims_paid", 0)])
+    summary.append(["Claims denied/appealed", h.get("claims_denied", 0)])
+    summary.append(["Credentialing new", h.get("cred_new", 0)])
+    summary.append(["Enrollment new",    h.get("enroll_new", 0)])
+    summary.append(["EDI new",           h.get("edi_new", 0)])
+    summary.append(["Production hours",  h.get("production_hours", 0)])
+    summary.append(["Notes",             h.get("notes_new", 0)])
+    summary.append(["Files uploaded",    h.get("files_uploaded", 0)])
+    summary.append(["Operators",         h.get("operators", 0)])
+    # Bold the first row
+    for cell in summary[1]:
+        cell.font = Font(bold=True, size=14, color="2563EB")
+    for cell in summary[6]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="F1F5F9")
+    summary.column_dimensions["A"].width = 32
+    summary.column_dimensions["B"].width = 20
+
+    # Section sheets
+    section_headers = {
+        "claims":        ["Time", "ClaimKey", "ClaimStatus", "Action", "Owner"],
+        "credentialing": ["Time", "Provider", "Payor", "Status", "Action", "Owner"],
+        "enrollment":    ["Time", "Provider", "Payor", "Status", "Action", "Owner"],
+        "edi":           ["Time", "Provider", "Payor", "Status", "Action", "Owner"],
+        "production":    ["Time", "Owner", "Category", "Task", "Qty", "Hours"],
+        "notes":         ["Time", "Author", "Subject", "Note"],
+        "documents":     ["Time", "Filename", "Category", "Uploaded By"],
+    }
+    section_row_fn = {
+        "claims":        lambda r: [_ts_short(r.get("ts","")), r.get("ClaimKey",""),
+                                    r.get("ClaimStatus",""), r.get("action",""), r.get("Owner","")],
+        "credentialing": lambda r: [_ts_short(r.get("ts","")), r.get("ProviderName",""),
+                                    r.get("Payor",""), r.get("Status",""),
+                                    r.get("action",""), r.get("Owner","")],
+        "enrollment":    lambda r: [_ts_short(r.get("ts","")), r.get("ProviderName",""),
+                                    r.get("Payor",""), r.get("Status",""),
+                                    r.get("action",""), r.get("Owner","")],
+        "edi":           lambda r: [_ts_short(r.get("ts","")), r.get("ProviderName",""),
+                                    r.get("Payor",""), r.get("Status",""),
+                                    r.get("action",""), r.get("Owner","")],
+        "production":    lambda r: [_ts_short(r.get("ts","")), r.get("Owner",""),
+                                    r.get("Category",""), r.get("Task",""),
+                                    r.get("Qty", 0), r.get("Hours", 0)],
+        "notes":         lambda r: [_ts_short(r.get("ts","")), r.get("Author",""),
+                                    r.get("Subject",""), r.get("Note","")],
+        "documents":     lambda r: [_ts_short(r.get("ts","")), r.get("Filename",""),
+                                    r.get("Category",""), r.get("UploadedBy","")],
+    }
+    sections = report.get("sections", {}) or {}
+    enabled  = report.get("enabled_modules") or []
+    for key, label, _mod, _ico, _color in _CLIENT_SECTION_META:
+        if not _client_section_visible(key, enabled):
+            continue
+        rows = sections.get(key) or []
+        if not rows:
+            continue
+        sheet_title = label[:31]   # Excel sheet name limit
+        ws = wb.create_sheet(sheet_title)
+        ws.append(section_headers[key])
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2563EB")
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+        for r in rows:
+            ws.append(section_row_fn[key](r))
+        # Auto-fit-ish column widths
+        for col_idx in range(1, len(section_headers[key]) + 1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = 22
+
+    # Operators sheet
+    operators = report.get("operators", []) or []
+    if operators:
+        ws = wb.create_sheet("Operators")
+        ws.append(["Username", "Contact name", "Role", "Actions", "Hours"])
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="0B1733")
+        for op in operators:
+            ws.append([
+                op.get("username",""),
+                op.get("contact_name",""),
+                op.get("role",""),
+                op.get("actions", 0),
+                op.get("hours", 0),
+            ])
+        for col in "ABCDE":
+            ws.column_dimensions[col].width = 20
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _client_report_recipients(report: dict) -> list[str]:
+    """Compose the recipient list for a client report: primary email +
+    any extras the admin set on the profile. Lowercased + deduped.
+    """
+    out = []
+    seen = set()
+    for raw in [report.get("email")] + list(report.get("report_recipients") or []):
+        if not raw:
+            continue
+        addr = str(raw).strip().lower()
+        if addr and addr not in seen and "@" in addr:
+            seen.add(addr)
+            out.append(addr)
+    return out
+
+
+def send_client_daily_report(client_id: int, report_date: str = None,
+                             force: bool = False, demo: bool = False) -> dict:
+    """Compose + email the per-client daily production report (with Excel).
+
+    Args:
+        client_id:   PK of the client.
+        report_date: YYYY-MM-DD (defaults to today).
+        force:       send even when there's zero activity.
+        demo:        ignore the DB and use a populated showcase payload.
+
+    Returns delivery report dict (sent / failed / recipients / headlines).
+    """
+    from datetime import datetime as _dt
+    if demo:
+        report = _build_demo_client_daily_report()
+    else:
+        try:
+            from app.client_db import get_client_daily_report
+        except Exception as e:
+            log.error(f"client_db.get_client_daily_report import failed: {e}")
+            return {"ok": False, "error": str(e), "client_id": client_id}
+        if not report_date:
+            report_date = _dt.now().strftime("%Y-%m-%d")
+        report = get_client_daily_report(client_id, report_date)
+        if not report or not report.get("ok"):
+            return {"ok": False, "error": (report or {}).get("error", "no report"),
+                    "client_id": client_id}
+
+    headlines = report.get("headlines", {}) or {}
+    has_activity = any(v for v in headlines.values() if isinstance(v, (int, float)) and v)
+    if not force and not demo and not has_activity:
+        log.info(f"Client {client_id} report skipped — no activity for {report.get('report_date')}")
+        return {"ok": True, "skipped": "no activity", "client_id": client_id,
+                "date": report.get("report_date")}
+
+    text_body, html_body = _render_client_daily_report_html(report)
+    xlsx_bytes = _build_client_report_xlsx(report)
+
+    try:
+        d_long = _dt.strptime(report["report_date"], "%Y-%m-%d").strftime("%a %b %d, %Y")
+    except Exception:
+        d_long = report.get("report_date", "")
+
+    company = report.get("company", "")
+    demo_tag = " [DEMO]" if demo else ""
+    subject = (
+        f"📊 MedPharma Daily Report{demo_tag} — {company} — {d_long} — "
+        f"{headlines.get('claims_new', 0)} new claims · "
+        f"{headlines.get('production_hours', 0)}h logged"
+    )
+
+    attachments = []
+    if xlsx_bytes:
+        safe_co = "".join(c if c.isalnum() else "_" for c in (company or "client"))[:40]
+        attachments.append({
+            "filename": f"MedPharma_{safe_co}_{report.get('report_date','')}.xlsx",
+            "content":  xlsx_bytes,
+            "mime":     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        })
+
+    recipients = _client_report_recipients(report)
+    if not recipients:
+        log.warning(f"Client {client_id} report has no deliverable recipients")
+        return {"ok": False, "error": "no recipients", "client_id": client_id,
+                "date": report.get("report_date")}
+
+    sent, failed = [], []
+    for to_email in recipients:
+        try:
+            ok_sent, via = _send_email_to(to_email, subject, text_body, html_body,
+                                          attachments=attachments)
+        except Exception as e:
+            log.error(f"Client report send to {to_email} crashed: {e}")
+            failed.append({"email": to_email, "via": f"exception: {e}"})
+            continue
+        if ok_sent:
+            sent.append({"email": to_email, "via": via})
+        else:
+            failed.append({"email": to_email, "via": via})
+
+    log.info(
+        f"Client {client_id} ({company}) report dispatched: "
+        f"sent={len(sent)} failed={len(failed)} attachment={'yes' if xlsx_bytes else 'no'}"
+    )
+    return {
+        "ok": True,
+        "demo": demo,
+        "client_id": client_id,
+        "company": company,
+        "date": report.get("report_date"),
+        "recipients": recipients,
+        "sent": sent,
+        "failed": failed,
+        "attachment_bytes": len(xlsx_bytes) if xlsx_bytes else 0,
+        "headlines": headlines,
+    }
+
+
+def send_all_client_daily_reports(report_date: str = None, force: bool = False) -> dict:
+    """Iterate every opted-in client (has email + daily_report_optin=1)
+    and dispatch their per-client production report. Used by the 6:30 PM
+    EST scheduler so the admin doesn't have to push a button per client.
+    """
+    try:
+        from app.client_db import list_clients_optin_for_daily_report
+    except Exception as e:
+        log.error(f"list_clients_optin_for_daily_report import failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+    clients = list_clients_optin_for_daily_report()
+    results = []
+    sent_total = failed_total = skipped = 0
+    for c in clients:
+        try:
+            result = send_client_daily_report(c["client_id"],
+                                              report_date=report_date,
+                                              force=force, demo=False)
+        except Exception as e:
+            log.error(f"send_client_daily_report({c['client_id']}) crashed: {e}")
+            result = {"ok": False, "error": str(e), "client_id": c["client_id"]}
+        if result.get("skipped"):
+            skipped += 1
+        else:
+            sent_total += len(result.get("sent") or [])
+            failed_total += len(result.get("failed") or [])
+        results.append({
+            "client_id": c["client_id"],
+            "company":   c["company"],
+            "ok":        result.get("ok"),
+            "skipped":   result.get("skipped"),
+            "sent":      len(result.get("sent") or []),
+            "failed":    len(result.get("failed") or []),
+        })
+    log.info(
+        f"Client report fan-out complete: "
+        f"clients={len(clients)} sent={sent_total} failed={failed_total} skipped={skipped}"
+    )
+    return {
+        "ok": True,
+        "date": report_date,
+        "client_count":  len(clients),
+        "sent_total":    sent_total,
+        "failed_total":  failed_total,
+        "skipped":       skipped,
+        "results":       results,
+    }
+
+
+def _build_demo_client_daily_report() -> dict:
+    """Fabricated single-client production report for previewing the email
+    layout when the live DB has no activity for the target client.
+    """
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+    ts = lambda hh, mm: f"{today} {hh:02d}:{mm:02d}:00"
+    return {
+        "ok": True,
+        "client_id": 0,
+        "company":   "Apex Pain Management (DEMO)",
+        "contact_name": "Dr. Elena Vargas",
+        "email":     "lexi@medprosc.com",
+        "report_date": today,
+        "generated_at": _dt.now().isoformat(timespec="seconds"),
+        "enabled_modules": ["claims", "credentialing", "enrollment",
+                            "production", "documents", "chat"],
+        "report_recipients": [],
+        "daily_report_optin": 1,
+        "headlines": {
+            "claims_new":       8,
+            "claims_touched":   12,
+            "claims_paid":      4,
+            "claims_denied":    2,
+            "cred_new":         3,
+            "enroll_new":       1,
+            "edi_new":          0,
+            "production_hours": 5.5,
+            "notes_new":        7,
+            "files_uploaded":   2,
+            "operators":        3,
+        },
+        "sections": {
+            "claims": [
+                {"ts": ts(9, 4),  "ClaimKey": "CLM-44218", "ClaimStatus": "Billed/Submitted", "Owner": "jessica", "action": "created"},
+                {"ts": ts(9, 38), "ClaimKey": "CLM-44219", "ClaimStatus": "Billed/Submitted", "Owner": "jessica", "action": "created"},
+                {"ts": ts(10, 22),"ClaimKey": "CLM-44091", "ClaimStatus": "Appeals",          "Owner": "jessica", "action": "updated"},
+                {"ts": ts(11, 14),"ClaimKey": "CLM-44109", "ClaimStatus": "Paid",             "Owner": "rcm",     "action": "updated"},
+                {"ts": ts(13, 47),"ClaimKey": "CLM-44177", "ClaimStatus": "Paid",             "Owner": "rcm",     "action": "updated"},
+                {"ts": ts(14, 9), "ClaimKey": "CLM-44188", "ClaimStatus": "Denied",           "Owner": "jessica", "action": "updated"},
+            ],
+            "credentialing": [
+                {"ts": ts(10, 1), "ProviderName": "Dr Chen",  "Payor": "BCBS-SC", "Status": "Submitted", "Owner": "susan", "action": "created"},
+                {"ts": ts(11, 56),"ProviderName": "Dr Patel", "Payor": "Aetna",   "Status": "Approved",  "Owner": "susan", "action": "updated"},
+                {"ts": ts(15, 12),"ProviderName": "Dr Chen",  "Payor": "Cigna",   "Status": "Submitted", "Owner": "susan", "action": "created"},
+            ],
+            "enrollment": [
+                {"ts": ts(13, 5), "ProviderName": "Dr Patel", "Payor": "Humana", "Status": "Submitted", "Owner": "susan", "action": "created"},
+            ],
+            "edi": [],
+            "production": [
+                {"ts": ts(11, 0), "Owner": "rcm",    "Category": "ERA Reconciliation", "Task": "Tied out Aetna 06/03 ERA", "Qty": 28, "Hours": 2.0},
+                {"ts": ts(13, 30),"Owner": "rcm",    "Category": "Posting",            "Task": "BCBS-SC EOB batch",        "Qty": 14, "Hours": 1.0},
+                {"ts": ts(15, 0), "Owner": "jessica","Category": "A/R Follow-Up",      "Task": "Worked Cigna denials batch","Qty": 12, "Hours": 2.5},
+            ],
+            "notes": [
+                {"ts": ts(10, 30),"Author": "jessica","Subject": "Claim CLM-44091","Note": "Sent reconsideration packet to Cigna with corrected modifier"},
+                {"ts": ts(11, 20),"Author": "rcm",    "Subject": "Claim CLM-44109","Note": "Aetna posted 06/03 ERA — $1,247.18 to patient acct"},
+                {"ts": ts(13, 45),"Author": "susan",  "Subject": "Cred Dr Chen",   "Note": "BCBS-SC initial app submitted; expect 60-day window"},
+                {"ts": ts(14, 50),"Author": "jessica","Subject": "Claim CLM-44188","Note": "Denied 197 — auth not on file; pulling pre-auth from EMR"},
+                {"ts": ts(15, 20),"Author": "susan",  "Subject": "Cred Dr Chen",   "Note": "Cigna initial app submitted; CAQH attestation confirmed"},
+            ],
+            "documents": [
+                {"ts": ts(11, 5), "Filename": "Patel-CAQH-attestation.pdf",   "Category": "Credentialing", "UploadedBy": "susan"},
+                {"ts": ts(15, 18),"Filename": "Chen-Cigna-W9-2026.pdf",        "Category": "Credentialing", "UploadedBy": "susan"},
+            ],
+        },
+        "operators": [
+            {"username": "jessica","contact_name": "Jessica","role": "staff","actions": 9, "hours": 2.5},
+            {"username": "rcm",    "contact_name": "RCM",    "role": "admin","actions": 4, "hours": 3.0},
+            {"username": "susan",  "contact_name": "Susan",  "role": "staff","actions": 6, "hours": 0.0},
+        ],
+    }
+
+
+def send_client_daily_report_demo(to_email: str = None) -> dict:
+    """Send the showcase client report (with Excel attachment).
+
+    If ``to_email`` is given it overrides the default lexi recipient
+    (handy when an admin wants to preview the layout in their own
+    inbox without actually emailing a customer).
+    """
+    report = _build_demo_client_daily_report()
+    if to_email:
+        report["email"] = to_email
+        report["report_recipients"] = []
+    return _send_demo_client_report(report)
+
+
+def _send_demo_client_report(report: dict) -> dict:
+    """Internal: same dispatch path as send_client_daily_report but
+    bypasses the DB lookup since the report dict is fabricated."""
+    from datetime import datetime as _dt
+    text_body, html_body = _render_client_daily_report_html(report)
+    xlsx_bytes = _build_client_report_xlsx(report)
+    try:
+        d_long = _dt.strptime(report["report_date"], "%Y-%m-%d").strftime("%a %b %d, %Y")
+    except Exception:
+        d_long = report.get("report_date", "")
+    headlines = report.get("headlines", {}) or {}
+    subject = (
+        f"📊 MedPharma Daily Report [DEMO] — {report.get('company','')} — {d_long} — "
+        f"{headlines.get('claims_new', 0)} new claims · "
+        f"{headlines.get('production_hours', 0)}h logged"
+    )
+    attachments = []
+    if xlsx_bytes:
+        safe_co = "".join(c if c.isalnum() else "_" for c in (report.get("company") or "client"))[:40]
+        attachments.append({
+            "filename": f"MedPharma_{safe_co}_{report.get('report_date','')}.xlsx",
+            "content":  xlsx_bytes,
+            "mime":     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        })
+    recipients = _client_report_recipients(report)
+    sent, failed = [], []
+    for to_email in recipients:
+        try:
+            ok_sent, via = _send_email_to(to_email, subject, text_body, html_body,
+                                          attachments=attachments)
+        except Exception as e:
+            log.error(f"Demo client report send to {to_email} crashed: {e}")
+            failed.append({"email": to_email, "via": f"exception: {e}"})
+            continue
+        if ok_sent:
+            sent.append({"email": to_email, "via": via})
+        else:
+            failed.append({"email": to_email, "via": via})
+    log.info(f"Client report DEMO dispatched: sent={len(sent)} failed={len(failed)}")
+    return {
+        "ok": True,
+        "demo": True,
+        "client_id": 0,
+        "company": report.get("company"),
+        "date": report.get("report_date"),
+        "recipients": recipients,
+        "sent": sent,
+        "failed": failed,
+        "attachment_bytes": len(xlsx_bytes) if xlsx_bytes else 0,
+        "headlines": headlines,
+    }
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -2450,12 +3324,21 @@ def start_daily_scheduler():
             send_eod_team_report,
             CronTrigger(hour=18, minute=30, timezone=est),
             id="daily_eod_team_report",
-            name="6:30 PM EST EOD Team Report (lexi+eric)",
+            name="6:30 PM EST EOD Team Report (lexi)",
+            replace_existing=True,
+        )
+
+        # 6:35 PM EST — Per-client production reports (with Excel attachments)
+        scheduler.add_job(
+            send_all_client_daily_reports,
+            CronTrigger(hour=18, minute=35, timezone=est),
+            id="daily_client_reports",
+            name="6:35 PM EST Per-Client Production Reports",
             replace_existing=True,
         )
 
         scheduler.start()
-        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD team report")
+        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD team, 6:35 client reports")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -2473,6 +3356,7 @@ def _start_thread_scheduler():
         last_reminder_date = None
         last_sent_date = None
         last_eod_date = None
+        last_clients_date = None
         while True:
             try:
                 # Get current time in US/Eastern
@@ -2506,10 +3390,16 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing EOD team report")
                     send_eod_team_report()
 
+                # 6:35 PM — Per-client production reports with Excel
+                if now_est.hour == 18 and 35 <= now_est.minute < 40 and last_clients_date != today:
+                    last_clients_date = today
+                    log.info("Thread scheduler firing per-client production reports")
+                    send_all_client_daily_reports()
+
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")
             _time.sleep(60)
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 EOD team report")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 EOD team + 6:35 client reports")

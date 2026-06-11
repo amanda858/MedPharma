@@ -497,7 +497,9 @@ def init_client_hub_db():
             doc_tab_names    TEXT DEFAULT '',
             practice_type    TEXT DEFAULT '',
             report_tab_names TEXT DEFAULT '',
-            enabled_modules  TEXT DEFAULT ''
+            enabled_modules  TEXT DEFAULT '',
+            daily_report_optin INTEGER DEFAULT 1,
+            report_recipients TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -930,6 +932,8 @@ def init_client_hub_db():
         ("practice_type", "TEXT DEFAULT ''"),
         ("report_tab_names", "TEXT DEFAULT ''"),
         ("enabled_modules", "TEXT DEFAULT ''"),
+        ("daily_report_optin", "INTEGER DEFAULT 1"),
+        ("report_recipients", "TEXT DEFAULT ''"),
     ]
     cur.execute("PRAGMA table_info(clients)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -1491,7 +1495,8 @@ def update_client(cid: int, data: dict):
         allowed = ["company", "contact_name", "email", "phone", "role", "is_active",
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
                    "address", "specialty", "notes", "doc_tab_names", "practice_type",
-                   "report_tab_names", "enabled_modules"]
+                   "report_tab_names", "enabled_modules",
+                   "daily_report_optin", "report_recipients"]
         parts, params = [], []
         for f in allowed:
             if f in data and data[f] is not None:
@@ -1612,7 +1617,8 @@ def get_profile(client_id: int) -> dict:
         cur.execute("""
             SELECT company, contact_name, email, phone,
                    tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
-                 address, specialty, notes, doc_tab_names, practice_type, report_tab_names, enabled_modules
+                 address, specialty, notes, doc_tab_names, practice_type, report_tab_names, enabled_modules,
+                 daily_report_optin, report_recipients
             FROM clients WHERE id=?""", [client_id])
         row = cur.fetchone()
     finally:
@@ -1621,8 +1627,9 @@ def get_profile(client_id: int) -> dict:
         return {}
     cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
             "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-            "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules"]
-    d = {c: (row[i] or "") for i, c in enumerate(cols)}
+            "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
+            "daily_report_optin", "report_recipients"]
+    d = {c: (row[i] if row[i] is not None else "") for i, c in enumerate(cols)}
     try:
         d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
     except Exception:
@@ -1635,6 +1642,17 @@ def get_profile(client_id: int) -> dict:
         d["enabled_modules"] = _json.loads(d["enabled_modules"]) if d["enabled_modules"] else DEFAULT_ENABLED_MODULES[:]
     except Exception:
         d["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
+    # Daily-report opt-in defaults ON when the client has an email on file.
+    try:
+        d["daily_report_optin"] = int(d["daily_report_optin"] if d["daily_report_optin"] != "" else 1)
+    except Exception:
+        d["daily_report_optin"] = 1
+    try:
+        d["report_recipients"] = (
+            _json.loads(d["report_recipients"]) if d["report_recipients"] else []
+        )
+    except Exception:
+        d["report_recipients"] = []
     return d
 
 
@@ -1642,8 +1660,19 @@ def update_profile(client_id: int, data: dict):
     import json as _json
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
-               "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules"]
-    update_client(client_id, {k: v for k, v in data.items() if k in allowed})
+               "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
+               "daily_report_optin", "report_recipients"]
+    payload = {}
+    for k, v in (data or {}).items():
+        if k not in allowed:
+            continue
+        if k == "report_recipients" and isinstance(v, (list, tuple)):
+            payload[k] = _json.dumps([str(x).strip() for x in v if str(x).strip()])
+        elif k == "daily_report_optin":
+            payload[k] = 1 if (str(v).lower() in ("1", "true", "yes", "on") or v is True) else 0
+        else:
+            payload[k] = v
+    update_client(client_id, payload)
 
 
 def get_practice_profiles(client_id: int) -> list:
@@ -2902,14 +2931,28 @@ def get_eod_team_report(report_date: str = None) -> dict:
     try:
         cur = conn.cursor()
 
-        # Map client_id -> "Company Name" for display.
+        # Map client_id -> ("Company Name", enabled_modules:list) for display
+        # and per-account module filtering on the report.
         client_lookup: dict[int, str] = {}
+        client_modules: dict[int, list[str]] = {}
         for row in cur.execute(
-            "SELECT id, COALESCE(NULLIF(company,''), username) AS name "
-            "FROM clients WHERE COALESCE(role,'client')='client' "
+            "SELECT id, COALESCE(NULLIF(company,''), username) AS name, "
+            "       enabled_modules FROM clients WHERE COALESCE(role,'client')='client' "
             "OR id IN (SELECT DISTINCT client_id FROM claims_master)"
         ).fetchall():
-            client_lookup[int(row["id"])] = row["name"]
+            cid_i = int(row["id"])
+            client_lookup[cid_i] = row["name"]
+            raw_mods = (row["enabled_modules"] or "").strip()
+            mods = DEFAULT_ENABLED_MODULES[:]
+            if raw_mods:
+                try:
+                    import json as _json
+                    parsed = _json.loads(raw_mods)
+                    if isinstance(parsed, list) and parsed:
+                        mods = [str(m).lower() for m in parsed]
+                except Exception:
+                    pass
+            client_modules[cid_i] = mods
 
         # Map username -> {contact_name, email, role} for the team roster.
         # The canonical email-style row wins so legacy short usernames
@@ -2971,6 +3014,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "contact_name": "",
             "email": "",
             "role": "",
+            "is_admin": False,
             "active_hours": 0.0,
             "idle_hours": 0.0,
             "actions": 0,
@@ -2979,6 +3023,8 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "totals": _new_tab_bucket(),
             "highlights": [],
             "clients": defaultdict(lambda: {
+                "client_id": 0,
+                "enabled_modules": list(DEFAULT_ENABLED_MODULES),
                 "totals": _new_tab_bucket(),
                 "items": [],
             }),
@@ -2991,7 +3037,9 @@ def get_eod_team_report(report_date: str = None) -> dict:
             meta = team_lookup.get(key, {})
             slot["contact_name"] = meta.get("name") or key.title()
             slot["email"] = meta.get("email") or ""
-            slot["role"] = meta.get("role") or ""
+            role = (meta.get("role") or "").lower()
+            slot["role"] = role
+            slot["is_admin"] = role in ("admin", "owner", "superadmin")
             return slot
 
         def _bump(username: str, client_id, tab: str, item: dict = None):
@@ -3000,6 +3048,14 @@ def get_eod_team_report(report_date: str = None) -> dict:
             cname = _client_name(client_id)
             cb = slot["clients"][cname]
             cb["totals"][tab] = cb["totals"].get(tab, 0) + 1
+            # Populate client_id + enabled_modules once per (user, client) bucket.
+            try:
+                cid_i = int(client_id) if client_id is not None else 0
+            except (TypeError, ValueError):
+                cid_i = 0
+            if cid_i and not cb.get("client_id"):
+                cb["client_id"] = cid_i
+                cb["enabled_modules"] = client_modules.get(cid_i, list(DEFAULT_ENABLED_MODULES))
             if item is not None and len(cb["items"]) < 25:
                 cb["items"].append({"tab": tab, **item})
 
@@ -3037,6 +3093,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # ── 3) Claims created/updated today, attributed to Owner ──
         for row in cur.execute(
             "SELECT client_id, ClaimKey, ClaimStatus, Owner, "
+            "       created_at, updated_at, "
             "       date(created_at) AS cd, date(updated_at) AS ud "
             "FROM claims_master "
             "WHERE date(created_at)=? OR date(updated_at)=?",
@@ -3046,9 +3103,11 @@ def get_eod_team_report(report_date: str = None) -> dict:
             if not owner:
                 continue
             action = "created" if row["cd"] == report_date else "updated"
+            ts = row["created_at"] if action == "created" else row["updated_at"]
             _bump(owner, row["client_id"], "Claims", {
                 "action": action,
                 "title": f"{row['ClaimKey']} ({row['ClaimStatus']})",
+                "ts": ts or "",
             })
 
         # ── 4) Credentialing / Enrollment / EDI created/updated today ──
@@ -3059,6 +3118,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         ):
             for row in cur.execute(
                 f"SELECT client_id, ProviderName, Payor, {status_col} AS Status, Owner, "
+                f"       created_at, updated_at, "
                 f"       date(created_at) AS cd, date(updated_at) AS ud "
                 f"FROM {table} "
                 f"WHERE date(created_at)=? OR date(updated_at)=?",
@@ -3068,16 +3128,18 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 if not owner:
                     continue
                 action = "created" if row["cd"] == report_date else "updated"
+                ts = row["created_at"] if action == "created" else row["updated_at"]
                 _bump(owner, row["client_id"], tab, {
                     "action": action,
                     "title": f"{row['ProviderName'] or '—'} · {row['Payor'] or '—'} ({row['Status'] or 'Not Started'})",
+                    "ts": ts or "",
                 })
 
         # ── 5) Production entries (Team Production tab) ──
         try:
             for row in cur.execute(
                 "SELECT client_id, username, category, task_description, "
-                "       quantity, time_spent FROM team_production "
+                "       quantity, time_spent, created_at FROM team_production "
                 "WHERE date(created_at)=? OR work_date=?",
                 (report_date, report_date),
             ).fetchall():
@@ -3087,6 +3149,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
                     "action": "logged",
                     "title": f"{row['category'] or '—'}: {(row['task_description'] or '')[:80]} "
                              f"({row['quantity'] or 0} · {row['time_spent'] or 0}h)",
+                    "ts": row["created_at"] or "",
                 })
         except Exception:
             pass
@@ -3094,7 +3157,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # ── 6) Notes log ──
         try:
             for row in cur.execute(
-                "SELECT client_id, ClaimKey, Module, Author, Note "
+                "SELECT client_id, ClaimKey, Module, Author, Note, created_at "
                 "FROM notes_log WHERE date(created_at)=?",
                 (report_date,),
             ).fetchall():
@@ -3104,6 +3167,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 _bump(author, row["client_id"], "Notes", {
                     "action": "noted",
                     "title": f"{row['Module'] or 'Claim'} {row['ClaimKey'] or ''} — {(row['Note'] or '')[:80]}",
+                    "ts": row["created_at"] or "",
                 })
         except Exception:
             pass
@@ -3138,7 +3202,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # ── 8) File uploads ──
         try:
             for row in cur.execute(
-                "SELECT client_id, original_name, uploaded_by, category "
+                "SELECT client_id, original_name, uploaded_by, category, created_at "
                 "FROM client_files WHERE date(created_at)=?",
                 (report_date,),
             ).fetchall():
@@ -3148,6 +3212,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 _bump(user_key, row["client_id"], "Documents", {
                     "action": "uploaded",
                     "title": f"{row['original_name']} · {row['category'] or 'General'}",
+                    "ts": row["created_at"] or "",
                 })
         except Exception:
             pass
@@ -3155,7 +3220,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # ── 9) Chat messages sent ──
         try:
             for row in cur.execute(
-                "SELECT m.room_id, m.sender_name, r.client_id, r.name AS room_name "
+                "SELECT m.room_id, m.sender_name, r.client_id, r.name AS room_name, m.created_at "
                 "FROM chat_messages m LEFT JOIN chat_rooms r ON r.id = m.room_id "
                 "WHERE date(m.created_at)=?",
                 (report_date,),
@@ -3166,6 +3231,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 _bump(sender, row["client_id"], "Chat", {
                     "action": "messaged",
                     "title": f"room '{row['room_name'] or row['room_id']}'",
+                    "ts": row["created_at"] or "",
                 })
         except Exception:
             pass
@@ -3180,8 +3246,10 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 continue
             u["clients"] = {
                 cname: {
-                    "totals": dict(cb["totals"]),
-                    "items": cb["items"],
+                    "client_id":       cb.get("client_id", 0),
+                    "enabled_modules": cb.get("enabled_modules", list(DEFAULT_ENABLED_MODULES)),
+                    "totals":          dict(cb["totals"]),
+                    "items":           cb["items"],
                 }
                 for cname, cb in sorted(u["clients"].items())
             }
@@ -3227,6 +3295,334 @@ def get_eod_team_report(report_date: str = None) -> dict:
         }
     finally:
         conn.close()
+
+
+def get_client_daily_report(client_id: int, report_date: str = None) -> dict:
+    """Build a per-CLIENT production-focused daily report.
+
+    Aggregates only the work touching a single client_id, organised by
+    production area (Claims movements / Credentialing / Enrollment / EDI /
+    Production hours / Notes / Documents) so the practice owner sees what
+    MedPharma did for them today. Each itemised row carries a timestamp.
+
+    Returns:
+        {
+            "client_id":  int,
+            "company":    str,
+            "contact_name": str,
+            "email":      str,
+            "report_date": "YYYY-MM-DD",
+            "generated_at": iso,
+            "enabled_modules": [str, ...],
+            "headlines": {
+                "claims_new":      int,
+                "claims_touched":  int,
+                "claims_paid":     int,
+                "claims_denied":   int,
+                "cred_new":        int,
+                "enroll_new":      int,
+                "edi_new":         int,
+                "production_hours": float,
+                "notes_new":       int,
+                "files_uploaded":  int,
+                "operators":       int,
+            },
+            "sections": {
+                "claims":        [ {ts, ClaimKey, ClaimStatus, Owner, action}, ... ],
+                "credentialing": [ ... ],
+                "enrollment":    [ ... ],
+                "edi":           [ ... ],
+                "production":    [ ... ],
+                "notes":         [ ... ],
+                "documents":     [ ... ],
+            },
+            "operators": [ {username, contact_name, hours, actions}, ... ],
+        }
+    """
+    import json as _json
+    from collections import defaultdict
+    if not report_date:
+        report_date = datetime.now().strftime("%Y-%m-%d")
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        # ── Client info ──
+        cur.execute(
+            "SELECT id, COALESCE(NULLIF(company,''), username) AS company, "
+            "       contact_name, email, enabled_modules, "
+            "       daily_report_optin, report_recipients "
+            "FROM clients WHERE id=?",
+            (int(client_id),),
+        )
+        crow = cur.fetchone()
+        if not crow:
+            return {"ok": False, "error": "client not found", "client_id": client_id}
+
+        enabled = DEFAULT_ENABLED_MODULES[:]
+        raw_mods = (crow["enabled_modules"] or "").strip()
+        if raw_mods:
+            try:
+                parsed = _json.loads(raw_mods)
+                if isinstance(parsed, list) and parsed:
+                    enabled = [str(m).lower() for m in parsed]
+            except Exception:
+                pass
+
+        extra_recipients = []
+        raw_recip = (crow["report_recipients"] or "").strip()
+        if raw_recip:
+            try:
+                parsed = _json.loads(raw_recip)
+                if isinstance(parsed, list):
+                    extra_recipients = [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                pass
+
+        cid = int(crow["id"])
+
+        # ── Pull each tab's rows scoped to THIS client + date ──
+        sections: dict[str, list[dict]] = {
+            "claims":        [],
+            "credentialing": [],
+            "enrollment":    [],
+            "edi":           [],
+            "production":    [],
+            "notes":         [],
+            "documents":     [],
+        }
+
+        # Claims (always include — claims is the core of every RCM client)
+        for row in cur.execute(
+            "SELECT ClaimKey, ClaimStatus, Owner, created_at, updated_at, "
+            "       date(created_at) AS cd, date(updated_at) AS ud "
+            "FROM claims_master "
+            "WHERE client_id=? AND (date(created_at)=? OR date(updated_at)=?)",
+            (cid, report_date, report_date),
+        ).fetchall():
+            action = "created" if row["cd"] == report_date else "updated"
+            ts = row["created_at"] if action == "created" else row["updated_at"]
+            sections["claims"].append({
+                "ts": ts or "",
+                "ClaimKey": row["ClaimKey"] or "",
+                "ClaimStatus": row["ClaimStatus"] or "",
+                "Owner": row["Owner"] or "",
+                "action": action,
+            })
+
+        # Credentialing / Enrollment / EDI (module-gated)
+        for table, key, status_col, mod in (
+            ("credentialing", "credentialing", "Status",    "credentialing"),
+            ("enrollment",    "enrollment",   "Status",    "enrollment"),
+            ("edi_setup",     "edi",          "EDIStatus", "edi"),
+        ):
+            if mod not in enabled:
+                continue
+            for row in cur.execute(
+                f"SELECT ProviderName, Payor, {status_col} AS Status, Owner, "
+                f"       created_at, updated_at, "
+                f"       date(created_at) AS cd, date(updated_at) AS ud "
+                f"FROM {table} "
+                f"WHERE client_id=? AND (date(created_at)=? OR date(updated_at)=?)",
+                (cid, report_date, report_date),
+            ).fetchall():
+                action = "created" if row["cd"] == report_date else "updated"
+                ts = row["created_at"] if action == "created" else row["updated_at"]
+                sections[key].append({
+                    "ts": ts or "",
+                    "ProviderName": row["ProviderName"] or "",
+                    "Payor": row["Payor"] or "",
+                    "Status": row["Status"] or "",
+                    "Owner": row["Owner"] or "",
+                    "action": action,
+                })
+
+        # Production hours (module-gated)
+        if "production" in enabled:
+            try:
+                for row in cur.execute(
+                    "SELECT username, category, task_description, quantity, "
+                    "       time_spent, created_at FROM team_production "
+                    "WHERE client_id=? AND (date(created_at)=? OR work_date=?)",
+                    (cid, report_date, report_date),
+                ).fetchall():
+                    sections["production"].append({
+                        "ts": row["created_at"] or "",
+                        "Owner": row["username"] or "",
+                        "Category": row["category"] or "",
+                        "Task": (row["task_description"] or "")[:200],
+                        "Qty": row["quantity"] or 0,
+                        "Hours": row["time_spent"] or 0,
+                    })
+            except Exception:
+                pass
+
+        # Notes
+        try:
+            for row in cur.execute(
+                "SELECT Author, ClaimKey, Module, Note, created_at "
+                "FROM notes_log WHERE client_id=? AND date(created_at)=?",
+                (cid, report_date),
+            ).fetchall():
+                sections["notes"].append({
+                    "ts": row["created_at"] or "",
+                    "Author": row["Author"] or "",
+                    "Subject": f"{row['Module'] or 'Claim'} {row['ClaimKey'] or ''}".strip(),
+                    "Note": (row["Note"] or "")[:300],
+                })
+        except Exception:
+            pass
+
+        # Documents (module-gated)
+        if "documents" in enabled:
+            try:
+                for row in cur.execute(
+                    "SELECT original_name, uploaded_by, category, created_at "
+                    "FROM client_files WHERE client_id=? AND date(created_at)=?",
+                    (cid, report_date),
+                ).fetchall():
+                    sections["documents"].append({
+                        "ts": row["created_at"] or "",
+                        "Filename": row["original_name"] or "",
+                        "UploadedBy": row["uploaded_by"] or "",
+                        "Category": row["category"] or "General",
+                    })
+            except Exception:
+                pass
+
+        # ── Operator roll-up: which MedPharma users worked this client today ──
+        op_lookup: dict[str, dict] = defaultdict(lambda: {"actions": 0, "hours": 0.0})
+        for row in sections["claims"]:
+            if row["Owner"]:
+                op_lookup[row["Owner"].lower()]["actions"] += 1
+        for k in ("credentialing", "enrollment", "edi"):
+            for row in sections[k]:
+                if row["Owner"]:
+                    op_lookup[row["Owner"].lower()]["actions"] += 1
+        for row in sections["production"]:
+            if row["Owner"]:
+                key = row["Owner"].lower()
+                op_lookup[key]["actions"] += 1
+                try:
+                    op_lookup[key]["hours"] += float(row["Hours"] or 0)
+                except Exception:
+                    pass
+        for row in sections["notes"]:
+            if row["Author"]:
+                op_lookup[row["Author"].lower()]["actions"] += 1
+        for row in sections["documents"]:
+            if row["UploadedBy"]:
+                op_lookup[row["UploadedBy"].lower()]["actions"] += 1
+
+        # Resolve operator contact names
+        operators = []
+        if op_lookup:
+            usernames = list(op_lookup.keys())
+            placeholders = ",".join("?" * len(usernames))
+            name_map = {}
+            try:
+                for row in cur.execute(
+                    f"SELECT lower(username) AS u, "
+                    f"  COALESCE(NULLIF(contact_name,''), username) AS name, role "
+                    f"FROM clients WHERE lower(username) IN ({placeholders})",
+                    usernames,
+                ).fetchall():
+                    name_map[row["u"]] = {"name": row["name"], "role": row["role"] or ""}
+            except Exception:
+                pass
+            for uname, agg in sorted(op_lookup.items()):
+                meta = name_map.get(uname, {})
+                operators.append({
+                    "username": uname,
+                    "contact_name": meta.get("name") or uname.title(),
+                    "role": meta.get("role", ""),
+                    "actions": agg["actions"],
+                    "hours": round(agg["hours"], 2),
+                })
+
+        # ── Headlines ──
+        def _count(items, predicate=lambda r: True):
+            return sum(1 for r in items if predicate(r))
+
+        paid_set = {"Paid", "Posted", "Closed"}
+        denied_set = {"Denied", "Rejected", "Appeals"}
+
+        headlines = {
+            "claims_new":       _count(sections["claims"], lambda r: r["action"] == "created"),
+            "claims_touched":   _count(sections["claims"], lambda r: r["action"] == "updated"),
+            "claims_paid":      _count(sections["claims"], lambda r: r["ClaimStatus"] in paid_set),
+            "claims_denied":    _count(sections["claims"], lambda r: r["ClaimStatus"] in denied_set),
+            "cred_new":         _count(sections["credentialing"], lambda r: r["action"] == "created"),
+            "enroll_new":       _count(sections["enrollment"],    lambda r: r["action"] == "created"),
+            "edi_new":          _count(sections["edi"],           lambda r: r["action"] == "created"),
+            "production_hours": round(sum(float(r["Hours"] or 0) for r in sections["production"]), 2),
+            "notes_new":        len(sections["notes"]),
+            "files_uploaded":   len(sections["documents"]),
+            "operators":        len(operators),
+        }
+
+        return {
+            "ok": True,
+            "client_id":     cid,
+            "company":       crow["company"] or "",
+            "contact_name":  crow["contact_name"] or "",
+            "email":         crow["email"] or "",
+            "report_date":   report_date,
+            "generated_at":  datetime.now().isoformat(timespec="seconds"),
+            "enabled_modules": enabled,
+            "report_recipients": extra_recipients,
+            "headlines":     headlines,
+            "sections":      sections,
+            "operators":     operators,
+            "daily_report_optin": int(crow["daily_report_optin"] if crow["daily_report_optin"] is not None else 1),
+        }
+    finally:
+        conn.close()
+
+
+def list_clients_optin_for_daily_report() -> list[dict]:
+    """Return every client row that has opted in to receive a daily
+    production report and has a deliverable email on file.
+
+    Used by the scheduler to fan out reports each evening without the
+    admin having to push a button per client.
+    """
+    import json as _json
+    conn = get_db()
+    out: list[dict] = []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, COALESCE(NULLIF(company,''), username) AS company, "
+            "       contact_name, email, daily_report_optin, report_recipients, "
+            "       enabled_modules "
+            "FROM clients "
+            "WHERE COALESCE(role,'client')='client' "
+            "  AND COALESCE(is_active,1)=1 "
+            "  AND COALESCE(daily_report_optin,1)=1 "
+            "  AND TRIM(COALESCE(email,'')) <> ''"
+        )
+        for row in cur.fetchall():
+            recipients = []
+            raw = (row["report_recipients"] or "").strip()
+            if raw:
+                try:
+                    parsed = _json.loads(raw)
+                    if isinstance(parsed, list):
+                        recipients = [str(x).strip() for x in parsed if str(x).strip()]
+                except Exception:
+                    pass
+            out.append({
+                "client_id":    int(row["id"]),
+                "company":      row["company"] or "",
+                "contact_name": row["contact_name"] or "",
+                "email":        row["email"] or "",
+                "extra_recipients": recipients,
+            })
+    finally:
+        conn.close()
+    return out
 
 
 # ─── SLA Auto-Flagging ───────────────────────────────────────────────────

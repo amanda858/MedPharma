@@ -3582,6 +3582,24 @@
         </div>
       </div>
 
+      <!-- ── Daily production report opt-in ── -->
+      <div class="form-group" style="margin-top:10px;padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px">
+        <label style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;margin-bottom:6px">
+          <input type="checkbox" id="fCDailyReportOptin" checked>
+          📊 Email this client a daily production report
+        </label>
+        <div style="font-size:11px;color:#64748b;margin-bottom:6px">
+          Sent automatically every evening at 6:35 PM EST to the email address above.
+          Includes a polished HTML summary plus an Excel attachment with the full row-level detail.
+          A one-time welcome preview is emailed immediately on save.
+        </div>
+        <label style="font-size:12px;color:#475569;display:block;font-weight:500;margin-top:4px">Additional recipients
+          <span style="font-size:11px;color:#94a3b8;font-weight:400">(comma-separated — optional CCs)</span>
+        </label>
+        <input class="form-control" id="fCReportRecipients" placeholder="cfo@client.com, billing@client.com"
+          style="margin-top:4px">
+      </div>
+
       <!-- ── Which staff/admin users get access to this client ── -->
       <div class="form-group" style="margin-top:10px">
         <label style="font-weight:600;margin-bottom:6px;display:block">Grant Access To
@@ -5454,6 +5472,10 @@
       const enabled_modules = Array.from(
         document.querySelectorAll('#fCModulesWrap input.fCModCb:checked')
       ).map(cb => cb.value);
+      // Daily-report opt-in + extra recipients (comma-separated)
+      const daily_report_optin = !!(document.getElementById('fCDailyReportOptin') || {}).checked;
+      const extraRaw = (document.getElementById('fCReportRecipients') || {}).value || '';
+      const report_recipients = extraRaw.split(',').map(s => s.trim()).filter(s => s && s.includes('@'));
       const data = {
         company: document.getElementById('fCCompany').value.trim(),
         contact_name: document.getElementById('fCContact').value.trim(),
@@ -5461,8 +5483,11 @@
         phone: document.getElementById('fCPhone').value.trim(),
         service_type,
         notes: document.getElementById('fCNotes') ? document.getElementById('fCNotes').value.trim() : '',
+        daily_report_optin,
+        report_recipients,
       };
       if (user_ids.length) data.user_ids = user_ids;
+      if (enabled_modules.length) data.enabled_modules = enabled_modules;
       if (!data.company) { toast('Company name is required', 'error'); return; }
       if (!service_type) { toast('Please select at least one service', 'error'); return; }
       try {
@@ -5472,17 +5497,16 @@
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         const result = await r.json().catch(() => ({}));
-        // Persist module opt-out if anything was unchecked (default = all modules).
-        if (result && result.id && Array.isArray(enabled_modules)) {
-          try {
-            await fetch(`/hub/api/profile/${result.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ enabled_modules })
-            });
-          } catch (_) { /* non-fatal: client already created */ }
+        // Backend already persisted enabled_modules + report opt-in via update_profile,
+        // so no need for the second PUT we used to do here.
+        const wel = result && result.welcome_email;
+        let wmsg = '';
+        if (wel && wel.ok && (wel.sent || []).length) {
+          wmsg = ` · 📧 welcome preview sent to ${wel.sent.map(s => s.email).join(', ')}`;
+        } else if (wel && wel.failed && wel.failed.length) {
+          wmsg = ` · ⚠️ welcome preview failed (${wel.failed[0].via || 'unknown'})`;
         }
-        closeModal('clientModal'); loadClients(); toast('Client created', 'success');
+        closeModal('clientModal'); loadClients(); toast('Client created' + wmsg, 'success');
         if (result && result.login && result.login.password) {
           const u = result.login.username || data.company;
           const p = result.login.password;

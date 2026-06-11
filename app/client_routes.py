@@ -555,6 +555,11 @@ class ClientIn(BaseModel):
     password: Optional[str] = None
     # Optional: pre-grant access to this new client for a list of existing users
     user_ids: Optional[list[int]] = None
+    # Optional: enabled module list (defaults to all modules)
+    enabled_modules: Optional[list[str]] = None
+    # Daily production report controls (defaults: opt-in ON; recipients fall back to email)
+    daily_report_optin: Optional[bool] = True
+    report_recipients: Optional[list[str]] = None
 
 
 class ClientUpdate(BaseModel):
@@ -584,6 +589,8 @@ class ProfileUpdate(BaseModel):
     doc_tabs: Optional[list] = None
     report_tabs: Optional[list] = None
     enabled_modules: Optional[list[str]] = None
+    daily_report_optin: Optional[bool] = None
+    report_recipients: Optional[list[str]] = None
 
 
 class PracticeProfileUpdate(BaseModel):
@@ -612,6 +619,11 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
     payload = body.model_dump()
     user_ids = payload.pop("user_ids", None) or []
+    # Pop report-related fields so create_client doesn't reject them — we
+    # persist these via update_profile right after the insert.
+    enabled_modules    = payload.pop("enabled_modules", None)
+    daily_report_optin = payload.pop("daily_report_optin", True)
+    report_recipients  = payload.pop("report_recipients", None) or []
     # Optional client password — require minimum length when one is provided.
     supplied_pw = (payload.get("password") or "").strip()
     if supplied_pw and len(supplied_pw) < 8:
@@ -624,12 +636,37 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
             granted = set_client_access(cid, user_ids, granted_by=admin.get("username", ""))
         except Exception as e:
             log.warning("client_user_access seed failed for %s: %s", cid, e)
+    # Persist module enablement + daily-report opt-in + extra recipients
+    try:
+        profile_patch: dict = {
+            "daily_report_optin": bool(daily_report_optin),
+            "report_recipients": report_recipients,
+        }
+        if enabled_modules is not None:
+            profile_patch["enabled_modules"] = enabled_modules
+        update_profile(cid, profile_patch)
+    except Exception as e:
+        log.warning("post-create profile patch failed for %s: %s", cid, e)
+    # Auto-trigger: send the client a one-time welcome / preview email so
+    # they immediately see what the daily 6:35 PM EST report will look
+    # like. Only fires when an email is on file AND opt-in is true.
+    welcome_result = None
+    primary_email = (payload.get("email") or "").strip().lower()
+    if primary_email and daily_report_optin:
+        try:
+            from app.notifications import send_client_daily_report_demo
+            welcome_result = send_client_daily_report_demo(to_email=primary_email)
+        except Exception as e:
+            log.warning("welcome demo email failed for client %s (%s): %s",
+                        cid, primary_email, e)
+            welcome_result = {"ok": False, "error": str(e)}
     # Surface the client login credentials exactly once so the admin can
     # hand them off. payload mutation in create_client adds these keys.
     return {
         "id": cid,
         "ok": True,
         "access_granted": granted,
+        "welcome_email": welcome_result,
         "login": {
             "username": payload.get("_created_username") or "",
             "password": payload.get("_created_password") or "",
@@ -862,9 +899,8 @@ def admin_eod_send_now(report_date: Optional[str] = None,
                        hub_session: Optional[str] = Cookie(None)):
     """Admin-only: dispatch the end-of-day team report immediately.
 
-    Sends to EOD_REPORT_EMAIL (defaults to lexi@medprosc.com +
-    eric@medprosc.com). Returns the delivery report so you can see
-    who it went to.
+    Sends to EOD_REPORT_EMAIL (defaults to lexi@medprosc.com).
+    Returns the delivery report so you can see who it went to.
 
     Set ``demo=true`` to send a fully-populated showcase email with
     fabricated activity so the recipient can see what the real report
@@ -876,6 +912,58 @@ def admin_eod_send_now(report_date: Optional[str] = None,
     if demo:
         return send_eod_team_report_demo()
     return send_eod_team_report(report_date=report_date, force=bool(force))
+
+
+# ─── Per-client daily production report (sent TO the client) ───────────
+
+@router.get("/admin/reports/client/{cid}/preview")
+def admin_client_report_preview(cid: int, report_date: Optional[str] = None,
+                                hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: dry-run the per-client production report aggregator.
+    Returns the structured dict the email layer would render.
+    """
+    _require_full_admin(hub_session)
+    from .client_db import get_client_daily_report
+    return get_client_daily_report(cid, report_date)
+
+
+@router.post("/admin/reports/client/{cid}/send-now")
+def admin_client_report_send_now(cid: int,
+                                 report_date: Optional[str] = None,
+                                 force: bool = True,
+                                 demo: bool = False,
+                                 to_email: Optional[str] = None,
+                                 hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: dispatch a per-client production report right now.
+
+    The email goes to the client's primary email + any extras configured
+    in their profile under ``report_recipients``. Comes with an Excel
+    attachment containing the full row-level detail.
+
+    Set ``demo=true`` to fabricate the data (useful for verifying the
+    layout in your own inbox). Set ``to_email=...`` to override the
+    recipient while previewing.
+    """
+    _require_full_admin(hub_session)
+    from app.notifications import send_client_daily_report, send_client_daily_report_demo
+    if demo:
+        return send_client_daily_report_demo(to_email=to_email)
+    return send_client_daily_report(client_id=cid, report_date=report_date,
+                                    force=bool(force), demo=False)
+
+
+@router.post("/admin/reports/client/send-all")
+def admin_client_report_send_all(report_date: Optional[str] = None,
+                                 force: bool = False,
+                                 hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: fan out per-client production reports to every
+    opted-in client. This is what the 6:35 PM EST scheduler triggers
+    automatically each evening; exposed here so an admin can re-fire on
+    demand without waiting for the cron tick.
+    """
+    _require_full_admin(hub_session)
+    from app.notifications import send_all_client_daily_reports
+    return send_all_client_daily_reports(report_date=report_date, force=bool(force))
 
 
 @router.delete("/clients/{cid}")
