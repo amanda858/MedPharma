@@ -5440,7 +5440,7 @@
       document.querySelectorAll('.fCService').forEach(cb => cb.checked = false);
       document.getElementById('fCNotesWrap').style.display = 'none';
       // Populate the new module + access pickers fresh each time.
-      populateClientModuleChecks('fCModulesWrap', null /* all enabled by default */);
+      populateClientModuleChecks('fCModulesWrap', NEW_CLIENT_DEFAULT_MODULES /* onboarding defaults */);
       populateClientAccessChecks('fCAccessWrap', null /* pre-check all team users */);
       document.getElementById('clientModal').classList.add('open');
     }
@@ -8273,19 +8273,46 @@
       { key: 'chat',          label: 'Team Chat' },
     ];
 
+    // New-client defaults: keep advanced payor modules off unless explicitly enabled.
+    const ADVANCED_MODULES = new Set(['credentialing', 'enrollment', 'edi']);
+    const NEW_CLIENT_DEFAULT_MODULES = [
+      'dashboard', 'profile', 'production', 'claims', 'providers', 'reporting', 'documents', 'chat'
+    ];
+
     // Cache for the active client's enabled_modules. null = "no opt-out, show all"
     let activeClientModules = null;
 
     function _renderModuleCheckboxGrid(targetId, selectedSet, cssClass) {
       const wrap = document.getElementById(targetId);
       if (!wrap) return;
-      wrap.innerHTML = MODULE_CATALOG.map(m => {
-        const checked = selectedSet ? selectedSet.has(m.key) : true;
-        return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;font-size:13px">
+
+      const coreModules = MODULE_CATALOG.filter(m => !ADVANCED_MODULES.has(m.key));
+      const advancedModules = MODULE_CATALOG.filter(m => ADVANCED_MODULES.has(m.key));
+
+      const rowHtml = (m, checked) => `<label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;font-size:13px">
           <input type="checkbox" class="${cssClass}" value="${m.key}" ${checked ? 'checked' : ''}>
           ${esc(m.label)}
         </label>`;
+
+      const coreHtml = coreModules.map(m => {
+        const checked = selectedSet ? selectedSet.has(m.key) : NEW_CLIENT_DEFAULT_MODULES.includes(m.key);
+        return rowHtml(m, checked);
       }).join('');
+
+      const advancedHtml = advancedModules.map(m => {
+        const checked = selectedSet ? selectedSet.has(m.key) : false;
+        return rowHtml(m, checked);
+      }).join('');
+
+      wrap.innerHTML = `
+        <div style="grid-column:1/-1;font-size:11px;color:#64748b;margin-bottom:2px">Core modules</div>
+        ${coreHtml}
+        <details style="grid-column:1/-1;margin-top:2px">
+          <summary style="cursor:pointer;font-size:12px;color:#334155;font-weight:600">Advanced modules (optional)</summary>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;padding-top:8px">
+            ${advancedHtml}
+          </div>
+        </details>`;
     }
 
     function populateClientModuleChecks(targetId, currentList) {
