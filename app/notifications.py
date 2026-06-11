@@ -102,9 +102,29 @@ def _carrier_sms_email(phone: str, carrier: str) -> str | None:
 
 def _live_config() -> dict:
     """Read notification credentials FRESH from env vars every call.
-    This avoids stale module-level caches if env vars were set after import."""
-    sg_key = os.getenv("SENDGRID_API_KEY", "") or SENDGRID_API_KEY
-    sg_from = os.getenv("SENDGRID_FROM", "notifications@medprosc.com") or SENDGRID_FROM
+    This avoids stale module-level caches if env vars were set after import.
+
+    Accepts common operator typos for the SendGrid key/from env vars so a
+    miskeyed Render variable doesn't silently break every email."""
+    # Honor any of the common names operators try.
+    sg_key = ""
+    for n in ("SENDGRID_API_KEY", "SENDGRID_KEY", "SENDGRID_TOKEN",
+              "SG_API_KEY", "SENDGRID"):
+        v = (os.getenv(n) or "").strip()
+        if v:
+            sg_key = v
+            break
+    if not sg_key:
+        sg_key = SENDGRID_API_KEY
+    sg_from = ""
+    for n in ("SENDGRID_FROM", "SENDGRID_FROM_EMAIL", "MAIL_FROM",
+              "FROM_EMAIL"):
+        v = (os.getenv(n) or "").strip()
+        if v:
+            sg_from = v
+            break
+    if not sg_from:
+        sg_from = SENDGRID_FROM or "notifications@medprosc.com"
     emails = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com").split(",") if e.strip()] or NOTIFY_EMAILS
     t_sid = os.getenv("TWILIO_SID", "") or TWILIO_SID
     t_tok = os.getenv("TWILIO_TOKEN", "") or TWILIO_TOKEN

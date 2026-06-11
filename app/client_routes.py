@@ -70,17 +70,75 @@ router = APIRouter(prefix="/hub/api")
 DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
 
 
+# Email provider env var aliases. Operators frequently mistype the canonical
+# name on Render — we accept the most common variants so a wrong-cased env
+# var doesn't silently break every notification on the platform.
+SENDGRID_KEY_ALIASES = (
+    "SENDGRID_API_KEY",
+    "SENDGRID_KEY",
+    "SENDGRID_TOKEN",
+    "SG_API_KEY",
+    "SENDGRID",
+)
+SENDGRID_FROM_ALIASES = (
+    "SENDGRID_FROM",
+    "SENDGRID_FROM_EMAIL",
+    "MAIL_FROM",
+    "FROM_EMAIL",
+)
+
+
+def _resolve_env(*names: str) -> tuple[str, str]:
+    """Return (value, name) for the first env var in `names` that has a
+    non-empty value. Empty result means none were set."""
+    for n in names:
+        v = (os.getenv(n) or "").strip()
+        if v:
+            return v, n
+    return "", ""
+
+
+def _resolved_email_config() -> dict:
+    """One source of truth for what email creds the live process can see,
+    safe to expose (key never returned, only its prefix)."""
+    sg_key, sg_key_name = _resolve_env(*SENDGRID_KEY_ALIASES)
+    sg_from, sg_from_name = _resolve_env(*SENDGRID_FROM_ALIASES)
+    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
+    smtp_p = int((os.getenv("SMTP_PORT") or "587").strip() or 587)
+    smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
+    if not sg_from:
+        # Last resort fallback so SendGrid doesn't 403 on bad from.
+        sg_from = (smtp_u or "notifications@medprosc.com").strip()
+        sg_from_name = "(fallback default)"
+    return {
+        "sg_key": sg_key,
+        "sg_key_name": sg_key_name,
+        "sg_key_prefix": (sg_key[:6] + "…") if sg_key else "",
+        "sg_from": sg_from,
+        "sg_from_name": sg_from_name,
+        "smtp_host": smtp_h,
+        "smtp_port": smtp_p,
+        "smtp_user": smtp_u,
+        "smtp_pass_set": bool(smtp_pw),
+        "ready_sendgrid": bool(sg_key),
+        "ready_smtp": bool(smtp_h and smtp_u and smtp_pw),
+        "ready": bool(sg_key or (smtp_h and smtp_u and smtp_pw)),
+    }
+
+
 def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: str = "") -> tuple[bool, str]:
     """Send a direct email to a single recipient using SendGrid or SMTP."""
     to_email = (to_email or "").strip()
     if not to_email:
         return False, "missing recipient"
 
-    sg_key = (os.getenv("SENDGRID_API_KEY") or "").strip()
-    sg_from = (os.getenv("SENDGRID_FROM") or os.getenv("SMTP_USER") or "notifications@medprosc.com").strip()
-    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
-    smtp_p = int((os.getenv("SMTP_PORT") or "587").strip() or 587)
-    smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    cfg = _resolved_email_config()
+    sg_key = cfg["sg_key"]
+    sg_from = cfg["sg_from"]
+    smtp_h = cfg["smtp_host"]
+    smtp_p = cfg["smtp_port"]
+    smtp_u = cfg["smtp_user"]
     smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
 
     # Track the actual SendGrid failure reason so we don't mask it with the
@@ -957,14 +1015,9 @@ def admin_diag_email(hub_session: Optional[str] = Cookie(None)):
     Never returns the API key itself — only whether it's set, its prefix, and
     where the From address resolves from."""
     _require_full_admin(hub_session)
-    sg_key = (os.getenv("SENDGRID_API_KEY") or "").strip()
-    sg_from = (os.getenv("SENDGRID_FROM") or "").strip()
-    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
-    smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    cfg = _resolved_email_config()
     notify_emails = (os.getenv("NOTIFY_EMAILS") or "").strip()
     eod_recipients = (os.getenv("EOD_REPORT_EMAIL") or "").strip()
-    sg_key_prefix = sg_key[:6] + "…" if sg_key else ""
-    has_email_provider = bool(sg_key or (smtp_h and smtp_u))
     try:
         from app.security import encryption_status
         chat_enc = encryption_status()
@@ -972,21 +1025,129 @@ def admin_diag_email(hub_session: Optional[str] = Cookie(None)):
         chat_enc = {"encryption": "unknown", "ready": False, "error": str(e)}
     return {
         "email": {
-            "sendgrid_key_set": bool(sg_key),
-            "sendgrid_key_prefix": sg_key_prefix,
-            "sendgrid_from": sg_from or "(default: notifications@medprosc.com)",
-            "smtp_host_set": bool(smtp_h),
-            "smtp_user_set": bool(smtp_u),
+            "sendgrid_key_set": cfg["ready_sendgrid"],
+            "sendgrid_key_prefix": cfg["sg_key_prefix"],
+            "sendgrid_key_env_var": cfg["sg_key_name"] or "",
+            "sendgrid_from": cfg["sg_from"] or "(none)",
+            "sendgrid_from_env_var": cfg["sg_from_name"] or "",
+            "smtp_host_set": bool(cfg["smtp_host"]),
+            "smtp_user_set": bool(cfg["smtp_user"]),
+            "smtp_pass_set": cfg["smtp_pass_set"],
             "notify_emails": notify_emails,
             "eod_report_email": eod_recipients,
-            "ready": has_email_provider,
+            "ready": cfg["ready"],
+            "accepted_key_env_vars": list(SENDGRID_KEY_ALIASES),
+            "accepted_from_env_vars": list(SENDGRID_FROM_ALIASES),
             "guidance": (
-                "ok" if has_email_provider else
-                "No email provider configured. Set SENDGRID_API_KEY (+ verified "
-                "SENDGRID_FROM) on Render, or set SMTP_HOST/SMTP_USER/SMTP_PASS."
+                "ok" if cfg["ready"] else
+                "No email provider configured. On Render → medpharma-hub → "
+                "Environment, add SENDGRID_API_KEY (the full SG.xxx... secret) "
+                "and SENDGRID_FROM=lexi@medprosc.com, then Save. Alternative: "
+                "set SMTP_HOST, SMTP_USER, SMTP_PASS for Gmail/Workspace App "
+                "Password (smtp.gmail.com / port 587)."
             ),
         },
         "chat_encryption": chat_enc,
+    }
+
+
+@router.post("/admin/diag/email/test")
+def admin_diag_email_test(
+    body: dict = None,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Admin-only: fire a real test email to a given address using whatever
+    env vars are currently live. Returns the EXACT provider response so the
+    operator can debug 'why isn't this working' without restarting.
+
+    Body: {"to": "you@example.com"} (defaults to the admin's own email)
+    """
+    admin = _require_full_admin(hub_session)
+    body = body or {}
+    to = (
+        (body.get("to") if isinstance(body, dict) else None)
+        or admin.get("email")
+        or ""
+    ).strip()
+    if not to or "@" not in to:
+        raise HTTPException(400, "Provide a 'to' email address")
+    cfg = _resolved_email_config()
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    subject = "MedPharma Hub — email provider test"
+    text_body = (
+        "If you can read this, the MedPharma Hub email pipeline is working.\n\n"
+        f"Triggered by {admin.get('username','admin')} at {now_iso}.\n\n"
+        f"Provider config:\n"
+        f"  SendGrid key set: {cfg['ready_sendgrid']} "
+        f"(env var: {cfg['sg_key_name'] or '-'})\n"
+        f"  SendGrid from:    {cfg['sg_from']} "
+        f"(env var: {cfg['sg_from_name'] or '-'})\n"
+        f"  SMTP host set:    {bool(cfg['smtp_host'])}\n"
+    )
+    html_body = (
+        "<p>If you can read this, the MedPharma Hub email pipeline is "
+        "working.</p>"
+        f"<p style='font-size:12px;color:#64748b'>Triggered by "
+        f"<b>{admin.get('username','admin')}</b> at {now_iso}.</p>"
+        "<table style='font-size:12px;border-collapse:collapse'>"
+        f"<tr><td style='padding:4px 10px;color:#64748b'>SendGrid key set</td>"
+        f"<td style='padding:4px 10px'><b>{cfg['ready_sendgrid']}</b> "
+        f"(env: {cfg['sg_key_name'] or '-'})</td></tr>"
+        f"<tr><td style='padding:4px 10px;color:#64748b'>SendGrid from</td>"
+        f"<td style='padding:4px 10px'>{cfg['sg_from']} "
+        f"(env: {cfg['sg_from_name'] or '-'})</td></tr>"
+        f"<tr><td style='padding:4px 10px;color:#64748b'>SMTP host set</td>"
+        f"<td style='padding:4px 10px'>{bool(cfg['smtp_host'])}</td></tr>"
+        "</table>"
+    )
+    sent, via = _send_direct_email(to, subject, text_body, html_body)
+    log_audit(None, admin.get("username", ""), "email_test",
+              "diagnostic", None,
+              f"test send to {to}: sent={sent} via={via}")
+    return {
+        "ok": sent,
+        "to": to,
+        "via": via,
+        "provider_config": {
+            "sendgrid_key_set": cfg["ready_sendgrid"],
+            "sendgrid_key_env_var": cfg["sg_key_name"] or "",
+            "sendgrid_key_prefix": cfg["sg_key_prefix"],
+            "sendgrid_from": cfg["sg_from"],
+            "sendgrid_from_env_var": cfg["sg_from_name"] or "",
+            "smtp_host_set": bool(cfg["smtp_host"]),
+            "smtp_user_set": bool(cfg["smtp_user"]),
+            "smtp_pass_set": cfg["smtp_pass_set"],
+        },
+        "guidance": (
+            "delivered" if sent else
+            "Email send failed. The exact provider response is in 'via'. "
+            "Most common causes: (1) SENDGRID_API_KEY env var not set on the "
+            "Render service (open Render → medpharma-hub → Environment), "
+            "(2) the SendGrid From address is not a verified sender — set "
+            "SENDGRID_FROM=lexi@medprosc.com and verify lexi@medprosc.com "
+            "in SendGrid → Settings → Sender Authentication, (3) the API key "
+            "lacks Mail Send permission."
+        ),
+    }
+
+
+@router.get("/email-status")
+def email_status_public(hub_session: Optional[str] = Cookie(None)):
+    """Lightweight, no-secrets status flag the hub UI can poll on every page
+    load to decide whether to show the 'email is not configured' banner.
+
+    Available to any logged-in user so non-admin pages can also show a
+    warning that chat invites won't be delivered by email."""
+    _require_user(hub_session)
+    cfg = _resolved_email_config()
+    return {
+        "ready": cfg["ready"],
+        "via": (
+            "sendgrid" if cfg["ready_sendgrid"]
+            else "smtp" if cfg["ready_smtp"]
+            else "none"
+        ),
+        "sendgrid_from": cfg["sg_from"] if cfg["ready"] else "",
     }
 
 
