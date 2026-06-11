@@ -101,40 +101,48 @@ def _carrier_sms_email(phone: str, carrier: str) -> str | None:
 
 
 def _live_config() -> dict:
-    """Read notification credentials FRESH from env vars every call.
-    This avoids stale module-level caches if env vars were set after import.
+    """Read notification credentials FRESH every call.
 
-    Accepts common operator typos for the SendGrid key/from env vars so a
-    miskeyed Render variable doesn't silently break every email."""
-    # Honor any of the common names operators try.
-    sg_key = ""
-    for n in ("SENDGRID_API_KEY", "SENDGRID_KEY", "SENDGRID_TOKEN",
-              "SG_API_KEY", "SENDGRID"):
-        v = (os.getenv(n) or "").strip()
-        if v:
-            sg_key = v
-            break
-    if not sg_key:
-        sg_key = SENDGRID_API_KEY
-    sg_from = ""
-    for n in ("SENDGRID_FROM", "SENDGRID_FROM_EMAIL", "MAIL_FROM",
-              "FROM_EMAIL"):
-        v = (os.getenv(n) or "").strip()
-        if v:
-            sg_from = v
-            break
-    if not sg_from:
-        sg_from = SENDGRID_FROM or "notifications@medprosc.com"
-    emails = [e.strip() for e in os.getenv("NOTIFY_EMAIL", "eric@medprosc.com").split(",") if e.strip()] or NOTIFY_EMAILS
+    Resolution order: in-DB app_settings (set via admin UI) → env vars →
+    module-level defaults. This lets the admin paste credentials in the
+    hub without ever touching Render env vars.
+    """
+    # Pull DB-stored secrets first; missing keys come back empty so the
+    # env / default fallbacks still apply.
+    try:
+        from app.client_db import get_app_setting as _gs
+        db_sg_key  = (_gs("SENDGRID_API_KEY") or "").strip()
+        db_sg_from = (_gs("SENDGRID_FROM") or "").strip()
+        db_smtp_h  = (_gs("SMTP_HOST") or "").strip()
+        db_smtp_p  = (_gs("SMTP_PORT") or "").strip()
+        db_smtp_u  = (_gs("SMTP_USER") or "").strip()
+        db_smtp_pw = (_gs("SMTP_PASS") or "").strip()
+        db_notify  = (_gs("NOTIFY_EMAILS") or "").strip()
+    except Exception:
+        db_sg_key = db_sg_from = db_smtp_h = db_smtp_p = ""
+        db_smtp_u = db_smtp_pw = db_notify = ""
+
+    sg_key = db_sg_key or os.getenv("SENDGRID_API_KEY", "") or SENDGRID_API_KEY
+    sg_from = (db_sg_from
+               or os.getenv("SENDGRID_FROM", "")
+               or "notifications@medprosc.com"
+               or SENDGRID_FROM)
+    notify_raw = (db_notify
+                  or os.getenv("NOTIFY_EMAIL", "eric@medprosc.com"))
+    emails = [e.strip() for e in notify_raw.split(",") if e.strip()] or NOTIFY_EMAILS
     t_sid = os.getenv("TWILIO_SID", "") or TWILIO_SID
     t_tok = os.getenv("TWILIO_TOKEN", "") or TWILIO_TOKEN
     t_from = _normalize_phone(os.getenv("TWILIO_FROM", "") or TWILIO_FROM)
     phone = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500")) or NOTIFY_PHONE
     carrier = os.getenv("NOTIFY_PHONE_CARRIER", "").strip().lower() or NOTIFY_PHONE_CARRIER
-    smtp_h = os.getenv("SMTP_HOST", "smtp.gmail.com") or SMTP_HOST
-    smtp_p = int(os.getenv("SMTP_PORT", "587") or SMTP_PORT)
-    smtp_u = os.getenv("SMTP_USER", "") or SMTP_USER
-    smtp_pw = os.getenv("SMTP_PASS", "") or SMTP_PASS
+    smtp_h = db_smtp_h or os.getenv("SMTP_HOST", "smtp.gmail.com") or SMTP_HOST
+    smtp_p_raw = db_smtp_p or os.getenv("SMTP_PORT", "587") or str(SMTP_PORT)
+    try:
+        smtp_p = int(smtp_p_raw or 587)
+    except (TypeError, ValueError):
+        smtp_p = 587
+    smtp_u = db_smtp_u or os.getenv("SMTP_USER", "") or SMTP_USER
+    smtp_pw = db_smtp_pw or os.getenv("SMTP_PASS", "") or SMTP_PASS
     in_app = os.getenv("NOTIFY_IN_APP_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
     return {
         "SENDGRID_API_KEY": sg_key, "SENDGRID_FROM": sg_from, "NOTIFY_EMAILS": emails,

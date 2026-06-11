@@ -1900,18 +1900,6 @@
 
   <!-- ══════════════ APP SHELL ══════════════ -->
   <div class="app" id="appShell">
-    <!-- Persistent email-provider warning banner. Shown to ANY logged-in user
-         when the live process can't send email so the team knows chat invites
-         won't arrive in their inbox. Hidden when email works. -->
-    <div id="emailWarnBanner" style="display:none;background:#fef3c7;color:#78350f;
-         border-bottom:2px solid #f59e0b;padding:10px 16px;font-size:13px;
-         font-weight:600;text-align:center;line-height:1.5">
-      <span style="font-size:16px;margin-right:8px">⚠️</span>
-      <span id="emailWarnText">Email notifications are not currently configured. Chat invites and EOD reports are still saved to the in-app inbox (🔔 bell) but won't arrive by email.</span>
-      <button id="emailWarnFixBtn" class="btn btn-secondary btn-sm"
-              onclick="openEmailFixModal()"
-              style="display:none;margin-left:12px;font-size:11px;padding:4px 10px">Fix now</button>
-    </div>
     <div class="topbar">
       <div class="topbar-left">
         <button class="hamburger" id="hamburgerBtn" onclick="toggleMobileSidebar()" aria-label="Menu">
@@ -2004,6 +1992,7 @@
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
             <div class="nav-item" data-panel="audit" onclick="navTo('audit')">Audit Log</div>
+            <div class="nav-item" data-panel="emailsetup" onclick="navTo('emailsetup')">✉️ Email Setup</div>
           </div>
         </div>
         <div class="nav-item" onclick="switchAccount()" style="color:#2563eb;font-weight:600;margin-top:auto">Change Account</div>
@@ -3176,7 +3165,7 @@
           </div>
         </div>
 
-        <!-- ═══ ALERTS ═══ -->
+        <!-- ═══ AUDIT LOG ═══ -->
         <div class="hub-panel" id="panel-audit">
           <div class="page-header">
             <div class="page-title">📜 Audit Log</div>
@@ -3199,6 +3188,94 @@
                 <tbody id="auditTbody"></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- ═══ EMAIL SETUP (admin) ═══ -->
+        <div class="hub-panel" id="panel-emailsetup">
+          <div class="page-header">
+            <div class="page-title">✉️ Email Setup</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadEmailSetup()">🔄 Refresh</button>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <div style="font-size:28px;line-height:1">🛡️</div>
+              <div style="flex:1">
+                <div style="font-weight:700;margin-bottom:4px">Credentials stay in the database, encrypted.</div>
+                <div style="color:var(--gray-300);font-size:14px;line-height:1.5">
+                  Paste your SendGrid API key (or SMTP credentials) below — they are
+                  Fernet-encrypted before being written to the SQLite database, and
+                  override anything set in Render env vars. Click <b>Save</b>, then
+                  <b>Send Test</b>. If the test arrives, chat invites and EOD reports
+                  will reach inboxes from this moment forward.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="emailSetupStatus" class="card" style="margin-bottom:16px"></div>
+
+          <div class="card">
+            <h3 style="margin:0 0 12px;font-size:16px">SendGrid (recommended)</h3>
+            <div class="form-grid">
+              <div class="form-group" style="grid-column:1/-1">
+                <label>SendGrid API Key <span id="esSgKeyState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSendgridKey" type="password" autocomplete="off"
+                  placeholder="SG.xxxxxxxxxxxxxxxxxxxxxx">
+                <div style="font-size:11px;color:var(--gray-400);margin-top:4px">
+                  Starts with <code>SG.</code> — leave blank to keep existing, clear and save to remove.
+                </div>
+              </div>
+              <div class="form-group" style="grid-column:1/-1">
+                <label>Verified "From" address <span id="esSgFromState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSendgridFrom" type="email" placeholder="lexi@medprosc.com">
+              </div>
+            </div>
+
+            <h3 style="margin:20px 0 12px;font-size:16px">SMTP fallback (Gmail, Outlook, etc.)</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>SMTP Host <span id="esSmtpHostState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSmtpHost" placeholder="smtp.gmail.com">
+              </div>
+              <div class="form-group">
+                <label>SMTP Port <span id="esSmtpPortState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSmtpPort" placeholder="587">
+              </div>
+              <div class="form-group">
+                <label>SMTP User <span id="esSmtpUserState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSmtpUser" autocomplete="off" placeholder="lexi@medprosc.com">
+              </div>
+              <div class="form-group">
+                <label>SMTP Password / App Token <span id="esSmtpPassState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esSmtpPass" type="password" autocomplete="off" placeholder="••••••••">
+              </div>
+            </div>
+
+            <h3 style="margin:20px 0 12px;font-size:16px">Notification recipients</h3>
+            <div class="form-grid">
+              <div class="form-group" style="grid-column:1/-1">
+                <label>Default "alerts" recipients <span id="esNotifyState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esNotifyEmails" placeholder="eric@medprosc.com, lexi@medprosc.com">
+              </div>
+              <div class="form-group" style="grid-column:1/-1">
+                <label>EOD report recipients <span id="esEodState" style="font-size:11px;color:var(--gray-400)"></span></label>
+                <input class="form-control" id="esEodEmail" placeholder="eric@medprosc.com">
+              </div>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+              <button class="btn btn-primary" onclick="saveEmailSettings()">💾 Save credentials</button>
+              <input class="form-control" id="esTestTo" placeholder="test@example.com" style="max-width:280px">
+              <button class="btn btn-secondary" onclick="sendEmailTest()">📤 Save &amp; send test</button>
+            </div>
+          </div>
+
+          <div id="emailSetupLog" class="card" style="margin-top:16px;display:none">
+            <h3 style="margin:0 0 8px;font-size:14px">Last test result</h3>
+            <pre id="emailSetupLogBody" style="white-space:pre-wrap;font-size:12px;color:var(--gray-300);margin:0"></pre>
           </div>
         </div>
 
@@ -3715,34 +3792,6 @@
         <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading…</div>
       </div>
       <button class="btn btn-primary" style="margin-top:12px" onclick="saveClientModules()">Save Modules</button>
-    </div>
-  </div>
-
-  <!-- ═══ EMAIL FIX MODAL (admin: live test of SendGrid/SMTP without leaving the hub) ═══ -->
-  <div id="emailFixOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;
-       background:rgba(15,23,42,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px">
-    <div style="background:#fff;border-radius:12px;padding:24px;max-width:560px;width:100%;
-         max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <h2 style="margin:0;font-size:18px">📧 Email provider — diagnose & test</h2>
-        <button onclick="closeEmailFixModal()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#64748b">&times;</button>
-      </div>
-      <div style="color:#475569;font-size:13px;margin-bottom:14px">
-        This page sends a real test email using whatever env vars the server is currently reading.
-        Use it to verify your Render env vars actually landed.
-      </div>
-      <div id="emailFixDiag" style="margin-bottom:14px"></div>
-      <div style="margin-bottom:10px">
-        <label style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Send test email to:</label>
-        <input id="emailFixTo" type="email" placeholder="you@medprosc.com"
-               style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px">
-      </div>
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button class="btn btn-primary" onclick="sendEmailFixTest()">Send test email</button>
-        <button class="btn btn-secondary" onclick="loadEmailFixDiag()">Re-check config</button>
-        <button class="btn btn-secondary" onclick="closeEmailFixModal()" style="margin-left:auto">Close</button>
-      </div>
-      <div id="emailFixResult"></div>
     </div>
   </div>
 
@@ -4391,6 +4440,7 @@
       }
       if (panel === 'alerts') loadAlerts();
       if (panel === 'audit') loadAuditLog();
+      if (panel === 'emailsetup') loadEmailSetup();
       if (panel === 'chat') loadChatRooms();
     }
 
@@ -4401,7 +4451,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit','chat'];
+                       'production','alerts','audit','chat','emailsetup'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
@@ -8327,125 +8377,6 @@
     };
 
     // ═══════════════════════════════════════
-    // EMAIL-PROVIDER STATUS BANNER
-    // Polls /hub/api/email-status on login and every 5 minutes. When email
-    // isn't configured we keep the yellow banner visible at the top of every
-    // page so the team knows chat invites are landing in-app only. Admins
-    // see a "Fix now" button that opens a real-send test modal.
-    // ═══════════════════════════════════════
-    async function refreshEmailStatusBanner() {
-      const banner = document.getElementById('emailWarnBanner');
-      const text = document.getElementById('emailWarnText');
-      const fixBtn = document.getElementById('emailWarnFixBtn');
-      if (!banner) return;
-      try {
-        const r = await fetch('/hub/api/email-status');
-        if (!r.ok) { banner.style.display = 'none'; return; }
-        const d = await r.json();
-        if (d.ready) {
-          banner.style.display = 'none';
-          return;
-        }
-        banner.style.display = 'block';
-        if (text) {
-          text.innerHTML =
-            '<span style="font-size:16px;margin-right:8px">⚠️</span>'
-            + 'Email is <b>not configured</b> on the server. '
-            + 'Chat invites and EOD reports are saved to the in-app inbox '
-            + '(🔔 bell, top-right) but <b>will not arrive by email</b> until '
-            + 'an admin sets SENDGRID_API_KEY on Render.';
-        }
-        const isAdmin = (window.currentUser && (window.currentUser.role === 'admin' || window.currentUser.is_admin));
-        if (fixBtn) fixBtn.style.display = isAdmin ? 'inline-block' : 'none';
-      } catch (e) {
-        // Endpoint unreachable — hide silently rather than spam the UI.
-        banner.style.display = 'none';
-      }
-    }
-
-    function openEmailFixModal() {
-      const overlay = document.getElementById('emailFixOverlay');
-      if (overlay) {
-        overlay.style.display = 'flex';
-        const inp = document.getElementById('emailFixTo');
-        if (inp && window.currentUser && window.currentUser.email) {
-          inp.value = window.currentUser.email;
-        }
-        loadEmailFixDiag();
-      }
-    }
-
-    function closeEmailFixModal() {
-      const overlay = document.getElementById('emailFixOverlay');
-      if (overlay) overlay.style.display = 'none';
-    }
-
-    async function loadEmailFixDiag() {
-      const out = document.getElementById('emailFixDiag');
-      if (!out) return;
-      out.innerHTML = '<div style="color:#64748b">Loading current provider config…</div>';
-      try {
-        const r = await fetch('/hub/api/admin/diag/email');
-        const d = await r.json();
-        const e = d.email || {};
-        out.innerHTML =
-          '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-size:12px">'
-          + '<div><b>SendGrid key set:</b> ' + (e.sendgrid_key_set ? '✅ yes (' + (e.sendgrid_key_prefix || '') + ', via ' + (e.sendgrid_key_env_var || '?') + ')' : '❌ no') + '</div>'
-          + '<div><b>SendGrid from:</b> ' + (e.sendgrid_from || '(unset)') + (e.sendgrid_from_env_var ? ' (via ' + e.sendgrid_from_env_var + ')' : '') + '</div>'
-          + '<div><b>SMTP host set:</b> ' + (e.smtp_host_set ? '✅' : '❌') + ' &nbsp; <b>SMTP user:</b> ' + (e.smtp_user_set ? '✅' : '❌') + ' &nbsp; <b>SMTP pass:</b> ' + (e.smtp_pass_set ? '✅' : '❌') + '</div>'
-          + '<div><b>Provider ready:</b> ' + (e.ready ? '✅' : '❌') + '</div>'
-          + (e.accepted_key_env_vars ? '<div style="color:#64748b;margin-top:6px">Accepted key env var names: ' + e.accepted_key_env_vars.join(', ') + '</div>' : '')
-          + '</div>'
-          + '<div style="margin-top:10px;color:#475569;font-size:12px;line-height:1.5">'
-          + '<b>To enable email:</b><br>'
-          + '1. Go to <a href="https://dashboard.render.com" target="_blank" style="color:#2563eb">Render dashboard</a> → <b>medpharma-hub</b> → <b>Environment</b><br>'
-          + '2. Add <code>SENDGRID_API_KEY</code> = your SendGrid secret (starts with <code>SG.</code>)<br>'
-          + '3. Add <code>SENDGRID_FROM</code> = <code>lexi@medprosc.com</code> (must be a verified sender in SendGrid)<br>'
-          + '4. Click <b>Save Changes</b> — Render auto-redeploys (~2 min)<br>'
-          + '5. Click <b>Send test email</b> below to verify'
-          + '</div>';
-      } catch (e) {
-        out.innerHTML = '<div style="color:#dc2626">Could not load diag: ' + e + '</div>';
-      }
-    }
-
-    async function sendEmailFixTest() {
-      const inp = document.getElementById('emailFixTo');
-      const out = document.getElementById('emailFixResult');
-      if (!inp || !out) return;
-      const to = (inp.value || '').trim();
-      if (!to || !to.includes('@')) {
-        out.innerHTML = '<div style="color:#dc2626">Enter a valid email address</div>';
-        return;
-      }
-      out.innerHTML = '<div style="color:#64748b">Sending…</div>';
-      try {
-        const r = await fetch('/hub/api/admin/diag/email/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to: to })
-        });
-        const d = await r.json();
-        if (d.ok) {
-          out.innerHTML = '<div style="background:#d1fae5;color:#065f46;border:1px solid #10b981;padding:10px;border-radius:8px"><b>✅ Sent successfully</b> via <b>' + (d.via || '?') + '</b> to ' + (d.to || '?') + '<br><span style="font-size:11px">Check the inbox (and spam folder). If it arrived, the banner will disappear after the next refresh.</span></div>';
-          setTimeout(refreshEmailStatusBanner, 2000);
-        } else {
-          out.innerHTML = '<div style="background:#fee2e2;color:#7f1d1d;border:1px solid #ef4444;padding:10px;border-radius:8px"><b>❌ Failed</b><br><b>Reason:</b> ' + (d.via || '?') + '<br><span style="font-size:11px">' + (d.guidance || '') + '</span></div>';
-        }
-      } catch (e) {
-        out.innerHTML = '<div style="color:#dc2626">Request failed: ' + e + '</div>';
-      }
-    }
-
-    // Run banner check on initial dashboard load and every 5 min thereafter.
-    const _origLoadDash2 = loadDashboard;
-    loadDashboard = async function () {
-      await _origLoadDash2();
-      refreshEmailStatusBanner();
-    };
-    setInterval(refreshEmailStatusBanner, 300000);
-
-    // ═══════════════════════════════════════
     // AUDIT LOG
     // ═══════════════════════════════════════
     async function loadAuditLog() {
@@ -8468,6 +8399,152 @@
           <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.details || '')}</td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
+    }
+
+    // ═══════════════════════════════════════
+    // EMAIL SETUP (admin) — paste credentials in-DB, send a test
+    // ═══════════════════════════════════════
+    function _emailStateBadge(s) {
+      if (!s) return '';
+      if (s.set) {
+        return `<span style="color:#10b981">● set${s.preview ? ' (' + esc(s.preview) + ')' : ''}${s.updated_at ? ' · ' + esc(s.updated_at) : ''}</span>`;
+      }
+      return `<span style="color:#9ca3af">○ not set</span>`;
+    }
+
+    async function loadEmailSetup() {
+      const status = document.getElementById('emailSetupStatus');
+      status.innerHTML = '<div style="color:var(--gray-400)">Loading email configuration…</div>';
+      try {
+        const [sR, dR] = await Promise.all([
+          fetch('/hub/api/admin/email/settings'),
+          fetch('/hub/api/admin/diag/email'),
+        ]);
+        if (!sR.ok) throw new Error('settings http ' + sR.status);
+        if (!dR.ok) throw new Error('diag http ' + dR.status);
+        const sJ = await sR.json();
+        const dJ = await dR.json();
+        const s = sJ.settings || {};
+
+        const setBadge = (id, key) => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = _emailStateBadge(s[key]);
+        };
+        setBadge('esSgKeyState',    'SENDGRID_API_KEY');
+        setBadge('esSgFromState',   'SENDGRID_FROM');
+        setBadge('esSmtpHostState', 'SMTP_HOST');
+        setBadge('esSmtpPortState', 'SMTP_PORT');
+        setBadge('esSmtpUserState', 'SMTP_USER');
+        setBadge('esSmtpPassState', 'SMTP_PASS');
+        setBadge('esNotifyState',   'NOTIFY_EMAILS');
+        setBadge('esEodState',      'EOD_REPORT_EMAIL');
+
+        const e = (dJ && dJ.email) || {};
+        const ready = !!e.ready;
+        status.innerHTML = `
+          <div style="display:flex;gap:12px;align-items:center">
+            <div style="font-size:24px">${ready ? '✅' : '⚠️'}</div>
+            <div style="flex:1">
+              <div style="font-weight:700">${ready ? 'Email is configured and ready' : 'No email provider configured yet'}</div>
+              <div style="color:var(--gray-300);font-size:13px;margin-top:2px">
+                ${ready
+                  ? `Sending from <b>${esc(e.sendgrid_from || '')}</b> via
+                     <b>${esc(e.sendgrid_key_source || e.smtp_source || 'env')}</b>${e.sendgrid_key_prefix ? ' (key ' + esc(e.sendgrid_key_prefix) + ')' : ''}.`
+                  : 'Paste a SendGrid API key or SMTP credentials below and click <b>Save</b>.'}
+              </div>
+            </div>
+          </div>`;
+      } catch (err) {
+        console.error(err);
+        status.innerHTML = `<div style="color:#ef4444">Could not load email settings: ${esc(String(err))}</div>`;
+      }
+    }
+
+    function _emailBody() {
+      const grab = (id) => (document.getElementById(id)?.value || '').trim();
+      // Send only fields the user actually filled in — null = leave unchanged.
+      const body = {};
+      const map = {
+        sendgrid_api_key:  'esSendgridKey',
+        sendgrid_from:     'esSendgridFrom',
+        smtp_host:         'esSmtpHost',
+        smtp_port:         'esSmtpPort',
+        smtp_user:         'esSmtpUser',
+        smtp_pass:         'esSmtpPass',
+        notify_emails:     'esNotifyEmails',
+        eod_report_email:  'esEodEmail',
+      };
+      for (const [k, id] of Object.entries(map)) {
+        const v = grab(id);
+        if (v) body[k] = v;
+      }
+      return body;
+    }
+
+    async function saveEmailSettings(silent) {
+      const status = document.getElementById('emailSetupStatus');
+      const body = _emailBody();
+      if (Object.keys(body).length === 0) {
+        if (!silent) status.innerHTML = '<div style="color:#f59e0b">Nothing to save — fill at least one field.</div>';
+        return false;
+      }
+      try {
+        const r = await fetch('/hub/api/admin/email/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          throw new Error('save failed: HTTP ' + r.status + ' — ' + t);
+        }
+        // Clear password-style inputs so they don't sit in the DOM.
+        ['esSendgridKey','esSmtpPass'].forEach(id => {
+          const el = document.getElementById(id); if (el) el.value = '';
+        });
+        await loadEmailSetup();
+        if (!silent) {
+          status.innerHTML = '<div style="color:#10b981">✅ Saved. Click <b>Send Test</b> to verify.</div>';
+        }
+        return true;
+      } catch (e) {
+        console.error(e);
+        status.innerHTML = `<div style="color:#ef4444">Save failed: ${esc(String(e))}</div>`;
+        return false;
+      }
+    }
+
+    async function sendEmailTest() {
+      const to = (document.getElementById('esTestTo')?.value || '').trim();
+      const logBox = document.getElementById('emailSetupLog');
+      const logBody = document.getElementById('emailSetupLogBody');
+      if (!to || !to.includes('@')) {
+        alert('Enter a destination email in the test box first.');
+        return;
+      }
+      // Save any newly-filled credentials first so the test uses them.
+      const body = _emailBody();
+      if (Object.keys(body).length > 0) {
+        const ok = await saveEmailSettings(true);
+        if (!ok) return;
+      }
+      logBox.style.display = 'block';
+      logBody.textContent = 'Sending…';
+      try {
+        const r = await fetch('/hub/api/admin/email/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          logBody.textContent = `✅ Sent to ${to} via ${j.via}.\nCheck the inbox (and spam folder).`;
+        } else {
+          logBody.textContent = `❌ Send failed via ${j.via}.\n${JSON.stringify(j, null, 2)}\n\nCommon fixes:\n• SendGrid: confirm the From address is a Verified Sender.\n• SMTP: Gmail needs an App Password, not your account password.`;
+        }
+      } catch (e) {
+        logBody.textContent = '❌ Request failed: ' + String(e);
+      }
     }
 
     // ═══════════════════════════════════════

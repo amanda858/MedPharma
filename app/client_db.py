@@ -901,6 +901,18 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_eod_reports_date
             ON eod_reports(report_date);
 
+        -- ── App settings (encrypted secrets configurable from the hub UI) ──
+        -- Lets the admin paste credentials (SendGrid API key, SMTP password,
+        -- etc.) into the UI without ever touching Render env vars. Values
+        -- are Fernet-encrypted at rest via app.security so they are never
+        -- readable from the SQLite file alone.
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key         TEXT PRIMARY KEY,
+            value_enc   TEXT NOT NULL,
+            updated_by  TEXT DEFAULT '',
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- ── Client access grants (which staff/admin users can open a given client) ──
         -- Used by /accounts to filter the selector for staff users.
         -- Admins always see every client regardless of rows here.
@@ -3001,6 +3013,120 @@ def get_eod_report(report_id: int) -> dict | None:
         return d
     finally:
         conn.close()
+
+
+# ─── App Settings (in-DB encrypted secrets) ─────────────────────────────
+#
+# Lets admins paste credentials (SendGrid API key, SMTP password, etc.)
+# into the hub UI instead of fighting Render env vars. Stored Fernet-
+# encrypted via app.security so the SQLite file alone reveals nothing.
+
+# Whitelisted settings keys — anything outside this set is rejected so
+# the endpoint can never be used as a generic shell for arbitrary writes.
+ALLOWED_SETTING_KEYS = {
+    "SENDGRID_API_KEY", "SENDGRID_FROM",
+    "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS",
+    "NOTIFY_EMAILS", "EOD_REPORT_EMAIL",
+}
+
+
+def set_app_setting(key: str, value: str, updated_by: str = "") -> bool:
+    """Store an encrypted secret. Empty value deletes the row."""
+    k = (key or "").strip().upper()
+    if k not in ALLOWED_SETTING_KEYS:
+        return False
+    val = (value or "").strip()
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        if not val:
+            cur.execute("DELETE FROM app_settings WHERE key=?", (k,))
+            conn.commit()
+            return True
+        try:
+            from app.security import encrypt_message
+            enc = encrypt_message(val)
+        except Exception:
+            enc = val  # last-resort plaintext; security.py will have logged
+        cur.execute(
+            "INSERT INTO app_settings (key, value_enc, updated_by, updated_at) "
+            "VALUES (?,?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value_enc=excluded.value_enc, updated_by=excluded.updated_by, "
+            "updated_at=CURRENT_TIMESTAMP",
+            (k, enc, updated_by or ""),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        log.exception("set_app_setting failed for key=%s", key)
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_app_setting(key: str) -> str:
+    """Return the decrypted value (or empty string)."""
+    k = (key or "").strip().upper()
+    if k not in ALLOWED_SETTING_KEYS:
+        return ""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT value_enc FROM app_settings WHERE key=?", (k,)
+        ).fetchone()
+        if not row or not row[0]:
+            return ""
+        try:
+            from app.security import decrypt_message
+            return decrypt_message(row[0]) or ""
+        except Exception:
+            return ""
+    finally:
+        conn.close()
+
+
+def list_app_settings() -> dict:
+    """Return a dict of {key: {"set": bool, "preview": str, "updated_*": ...}}
+    for every whitelisted key. Never returns full secret values."""
+    out = {k: {"set": False, "preview": "", "updated_by": "",
+               "updated_at": ""} for k in ALLOWED_SETTING_KEYS}
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT key, value_enc, updated_by, updated_at FROM app_settings"
+        ).fetchall()
+        try:
+            from app.security import decrypt_message
+        except Exception:
+            decrypt_message = lambda x: ""  # noqa: E731
+        for r in rows:
+            k = r["key"]
+            if k not in out:
+                continue
+            try:
+                v = decrypt_message(r["value_enc"]) or ""
+            except Exception:
+                v = ""
+            preview = ""
+            if v:
+                if k in ("SENDGRID_API_KEY", "SMTP_PASS"):
+                    preview = v[:6] + "…" + v[-2:] if len(v) > 10 else "***"
+                else:
+                    preview = v
+            out[k] = {
+                "set": bool(v),
+                "preview": preview,
+                "updated_by": r["updated_by"] or "",
+                "updated_at": r["updated_at"] or "",
+            }
+    finally:
+        conn.close()
+    return out
 
 
 # ─── Team Tracking / Productivity (ActivTrak-style) ───────────────────────

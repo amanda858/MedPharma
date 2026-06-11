@@ -53,6 +53,8 @@ from app.client_db import (
     count_unread_notifications, mark_notification_read,
     mark_all_notifications_read,
     save_eod_report, list_eod_reports, get_eod_report,
+    set_app_setting, get_app_setting, list_app_settings,
+    ALLOWED_SETTING_KEYS,
 )
 
 from app.notifications import (
@@ -70,76 +72,45 @@ router = APIRouter(prefix="/hub/api")
 DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
 
 
-# Email provider env var aliases. Operators frequently mistype the canonical
-# name on Render — we accept the most common variants so a wrong-cased env
-# var doesn't silently break every notification on the platform.
-SENDGRID_KEY_ALIASES = (
-    "SENDGRID_API_KEY",
-    "SENDGRID_KEY",
-    "SENDGRID_TOKEN",
-    "SG_API_KEY",
-    "SENDGRID",
-)
-SENDGRID_FROM_ALIASES = (
-    "SENDGRID_FROM",
-    "SENDGRID_FROM_EMAIL",
-    "MAIL_FROM",
-    "FROM_EMAIL",
-)
-
-
-def _resolve_env(*names: str) -> tuple[str, str]:
-    """Return (value, name) for the first env var in `names` that has a
-    non-empty value. Empty result means none were set."""
-    for n in names:
-        v = (os.getenv(n) or "").strip()
-        if v:
-            return v, n
-    return "", ""
-
-
-def _resolved_email_config() -> dict:
-    """One source of truth for what email creds the live process can see,
-    safe to expose (key never returned, only its prefix)."""
-    sg_key, sg_key_name = _resolve_env(*SENDGRID_KEY_ALIASES)
-    sg_from, sg_from_name = _resolve_env(*SENDGRID_FROM_ALIASES)
-    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
-    smtp_p = int((os.getenv("SMTP_PORT") or "587").strip() or 587)
-    smtp_u = (os.getenv("SMTP_USER") or "").strip()
-    smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
-    if not sg_from:
-        # Last resort fallback so SendGrid doesn't 403 on bad from.
-        sg_from = (smtp_u or "notifications@medprosc.com").strip()
-        sg_from_name = "(fallback default)"
-    return {
-        "sg_key": sg_key,
-        "sg_key_name": sg_key_name,
-        "sg_key_prefix": (sg_key[:6] + "…") if sg_key else "",
-        "sg_from": sg_from,
-        "sg_from_name": sg_from_name,
-        "smtp_host": smtp_h,
-        "smtp_port": smtp_p,
-        "smtp_user": smtp_u,
-        "smtp_pass_set": bool(smtp_pw),
-        "ready_sendgrid": bool(sg_key),
-        "ready_smtp": bool(smtp_h and smtp_u and smtp_pw),
-        "ready": bool(sg_key or (smtp_h and smtp_u and smtp_pw)),
-    }
-
-
 def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: str = "") -> tuple[bool, str]:
-    """Send a direct email to a single recipient using SendGrid or SMTP."""
+    """Send a direct email to a single recipient using SendGrid or SMTP.
+
+    Resolution order for credentials:
+      1. In-DB encrypted settings (app_settings table) — set via admin UI.
+      2. Environment variables (SENDGRID_API_KEY, SMTP_*).
+    This lets the operator paste credentials in the hub without ever
+    touching Render env vars.
+    """
     to_email = (to_email or "").strip()
     if not to_email:
         return False, "missing recipient"
 
-    cfg = _resolved_email_config()
-    sg_key = cfg["sg_key"]
-    sg_from = cfg["sg_from"]
-    smtp_h = cfg["smtp_host"]
-    smtp_p = cfg["smtp_port"]
-    smtp_u = cfg["smtp_user"]
-    smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
+    # In-DB settings win over env so an admin can override Render config.
+    try:
+        from app.client_db import get_app_setting as _gs
+        db_sg_key = (_gs("SENDGRID_API_KEY") or "").strip()
+        db_sg_from = (_gs("SENDGRID_FROM") or "").strip()
+        db_smtp_h = (_gs("SMTP_HOST") or "").strip()
+        db_smtp_p = (_gs("SMTP_PORT") or "").strip()
+        db_smtp_u = (_gs("SMTP_USER") or "").strip()
+        db_smtp_pw = (_gs("SMTP_PASS") or "").strip()
+    except Exception:
+        db_sg_key = db_sg_from = db_smtp_h = db_smtp_p = db_smtp_u = db_smtp_pw = ""
+
+    sg_key = db_sg_key or (os.getenv("SENDGRID_API_KEY") or "").strip()
+    sg_from = (db_sg_from
+               or (os.getenv("SENDGRID_FROM") or "").strip()
+               or db_smtp_u
+               or (os.getenv("SMTP_USER") or "").strip()
+               or "notifications@medprosc.com")
+    smtp_h = db_smtp_h or (os.getenv("SMTP_HOST") or "").strip()
+    smtp_p_raw = db_smtp_p or (os.getenv("SMTP_PORT") or "587").strip()
+    try:
+        smtp_p = int(smtp_p_raw or 587)
+    except (TypeError, ValueError):
+        smtp_p = 587
+    smtp_u = db_smtp_u or (os.getenv("SMTP_USER") or "").strip()
+    smtp_pw = db_smtp_pw or (os.getenv("SMTP_PASS") or "").strip()
 
     # Track the actual SendGrid failure reason so we don't mask it with the
     # generic "no provider configured" message when SMTP also isn't set.
@@ -1015,9 +986,27 @@ def admin_diag_email(hub_session: Optional[str] = Cookie(None)):
     Never returns the API key itself — only whether it's set, its prefix, and
     where the From address resolves from."""
     _require_full_admin(hub_session)
-    cfg = _resolved_email_config()
-    notify_emails = (os.getenv("NOTIFY_EMAILS") or "").strip()
-    eod_recipients = (os.getenv("EOD_REPORT_EMAIL") or "").strip()
+    # In-DB (admin-pasted) values win, env vars fall back.
+    db = list_app_settings()
+    db_key = (get_app_setting("SENDGRID_API_KEY") or "").strip()
+    db_from = (get_app_setting("SENDGRID_FROM") or "").strip()
+    db_smtp_h = (get_app_setting("SMTP_HOST") or "").strip()
+    db_smtp_u = (get_app_setting("SMTP_USER") or "").strip()
+    env_sg_key = (os.getenv("SENDGRID_API_KEY") or "").strip()
+    env_sg_from = (os.getenv("SENDGRID_FROM") or "").strip()
+    env_smtp_h = (os.getenv("SMTP_HOST") or "").strip()
+    env_smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    notify_emails = (get_app_setting("NOTIFY_EMAILS")
+                     or os.getenv("NOTIFY_EMAILS") or "").strip()
+    eod_recipients = (get_app_setting("EOD_REPORT_EMAIL")
+                      or os.getenv("EOD_REPORT_EMAIL") or "").strip()
+    effective_key = db_key or env_sg_key
+    effective_from = (db_from or env_sg_from or db_smtp_u
+                      or env_smtp_u or "notifications@medprosc.com")
+    effective_smtp_h = db_smtp_h or env_smtp_h
+    effective_smtp_u = db_smtp_u or env_smtp_u
+    sg_key_prefix = effective_key[:6] + "…" if effective_key else ""
+    has_email_provider = bool(effective_key or (effective_smtp_h and effective_smtp_u))
     try:
         from app.security import encryption_status
         chat_enc = encryption_status()
@@ -1025,130 +1014,123 @@ def admin_diag_email(hub_session: Optional[str] = Cookie(None)):
         chat_enc = {"encryption": "unknown", "ready": False, "error": str(e)}
     return {
         "email": {
-            "sendgrid_key_set": cfg["ready_sendgrid"],
-            "sendgrid_key_prefix": cfg["sg_key_prefix"],
-            "sendgrid_key_env_var": cfg["sg_key_name"] or "",
-            "sendgrid_from": cfg["sg_from"] or "(none)",
-            "sendgrid_from_env_var": cfg["sg_from_name"] or "",
-            "smtp_host_set": bool(cfg["smtp_host"]),
-            "smtp_user_set": bool(cfg["smtp_user"]),
-            "smtp_pass_set": cfg["smtp_pass_set"],
+            "sendgrid_key_set": bool(effective_key),
+            "sendgrid_key_source": ("db" if db_key
+                                    else ("env" if env_sg_key else "")),
+            "sendgrid_key_prefix": sg_key_prefix,
+            "sendgrid_from": effective_from,
+            "sendgrid_from_source": ("db" if db_from
+                                     else ("env" if env_sg_from else "default")),
+            "smtp_host_set": bool(effective_smtp_h),
+            "smtp_user_set": bool(effective_smtp_u),
+            "smtp_source": ("db" if (db_smtp_h or db_smtp_u)
+                            else ("env" if (env_smtp_h or env_smtp_u) else "")),
             "notify_emails": notify_emails,
             "eod_report_email": eod_recipients,
-            "ready": cfg["ready"],
-            "accepted_key_env_vars": list(SENDGRID_KEY_ALIASES),
-            "accepted_from_env_vars": list(SENDGRID_FROM_ALIASES),
+            "ready": has_email_provider,
             "guidance": (
-                "ok" if cfg["ready"] else
-                "No email provider configured. On Render → medpharma-hub → "
-                "Environment, add SENDGRID_API_KEY (the full SG.xxx... secret) "
-                "and SENDGRID_FROM=lexi@medprosc.com, then Save. Alternative: "
-                "set SMTP_HOST, SMTP_USER, SMTP_PASS for Gmail/Workspace App "
-                "Password (smtp.gmail.com / port 587)."
+                "ok" if has_email_provider else
+                "No email provider configured. Use Admin → Email Settings in "
+                "the hub to paste your SendGrid API key (or SMTP credentials) "
+                "— no Render dashboard required."
             ),
         },
+        "db_settings": db,  # which keys are set, masked previews only
         "chat_encryption": chat_enc,
     }
 
 
-@router.post("/admin/diag/email/test")
-def admin_diag_email_test(
-    body: dict = None,
-    hub_session: Optional[str] = Cookie(None),
-):
-    """Admin-only: fire a real test email to a given address using whatever
-    env vars are currently live. Returns the EXACT provider response so the
-    operator can debug 'why isn't this working' without restarting.
+# ── Admin-pasted email credentials (stored Fernet-encrypted in DB) ─────────
 
-    Body: {"to": "you@example.com"} (defaults to the admin's own email)
+class EmailSettingsIn(BaseModel):
+    sendgrid_api_key: Optional[str] = None
+    sendgrid_from: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[str] = None
+    smtp_user: Optional[str] = None
+    smtp_pass: Optional[str] = None
+    notify_emails: Optional[str] = None
+    eod_report_email: Optional[str] = None
+
+
+@router.get("/admin/email/settings")
+def admin_email_settings_get(hub_session: Optional[str] = Cookie(None)):
+    """List which credentials are set (never returns full secrets)."""
+    _require_full_admin(hub_session)
+    return {"settings": list_app_settings(),
+            "allowed_keys": sorted(ALLOWED_SETTING_KEYS)}
+
+
+@router.put("/admin/email/settings")
+def admin_email_settings_put(body: EmailSettingsIn,
+                             hub_session: Optional[str] = Cookie(None)):
+    """Save / clear admin-pasted email credentials.
+
+    Empty string clears a key. Sending null leaves the key unchanged.
+    Stored Fernet-encrypted via app.security.
     """
     admin = _require_full_admin(hub_session)
-    body = body or {}
-    to = (
-        (body.get("to") if isinstance(body, dict) else None)
-        or admin.get("email")
-        or ""
-    ).strip()
+    mapping = {
+        "SENDGRID_API_KEY": body.sendgrid_api_key,
+        "SENDGRID_FROM":    body.sendgrid_from,
+        "SMTP_HOST":        body.smtp_host,
+        "SMTP_PORT":        body.smtp_port,
+        "SMTP_USER":        body.smtp_user,
+        "SMTP_PASS":        body.smtp_pass,
+        "NOTIFY_EMAILS":    body.notify_emails,
+        "EOD_REPORT_EMAIL": body.eod_report_email,
+    }
+    saved: list[str] = []
+    cleared: list[str] = []
+    for key, val in mapping.items():
+        if val is None:
+            continue  # untouched
+        v = (val or "").strip()
+        ok = set_app_setting(key, v, updated_by=admin.get("username", ""))
+        if not ok:
+            raise HTTPException(400, f"Could not save {key}")
+        (cleared if not v else saved).append(key)
+    log_audit(None, admin.get("username", ""),
+              "email_settings_update", "app_settings", None,
+              f"saved={saved}, cleared={cleared}")
+    return {"ok": True, "saved": saved, "cleared": cleared,
+            "settings": list_app_settings()}
+
+
+class EmailTestIn(BaseModel):
+    to: str
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.post("/admin/email/test")
+def admin_email_test(body: EmailTestIn,
+                     hub_session: Optional[str] = Cookie(None)):
+    """Fire a one-shot test email using whatever credentials are configured
+    right now (DB > env). Returns the EXACT provider message on failure so
+    the admin can debug without grepping logs."""
+    admin = _require_full_admin(hub_session)
+    to = (body.to or "").strip()
     if not to or "@" not in to:
-        raise HTTPException(400, "Provide a 'to' email address")
-    cfg = _resolved_email_config()
-    now_iso = datetime.now().isoformat(timespec="seconds")
-    subject = "MedPharma Hub — email provider test"
-    text_body = (
-        "If you can read this, the MedPharma Hub email pipeline is working.\n\n"
-        f"Triggered by {admin.get('username','admin')} at {now_iso}.\n\n"
-        f"Provider config:\n"
-        f"  SendGrid key set: {cfg['ready_sendgrid']} "
-        f"(env var: {cfg['sg_key_name'] or '-'})\n"
-        f"  SendGrid from:    {cfg['sg_from']} "
-        f"(env var: {cfg['sg_from_name'] or '-'})\n"
-        f"  SMTP host set:    {bool(cfg['smtp_host'])}\n"
-    )
+        raise HTTPException(400, "Valid 'to' email address is required")
+    subject = (body.subject or "MedPharma Hub — email test").strip()
+    text_body = (body.body or
+                 f"This is a test email from the MedPharma Hub.\n"
+                 f"Triggered by: {admin.get('username','admin')} at "
+                 f"{datetime.now().isoformat(timespec='seconds')}.\n\n"
+                 f"If you got this, outbound email is working — chat invites "
+                 f"and EOD reports will now reach inboxes.")
     html_body = (
-        "<p>If you can read this, the MedPharma Hub email pipeline is "
-        "working.</p>"
-        f"<p style='font-size:12px;color:#64748b'>Triggered by "
-        f"<b>{admin.get('username','admin')}</b> at {now_iso}.</p>"
-        "<table style='font-size:12px;border-collapse:collapse'>"
-        f"<tr><td style='padding:4px 10px;color:#64748b'>SendGrid key set</td>"
-        f"<td style='padding:4px 10px'><b>{cfg['ready_sendgrid']}</b> "
-        f"(env: {cfg['sg_key_name'] or '-'})</td></tr>"
-        f"<tr><td style='padding:4px 10px;color:#64748b'>SendGrid from</td>"
-        f"<td style='padding:4px 10px'>{cfg['sg_from']} "
-        f"(env: {cfg['sg_from_name'] or '-'})</td></tr>"
-        f"<tr><td style='padding:4px 10px;color:#64748b'>SMTP host set</td>"
-        f"<td style='padding:4px 10px'>{bool(cfg['smtp_host'])}</td></tr>"
-        "</table>"
+        f"<div style='font-family:system-ui,Arial,sans-serif'>"
+        f"<h2 style='color:#1d4ed8'>✅ MedPharma Hub email test</h2>"
+        f"<p>{text_body.replace(chr(10), '<br/>')}</p>"
+        f"</div>"
     )
     sent, via = _send_direct_email(to, subject, text_body, html_body)
-    log_audit(None, admin.get("username", ""), "email_test",
-              "diagnostic", None,
-              f"test send to {to}: sent={sent} via={via}")
-    return {
-        "ok": sent,
-        "to": to,
-        "via": via,
-        "provider_config": {
-            "sendgrid_key_set": cfg["ready_sendgrid"],
-            "sendgrid_key_env_var": cfg["sg_key_name"] or "",
-            "sendgrid_key_prefix": cfg["sg_key_prefix"],
-            "sendgrid_from": cfg["sg_from"],
-            "sendgrid_from_env_var": cfg["sg_from_name"] or "",
-            "smtp_host_set": bool(cfg["smtp_host"]),
-            "smtp_user_set": bool(cfg["smtp_user"]),
-            "smtp_pass_set": cfg["smtp_pass_set"],
-        },
-        "guidance": (
-            "delivered" if sent else
-            "Email send failed. The exact provider response is in 'via'. "
-            "Most common causes: (1) SENDGRID_API_KEY env var not set on the "
-            "Render service (open Render → medpharma-hub → Environment), "
-            "(2) the SendGrid From address is not a verified sender — set "
-            "SENDGRID_FROM=lexi@medprosc.com and verify lexi@medprosc.com "
-            "in SendGrid → Settings → Sender Authentication, (3) the API key "
-            "lacks Mail Send permission."
-        ),
-    }
-
-
-@router.get("/email-status")
-def email_status_public(hub_session: Optional[str] = Cookie(None)):
-    """Lightweight, no-secrets status flag the hub UI can poll on every page
-    load to decide whether to show the 'email is not configured' banner.
-
-    Available to any logged-in user so non-admin pages can also show a
-    warning that chat invites won't be delivered by email."""
-    _require_user(hub_session)
-    cfg = _resolved_email_config()
-    return {
-        "ready": cfg["ready"],
-        "via": (
-            "sendgrid" if cfg["ready_sendgrid"]
-            else "smtp" if cfg["ready_smtp"]
-            else "none"
-        ),
-        "sendgrid_from": cfg["sg_from"] if cfg["ready"] else "",
-    }
+    log_audit(None, admin.get("username", ""),
+              "email_test", "email", None,
+              f"to={to}, sent={sent}, via={via}")
+    return {"ok": sent, "sent": sent, "via": via, "to": to}
 
 
 @router.get("/admin/reports/eod/preview")
