@@ -5433,11 +5433,15 @@
     function openClientModal() {
       // Reset form
       ['fCCompany','fCContact','fCEmail','fCPhone','fCNotes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+      const reportOpt = document.getElementById('fCDailyReportOptin');
+      if (reportOpt) reportOpt.checked = true;
+      const reportRecipients = document.getElementById('fCReportRecipients');
+      if (reportRecipients) reportRecipients.value = '';
       document.querySelectorAll('.fCService').forEach(cb => cb.checked = false);
       document.getElementById('fCNotesWrap').style.display = 'none';
       // Populate the new module + access pickers fresh each time.
       populateClientModuleChecks('fCModulesWrap', null /* all enabled by default */);
-      populateClientAccessChecks('fCAccessWrap', [] /* no pre-grants */);
+      populateClientAccessChecks('fCAccessWrap', null /* pre-check all team users */);
       document.getElementById('clientModal').classList.add('open');
     }
 
@@ -8299,6 +8303,7 @@
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         const users = (d.users || d || []).filter(u => u.role === 'staff' || u.role === 'admin');
+        const hasExplicit = Array.isArray(grantedIds);
         const set = new Set((grantedIds || []).map(x => parseInt(x, 10)));
         if (!users.length) {
           wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">No staff or admin users found.</div>';
@@ -8306,7 +8311,7 @@
         }
         wrap.innerHTML = users.map(u => {
           const isAdmin = u.role === 'admin';
-          const checked = isAdmin || set.has(parseInt(u.id, 10));
+          const checked = isAdmin || (!hasExplicit) || set.has(parseInt(u.id, 10));
           const label = `${esc(u.contact_name || u.username)} <span style="color:#94a3b8;font-size:11px">(${esc(u.role)})</span>`;
           return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;cursor:${isAdmin ? 'not-allowed' : 'pointer'}">
             <input type="checkbox" class="fCAccessCb" value="${u.id}" ${checked ? 'checked' : ''} ${isAdmin ? 'disabled' : ''}>

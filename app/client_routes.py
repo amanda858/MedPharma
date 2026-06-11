@@ -104,6 +104,18 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
             with urllib.request.urlopen(req, timeout=20) as resp:
                 if resp.getcode() in (200, 202):
                     return True, "sendgrid"
+                return False, f"sendgrid http {resp.getcode()}"
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = (e.read() or b"").decode("utf-8", "ignore")[:280]
+            except Exception:
+                body = ""
+            msg = f"sendgrid http {e.code}"
+            if body:
+                msg = f"{msg}: {body}"
+            log.error("invite email sendgrid failed: %s", msg)
+            return False, msg
         except Exception as e:
             log.error("invite email sendgrid failed: %s", e)
 
@@ -128,8 +140,25 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
             return True, "smtp"
         except Exception as e:
             log.error("invite email smtp failed: %s", e)
+            return False, f"smtp failed: {e}"
 
-    return False, "no provider configured or send failed"
+    return False, "email provider not configured (set SENDGRID_API_KEY or SMTP_* env vars)"
+
+
+def _all_team_user_ids() -> list[int]:
+    """All active admin/staff IDs for default client-access seeding."""
+    ids: list[int] = []
+    for u in list_chat_eligible_users() or []:
+        role = (u.get("role") or "").strip().lower()
+        if role not in ("admin", "staff"):
+            continue
+        try:
+            uid = int(u.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if uid > 0 and uid not in ids:
+            ids.append(uid)
+    return ids
 
 
 def _lookup_users_by_ids(user_ids: list[int]) -> list[dict]:
@@ -619,6 +648,7 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
     payload = body.model_dump()
     user_ids = payload.pop("user_ids", None) or []
+    user_ids = [int(u) for u in user_ids if str(u).isdigit()]
     # Pop report-related fields so create_client doesn't reject them — we
     # persist these via update_profile right after the insert.
     enabled_modules    = payload.pop("enabled_modules", None)
@@ -631,6 +661,10 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     cid = create_client(payload)
     # Grant the selected staff/admin users access to this newly-created client
     granted = 0
+    if not user_ids:
+        # Safety default: a brand-new client should be visible to the active
+        # MedPharma team even if the modal access picker wasn't populated yet.
+        user_ids = _all_team_user_ids()
     if user_ids:
         try:
             granted = set_client_access(cid, user_ids, granted_by=admin.get("username", ""))
