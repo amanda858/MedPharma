@@ -18,6 +18,59 @@
             "problemMatcher": []
         },
         {
+            "label": "bug-scan",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/bug_scan.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "diag-render",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/diag_render.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "audit-chat-ui",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/audit_chat_ui.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "smoke-chat-modules",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/smoke_chat_modules.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "verify-chat-markers",
+            "type": "shell",
+            "command": "python3 /workspaces/CVOPro/.vscode/verify_chat_markers.py",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "push-chat-modules-access",
+            "type": "shell",
+            "command": "cd /workspaces/CVOPro && set -e && git add app/client_db.py app/client_routes.py app/templates/client_hub.html .vscode/tasks.json .vscode/smoke_chat_modules.py && git diff --cached --stat && git commit -m 'feat(hub): team chat panel + per-client module opt-out + user-account access control' && git push origin main",
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
+            "label": "fix-logins-now",
+            "type": "shell",
+            "command": "python3",
+            "args": ["/workspaces/CVOPro/.vscode/fix_logins_now.py"],
+            "options": {"cwd": "/workspaces/CVOPro"},
+            "problemMatcher": []
+        },
+        {
             "label": "cleanup-diff-snapshot",
             "type": "shell",
             "command": "python3",

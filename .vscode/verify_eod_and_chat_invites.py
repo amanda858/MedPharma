@@ -25,7 +25,7 @@ from http.cookiejar import CookieJar
 
 
 BASE = "https://medpharma-hub.onrender.com"
-EXPECTED_PREFIX = "d5278ac"
+EXPECTED_PREFIX = "04b43ee"
 
 
 def _opener():
