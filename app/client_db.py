@@ -12,10 +12,15 @@ from app.config import DATABASE_PATH
 
 log = logging.getLogger(__name__)
 
-# Path to the persistent client seed file (committed to repo)
-_CLIENTS_SEED_PATH = os.path.join(
+# Repo seed used for bootstrap/fallback.
+_REPO_CLIENTS_SEED_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "clients_seed.json"
 )
+# Runtime seed path: prefer durable disk when present (Render /data).
+_DEFAULT_CLIENTS_SEED_PATH = (
+    "/data/clients_seed.json" if os.path.isdir("/data") else _REPO_CLIENTS_SEED_PATH
+)
+_CLIENTS_SEED_PATH = os.getenv("CLIENTS_SEED_PATH", _DEFAULT_CLIENTS_SEED_PATH)
 
 
 def _sanitize_seed_entry(entry: dict) -> dict:
@@ -33,20 +38,38 @@ def _sanitize_seed_entry(entry: dict) -> dict:
 
 def _load_clients_seed() -> list[dict]:
     """Load clients_seed.json, return empty list on any error."""
-    try:
-        with open(_CLIENTS_SEED_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            return []
-        sanitized = [_sanitize_seed_entry(entry or {}) for entry in data]
-        if sanitized != data:
-            _save_clients_seed(sanitized)
-        return sanitized
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        log.error("could not read clients_seed.json: %s", e)
-        raise
+    candidates = []
+    if _CLIENTS_SEED_PATH:
+        candidates.append(_CLIENTS_SEED_PATH)
+    if _REPO_CLIENTS_SEED_PATH not in candidates:
+        candidates.append(_REPO_CLIENTS_SEED_PATH)
+
+    last_error = None
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return []
+            sanitized = [_sanitize_seed_entry(entry or {}) for entry in data]
+            # If we loaded from fallback (repo), promote into runtime path.
+            if path != _CLIENTS_SEED_PATH:
+                try:
+                    _save_clients_seed(sanitized)
+                except Exception as copy_e:
+                    log.warning("could not promote repo clients_seed to runtime path: %s", copy_e)
+            elif sanitized != data:
+                _save_clients_seed(sanitized)
+            return sanitized
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            last_error = e
+
+    if last_error is not None:
+        log.error("could not read clients_seed.json: %s", last_error)
+        raise last_error
+    return []
 
 
 def _save_clients_seed(clients: list[dict]):
