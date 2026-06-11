@@ -49,6 +49,10 @@ from app.client_db import (
     user_can_access_room, add_room_message, list_room_messages,
     mark_room_read, chat_unread_total, list_chat_eligible_users,
     list_client_access, set_client_access, list_clients_for_user,
+    create_notification, fanout_notification, list_notifications,
+    count_unread_notifications, mark_notification_read,
+    mark_all_notifications_read,
+    save_eod_report, list_eod_reports, get_eod_report,
 )
 
 from app.notifications import (
@@ -800,6 +804,28 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
                 set_must_change_password(int(invite.get("client_id", 0) or 0), True)
         except Exception:
             password_set = False
+
+    # In-app welcome notification so the new user can see they've been
+    # invited the moment they log in — independent of email delivery.
+    try:
+        new_uid = int(invite.get("client_id", 0) or 0)
+        if new_uid:
+            inviter_display = (admin.get("contact_name")
+                               or admin.get("username") or "An administrator").strip()
+            create_notification(
+                user_id=new_uid,
+                kind="welcome",
+                title="Welcome to the MedPharma Hub",
+                body=f"{inviter_display} invited you to the hub. "
+                     f"Username: {invite.get('username','')}. "
+                     f"Role: {invite.get('role','client')}.",
+                link="/hub",
+                related_type="client",
+                related_id=new_uid,
+            )
+    except Exception:
+        log.exception("welcome in-app notification failed for user %s",
+                      invite.get("client_id"))
 
     log_audit(
         None,
@@ -4558,6 +4584,63 @@ def alerts_endpoint(client_id: Optional[int] = None,
     return {"alerts": alert_list, "count": len(alert_list)}
 
 
+# ── In-app notification inbox (chat invites, chat messages, EOD, welcome) ──
+# These are written by the same code paths that send emails, so the recipient
+# sees them even if SendGrid/SMTP isn't configured.
+
+@router.get("/notifications")
+def notifications_list(unread: int = 0, limit: int = 50,
+                       hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    items = list_notifications(int(user["id"]),
+                               unread_only=bool(int(unread or 0)),
+                               limit=max(1, min(int(limit or 50), 200)))
+    unread_count = count_unread_notifications(int(user["id"]))
+    return {"items": items, "unread": unread_count}
+
+
+@router.get("/notifications/unread-count")
+def notifications_unread_count(hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    return {"unread": count_unread_notifications(int(user["id"]))}
+
+
+@router.post("/notifications/{nid}/read")
+def notifications_mark_read(nid: int,
+                            hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    ok = mark_notification_read(int(user["id"]), int(nid))
+    return {"ok": ok}
+
+
+@router.post("/notifications/read-all")
+def notifications_mark_all_read(hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    n = mark_all_notifications_read(int(user["id"]))
+    return {"ok": True, "marked": n}
+
+
+# ── EOD report history (persisted reports, viewable in-app) ────────────────
+
+@router.get("/reports/eod/history")
+def eod_history(limit: int = 30,
+                hub_session: Optional[str] = Cookie(None)):
+    """List archived EOD reports. Admin/staff only."""
+    _require_admin(hub_session)
+    return {"reports": list_eod_reports(limit=max(1, min(int(limit or 30), 365)))}
+
+
+@router.get("/reports/eod/archive/{report_id}")
+def eod_archive_view(report_id: int,
+                     hub_session: Optional[str] = Cookie(None)):
+    """Fetch a single archived EOD report (admin/staff only)."""
+    _require_admin(hub_session)
+    rec = get_eod_report(int(report_id))
+    if not rec:
+        raise HTTPException(404, "EOD report not found")
+    return rec
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 
 @router.get("/audit-log")
@@ -4927,6 +5010,24 @@ def chat_create_room(body: ChatRoomCreate, request: Request, hub_session: Option
               f"Created room '{name}' with {len(member_ids)} member(s)")
     notify_activity(user.get("username", ""), "created", "Chat Room",
                     f"room #{room_id} '{name}'")
+    # In-app notification for every invited member — works even if email
+    # is unconfigured.
+    try:
+        inviter_display = (user.get("contact_name")
+                           or user.get("username") or "Your team").strip()
+        fanout_notification(
+            user_ids=[int(m) for m in member_ids],
+            kind="chat_invite",
+            title=f"You were added to chat: {name}",
+            body=f"{inviter_display} added you to a chat room.",
+            link=f"/hub?chat={room_id}",
+            related_type="chat_room",
+            related_id=room_id,
+            skip_user_id=int(user.get("id") or 0),
+        )
+    except Exception:
+        log.exception("chat invite in-app notification failed for room %s",
+                      room_id)
     invite_report: list[dict] = []
     try:
         invite_report = _send_chat_invite_emails(
@@ -5005,6 +5106,21 @@ def chat_add_member(room_id: int, body: ChatMemberIn, request: Request,
                     added_by=user.get("username", ""))
     log_audit(None, user.get("username", ""), "chat_member_add",
               "chat_rooms", room_id, f"Added user #{body.user_id}")
+    try:
+        inviter_display = (user.get("contact_name")
+                           or user.get("username") or "Your team").strip()
+        create_notification(
+            user_id=int(body.user_id),
+            kind="chat_invite",
+            title=f"You were added to chat: {room.get('name','') or 'a room'}",
+            body=f"{inviter_display} added you to a chat room.",
+            link=f"/hub?chat={room_id}",
+            related_type="chat_room",
+            related_id=room_id,
+        )
+    except Exception:
+        log.exception("chat add-member in-app notification failed for "
+                      "room %s user %s", room_id, body.user_id)
     invite_report: list[dict] = []
     try:
         invite_report = _send_chat_invite_emails(
@@ -5088,6 +5204,28 @@ def chat_post_message(room_id: int, body: ChatMessageIn,
         body_marker = f"[chat message • {len(text)} chars]"
     log_audit(room.get("client_id"), user.get("username", ""), "chat_message",
               "chat_rooms", room_id, body_marker)
+    # In-app notification fanout to every other room member. PHI-safe:
+    # we only store the length marker, never the real text.
+    try:
+        members = list_room_members(room_id) or []
+        member_ids = [int(m.get("user_id") or m.get("id") or 0)
+                      for m in members]
+        member_ids = [uid for uid in member_ids if uid > 0]
+        sender_display = (user.get("contact_name")
+                          or user.get("username") or "Someone").strip()
+        fanout_notification(
+            user_ids=member_ids,
+            kind="chat_message",
+            title=f"New message from {sender_display}",
+            body=f"in '{room.get('name','room')}' · {body_marker}",
+            link=f"/hub?chat={room_id}",
+            related_type="chat_room",
+            related_id=room_id,
+            skip_user_id=int(user.get("id") or 0),
+        )
+    except Exception:
+        log.exception("chat message in-app notification failed for room %s",
+                      room_id)
     try:
         notify_activity(user.get("username", ""), "sent message",
                         "Chat", f"room '{room.get('name','?')}' {body_marker}")

@@ -860,6 +860,47 @@ def init_client_hub_db():
             FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
         );
 
+        -- ── In-app notifications (decoupled from email) ─────────────────────
+        -- One row per (recipient × event). Lets the hub show "you've been
+        -- invited / you have a new message / your EOD report is ready" even
+        -- when SendGrid/SMTP isn't configured. PHI-safe: body is just a
+        -- short marker (e.g. "[chat message • 47 chars]") — never the real
+        -- chat text.
+        CREATE TABLE IF NOT EXISTS notifications (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            kind         TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            body         TEXT DEFAULT '',
+            link         TEXT DEFAULT '',
+            related_type TEXT DEFAULT '',
+            related_id   INTEGER,
+            is_read      INTEGER DEFAULT 0,
+            created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+            read_at      TEXT,
+            FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notif_user_unread
+            ON notifications(user_id, is_read, created_at);
+        CREATE INDEX IF NOT EXISTS idx_notif_user_time
+            ON notifications(user_id, created_at);
+
+        -- ── EOD report archive (persists even if email delivery fails) ──────
+        CREATE TABLE IF NOT EXISTS eod_reports (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date      TEXT NOT NULL,
+            generated_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by     TEXT DEFAULT 'scheduled',
+            headlines_json   TEXT DEFAULT '{}',
+            summary_json     TEXT DEFAULT '{}',
+            html_body        TEXT DEFAULT '',
+            text_body        TEXT DEFAULT '',
+            email_status     TEXT DEFAULT '',
+            email_recipients TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_eod_reports_date
+            ON eod_reports(report_date);
+
         -- ── Client access grants (which staff/admin users can open a given client) ──
         -- Used by /accounts to filter the selector for staff users.
         -- Admins always see every client regardless of rows here.
@@ -2687,6 +2728,279 @@ def get_audit_log(client_id: int = None, limit: int = 100):
     finally:
         conn.close()
     return rows
+
+
+# ─── In-App Notifications (HIPAA-safe) ──────────────────────────────────
+#
+# A persistent inbox per user. Anything that *would* send an email
+# (chat invite, chat message, EOD report ready, welcome) also drops a
+# row here so the recipient sees it in the hub even when the email
+# provider is down or unconfigured. Bodies are always PHI-safe markers
+# (e.g. "[chat message · 47 chars]") — the real PHI lives only in
+# the encrypted chat_messages table.
+
+def create_notification(user_id: int, kind: str, title: str,
+                        body: str = "", link: str = "",
+                        related_type: str = "",
+                        related_id: int | None = None) -> int:
+    """Insert a single notification row. Returns the new id (or 0 on failure
+    — safe to ignore, we never want notification writes to break the
+    triggering action)."""
+    if not user_id or not kind or not title:
+        return 0
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO notifications "
+            "(user_id, kind, title, body, link, related_type, related_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (int(user_id), kind, title, body or "", link or "",
+             related_type or "", int(related_id) if related_id else None),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    except Exception:
+        log.exception("create_notification failed for user_id=%s kind=%s",
+                      user_id, kind)
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def fanout_notification(user_ids: list[int], kind: str, title: str,
+                        body: str = "", link: str = "",
+                        related_type: str = "",
+                        related_id: int | None = None,
+                        skip_user_id: int | None = None) -> int:
+    """Insert the same notification for many recipients in one transaction."""
+    valid_ids = [int(u) for u in (user_ids or [])
+                 if u and int(u) != int(skip_user_id or 0)]
+    if not valid_ids:
+        return 0
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        rows = [
+            (uid, kind, title, body or "", link or "", related_type or "",
+             int(related_id) if related_id else None)
+            for uid in valid_ids
+        ]
+        cur.executemany(
+            "INSERT INTO notifications "
+            "(user_id, kind, title, body, link, related_type, related_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    except Exception:
+        log.exception("fanout_notification failed kind=%s n=%s",
+                      kind, len(valid_ids))
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def list_notifications(user_id: int, unread_only: bool = False,
+                       limit: int = 50) -> list[dict]:
+    """Most recent notifications for a single user (newest first)."""
+    if not user_id:
+        return []
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if unread_only:
+            cur.execute(
+                "SELECT id, kind, title, body, link, related_type, related_id, "
+                "       is_read, created_at, read_at FROM notifications "
+                "WHERE user_id=? AND is_read=0 "
+                "ORDER BY datetime(created_at) DESC LIMIT ?",
+                (int(user_id), int(limit)),
+            )
+        else:
+            cur.execute(
+                "SELECT id, kind, title, body, link, related_type, related_id, "
+                "       is_read, created_at, read_at FROM notifications "
+                "WHERE user_id=? "
+                "ORDER BY datetime(created_at) DESC LIMIT ?",
+                (int(user_id), int(limit)),
+            )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def count_unread_notifications(user_id: int) -> int:
+    if not user_id:
+        return 0
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0",
+            (int(user_id),),
+        )
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def mark_notification_read(user_id: int, notification_id: int) -> bool:
+    if not user_id or not notification_id:
+        return False
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE notifications SET is_read=1, "
+            "read_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND user_id=? AND is_read=0",
+            (int(notification_id), int(user_id)),
+        )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def mark_all_notifications_read(user_id: int) -> int:
+    if not user_id:
+        return 0
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE notifications SET is_read=1, "
+            "read_at=CURRENT_TIMESTAMP "
+            "WHERE user_id=? AND is_read=0",
+            (int(user_id),),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+# ─── EOD Report Archive ─────────────────────────────────────────────────
+
+def save_eod_report(report_date: str, headlines: dict, summary: dict,
+                    html_body: str = "", text_body: str = "",
+                    generated_by: str = "scheduled",
+                    email_status: str = "",
+                    email_recipients: list[str] | None = None) -> int:
+    """Persist a generated EOD report so it can be viewed later even if
+    email delivery fails."""
+    import json as _json
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO eod_reports "
+            "(report_date, generated_by, headlines_json, summary_json, "
+            " html_body, text_body, email_status, email_recipients) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                report_date,
+                generated_by or "scheduled",
+                _json.dumps(headlines or {}, default=str),
+                _json.dumps(summary or {}, default=str),
+                html_body or "",
+                text_body or "",
+                email_status or "",
+                ",".join(email_recipients or []),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    except Exception:
+        log.exception("save_eod_report failed for date=%s", report_date)
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def update_eod_report_email_status(report_id: int, status: str,
+                                   recipients: list[str] | None = None) -> bool:
+    if not report_id:
+        return False
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if recipients is not None:
+            cur.execute(
+                "UPDATE eod_reports SET email_status=?, email_recipients=? "
+                "WHERE id=?",
+                (status or "", ",".join(recipients or []), int(report_id)),
+            )
+        else:
+            cur.execute(
+                "UPDATE eod_reports SET email_status=? WHERE id=?",
+                (status or "", int(report_id)),
+            )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def list_eod_reports(limit: int = 30) -> list[dict]:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, report_date, generated_at, generated_by, "
+            "       headlines_json, email_status, email_recipients "
+            "FROM eod_reports ORDER BY datetime(generated_at) DESC LIMIT ?",
+            (int(limit),),
+        )
+        out: list[dict] = []
+        import json as _json
+        for r in cur.fetchall():
+            d = dict(r)
+            try:
+                d["headlines"] = _json.loads(d.pop("headlines_json") or "{}")
+            except Exception:
+                d["headlines"] = {}
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def get_eod_report(report_id: int) -> dict | None:
+    if not report_id:
+        return None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM eod_reports WHERE id=?",
+            (int(report_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        import json as _json
+        try:
+            d["headlines"] = _json.loads(d.pop("headlines_json", "") or "{}")
+        except Exception:
+            d["headlines"] = {}
+        try:
+            d["summary"] = _json.loads(d.pop("summary_json", "") or "{}")
+        except Exception:
+            d["summary"] = {}
+        return d
+    finally:
+        conn.close()
 
 
 # ─── Team Tracking / Productivity (ActivTrak-style) ───────────────────────

@@ -2301,10 +2301,69 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
     )
 
     recipients = _eod_recipients()
+
+    # Persist the rendered report BEFORE attempting email so it's available
+    # in the in-app archive even if SendGrid is unconfigured / fails.
+    archive_id = 0
+    try:
+        from app.client_db import save_eod_report
+        archive_id = save_eod_report(
+            report_date=report_date,
+            headlines=headlines,
+            summary=report,
+            html_body=html_body,
+            text_body=text_body,
+            generated_by="scheduled" if not force else "manual",
+            email_status="pending",
+            email_recipients=recipients,
+        )
+    except Exception:
+        log.exception("save_eod_report failed for %s", report_date)
+
+    # Fan out an in-app notification to every active admin/staff user so
+    # they see "Your EOD report is ready" the moment they sign in, no matter
+    # what email is doing.
+    try:
+        from app.client_db import get_db, fanout_notification
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id FROM clients "
+                "WHERE COALESCE(is_active,1)=1 "
+                "AND lower(COALESCE(role,'client')) IN ('admin','staff')"
+            )
+            staff_ids = [int(r[0]) for r in cur.fetchall()]
+        finally:
+            conn.close()
+        if staff_ids:
+            fanout_notification(
+                user_ids=staff_ids,
+                kind="eod_report",
+                title=f"EOD report ready · {d_long}",
+                body=(
+                    f"{headlines.get('active_users', 0)} active users · "
+                    f"{headlines.get('claims_new', 0)} new claims · "
+                    f"{headlines.get('production_hours', 0)}h logged"
+                ),
+                link=(f"/hub?eod={archive_id}" if archive_id else "/hub"),
+                related_type="eod_report",
+                related_id=archive_id or None,
+            )
+    except Exception:
+        log.exception("EOD in-app fanout failed for %s", report_date)
+
     sent, failed = [], []
     if not recipients:
         log.error("EOD report has no recipients configured")
-        return {"ok": False, "error": "no recipients", "date": report_date}
+        try:
+            from app.client_db import update_eod_report_email_status
+            if archive_id:
+                update_eod_report_email_status(archive_id, "no_recipients", [])
+        except Exception:
+            pass
+        return {"ok": False, "error": "no recipients", "date": report_date,
+                "archive_id": archive_id}
 
     for to_email in recipients:
         try:
@@ -2318,13 +2377,37 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
         else:
             failed.append({"email": to_email, "via": via})
 
+    # Update archive with final delivery status so the in-app history view
+    # tells the operator exactly what happened.
+    try:
+        from app.client_db import update_eod_report_email_status
+        if archive_id:
+            if sent and not failed:
+                final_status = "delivered"
+            elif sent and failed:
+                final_status = "partial"
+            elif failed:
+                # Distinguish "no provider configured" from "provider rejected".
+                via0 = (failed[0].get("via") or "").lower()
+                if "not configured" in via0 or "no provider" in via0 or "missing" in via0:
+                    final_status = "no_provider"
+                else:
+                    final_status = "failed"
+            else:
+                final_status = "unknown"
+            update_eod_report_email_status(archive_id, final_status,
+                                           [s.get("email") for s in sent])
+    except Exception:
+        log.exception("update_eod_report_email_status failed for %s", archive_id)
+
     log.info(
         f"EOD report dispatched for {report_date}: sent={len(sent)} failed={len(failed)} "
-        f"users={len(report.get('users', []))}"
+        f"users={len(report.get('users', []))} archive_id={archive_id}"
     )
     return {
         "ok": True,
         "date": report_date,
+        "archive_id": archive_id,
         "recipients": recipients,
         "sent": sent,
         "failed": failed,

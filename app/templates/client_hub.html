@@ -8115,47 +8115,169 @@
     // ═══════════════════════════════════════
     // ALERTS & NOTIFICATIONS
     // ═══════════════════════════════════════
+    function _alertCardHtml(a) {
+      return `
+        <div class="alert-card ${esc(a.type || 'info')}">
+          <div class="alert-icon">${esc(a.icon || '⚠️')}</div>
+          <div class="alert-body">
+            <div class="alert-title">${esc(a.title || '')}</div>
+            <div class="alert-detail">${esc(a.detail || '')}</div>
+          </div>
+        </div>`;
+    }
+
+    function _notifCardHtml(n) {
+      const KIND_ICON = {
+        chat_invite:  '💬',
+        chat_message: '💬',
+        eod_report:   '📋',
+        welcome:      '🎉',
+        system:       '🔔',
+      };
+      const icon = KIND_ICON[n.kind] || '🔔';
+      const unread = !n.is_read;
+      const linkAttr = n.link ? `data-link="${esc(n.link)}"` : '';
+      const ts = (n.created_at || '').replace('T', ' ').slice(0, 19);
+      return `
+        <div class="alert-card ${unread ? 'warning' : 'info'}"
+             data-notif-id="${n.id}" ${linkAttr}
+             style="cursor:${n.link ? 'pointer' : 'default'};opacity:${unread ? 1 : 0.7}"
+             onclick="openNotification(${n.id}, ${n.link ? `'${esc(n.link)}'` : 'null'})">
+          <div class="alert-icon">${icon}</div>
+          <div class="alert-body">
+            <div class="alert-title">
+              ${unread ? '<span style="color:#dc2626">●</span> ' : ''}${esc(n.title || '')}
+            </div>
+            <div class="alert-detail">${esc(n.body || '')}</div>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:4px">${esc(ts)}</div>
+          </div>
+        </div>`;
+    }
+
+    async function openNotification(notifId, link) {
+      try {
+        await fetch(`/hub/api/notifications/${notifId}/read`, { method: 'POST' });
+      } catch (e) { /* best-effort */ }
+      // Handle deep links: /hub?chat=ID jumps to chat panel
+      if (link) {
+        const m = link.match(/[?&]chat=(\d+)/);
+        if (m) {
+          navTo('chat');
+          if (typeof selectChatRoom === 'function') {
+            try { selectChatRoom(parseInt(m[1])); } catch (e) { /* ignore */ }
+          }
+        } else if (link.startsWith('/hub') && !link.startsWith('/hub/')) {
+          // /hub or /hub?... — already on the page, just refresh notifications
+        } else {
+          window.location.href = link;
+        }
+      }
+      loadAlerts();
+    }
+
+    async function markAllNotificationsRead() {
+      try {
+        await fetch('/hub/api/notifications/read-all', { method: 'POST' });
+      } catch (e) { console.error(e); }
+      loadAlerts();
+    }
+
     async function loadAlerts() {
       const params = new URLSearchParams();
       if (activeClientId) params.set('client_id', activeClientId);
+      let alerts = [];
+      let notifs = [];
+      let unreadNotifs = 0;
       try {
-        const r = await fetch('/hub/api/alerts?' + params);
-        const d = await r.json();
-        const alerts = d.alerts || [];
-
-        // Update badges
-        const bellBadge = document.getElementById('alertsBadge');
-        const navBadge = document.getElementById('navAlertsBadge');
-        if (alerts.length > 0) {
-          bellBadge.textContent = alerts.length; bellBadge.style.display = '';
-          navBadge.textContent = alerts.length; navBadge.style.display = '';
-        } else {
-          bellBadge.style.display = 'none';
-          navBadge.style.display = 'none';
-        }
-
-        // Render alerts panel
-        const el = document.getElementById('alertsContent');
-        if (!el) return;
-        if (!alerts.length) {
-          el.innerHTML = `<div class="card" style="text-align:center;padding:40px">
-            <div style="font-size:48px;margin-bottom:12px">✅</div>
-            <p style="color:var(--gray-500);font-size:15px;font-weight:600">No active alerts</p>
-            <p style="color:var(--gray-400);font-size:13px;margin-top:4px">Everything looks good! All metrics are within normal ranges.</p>
-          </div>`;
-          return;
-        }
-        el.innerHTML = alerts.map(a => `
-          <div class="alert-card ${a.type}">
-            <div class="alert-icon">${a.icon || '⚠️'}</div>
-            <div class="alert-body">
-              <div class="alert-title">${esc(a.title)}</div>
-              <div class="alert-detail">${esc(a.detail)}</div>
-            </div>
-          </div>
-        `).join('');
+        const [aR, nR] = await Promise.all([
+          fetch('/hub/api/alerts?' + params).then(r => r.json()).catch(() => ({})),
+          fetch('/hub/api/notifications?limit=50').then(r => r.json()).catch(() => ({})),
+        ]);
+        alerts = aR.alerts || [];
+        notifs = nR.items || [];
+        unreadNotifs = nR.unread || 0;
       } catch (e) { console.error(e); }
+
+      // Badge = business alerts + unread in-app notifications
+      const totalBadge = (alerts.length || 0) + (unreadNotifs || 0);
+      const bellBadge = document.getElementById('alertsBadge');
+      const navBadge = document.getElementById('navAlertsBadge');
+      if (totalBadge > 0) {
+        if (bellBadge) { bellBadge.textContent = totalBadge; bellBadge.style.display = ''; }
+        if (navBadge)  { navBadge.textContent  = totalBadge; navBadge.style.display  = ''; }
+      } else {
+        if (bellBadge) bellBadge.style.display = 'none';
+        if (navBadge)  navBadge.style.display  = 'none';
+      }
+
+      const el = document.getElementById('alertsContent');
+      if (!el) return;
+
+      const hasAlerts = alerts.length > 0;
+      const hasNotifs = notifs.length > 0;
+      if (!hasAlerts && !hasNotifs) {
+        el.innerHTML = `<div class="card" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">✅</div>
+          <p style="color:var(--gray-500);font-size:15px;font-weight:600">No alerts or notifications</p>
+          <p style="color:var(--gray-400);font-size:13px;margin-top:4px">Everything looks good. New chat invites, messages, and EOD reports will land here.</p>
+        </div>`;
+        return;
+      }
+
+      let html = '';
+      if (hasNotifs) {
+        html += `<div class="card" style="margin-bottom:14px">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <div class="card-title">🔔 Notifications ${unreadNotifs ? `<span class="badge badge-red" style="margin-left:8px">${unreadNotifs} new</span>` : ''}</div>
+            ${unreadNotifs ? `<button class="btn btn-secondary btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>` : ''}
+          </div>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+            ${notifs.map(_notifCardHtml).join('')}
+          </div>
+        </div>`;
+      }
+      if (hasAlerts) {
+        html += `<div class="card">
+          <div class="card-header"><div class="card-title">⚠️ Account Alerts</div></div>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+            ${alerts.map(_alertCardHtml).join('')}
+          </div>
+        </div>`;
+      }
+      el.innerHTML = html;
     }
+
+    // Poll the bell every 60s so badges stay fresh.
+    setInterval(() => {
+      const bell = document.getElementById('alertsBadge');
+      if (!bell) return;
+      // Lightweight count-only poll; full reload only when user opens the panel.
+      fetch('/hub/api/notifications/unread-count')
+        .then(r => r.json())
+        .then(d => {
+          const unread = d.unread || 0;
+          // Update badge using existing alerts text if present
+          const currentNav = document.getElementById('navAlertsBadge');
+          const existingAlerts = parseInt((currentNav?.textContent || '0').replace(/\D/g, '')) || 0;
+          // We don't know how many were alerts vs notifs — re-fetch alerts cheaply.
+          fetch('/hub/api/alerts' + (activeClientId ? `?client_id=${activeClientId}` : ''))
+            .then(r => r.json())
+            .then(a => {
+              const total = (a.alerts?.length || 0) + unread;
+              const b = document.getElementById('alertsBadge');
+              const n = document.getElementById('navAlertsBadge');
+              if (total > 0) {
+                if (b) { b.textContent = total; b.style.display = ''; }
+                if (n) { n.textContent = total; n.style.display = ''; }
+              } else {
+                if (b) b.style.display = 'none';
+                if (n) n.style.display = 'none';
+              }
+            })
+            .catch(() => {});
+        })
+        .catch(() => {});
+    }, 60000);
 
     // Load alerts on dashboard too — update badge count
     const _origLoadDash = loadDashboard;
