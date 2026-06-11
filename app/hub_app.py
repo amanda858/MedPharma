@@ -204,7 +204,21 @@ async def readyz():
             },
         )
 
-    return {"ok": True, "service": "hub", "ready": True, "status": app.state.startup_status}
+    # HIPAA visibility: surface chat encryption readiness so ops can spot a
+    # missing key without admin login.
+    try:
+        from app.security import encryption_status
+        chat_enc = encryption_status()
+    except Exception:
+        chat_enc = {"encryption": "unknown", "ready": False}
+
+    return {
+        "ok": True,
+        "service": "hub",
+        "ready": True,
+        "status": app.state.startup_status,
+        "chat_encryption": chat_enc,
+    }
 
 
 @app.get("/buildz")

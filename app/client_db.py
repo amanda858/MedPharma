@@ -4482,6 +4482,13 @@ def _row_to_room(row) -> dict:
         return {}
     d = dict(row)
     d["archived"] = bool(d.get("archived"))
+    # Decrypt the last-message preview so the room list shows readable text.
+    if "last_body" in d and d["last_body"]:
+        try:
+            from app.security import decrypt_message
+            d["last_body"] = decrypt_message(d["last_body"])
+        except Exception:
+            pass
     return d
 
 
@@ -4681,13 +4688,21 @@ def add_room_message(room_id: int, sender_id: int, sender_name: str,
     if not body:
         raise ValueError("Message body is required")
     role = (sender_role or "member").lower()
+    # HIPAA: encrypt the body at rest. Schema is unchanged — we store the
+    # ciphertext (or legacy plaintext) in the same TEXT column.
+    try:
+        from app.security import encrypt_message
+        stored_body = encrypt_message(body)
+    except Exception:
+        log.exception("chat encryption failed; falling back to plaintext")
+        stored_body = body
     conn = get_db()
     try:
         cur = conn.execute(
             """INSERT INTO chat_messages
                (room_id, sender_id, sender_name, sender_role, body)
                VALUES (?,?,?,?,?)""",
-            (room_id, sender_id, sender_name, role, body),
+            (room_id, sender_id, sender_name, role, stored_body),
         )
         # Sender has implicitly read their own message
         conn.execute(
@@ -4724,8 +4739,17 @@ def list_room_messages(room_id: int, limit: int = 200,
                    ORDER BY id DESC LIMIT ?""",
                 (room_id, limit),
             ).fetchall()
-        # Return oldest → newest
-        return [dict(r) for r in reversed(rows)]
+        # Return oldest → newest, decrypting each body on the way out.
+        try:
+            from app.security import decrypt_message
+        except Exception:
+            decrypt_message = lambda v: v  # noqa: E731
+        out = []
+        for r in reversed(rows):
+            d = dict(r)
+            d["body"] = decrypt_message(d.get("body"))
+            out.append(d)
+        return out
     finally:
         conn.close()
 

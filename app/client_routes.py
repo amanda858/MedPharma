@@ -79,6 +79,10 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
     smtp_u = (os.getenv("SMTP_USER") or "").strip()
     smtp_pw = (os.getenv("SMTP_PASS") or "").strip()
 
+    # Track the actual SendGrid failure reason so we don't mask it with the
+    # generic "no provider configured" message when SMTP also isn't set.
+    sendgrid_failure: str | None = None
+
     if sg_key:
         try:
             import urllib.request
@@ -117,6 +121,7 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
             log.error("invite email sendgrid failed: %s", msg)
             return False, msg
         except Exception as e:
+            sendgrid_failure = f"sendgrid error: {e}"
             log.error("invite email sendgrid failed: %s", e)
 
     if smtp_h and smtp_u and smtp_pw:
@@ -142,6 +147,10 @@ def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: s
             log.error("invite email smtp failed: %s", e)
             return False, f"smtp failed: {e}"
 
+    # No provider succeeded. Surface the real SendGrid failure if we hit one,
+    # otherwise tell the operator what env vars are still missing.
+    if sendgrid_failure:
+        return False, sendgrid_failure
     return False, "email provider not configured (set SENDGRID_API_KEY or SMTP_* env vars)"
 
 
@@ -911,6 +920,48 @@ def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     finally:
         conn.close()
     return {"ok": err is None, "error": err, "trace": trace, "before": before, "after": after, "team_usernames": usernames}
+
+
+@router.get("/admin/diag/email")
+def admin_diag_email(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: report the live email + chat-encryption configuration so
+    operators can see at a glance why invites aren't going out (missing key,
+    wrong From, etc.) without grepping logs.
+
+    Never returns the API key itself — only whether it's set, its prefix, and
+    where the From address resolves from."""
+    _require_full_admin(hub_session)
+    sg_key = (os.getenv("SENDGRID_API_KEY") or "").strip()
+    sg_from = (os.getenv("SENDGRID_FROM") or "").strip()
+    smtp_h = (os.getenv("SMTP_HOST") or "").strip()
+    smtp_u = (os.getenv("SMTP_USER") or "").strip()
+    notify_emails = (os.getenv("NOTIFY_EMAILS") or "").strip()
+    eod_recipients = (os.getenv("EOD_REPORT_EMAIL") or "").strip()
+    sg_key_prefix = sg_key[:6] + "…" if sg_key else ""
+    has_email_provider = bool(sg_key or (smtp_h and smtp_u))
+    try:
+        from app.security import encryption_status
+        chat_enc = encryption_status()
+    except Exception as e:
+        chat_enc = {"encryption": "unknown", "ready": False, "error": str(e)}
+    return {
+        "email": {
+            "sendgrid_key_set": bool(sg_key),
+            "sendgrid_key_prefix": sg_key_prefix,
+            "sendgrid_from": sg_from or "(default: notifications@medprosc.com)",
+            "smtp_host_set": bool(smtp_h),
+            "smtp_user_set": bool(smtp_u),
+            "notify_emails": notify_emails,
+            "eod_report_email": eod_recipients,
+            "ready": has_email_provider,
+            "guidance": (
+                "ok" if has_email_provider else
+                "No email provider configured. Set SENDGRID_API_KEY (+ verified "
+                "SENDGRID_FROM) on Render, or set SMTP_HOST/SMTP_USER/SMTP_PASS."
+            ),
+        },
+        "chat_encryption": chat_enc,
+    }
 
 
 @router.get("/admin/reports/eod/preview")
@@ -5027,25 +5078,52 @@ def chat_post_message(room_id: int, body: ChatMessageIn,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # HIPAA: never put message body content into audit logs / activity feeds /
+    # email notifications. The full body lives encrypted in chat_messages; the
+    # only thing we record outside that table is a length-only marker.
+    try:
+        from app.security import phi_safe_preview
+        body_marker = phi_safe_preview(text)
+    except Exception:
+        body_marker = f"[chat message • {len(text)} chars]"
     log_audit(room.get("client_id"), user.get("username", ""), "chat_message",
-              "chat_rooms", room_id, text[:200])
+              "chat_rooms", room_id, body_marker)
     try:
         notify_activity(user.get("username", ""), "sent message",
-                        "Chat", f"room '{room.get('name','?')}': {text[:120]}")
-        # Forward client-originated messages directly to admin email so they
-        # don't have to wait for the daily digest.
+                        "Chat", f"room '{room.get('name','?')}' {body_marker}")
+        # Forward client-originated activity to admin email so they can react
+        # quickly — but DO NOT include the message body. The notification only
+        # tells the admin "open the room to view"; the body itself stays inside
+        # the encrypted, access-controlled chat panel.
         if not _is_admin_user(user):
             from app.notifications import _send_email  # type: ignore
             subject = f"💬 New chat message in '{room.get('name','room')}' from {user.get('username','client')}"
+            try:
+                from app.config import HUB_BASE_URL as _hub_base  # type: ignore
+                hub_base = (_hub_base or "").strip().rstrip("/")
+            except Exception:
+                hub_base = ""
+            deep_link = f"{hub_base}/hub?chat={room_id}" if hub_base else f"/hub?chat={room_id}"
+            text_alert = (
+                f"{user.get('username','client')} sent a new message in chat "
+                f"room '{room.get('name','room')}' (#{room_id}).\n\n"
+                f"Open the room to view (PHI is not included in this "
+                f"notification for HIPAA compliance):\n{deep_link}"
+            )
             html = (
                 f"<p><b>{user.get('username','client')}</b> sent a new message "
-                f"in chat room <b>{room.get('name','room')}</b> (#{room_id}):</p>"
-                f"<blockquote style='border-left:3px solid #2563eb;padding:6px 12px;color:#1f2937'>"
-                f"{text[:1500]}</blockquote>"
+                f"in chat room <b>{room.get('name','room')}</b> (#{room_id}).</p>"
+                f"<p style='color:#475569;font-size:13px'>The message body is "
+                f"intentionally not included in this email. Open the room to "
+                f"view (HIPAA-protected content stays inside the hub).</p>"
+                f"<p style='margin:18px 0'>"
+                f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
+                f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
+                f"font-weight:600'>Open the chat room →</a></p>"
             )
             threading.Thread(
                 target=_send_email,
-                args=(subject, text[:1500], html),
+                args=(subject, text_alert, html),
                 daemon=True,
             ).start()
     except Exception:
