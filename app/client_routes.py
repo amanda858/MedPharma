@@ -2120,17 +2120,12 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    if user.get("role") in ("admin", "staff"):
+        logs = list_production_logs(None, start_date, end_date, username=None)
+        return {"logs": logs, "fallback_all_clients": True, "selected_client_id": client_id}
+
     scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
-    # Turnkey admin fallback: when a selected account has no rows,
-    # return all production rows so the panel is never empty by mistake.
-    if user.get("role") in ("admin", "staff") and client_id is not None and not logs:
-        logs = list_production_logs(None, start_date, end_date, username=None)
-        return {
-            "logs": logs,
-            "fallback_all_clients": True,
-            "selected_client_id": client_id,
-        }
     return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
 
 
