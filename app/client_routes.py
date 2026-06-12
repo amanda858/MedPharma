@@ -40,6 +40,7 @@ from app.client_db import (
     log_activity, list_activity_events, get_live_users, get_productivity_report,
     global_search, bulk_update_claims, export_claims, export_table,
     get_report_notes, upsert_report_note, delete_report_note, rename_report_note,
+    get_user_production_snapshot,
     list_sharefile_links, add_sharefile_link, delete_sharefile_link,
     create_job, append_job_event, set_job_running, update_job_progress,
     complete_job, fail_job, get_job, list_jobs, reset_job_for_retry,
@@ -63,6 +64,8 @@ from app.notifications import (
     flush_and_notify,
     send_test_notification,
     get_notification_status,
+    get_notification_debug,
+    send_daily_account_summary,
 )
 from rule_intercept import intercept_excel_upload
 
@@ -1888,7 +1891,8 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
 
 # ─── File Uploads ───────────────────────────────────────────────────────────
 
-UPLOAD_DIR = os.path.join("data", "uploads")
+_DATA_ROOT = "/data" if os.path.isdir("/data") else "data"
+UPLOAD_DIR = os.path.join(_DATA_ROOT, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -2116,17 +2120,12 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    if user.get("role") in ("admin", "staff"):
+        logs = list_production_logs(None, start_date, end_date, username=None)
+        return {"logs": logs, "fallback_all_clients": True, "selected_client_id": client_id}
+
     scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
-    # Turnkey admin fallback: when a selected account has no rows,
-    # return all production rows so the panel is never empty by mistake.
-    if user.get("role") in ("admin", "staff") and client_id is not None and not logs:
-        logs = list_production_logs(None, start_date, end_date, username=None)
-        return {
-            "logs": logs,
-            "fallback_all_clients": True,
-            "selected_client_id": client_id,
-        }
     return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
 
 
@@ -2146,7 +2145,12 @@ def create_production_log(body: ProductionLogIn, hub_session: Optional[str] = Co
 @router.delete("/production/{log_id}")
 def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    delete_production_log(log_id)
+    if user.get("role") in ("admin", "staff"):
+        deleted = delete_production_log(log_id)
+    else:
+        deleted = delete_production_log(log_id, username=user.get("username", ""))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Production entry not found")
     notify_activity(user["username"], "deleted", "Time Tracking", f"Log #{log_id}")
     return {"ok": True}
 
@@ -2536,6 +2540,31 @@ def notifications_test_endpoint(hub_session: Optional[str] = Cookie(None)):
     return send_test_notification(triggered_by=user.get("username") or "admin")
 
 
+@router.get("/notifications/debug")
+def notifications_debug_endpoint(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: return notification runtime/config debug details."""
+    _require_admin(hub_session)
+    return get_notification_debug()
+
+
+@router.post("/notifications/daily-report")
+def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: immediately send the daily account summary report (email + SMS)."""
+    _require_admin(hub_session)
+    try:
+        send_daily_account_summary()
+        return {"ok": True, "message": "Daily report sent to configured recipients"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send daily report: {e}")
+
+
+@router.get("/production/snapshot")
+def production_snapshot(work_date: Optional[str] = None, hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: get per-user production snapshot for a date (defaults to today)."""
+    _require_admin(hub_session)
+    return get_user_production_snapshot(work_date)
+
+
 @router.post("/admin/production/relink-kindercare")
 def relink_kindercare_production(body: ProductionRelinkIn, hub_session: Optional[str] = Cookie(None)):
     """Safely copy legacy production rows into the KinderCare account.
@@ -2742,15 +2771,9 @@ async def upload_file(
             effective_category = inferred
             category_source = "auto"
         else:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "CATEGORY_INTERCEPT_REQUIRED",
-                    "message": "Could not confidently map spreadsheet to Claims, Credentialing, Enrollment, or EDI. Select a valid category or upload a clearly labeled sheet.",
-                    "requested_category": requested_category,
-                    "category_inference": infer_debug,
-                },
-            )
+            # Can't map to a data section — save as a plain document without importing.
+            effective_category = requested_category
+            category_source = "document"
 
     file_id = add_file(
         client_id=scope,
@@ -4159,15 +4182,9 @@ async def replace_file(
             effective_category = inferred
             category_source = "auto"
         else:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "CATEGORY_INTERCEPT_REQUIRED",
-                    "message": "Could not confidently map replacement spreadsheet to Claims, Credentialing, Enrollment, or EDI. Set the file category first or upload a clearly labeled sheet.",
-                    "existing_category": category,
-                    "category_inference": infer_debug,
-                },
-            )
+            # Can't map to a data section — keep existing document category, no import.
+            effective_category = category
+            category_source = "document"
 
     # Save new file after validation succeeds.
     new_unique = f"{uuid.uuid4().hex}{ext}"
@@ -4255,6 +4272,31 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
     from app.client_db import get_db
     from datetime import date
 
+    # Gather all report data
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    client_row = conn.execute("SELECT company,contact_name,email,phone,practice_type,specialty FROM clients WHERE id=?", (client_id,)).fetchone()
+    client_info = dict(client_row) if client_row else {}
+    practice_type = client_info.get("practice_type", "") or ""
+
+    try:
+        overall = _build_section_data(conn, client_id)
+        sub_profiles = {}
+        if practice_type == "MHP+OMT":
+            for sp_name in ["OMT", "MHP"]:
+                sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
+    finally:
+        conn.close()
+
+    production_snapshot = get_user_production_snapshot(date.today().isoformat())
+    prod_users = production_snapshot.get("user_stats", [])
+    prod_total_entries = production_snapshot.get("total_entries", 0)
+    prod_total_hours = production_snapshot.get("total_hours", 0)
+    prod_by_user_lines = chr(10).join(
+        f"  - {u.get('username','?')}: {u.get('entry_count',0)} entries, {u.get('total_hours',0)}h, {u.get('total_qty',0)} qty"
+        for u in prod_users
+    ) or "  None"
+
     if not OPENAI_API_KEY:
         # Rule-based narrative — no API key needed
         try:
@@ -4296,6 +4338,18 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
                     f"enrollment <b>{enr_count}</b> records, and EDI connectivity is configured for <b>{edi_count}</b> connections. "
                     "Ensure all pending credentialing items are resolved to avoid future payment delays.\n\n"
                 )
+            narrative += (
+                f"<b>User Production Analysis:</b> Team members logged <b>{prod_total_entries}</b> production entries totaling "
+                f"<b>{prod_total_hours}</b> hours today. "
+            )
+            if prod_users:
+                top_user = prod_users[0]
+                narrative += (
+                    f"Top contributor was <b>{top_user.get('username','')}</b> with "
+                    f"<b>{top_user.get('total_hours',0)}h</b> across <b>{top_user.get('entry_count',0)}</b> entries.\n\n"
+                )
+            else:
+                narrative += "No team production entries were logged for today.\n\n"
             if coll_rate < 80:
                 narrative += (
                     "<b>Recommended Actions:</b> (1) Work down the top denial category immediately. "
@@ -4312,22 +4366,6 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
             return {"narrative": narrative, "model": "rule-based", "company": client_info.get("company", "")}
         except Exception:
             return {"narrative": "Narrative generation unavailable — set OPENAI_API_KEY for AI narratives.", "model": "none", "company": client_info.get("company", "")}
-
-    # Gather all report data
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    client_row = conn.execute("SELECT company,contact_name,email,phone,practice_type,specialty FROM clients WHERE id=?", (client_id,)).fetchone()
-    client_info = dict(client_row) if client_row else {}
-    practice_type = client_info.get("practice_type", "") or ""
-
-    try:
-        overall = _build_section_data(conn, client_id)
-        sub_profiles = {}
-        if practice_type == "MHP+OMT":
-            for sp_name in ["OMT", "MHP"]:
-                sub_profiles[sp_name] = _build_section_data(conn, client_id, sub_profile=sp_name)
-    finally:
-        conn.close()
 
     # Build concise data summary for GPT
     cl = overall.get("claims", {})
@@ -4365,6 +4403,12 @@ EDI SETUP: {len(edi.get('detail', []))} connections
 {chr(10).join(f"  - {e.get('provider','?')} / {e.get('payor','?')}: EDI={e.get('edi','?')}, ERA={e.get('era','?')}, EFT={e.get('eft','?')}" for e in edi.get('detail', [])[:10])}
 
 PAYMENTS: {pay.get('count', 0)} payments totaling ${pay.get('total', 0):,.2f}
+
+USER PRODUCTION ANALYSIS ({production_snapshot.get('work_date','')}):
+- Total Production Entries Logged: {prod_total_entries}
+- Total Production Hours: {prod_total_hours}
+- Production by Team Member:
+{prod_by_user_lines}
 """
 
     # Sub-profile data
@@ -4389,8 +4433,9 @@ Your report should include:
 6. ENROLLMENT STATUS — Summarize payor enrollment position
 7. EDI CONNECTIVITY — Note setup status
 8. SUB-PROFILE COMPARISON — If multiple sub-profiles exist, compare performance
-9. RECOMMENDED ACTIONS — Specific, prioritized action items
-10. OUTLOOK — Brief forward-looking statement
+9. USER PRODUCTION ANALYSIS — Summarize team productivity and outliers using production logs
+10. RECOMMENDED ACTIONS — Specific, prioritized action items
+11. OUTLOOK — Brief forward-looking statement
 
 Write in a professional medical billing tone. Use specific numbers from the data.
 Do NOT use markdown headers or bullets — write flowing paragraphs separated by blank lines, with key figures in bold (use <b> tags).

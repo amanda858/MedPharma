@@ -2713,6 +2713,38 @@
             </div>
           </div>
 
+          <!-- Tab Content: Enrollment -->
+          <div id="reportTabContent-enrollment" style="display:none">
+            <div class="card" style="margin-bottom:16px;border-left:4px solid #22c55e">
+              <div class="card-header">
+                <div class="card-title">📊 Enrollment Report</div>
+              </div>
+              <div id="rptEnrollCharts" style="padding:16px">
+                <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--gray-600)">Enrollment Status
+                </div>
+                <div id="rptEnrollStatusChart"></div>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom:16px">
+              <div class="card-header">
+                <div class="card-title">Enrollment Detail</div>
+              </div>
+              <div id="rptEnrollTable" style="overflow-x:auto"></div>
+            </div>
+            <div class="card" style="margin-bottom:16px;border-left:4px solid #7c3aed">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <div class="card-title">📝 Enrollment Notes & Requirements</div>
+                <button class="btn btn-sm btn-primary" onclick="saveReportTabNote('Enrollment')">💾 Save Notes</button>
+              </div>
+              <div style="padding:12px">
+                <textarea id="reportNote-Enrollment" class="form-control" rows="6"
+                  placeholder="Add Enrollment-specific notes, payer follow-ups, effective date blockers, revalidation details, etc."
+                  style="font-size:13px;line-height:1.6;resize:vertical"></textarea>
+                <div id="reportNoteInfo-Enrollment" style="font-size:11px;color:var(--gray-400);margin-top:4px"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Tab Content: EDI -->
           <div id="reportTabContent-edi" style="display:none">
             <div class="card" style="margin-bottom:16px;border-left:4px solid #0ea5e9">
@@ -5865,6 +5897,7 @@
       document.body.appendChild(t);
       setTimeout(() => t.remove(), 3500);
     }
+    function showToast(msg, type = '') { toast(msg, type); }
 
     // ═══════════════════════════════════════
     // SESSION CHECK HELPER — verify auth before large operations
@@ -5930,10 +5963,10 @@
     const CHART_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#64748b'];
 
     // ═══════════════════════════════════════
-    // REPORT TABS — Custom tabs for Claims / Credentialing / EDI + user-defined
+    // REPORT TABS — Claims by default; Credentialing / Enrollment / EDI optional
     // ═══════════════════════════════════════
-    const DEFAULT_REPORT_TABS = ['Claims', 'Credentialing', 'EDI'];
-    const BUILT_IN_REPORT_TABS = ['Overview', 'Claims', 'Credentialing', 'EDI'];
+    const DEFAULT_REPORT_TABS = ['Claims'];
+    const BUILT_IN_REPORT_TABS = ['Overview', 'Claims', 'Credentialing', 'Enrollment', 'EDI'];
     let activeReportTab = 'Overview';
     let currentReportTabs = [...DEFAULT_REPORT_TABS];
     let reportNotesCache = {};
@@ -5944,7 +5977,7 @@
       const tabs = ['Overview', ...currentReportTabs];
       document.getElementById('reportTabBar').innerHTML = tabs.map(t => {
         const isActive = t === activeReportTab;
-        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'EDI' ? '🔗' : '📄';
+        const icon = t === 'Overview' ? '📋' : t === 'Claims' ? '💰' : t === 'Credentialing' ? '📋' : t === 'Enrollment' ? '📝' : t === 'EDI' ? '🔗' : '📄';
         return `<button class="qtab ${isActive ? 'active' : ''}"
           onclick="setReportTab('${t.replace(/'/g, "\\'")}')"
           style="padding:6px 14px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid ${isActive ? 'var(--info)' : 'var(--gray-200)'};background:${isActive ? 'var(--info)' : 'var(--gray-50)'};color:${isActive ? '#fff' : 'var(--gray-600)'};cursor:pointer;transition:all .2s">
@@ -5964,9 +5997,10 @@
       const overview = document.getElementById('reportTabContent-overview');
       const claims = document.getElementById('reportTabContent-claims');
       const cred = document.getElementById('reportTabContent-credentialing');
+      const enroll = document.getElementById('reportTabContent-enrollment');
       const edi = document.getElementById('reportTabContent-edi');
       const custom = document.getElementById('reportTabContent-custom');
-      [overview, claims, cred, edi, custom].forEach(el => { if (el) el.style.display = 'none'; });
+      [overview, claims, cred, enroll, edi, custom].forEach(el => { if (el) el.style.display = 'none'; });
 
       const tabLower = tab.toLowerCase();
       if (tabLower === 'overview') {
@@ -5977,6 +6011,9 @@
       } else if (tabLower === 'credentialing') {
         cred.style.display = '';
         renderCredTabContent();
+      } else if (tabLower === 'enrollment') {
+        enroll.style.display = '';
+        renderEnrollTabContent();
       } else if (tabLower === 'edi') {
         edi.style.display = '';
         renderEdiTabContent();
@@ -6063,6 +6100,36 @@
         </table>` : '<p style="color:var(--gray-400);font-size:13px">No credentialing data</p>';
 
       loadReportTabNote('Credentialing');
+    }
+
+    function renderEnrollTabContent() {
+      if (!lastReportData) return;
+      const enr = lastReportData.enrollment || {};
+      const enrSummary = (enr.summary || []).map(s => ({ label: s.status, value: s.count }));
+      renderDonutChart('rptEnrollStatusChart', enrSummary, 'value', 'label');
+
+      const enrD = enr.detail || [];
+      document.getElementById('rptEnrollTable').innerHTML = enrD.length ? `
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr style="background:var(--gray-50)">
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Provider</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Payor</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Type</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Status</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Submitted</th>
+            <th style="text-align:left;padding:6px 10px;font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Effective</th>
+          </tr></thead>
+          <tbody>${enrD.map(r => `<tr>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100);font-weight:600">${esc(r.provider || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${esc(r.payor || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${esc(r.type || '-')}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${statusBadge(r.status)}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${r.submitted || '-'}</td>
+            <td style="padding:6px 10px;border-top:1px solid var(--gray-100)">${r.effective || '-'}</td>
+          </tr>`).join('')}</tbody>
+        </table>` : '<p style="color:var(--gray-400);font-size:13px">No enrollment data</p>';
+
+      loadReportTabNote('Enrollment');
     }
 
     function renderEdiTabContent() {
@@ -7813,7 +7880,9 @@
           <td style="text-align:center;font-weight:600">${l.quantity}</td>
           <td style="text-align:center;font-weight:600">${l.time_spent}h</td>
           <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
-          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
+          <td>${(isStaffOrAdmin() || ((((currentUser && currentUser.username) || '')).toLowerCase() === String(l.username || '').toLowerCase()))
+            ? `<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button>`
+            : ''}</td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
     }
