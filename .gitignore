@@ -13,5 +13,16 @@ dist/
 # editor scratch / cleanup
 .vscode/Screenshot*.png
 .vscode/Screenshot*.PNG
+.devcontainer/Screenshot*.png
+.devcontainer/Screenshot*.PNG
+.devcontainer/*.xlsx
+.devcontainer/*.csv
 *.bak-*
 tatus*
+
+# command-output / scratch dumps
+gitdiff.txt
+gitlog.txt
+route_out.txt
+rule_out.txt
+rule_run.txt
