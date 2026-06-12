@@ -96,3 +96,188 @@ def test_admin_routes_exist_for_snapshot_and_notifications(hub_env, monkeypatch)
         daily = client.post("/hub/api/notifications/daily-report")
         assert daily.status_code == 200, daily.text
         assert daily.json().get("ok") is True
+
+
+def test_admin_production_is_all_accounts(hub_env):
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        owner_id = client_db.create_client({
+            "username": "scope_owner",
+            "password": "scopepass123",
+            "company": "Scope Owner",
+            "contact_name": "Scope Owner",
+            "email": "scope_owner@example.com",
+            "phone": "555-1100",
+            "role": "client",
+        })
+        other_id = client_db.create_client({
+            "username": "scope_other",
+            "password": "scopepass456",
+            "company": "Scope Other",
+            "contact_name": "Scope Other",
+            "email": "scope_other@example.com",
+            "phone": "555-1101",
+            "role": "client",
+        })
+
+        client_db.add_production_log({
+            "client_id": owner_id,
+            "work_date": "2026-06-12",
+            "username": "scope_owner",
+            "category": "Billing",
+            "task_description": "Owner task",
+            "quantity": 1,
+            "time_spent": 1.0,
+            "notes": "",
+        })
+        client_db.add_production_log({
+            "client_id": other_id,
+            "work_date": "2026-06-12",
+            "username": "scope_other",
+            "category": "Claims",
+            "task_description": "Other task",
+            "quantity": 1,
+            "time_spent": 1.0,
+            "notes": "",
+        })
+
+        _login(client, "admin", "admin123")
+        response = client.get(f"/hub/api/production?client_id={owner_id}")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload.get("fallback_all_clients") is True
+        usernames = {row.get("username") for row in payload.get("logs", [])}
+        assert {"scope_owner", "scope_other"}.issubset(usernames)
+
+        client_db.delete_client(owner_id)
+        client_db.delete_client(other_id)
+
+
+def test_staff_accounts_keep_unscoped_clients_visible(hub_env):
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        staff_id = client_db.create_client({
+            "username": "staff_scope",
+            "password": "staffscope123",
+            "company": "MedPharma SC",
+            "contact_name": "Staff Scope",
+            "email": "staff_scope@example.com",
+            "phone": "555-1200",
+            "role": "staff",
+        })
+        other_staff_id = client_db.create_client({
+            "username": "staff_other",
+            "password": "staffother123",
+            "company": "MedPharma SC",
+            "contact_name": "Staff Other",
+            "email": "staff_other@example.com",
+            "phone": "555-1201",
+            "role": "staff",
+        })
+        unscoped_client_id = client_db.create_client({
+            "username": "svdiag",
+            "password": "svdiagpass123",
+            "company": "SV Diagnostics",
+            "contact_name": "SV Owner",
+            "email": "svdiag@example.com",
+            "phone": "555-1202",
+            "role": "client",
+        })
+        granted_client_id = client_db.create_client({
+            "username": "grantscope",
+            "password": "grantscope123",
+            "company": "Grant Scope Client",
+            "contact_name": "Grant Scope",
+            "email": "grantscope@example.com",
+            "phone": "555-1203",
+            "role": "client",
+        })
+        hidden_client_id = client_db.create_client({
+            "username": "hiddenclient",
+            "password": "hiddenclient123",
+            "company": "Hidden Client",
+            "contact_name": "Hidden Client",
+            "email": "hidden@example.com",
+            "phone": "555-1204",
+            "role": "client",
+        })
+
+        client_db.set_client_access(granted_client_id, [staff_id], granted_by="admin")
+        client_db.set_client_access(hidden_client_id, [other_staff_id], granted_by="admin")
+
+        _login(client, "staff_scope", "staffscope123")
+        accounts = client.get("/hub/api/accounts")
+        assert accounts.status_code == 200, accounts.text
+        companies = {row.get("company") for row in accounts.json()}
+        assert "SV Diagnostics" in companies
+        assert "Grant Scope Client" in companies
+        assert "Hidden Client" not in companies
+
+
+def test_report_tabs_default_to_claims_only_and_allow_optional_modules(hub_env):
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        client_id = client_db.create_client({
+            "username": "reporttabs",
+            "password": "reporttabs123",
+            "company": "Report Tabs Client",
+            "contact_name": "Report Tabs",
+            "email": "reporttabs@example.com",
+            "phone": "555-1300",
+            "role": "client",
+        })
+
+        _login(client, "admin", "admin123")
+        profile = client.get(f"/hub/api/profile/{client_id}")
+        assert profile.status_code == 200, profile.text
+        assert profile.json().get("report_tabs") == ["Claims"]
+
+        update = client.put(f"/hub/api/profile/{client_id}", json={
+            "report_tabs": ["Claims", "Credentialing", "Enrollment", "EDI"]
+        })
+        assert update.status_code == 200, update.text
+
+        refreshed = client.get(f"/hub/api/profile/{client_id}")
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json().get("report_tabs") == ["Claims", "Credentialing", "Enrollment", "EDI"]
+
+
+def test_chat_room_create_and_message_flow(hub_env, monkeypatch):
+    client_db, hub_app = hub_env
+    routes = importlib.import_module("app.client_routes")
+    monkeypatch.setattr(routes, "_send_chat_invite_emails", lambda **kwargs: [])
+
+    with TestClient(hub_app.app) as client:
+        staff_id = client_db.create_client({
+            "username": "chatstaff",
+            "password": "chatstaff123",
+            "company": "MedPharma SC",
+            "contact_name": "Chat Staff",
+            "email": "chatstaff@example.com",
+            "phone": "555-1400",
+            "role": "staff",
+        })
+
+        _login(client, "admin", "admin123")
+        created = client.post("/hub/api/chat/rooms", json={
+            "name": "SV Diagnostics Ops",
+            "member_user_ids": [staff_id],
+        })
+        assert created.status_code == 200, created.text
+        room_id = created.json()["id"]
+
+        client.post("/hub/api/logout")
+        _login(client, "chatstaff", "chatstaff123")
+
+        rooms = client.get("/hub/api/chat/rooms")
+        assert rooms.status_code == 200, rooms.text
+        room_ids = {row.get("id") for row in rooms.json().get("rooms", [])}
+        assert room_id in room_ids
+
+        sent = client.post(f"/hub/api/chat/rooms/{room_id}/messages", json={"body": "Chat is working"})
+        assert sent.status_code == 200, sent.text
+
+        messages = client.get(f"/hub/api/chat/rooms/{room_id}/messages")
+        assert messages.status_code == 200, messages.text
+        payload = messages.json().get("messages", [])
+        assert any(msg.get("body") == "Chat is working" for msg in payload)
