@@ -4626,14 +4626,83 @@ def add_production_log(data: dict) -> int:
     return new_id
 
 
-def delete_production_log(log_id: int, client_id: int = None):
+def delete_production_log(log_id: int, client_id: int = None, username: str = None) -> bool:
     conn = get_db()
     try:
+        conditions = ["id=?"]
+        params: list[object] = [log_id]
         if client_id:
-            conn.execute("DELETE FROM team_production WHERE id=? AND client_id=?", (log_id, client_id))
-        else:
-            conn.execute("DELETE FROM team_production WHERE id=?", (log_id,))
+            conditions.append("client_id=?")
+            params.append(client_id)
+        if username:
+            conditions.append("LOWER(username)=LOWER(?)")
+            params.append(username)
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM team_production WHERE {' AND '.join(conditions)}", params)
         conn.commit()
+        deleted = cur.rowcount > 0
+    finally:
+        conn.close()
+    return deleted
+
+
+def get_user_production_snapshot(work_date: str = None):
+    """Return per-user production activity for a given date (defaults to today)."""
+    target_date = (work_date or date.today().isoformat()).strip()
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, client_id, work_date, username, category, task_description, quantity, time_spent, notes, created_at
+            FROM team_production
+            WHERE work_date=?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (target_date,),
+        )
+        entries = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT username,
+                   COUNT(*) AS entry_count,
+                   ROUND(COALESCE(SUM(time_spent),0),1) AS total_hours,
+                   COALESCE(SUM(quantity),0) AS total_qty,
+                   COALESCE(GROUP_CONCAT(DISTINCT category), '') AS categories
+            FROM team_production
+            WHERE work_date=?
+            GROUP BY username
+            ORDER BY total_hours DESC, entry_count DESC, username ASC
+            """,
+            (target_date,),
+        )
+        user_stats = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT uploaded_by AS username, COUNT(*) AS file_count
+            FROM client_files
+            WHERE DATE(created_at)=? AND TRIM(COALESCE(uploaded_by, '')) != ''
+            GROUP BY uploaded_by
+            """,
+            (target_date,),
+        )
+        file_uploads = {str(r["username"]): int(r["file_count"] or 0) for r in cur.fetchall()}
+
+        total_entries = len(entries)
+        total_hours = round(sum(float(e.get("time_spent") or 0) for e in entries), 1)
+        total_quantity = int(sum(int(e.get("quantity") or 0) for e in entries))
+        return {
+            "work_date": target_date,
+            "total_entries": total_entries,
+            "total_hours": total_hours,
+            "total_quantity": total_quantity,
+            "user_stats": user_stats,
+            "file_uploads": file_uploads,
+            "entries": entries,
+        }
     finally:
         conn.close()
 
