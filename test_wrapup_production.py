@@ -96,3 +96,58 @@ def test_admin_routes_exist_for_snapshot_and_notifications(hub_env, monkeypatch)
         daily = client.post("/hub/api/notifications/daily-report")
         assert daily.status_code == 200, daily.text
         assert daily.json().get("ok") is True
+
+
+def test_admin_production_is_all_accounts(hub_env):
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        owner_id = client_db.create_client({
+            "username": "scope_owner",
+            "password": "scopepass123",
+            "company": "Scope Owner",
+            "contact_name": "Scope Owner",
+            "email": "scope_owner@example.com",
+            "phone": "555-1100",
+            "role": "client",
+        })
+        other_id = client_db.create_client({
+            "username": "scope_other",
+            "password": "scopepass456",
+            "company": "Scope Other",
+            "contact_name": "Scope Other",
+            "email": "scope_other@example.com",
+            "phone": "555-1101",
+            "role": "client",
+        })
+
+        client_db.add_production_log({
+            "client_id": owner_id,
+            "work_date": "2026-06-12",
+            "username": "scope_owner",
+            "category": "Billing",
+            "task_description": "Owner task",
+            "quantity": 1,
+            "time_spent": 1.0,
+            "notes": "",
+        })
+        client_db.add_production_log({
+            "client_id": other_id,
+            "work_date": "2026-06-12",
+            "username": "scope_other",
+            "category": "Claims",
+            "task_description": "Other task",
+            "quantity": 1,
+            "time_spent": 1.0,
+            "notes": "",
+        })
+
+        _login(client, "admin", "admin123")
+        response = client.get(f"/hub/api/production?client_id={owner_id}")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload.get("fallback_all_clients") is True
+        usernames = {row.get("username") for row in payload.get("logs", [])}
+        assert {"scope_owner", "scope_other"}.issubset(usernames)
+
+        client_db.delete_client(owner_id)
+        client_db.delete_client(other_id)
