@@ -1888,7 +1888,8 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
 
 # ─── File Uploads ───────────────────────────────────────────────────────────
 
-UPLOAD_DIR = os.path.join("data", "uploads")
+_DATA_ROOT = "/data" if os.path.isdir("/data") else "data"
+UPLOAD_DIR = os.path.join(_DATA_ROOT, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -2742,15 +2743,9 @@ async def upload_file(
             effective_category = inferred
             category_source = "auto"
         else:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "CATEGORY_INTERCEPT_REQUIRED",
-                    "message": "Could not confidently map spreadsheet to Claims, Credentialing, Enrollment, or EDI. Select a valid category or upload a clearly labeled sheet.",
-                    "requested_category": requested_category,
-                    "category_inference": infer_debug,
-                },
-            )
+            # Can't map to a data section — save as a plain document without importing.
+            effective_category = requested_category
+            category_source = "document"
 
     file_id = add_file(
         client_id=scope,
@@ -4159,15 +4154,9 @@ async def replace_file(
             effective_category = inferred
             category_source = "auto"
         else:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "CATEGORY_INTERCEPT_REQUIRED",
-                    "message": "Could not confidently map replacement spreadsheet to Claims, Credentialing, Enrollment, or EDI. Set the file category first or upload a clearly labeled sheet.",
-                    "existing_category": category,
-                    "category_inference": infer_debug,
-                },
-            )
+            # Can't map to a data section — keep existing document category, no import.
+            effective_category = category
+            category_source = "document"
 
     # Save new file after validation succeeds.
     new_unique = f"{uuid.uuid4().hex}{ext}"
