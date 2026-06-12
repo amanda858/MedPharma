@@ -1671,7 +1671,7 @@ def delete_client(cid: int):
 
 
 DEFAULT_DOC_TABS = ["Payor Letters", "Company Documents", "Credentialing Docs", "Reports", "General"]
-DEFAULT_REPORT_TABS = ["Claims", "Credentialing", "EDI"]
+DEFAULT_REPORT_TABS = ["Claims"]
 DEFAULT_ENABLED_MODULES = [
     "claims",
     "credentialing",
@@ -5414,11 +5414,36 @@ def set_client_access(client_id: int, user_ids: list[int], granted_by: str = "")
 
 
 def list_clients_for_user(user_id: int) -> list[int]:
-    """Client IDs that ``user_id`` has been explicitly granted access to."""
+    """Client IDs visible to ``user_id``.
+
+    Legacy/default-open behavior is preserved for existing clients that have no
+    rows in ``client_user_access`` yet: those clients remain visible to all
+    staff. Once a client has at least one explicit access row, only the listed
+    staff users can see it.
+    """
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT client_id FROM client_user_access WHERE user_id=?",
+            """
+            SELECT c.id
+            FROM clients c
+            WHERE COALESCE(c.role, 'client')='client'
+              AND COALESCE(c.is_active,1)=1
+              AND (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM client_user_access cua_any
+                        WHERE cua_any.client_id = c.id
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM client_user_access cua_self
+                        WHERE cua_self.client_id = c.id
+                          AND cua_self.user_id = ?
+                    )
+              )
+            ORDER BY c.id
+            """,
             (int(user_id),),
         ).fetchall()
         return [int(r[0]) for r in rows]
