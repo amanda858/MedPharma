@@ -1,4 +1,10 @@
 {
+    "name": "MedPharma Hub",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "containerEnv": {
+        "TZ": "US/Eastern"
+    },
+    "postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
     "forwardPorts": [
         8000,
         5240
