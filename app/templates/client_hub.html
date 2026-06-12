@@ -5865,6 +5865,7 @@
       document.body.appendChild(t);
       setTimeout(() => t.remove(), 3500);
     }
+    function showToast(msg, type = '') { toast(msg, type); }
 
     // ═══════════════════════════════════════
     // SESSION CHECK HELPER — verify auth before large operations
@@ -7813,7 +7814,9 @@
           <td style="text-align:center;font-weight:600">${l.quantity}</td>
           <td style="text-align:center;font-weight:600">${l.time_spent}h</td>
           <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
-          <td><button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button></td>
+          <td>${(isStaffOrAdmin() || ((((currentUser && currentUser.username) || '')).toLowerCase() === String(l.username || '').toLowerCase()))
+            ? `<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button>`
+            : ''}</td>
         </tr>`).join('');
       } catch (e) { console.error(e); }
     }
