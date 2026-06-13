@@ -8859,18 +8859,21 @@
 
     // ── Sidebar nav visibility per enabled_modules ───────────────────────
     function applyModuleVisibility() {
-      // Admins/staff always see everything; only constrain for clients.
+      // Sidebar modules follow exactly what was selected at client intake
+      // (enabled_modules). This now applies to admins/staff too — but only
+      // when a specific client is in context. In the Admin Workspace (no client
+      // selected) everything stays visible so the team can still manage, and
+      // Dashboard/Client Profile always remain reachable for admins/staff.
       const navItems = document.querySelectorAll('.nav-item[data-module]');
-      if (isStaffOrAdmin()) {
-        navItems.forEach(n => n.style.display = '');
-        return;
-      }
+      const staffAdmin = isStaffOrAdmin();
       const enabled = activeClientModules
         ? new Set(activeClientModules)
-        : null; // null = no opt-out recorded → show defaults
+        : null; // null = no client in context → show everything
+      const ADMIN_ALWAYS = new Set(['dashboard', 'profile']);
       navItems.forEach(n => {
         const key = n.getAttribute('data-module');
         if (!enabled) { n.style.display = ''; return; }
+        if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
         n.style.display = enabled.has(key) ? '' : 'none';
       });
     }
