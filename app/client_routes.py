@@ -2169,13 +2169,15 @@ async def import_production_excel(
         raise HTTPException(status_code=422, detail="client_id is required")
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if ext not in {"xlsx", "xls", "csv", "ods", "odf", "pdf"}:
-        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, .csv, .ods, .odf, or .pdf")
+    if ext not in {"xlsx", "xls", "csv", "ods", "odf", "pdf", "doc", "docx"}:
+        raise HTTPException(status_code=422, detail="File must be .xlsx, .xls, .csv, .ods, .odf, .pdf, .doc, or .docx")
 
     content = await file.read()
     try:
         if ext == "pdf":
             rows = _parse_pdf_rows(content)
+        elif ext in ("doc", "docx"):
+            rows = _parse_docx_rows(content)
         else:
             rows = _parse_excel_rows(content, f".{ext}")
     except Exception as exc:
@@ -3352,6 +3354,91 @@ def _parse_pdf_rows(content: bytes) -> list[dict]:
             parts = parts + [""] * (ncols - len(parts))
         elif len(parts) > ncols:
             parts = parts[: ncols - 1] + [" ".join(parts[ncols - 1 :])]
+        row = dict(zip(headers, parts))
+        if any(str(v).strip() for v in row.values()):
+            rows.append(row)
+    return rows
+
+
+def _parse_docx_rows(content: bytes) -> list[dict]:
+    """Parse a Word (.docx) document into list[dict].
+
+    Prefers the document's first real table (header row + data rows). If the
+    document has no usable table, falls back to reading paragraph text and
+    detecting a tabular header the same way the PDF parser does.
+    """
+    try:
+        from docx import Document
+    except Exception as exc:  # pragma: no cover - dependency guard
+        raise ValueError("Word parsing dependency missing. Install 'python-docx'.") from exc
+
+    import io as _io
+
+    doc = Document(_io.BytesIO(content))
+
+    # 1) Prefer a real table with a header row + at least one data row.
+    for table in doc.tables:
+        trows = table.rows
+        if len(trows) < 2:
+            continue
+        headers = [(_clean_val(c.text) or "").strip() for c in trows[0].cells]
+        if sum(1 for h in headers if h) < 2:
+            continue
+        ncols = len(headers)
+        out: list[dict] = []
+        for tr in trows[1:]:
+            cells = [(_clean_val(c.text) or "").strip() for c in tr.cells]
+            if len(cells) < ncols:
+                cells = cells + [""] * (ncols - len(cells))
+            elif len(cells) > ncols:
+                cells = cells[:ncols]
+            row = dict(zip(headers, cells))
+            if any(str(v).strip() for v in row.values()):
+                out.append(row)
+        if out:
+            return out
+
+    # 2) Fall back to paragraph text using the PDF line/header heuristics.
+    text = "\n".join(p.text for p in doc.paragraphs)
+    fake_pdf_lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines() if ln.strip()]
+    if not fake_pdf_lines:
+        return []
+
+    def _split_line(line: str) -> list[str]:
+        if "|" in line:
+            return [p.strip() for p in line.split("|") if p.strip()]
+        if "\t" in line:
+            return [p.strip() for p in line.split("\t") if p.strip()]
+        parts = [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
+        return parts if len(parts) >= 3 else [line.strip()]
+
+    header_keywords = (
+        "date", "work date", "task", "description", "hours", "qty", "quantity",
+        "category", "user", "notes",
+    )
+    header_idx, headers = -1, []
+    for i, line in enumerate(fake_pdf_lines[:60]):
+        parts = _split_line(line)
+        if len(parts) < 3:
+            continue
+        if sum(1 for k in header_keywords if k in " ".join(parts).lower()) >= 2:
+            header_idx, headers = i, parts
+            break
+    if header_idx < 0:
+        raise ValueError(
+            "Could not detect a table in the Word document. "
+            "Use a table with columns like Date, Task/Description, Category, Qty, Hours, Notes."
+        )
+    ncols = len(headers)
+    rows: list[dict] = []
+    for line in fake_pdf_lines[header_idx + 1:]:
+        parts = _split_line(line)
+        if len(parts) < 2:
+            continue
+        if len(parts) < ncols:
+            parts = parts + [""] * (ncols - len(parts))
+        elif len(parts) > ncols:
+            parts = parts[: ncols - 1] + [" ".join(parts[ncols - 1:])]
         row = dict(zip(headers, parts))
         if any(str(v).strip() for v in row.values()):
             rows.append(row)

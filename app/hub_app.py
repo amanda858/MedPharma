@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session
 from app.client_routes import router as client_hub_router
@@ -24,6 +25,11 @@ app = FastAPI(
 )
 app.state.startup_ready = False
 app.state.startup_status = {"db": False, "scheduler": False}
+
+# Serve PWA icons and other static assets.
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 def _backup_db():
@@ -228,6 +234,53 @@ async def buildz():
         "service": "hub",
         "build_marker": BUILD_MARKER,
     }
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def web_manifest():
+    """PWA manifest so the hub can be installed to the iPhone/Android home screen."""
+    manifest = {
+        "name": "MedPharma Hub",
+        "short_name": "MedPharma",
+        "description": "MedPharma Revenue Cycle Management — Client Hub",
+        "start_url": "/hub",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait-primary",
+        "background_color": "#0d47a1",
+        "theme_color": "#1565c0",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }
+    return JSONResponse(
+        manifest,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+# Minimal, HIPAA-safe service worker: it enables "Add to Home Screen" /
+# installability but deliberately does NOT cache any responses, so no PHI is
+# ever stored on the device by the worker. All requests pass straight through.
+_SERVICE_WORKER_JS = """
+self.addEventListener('install', (e) => { self.skipWaiting(); });
+self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', (e) => { /* network passthrough, no caching */ });
+""".lstrip()
+
+
+@app.get("/service-worker.js", include_in_schema=False)
+async def service_worker():
+    return Response(
+        content=_SERVICE_WORKER_JS,
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @app.get("/api/admin/integrations/readiness")
