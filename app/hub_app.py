@@ -236,6 +236,34 @@ async def buildz():
     }
 
 
+@app.get("/diskz")
+async def diskz():
+    """Definitive persistence check: is /data a real mounted disk?
+
+    mounted=True  -> persistent disk is attached (paid plan); data survives restarts.
+    mounted=False -> /data is ephemeral; data is wiped on every redeploy/spin-down.
+    """
+    info = {"ok": True, "data_path": DATABASE_PATH}
+    try:
+        info["data_dir_is_mount"] = os.path.ismount("/data")
+    except Exception as e:
+        info["data_dir_is_mount"] = None
+        info["mount_error"] = str(e)
+    try:
+        info["db_exists"] = os.path.exists(DATABASE_PATH)
+        info["db_size_bytes"] = os.path.getsize(DATABASE_PATH) if os.path.exists(DATABASE_PATH) else 0
+    except Exception as e:
+        info["db_error"] = str(e)
+    try:
+        usage = shutil.disk_usage("/data" if os.path.isdir("/data") else ".")
+        info["disk_total_mb"] = round(usage.total / 1048576, 1)
+        info["disk_free_mb"] = round(usage.free / 1048576, 1)
+    except Exception as e:
+        info["disk_usage_error"] = str(e)
+    info["persistent"] = bool(info.get("data_dir_is_mount"))
+    return info
+
+
 @app.get("/manifest.webmanifest", include_in_schema=False)
 async def web_manifest():
     """PWA manifest so the hub can be installed to the iPhone/Android home screen."""
