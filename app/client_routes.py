@@ -760,10 +760,10 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     cid = create_client(payload)
     # Grant the selected staff/admin users access to this newly-created client
     granted = 0
-    if not user_ids:
-        # Safety default: a brand-new client should be visible to the active
-        # MedPharma team even if the modal access picker wasn't populated yet.
-        user_ids = _all_team_user_ids()
+    if not user_ids and admin.get("id"):
+        # Safer default for tenant isolation: if no explicit users were picked,
+        # grant access only to the creator/admin instead of the full team.
+        user_ids = [int(admin.get("id"))]
     if user_ids:
         try:
             granted = set_client_access(cid, user_ids, granted_by=admin.get("username", ""))
@@ -1285,6 +1285,17 @@ def api_send_followup_reminders(hub_session: Optional[str] = Cookie(None)):
     _require_leads_access(hub_session)
     from app.notifications import send_bizdev_followup_reminders
     return send_bizdev_followup_reminders()
+
+
+@router.post("/leads-weekly-report/send")
+def api_send_weekly_report(week_start: Optional[str] = None,
+                           hub_session: Optional[str] = Cookie(None)):
+    """Email Victor's weekly BizDev pipeline report to the team (Lexi + Eric).
+    This is what the Monday 8 AM EST scheduler sends automatically; exposed so
+    BizDev or an admin can send it on demand."""
+    _require_leads_access(hub_session)
+    from app.notifications import send_bizdev_weekly_report
+    return send_bizdev_weekly_report(week_start)
 
 
 @router.delete("/clients/{cid}")

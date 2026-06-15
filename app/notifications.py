@@ -3493,6 +3493,90 @@ def send_bizdev_followup_reminders() -> dict:
     return {"ok": True, "due": len(due), "emailed": emailed, "notified": notified}
 
 
+def send_bizdev_weekly_report(week_start: str = None) -> dict:
+    """Email Victor's weekly Business-Development pipeline report to the team
+    (Lexi + Eric, or whoever EOD_REPORT_EMAIL is set to). Runs Monday 8 AM EST
+    and is also exposed for on-demand sending."""
+    from app.client_db import get_leads_weekly_report
+
+    rep = get_leads_weekly_report(week_start)
+    cats = rep.get("categories", {}) or {}
+    rng = f"{rep.get('week_start','')} – {rep.get('week_end','')}"
+
+    def _money(v):
+        try:
+            return "$" + format(float(v or 0), ",.0f")
+        except Exception:
+            return "$0"
+
+    cat_lines = "\n".join([
+        f"  • RCM: {cats.get('rcm', 0)}",
+        f"  • Payor: {cats.get('payor', 0)}",
+        f"  • Workflow: {cats.get('workflow', 0)}",
+        f"  • Compliance: {cats.get('compliance', 0)}",
+        f"  • Combination (2+ services): {cats.get('combination', 0)}",
+        f"  • Open total: {cats.get('open_total', 0)}",
+        f"  • Closed: {cats.get('closed', 0)}",
+    ])
+    text_body = (
+        f"Business Development — Weekly Report\n"
+        f"Week: {rng}\n\n"
+        f"New leads this week: {rep.get('new_this_week', 0)}\n"
+        f"Closed this week: {rep.get('closed_this_week', 0)}\n"
+        f"Open pipeline value: {_money(rep.get('pipeline_value'))}\n"
+        f"Won value this week: {_money(rep.get('won_value_this_week'))}\n\n"
+        f"Pipeline by category:\n{cat_lines}\n"
+    )
+
+    def _esc(s):
+        return _esc_html(s) if s is not None else ""
+
+    rows_html = "".join(
+        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>"
+        f"<b>{_esc(r.get('practice_name') or r.get('contact_name') or ('Lead #' + str(r.get('id'))))}</b></td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>{_esc(', '.join(r.get('service_lines') or []))}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>{_esc(r.get('status') or '')}</td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right'>{_money(r.get('est_value'))}</td></tr>"
+        for r in (rep.get("rows") or [])[:40]
+    ) or "<tr><td colspan='4' style='padding:10px;color:#64748b'>No lead activity this week.</td></tr>"
+
+    html_body = (
+        "<div style='font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:640px;margin:0 auto;color:#0f172a'>"
+        "<h2 style='color:#1d4ed8;margin:0 0 4px'>📅 Business Development — Weekly Report</h2>"
+        f"<p style='color:#64748b;margin:0 0 16px'>{rng}</p>"
+        "<table style='width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px'>"
+        f"<tr><td style='padding:6px 10px'>New leads this week</td><td style='padding:6px 10px;text-align:right'><b>{rep.get('new_this_week', 0)}</b></td></tr>"
+        f"<tr><td style='padding:6px 10px'>Closed this week</td><td style='padding:6px 10px;text-align:right'><b>{rep.get('closed_this_week', 0)}</b></td></tr>"
+        f"<tr><td style='padding:6px 10px'>Open pipeline value</td><td style='padding:6px 10px;text-align:right'><b>{_money(rep.get('pipeline_value'))}</b></td></tr>"
+        f"<tr><td style='padding:6px 10px'>Won value this week</td><td style='padding:6px 10px;text-align:right;color:#047857'><b>{_money(rep.get('won_value_this_week'))}</b></td></tr>"
+        f"<tr><td style='padding:6px 10px'>Open by category</td><td style='padding:6px 10px;text-align:right'>"
+        f"RCM {cats.get('rcm',0)} · Payor {cats.get('payor',0)} · Workflow {cats.get('workflow',0)} · Compliance {cats.get('compliance',0)} · Combo {cats.get('combination',0)}</td></tr>"
+        "</table>"
+        "<h3 style='font-size:15px;margin:0 0 8px'>Lead activity this week</h3>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
+        "<tr style='text-align:left;color:#64748b'><th style='padding:6px 10px'>Lead</th><th style='padding:6px 10px'>Services</th><th style='padding:6px 10px'>Status</th><th style='padding:6px 10px;text-align:right'>Est. Value</th></tr>"
+        f"{rows_html}</table></div>"
+    )
+
+    recipients = _eod_recipients()
+    subject = f"📅 BizDev Weekly Report — {rng}"
+    sent = []
+    failed = []
+    for addr in recipients:
+        addr = (addr or "").strip()
+        if not addr or "@" not in addr:
+            continue
+        try:
+            ok, via = _send_email_to(addr, subject, text_body, html_body)
+            (sent if ok else failed).append({"email": addr, "via": via})
+        except Exception as e:
+            failed.append({"email": addr, "via": f"error: {e}"})
+
+    log.info(f"BizDev weekly report: sent={len(sent)} failed={len(failed)} recipients={recipients}")
+    return {"ok": True, "recipients": recipients, "sent": sent, "failed": failed,
+            "week": rng}
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -3555,6 +3639,15 @@ def start_daily_scheduler():
             CronTrigger(hour=9, minute=0, timezone=est),
             id="bizdev_followup_reminders",
             name="9 AM EST BizDev Follow-up Reminders",
+            replace_existing=True,
+        )
+
+        # Monday 8:00 AM EST — BizDev weekly pipeline report to the team
+        scheduler.add_job(
+            send_bizdev_weekly_report,
+            CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=est),
+            id="bizdev_weekly_report",
+            name="Mon 8 AM EST BizDev Weekly Report",
             replace_existing=True,
         )
 
