@@ -2011,6 +2011,21 @@
             <div class="nav-item" data-panel="emailsetup" onclick="navTo('emailsetup')">✉️ Email Setup</div>
           </div>
         </div>
+        <!-- BUSINESS DEVELOPMENT SIDEBAR: leads pipeline + weekly report + chat -->
+        <div id="bizdevNav" style="display:none">
+          <div class="nav-section">Leads Pipeline</div>
+          <div class="nav-item active" data-panel="leads_rcm"         data-leadcat="rcm"         onclick="showLeads('rcm','leads_rcm')">💵 RCM Leads</div>
+          <div class="nav-item"        data-panel="leads_payor"       data-leadcat="payor"       onclick="showLeads('payor','leads_payor')">🏦 Payor Leads</div>
+          <div class="nav-item"        data-panel="leads_workflow"    data-leadcat="workflow"    onclick="showLeads('workflow','leads_workflow')">⚙️ Workflow Leads</div>
+          <div class="nav-item"        data-panel="leads_compliance"  data-leadcat="compliance"  onclick="showLeads('compliance','leads_compliance')">🛡️ Compliance Leads</div>
+          <div class="nav-item"        data-panel="leads_combination" data-leadcat="combination" onclick="showLeads('combination','leads_combination')">🔗 Combination Leads</div>
+          <div class="nav-item"        data-panel="leads_closed"      data-leadcat="closed"      onclick="showLeads('closed','leads_closed')">✅ Closed Leads</div>
+          <div class="nav-section">Reporting</div>
+          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 Weekly Report</div>
+          <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
+            <span id="navChatBadgeBiz" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
+          </div>
+        </div>
         <div class="nav-item" onclick="switchAccount()" style="color:#2563eb;font-weight:600;margin-top:auto">Change Account</div>
         <div class="nav-item" data-panel="alerts" onclick="navTo('alerts')">
           Alerts <span id="navAlertsBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
@@ -3200,6 +3215,85 @@
           </div>
         </div>
 
+        <!-- ═══ BIZDEV: LEADS PIPELINE ═══ -->
+        <div class="hub-panel" id="panel-leads">
+          <div class="page-header">
+            <div class="page-title" id="leadsTitle">💵 RCM Leads</div>
+            <div class="page-actions">
+              <button class="btn btn-primary btn-sm" onclick="openLeadForm()">+ Add Lead</button>
+              <button class="btn btn-secondary btn-sm" onclick="loadLeads(leadsCurrentCat)">🔄 Refresh</button>
+            </div>
+          </div>
+
+          <!-- Add / Edit form (hidden until +Add or Edit) -->
+          <div class="card" id="leadFormCard" style="display:none;margin-bottom:16px;padding:18px">
+            <div style="font-weight:700;margin-bottom:12px" id="leadFormTitle">New Lead</div>
+            <input type="hidden" id="leadEditId" value="">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+              <div><label style="font-size:12px;color:var(--gray-500)">Practice / Organization</label>
+                <input id="leadPractice" type="text" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
+              <div><label style="font-size:12px;color:var(--gray-500)">Contact Name</label>
+                <input id="leadContact" type="text" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
+              <div><label style="font-size:12px;color:var(--gray-500)">Contact Email</label>
+                <input id="leadEmail" type="email" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
+              <div><label style="font-size:12px;color:var(--gray-500)">Contact Phone</label>
+                <input id="leadPhone" type="text" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
+              <div><label style="font-size:12px;color:var(--gray-500)">Status</label>
+                <select id="leadStatus" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px">
+                  <option>New</option><option>Contacted</option><option>Qualified</option>
+                  <option>Proposal</option><option>Negotiation</option>
+                  <option value="Won">Won (Closed)</option><option value="Lost">Lost (Closed)</option>
+                </select></div>
+              <div><label style="font-size:12px;color:var(--gray-500)">Est. Value ($)</label>
+                <input id="leadValue" type="number" min="0" step="100" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
+            </div>
+            <div style="margin-top:12px">
+              <label style="font-size:12px;color:var(--gray-500);display:block;margin-bottom:6px">Service Lines (check all that apply — 2+ = Combination)</label>
+              <label style="margin-right:16px"><input type="checkbox" id="leadSvcRcm"> RCM</label>
+              <label style="margin-right:16px"><input type="checkbox" id="leadSvcPayor"> Payor</label>
+              <label style="margin-right:16px"><input type="checkbox" id="leadSvcWorkflow"> Workflow</label>
+              <label style="margin-right:16px"><input type="checkbox" id="leadSvcCompliance"> Compliance</label>
+            </div>
+            <div style="margin-top:12px">
+              <label style="font-size:12px;color:var(--gray-500)">Notes</label>
+              <textarea id="leadNotes" rows="2" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></textarea>
+            </div>
+            <div style="margin-top:14px;display:flex;gap:8px">
+              <button class="btn btn-primary btn-sm" onclick="saveLead()">Save Lead</button>
+              <button class="btn btn-secondary btn-sm" onclick="closeLeadForm()">Cancel</button>
+            </div>
+          </div>
+
+          <div class="card" style="padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Practice</th><th>Contact</th><th>Services</th>
+                    <th>Status</th><th>Est. Value</th><th>Updated</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="leadsTbody">
+                  <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ BIZDEV: WEEKLY REPORT ═══ -->
+        <div class="hub-panel" id="panel-leadreport">
+          <div class="page-header">
+            <div class="page-title">📅 Weekly Business Development Report</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadLeadReport()">🔄 Refresh</button>
+            </div>
+          </div>
+          <div id="leadReportContent">
+            <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>
+          </div>
+        </div>
+
         <!-- ═══ ALERTS & NOTIFICATIONS ═══ -->
         <div class="hub-panel" id="panel-alerts">
           <div class="page-header">
@@ -3865,6 +3959,7 @@
     // Role helpers
     function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
     function isFullAdmin()    { return currentUser && currentUser.role === 'admin'; }
+    function isBizdev()       { return currentUser && currentUser.role === 'bizdev'; }
 
     // ═══════════════════════════════════════
     // GLOBAL FETCH WRAPPER — auth for ALL API calls
@@ -4191,6 +4286,9 @@
     // ACCOUNT SELECTOR
     // ═══════════════════════════════════════
     async function showAccountSelector() {
+      // Business Development users skip the client-account selector entirely —
+      // their workspace is the leads pipeline, not a single client account.
+      if (isBizdev()) { enterAsBizdev(); return; }
       stopGlobalJobsMonitor();
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('appShell').style.display = 'none';
@@ -4332,6 +4430,204 @@
       // navTo('clients') is gated to admin in the sidebar; call after enterAsAdmin
       // so adminFullNav is visible and the panel can mount.
       setTimeout(() => { try { navTo('clients'); } catch(_){} }, 0);
+    }
+
+    // ═══════════════════════════════════════
+    // BUSINESS DEVELOPMENT (BizDev / Victor)
+    // ═══════════════════════════════════════
+    let leadsCurrentCat = 'rcm';
+    const LEAD_CAT_TITLES = {
+      rcm: '💵 RCM Leads', payor: '🏦 Payor Leads', workflow: '⚙️ Workflow Leads',
+      compliance: '🛡️ Compliance Leads', combination: '🔗 Combination Leads',
+      closed: '✅ Closed Leads',
+    };
+
+    function enterAsBizdev() {
+      stopGlobalJobsMonitor();
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('accountSelect').style.display = 'none';
+      document.getElementById('appShell').style.display = 'block';
+      document.getElementById('topAccount').innerHTML =
+        `<span style="opacity:.6;font-size:11px">&#8629;</span> Business Development`;
+      document.getElementById('topUser').textContent = currentUser.username;
+      const rolePill = document.getElementById('topRole');
+      if (rolePill) { rolePill.textContent = 'Biz Dev'; rolePill.style.display = ''; }
+      const topAddUserBtn = document.getElementById('topAddUserBtn');
+      if (topAddUserBtn) topAddUserBtn.style.display = 'none';
+      // Only the BizDev sidebar is visible.
+      ['adminNav','adminFullNav','clientNav'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = 'none';
+      });
+      document.getElementById('bizdevNav').style.display = 'block';
+      const bar = document.getElementById('subProfileBar'); if (bar) bar.style.display = 'none';
+      activeClientId = null; activeClientModules = null;
+      showLeads('rcm', 'leads_rcm');
+      try { loadChatRooms(); } catch (_) {}
+    }
+
+    function showLeads(cat, panelKey) {
+      leadsCurrentCat = cat;
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.hub-panel').forEach(p => p.classList.remove('active'));
+      const ni = document.querySelector(`[data-panel="${panelKey}"]`);
+      if (ni) ni.classList.add('active');
+      const pp = document.getElementById('panel-leads');
+      if (pp) pp.classList.add('active');
+      closeMobileSidebar();
+      const t = document.getElementById('leadsTitle');
+      if (t) t.textContent = LEAD_CAT_TITLES[cat] || 'Leads';
+      // Closed leads are read-only history — hide the Add button there.
+      const addBtn = document.querySelector('#panel-leads .page-actions .btn-primary');
+      if (addBtn) addBtn.style.display = (cat === 'closed') ? 'none' : '';
+      closeLeadForm();
+      loadLeads(cat);
+    }
+
+    async function loadLeads(cat) {
+      const tb = document.getElementById('leadsTbody');
+      if (!tb) return;
+      tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>`;
+      try {
+        const r = await fetch(`/hub/api/leads?category=${encodeURIComponent(cat)}`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        renderLeads(d.leads || []);
+      } catch (e) {
+        tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:#dc2626">Could not load leads.</td></tr>`;
+      }
+    }
+
+    function renderLeads(rows) {
+      const tb = document.getElementById('leadsTbody');
+      if (!tb) return;
+      if (!rows.length) {
+        tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">No leads in this category yet.</td></tr>`;
+        return;
+      }
+      tb.innerHTML = rows.map(l => {
+        const svc = (l.service_lines || []).join(', ') + (l.is_combination ? ' <span class="badge" style="background:#eef2ff;color:#4338ca">Combo</span>' : '');
+        const val = l.est_value ? ('$' + Number(l.est_value).toLocaleString()) : '—';
+        const upd = (l.updated_at || '').slice(0, 10);
+        return `<tr>
+          <td>${esc(l.practice_name || '—')}</td>
+          <td>${esc(l.contact_name || '')}${l.contact_email ? `<br><span style="color:var(--gray-400);font-size:11px">${esc(l.contact_email)}</span>` : ''}</td>
+          <td>${svc || '—'}</td>
+          <td>${esc(l.status || '')}</td>
+          <td>${val}</td>
+          <td>${esc(upd)}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick='editLead(${JSON.stringify(l)})'>Edit</button></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function openLeadForm() {
+      document.getElementById('leadEditId').value = '';
+      document.getElementById('leadFormTitle').textContent = 'New Lead';
+      ['leadPractice','leadContact','leadEmail','leadPhone','leadValue','leadNotes'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('leadStatus').value = 'New';
+      ['leadSvcRcm','leadSvcPayor','leadSvcWorkflow','leadSvcCompliance'].forEach(id => document.getElementById(id).checked = false);
+      // Pre-check the service line matching the current category.
+      const map = { rcm: 'leadSvcRcm', payor: 'leadSvcPayor', workflow: 'leadSvcWorkflow', compliance: 'leadSvcCompliance' };
+      if (map[leadsCurrentCat]) document.getElementById(map[leadsCurrentCat]).checked = true;
+      document.getElementById('leadFormCard').style.display = '';
+    }
+
+    function closeLeadForm() {
+      const c = document.getElementById('leadFormCard');
+      if (c) c.style.display = 'none';
+    }
+
+    function editLead(l) {
+      document.getElementById('leadEditId').value = l.id;
+      document.getElementById('leadFormTitle').textContent = 'Edit Lead';
+      document.getElementById('leadPractice').value = l.practice_name || '';
+      document.getElementById('leadContact').value = l.contact_name || '';
+      document.getElementById('leadEmail').value = l.contact_email || '';
+      document.getElementById('leadPhone').value = l.contact_phone || '';
+      document.getElementById('leadValue').value = l.est_value || '';
+      document.getElementById('leadNotes').value = l.notes || '';
+      document.getElementById('leadStatus').value = l.status || 'New';
+      document.getElementById('leadSvcRcm').checked = !!l.service_rcm;
+      document.getElementById('leadSvcPayor').checked = !!l.service_payor;
+      document.getElementById('leadSvcWorkflow').checked = !!l.service_workflow;
+      document.getElementById('leadSvcCompliance').checked = !!l.service_compliance;
+      document.getElementById('leadFormCard').style.display = '';
+    }
+
+    async function saveLead() {
+      const id = document.getElementById('leadEditId').value;
+      const payload = {
+        practice_name: document.getElementById('leadPractice').value.trim(),
+        contact_name: document.getElementById('leadContact').value.trim(),
+        contact_email: document.getElementById('leadEmail').value.trim(),
+        contact_phone: document.getElementById('leadPhone').value.trim(),
+        service_rcm: document.getElementById('leadSvcRcm').checked,
+        service_payor: document.getElementById('leadSvcPayor').checked,
+        service_workflow: document.getElementById('leadSvcWorkflow').checked,
+        service_compliance: document.getElementById('leadSvcCompliance').checked,
+        status: document.getElementById('leadStatus').value,
+        est_value: parseFloat(document.getElementById('leadValue').value || '0') || 0,
+        notes: document.getElementById('leadNotes').value.trim(),
+      };
+      if (!payload.practice_name) { toast('Practice / organization name is required', 'error'); return; }
+      try {
+        const r = await fetch(id ? `/hub/api/leads/${id}` : '/hub/api/leads', {
+          method: id ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Save failed');
+        toast(id ? 'Lead updated' : 'Lead added', 'success');
+        closeLeadForm();
+        loadLeads(leadsCurrentCat);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function loadLeadReport() {
+      const box = document.getElementById('leadReportContent');
+      if (!box) return;
+      box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>`;
+      try {
+        const r = await fetch('/hub/api/leads-weekly-report');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const c = d.categories || {};
+        const stat = (label, val) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:16px">
+          <div style="font-size:24px;font-weight:800;color:#4338ca">${val}</div>
+          <div style="font-size:12px;color:var(--gray-500)">${label}</div></div>`;
+        const rowsHtml = (d.rows || []).map(l => `<tr>
+          <td>${esc(l.practice_name || '—')}</td>
+          <td>${esc((l.service_lines || []).join(', ') || '—')}</td>
+          <td>${esc(l.status || '')}</td>
+          <td>${l.est_value ? ('$' + Number(l.est_value).toLocaleString()) : '—'}</td>
+          <td>${esc((l.updated_at || '').slice(0, 10))}</td></tr>`).join('')
+          || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--gray-400)">No activity recorded this week.</td></tr>`;
+        box.innerHTML = `
+          <div class="card" style="margin-bottom:14px;padding:14px">
+            <div style="font-weight:700">Week of ${esc(d.week_start)} → ${esc(d.week_end)} <span style="color:var(--gray-400);font-weight:400">(Mon–Sun)</span></div>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+            ${stat('New This Week', d.new_this_week || 0)}
+            ${stat('Closed This Week', d.closed_this_week || 0)}
+            ${stat('Open Pipeline', c.open_total || 0)}
+            ${stat('Pipeline Value', '$' + Number(d.pipeline_value || 0).toLocaleString())}
+            ${stat('Won Value (wk)', '$' + Number(d.won_value_this_week || 0).toLocaleString())}
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+            ${stat('RCM', c.rcm || 0)}${stat('Payor', c.payor || 0)}
+            ${stat('Workflow', c.workflow || 0)}${stat('Compliance', c.compliance || 0)}
+            ${stat('Combination', c.combination || 0)}${stat('Closed (all)', c.closed || 0)}
+          </div>
+          <div class="card" style="padding:0">
+            <div style="padding:12px 16px;font-weight:700;border-bottom:1px solid var(--gray-200)">This Week's Activity</div>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Practice</th><th>Services</th><th>Status</th><th>Est. Value</th><th>Updated</th></tr></thead>
+              <tbody>${rowsHtml}</tbody>
+            </table></div>
+          </div>`;
+      } catch (e) {
+        box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:#dc2626">Could not load the weekly report.</div>`;
+      }
     }
 
     // Show a "5 team members" line on the empty selector so admins/staff
@@ -4490,6 +4786,7 @@
       if (panel === 'audit') loadAuditLog();
       if (panel === 'emailsetup') loadEmailSetup();
       if (panel === 'chat') loadChatRooms();
+      if (panel === 'leadreport') loadLeadReport();
     }
 
     // Open the panel referenced by URL hash on first load (e.g. /hub#production)
@@ -4499,7 +4796,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit','chat','emailsetup'];
+                       'production','alerts','audit','chat','emailsetup','leadreport'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {

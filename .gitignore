@@ -26,3 +26,7 @@ gitlog.txt
 route_out.txt
 rule_out.txt
 rule_run.txt
+
+# local secret, never commit
+render_key.txt
+.render_key

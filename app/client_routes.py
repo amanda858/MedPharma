@@ -56,6 +56,7 @@ from app.client_db import (
     save_eod_report, list_eod_reports, get_eod_report,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
+    list_leads, create_lead, update_lead, get_leads_weekly_report,
 )
 
 from app.notifications import (
@@ -1236,6 +1237,84 @@ def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
         logging.getLogger(__name__).exception("delete_client failed for cid=%s", cid)
         raise HTTPException(status_code=500, detail=f"Failed to remove account: {exc}")
     return {"ok": True}
+
+
+# ─── Business-development leads (BizDev / Victor) ─────────────────────────────
+
+class LeadIn(BaseModel):
+    practice_name: Optional[str] = ""
+    contact_name: Optional[str] = ""
+    contact_email: Optional[str] = ""
+    contact_phone: Optional[str] = ""
+    service_rcm: Optional[bool] = False
+    service_payor: Optional[bool] = False
+    service_workflow: Optional[bool] = False
+    service_compliance: Optional[bool] = False
+    status: Optional[str] = "New"
+    est_value: Optional[float] = 0
+    owner: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class LeadUpdateIn(BaseModel):
+    practice_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    service_rcm: Optional[bool] = None
+    service_payor: Optional[bool] = None
+    service_workflow: Optional[bool] = None
+    service_compliance: Optional[bool] = None
+    status: Optional[str] = None
+    est_value: Optional[float] = None
+    owner: Optional[str] = None
+    notes: Optional[str] = None
+
+
+_LEADS_ROLES = {"bizdev", "admin", "staff"}
+
+
+def _require_leads_access(hub_session: Optional[str]):
+    """Leads pipeline is for the Business Development role (plus admin/staff)."""
+    user = _require_user(hub_session)
+    if (user.get("role") or "").lower() not in _LEADS_ROLES:
+        raise HTTPException(status_code=403, detail="Business Development access required")
+    return user
+
+
+@router.get("/leads")
+def api_list_leads(category: Optional[str] = "all",
+                   hub_session: Optional[str] = Cookie(None)):
+    _require_leads_access(hub_session)
+    return {"category": (category or "all"), "leads": list_leads(category)}
+
+
+@router.post("/leads")
+def api_create_lead(body: LeadIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_leads_access(hub_session)
+    data = body.model_dump()
+    if not data.get("owner"):
+        data["owner"] = user.get("contact_name") or user.get("username") or ""
+    lead_id = create_lead(data)
+    return {"ok": True, "id": lead_id}
+
+
+@router.put("/leads/{lead_id}")
+def api_update_lead(lead_id: int, body: LeadUpdateIn,
+                    hub_session: Optional[str] = Cookie(None)):
+    _require_leads_access(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    ok = update_lead(lead_id, changes)
+    if not ok:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    return {"ok": True}
+
+
+@router.get("/leads-weekly-report")
+def api_leads_weekly_report(week_start: Optional[str] = None,
+                            hub_session: Optional[str] = Cookie(None)):
+    _require_leads_access(hub_session)
+    return get_leads_weekly_report(week_start)
 
 
 # ─── Profile (own client profile) ──────────────────────────────────────────────────────────

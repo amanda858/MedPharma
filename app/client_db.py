@@ -411,7 +411,40 @@ def _apply_startup_user_migrations(conn):
     # unacceptable, so re-assert them on every startup. UPDATE-or-INSERT is
     # cheap and idempotent.
     _ensure_medpharma_team_accounts(cur)
+    _ensure_bizdev_account(cur)
     conn.commit()
+
+
+def _ensure_bizdev_account(cur):
+    """Create / repair the Business Development (Victor) login.
+
+    role='bizdev' drives the dedicated Leads sidebar + weekly reporting + chat.
+    Idempotent: preserves an operator-changed password on existing rows, but
+    always re-asserts role and the leads module set so the account can never
+    silently lose its Business Development view (even on a fresh disk DB).
+    """
+    username = "victor@medprosc.com"
+    mods = json.dumps([
+        "leads_rcm", "leads_payor", "leads_workflow", "leads_compliance",
+        "leads_combination", "leads_closed", "leadreport", "chat",
+    ])
+    row = cur.execute("SELECT id FROM clients WHERE username=?", (username,)).fetchone()
+    if row:
+        cur.execute(
+            "UPDATE clients SET role='bizdev', company='MedPharma SC', "
+            "contact_name=COALESCE(NULLIF(contact_name,''),'Victor'), "
+            "email=?, enabled_modules=?, is_active=1 WHERE id=?",
+            (username, mods, row[0]),
+        )
+    else:
+        salt = secrets.token_hex(16)
+        pw_hash = _hash_pw("victor123", salt)
+        cur.execute(
+            "INSERT INTO clients "
+            "(username,password,salt,company,contact_name,email,role,enabled_modules,is_active) "
+            "VALUES (?,?,?,?,?,?,?,?,1)",
+            (username, pw_hash, salt, "MedPharma SC", "Victor", username, "bizdev", mods),
+        )
 
 
 def _ensure_medpharma_team_accounts(cur):
@@ -800,6 +833,28 @@ def init_client_hub_db():
         CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log(client_id);
         CREATE INDEX IF NOT EXISTS idx_audit_time   ON audit_log(created_at);
 
+        -- ── Business-development leads (sales pipeline) ───────────────────────
+        CREATE TABLE IF NOT EXISTS leads (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            practice_name      TEXT DEFAULT '',
+            contact_name       TEXT DEFAULT '',
+            contact_email      TEXT DEFAULT '',
+            contact_phone      TEXT DEFAULT '',
+            service_rcm        INTEGER DEFAULT 0,
+            service_payor      INTEGER DEFAULT 0,
+            service_workflow   INTEGER DEFAULT 0,
+            service_compliance INTEGER DEFAULT 0,
+            status             TEXT DEFAULT 'New',
+            est_value          REAL DEFAULT 0,
+            owner              TEXT DEFAULT '',
+            notes              TEXT DEFAULT '',
+            is_closed          INTEGER DEFAULT 0,
+            created_at         TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at         TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_leads_closed ON leads(is_closed);
+        CREATE INDEX IF NOT EXISTS idx_leads_owner  ON leads(owner);
+
         -- ── Report notes (custom report tab content) ──────────────────────────
         CREATE TABLE IF NOT EXISTS report_notes (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1051,6 +1106,7 @@ def init_client_hub_db():
     try:
         cur2 = conn.cursor()
         _ensure_medpharma_team_accounts(cur2)
+        _ensure_bizdev_account(cur2)
         conn.commit()
     except Exception as _team_e:
         log.error("ensure_medpharma_team_accounts at startup failed: %s", _team_e)
@@ -3366,6 +3422,168 @@ def get_productivity_report(start_date: str = None,
 
 
 # ─── End-of-Day Team Report ──────────────────────────────────────────────
+
+# ─── Business-development leads (sales pipeline) ──────────────────────────────
+
+LEAD_CLOSED_STATUSES = {"won", "lost", "closed"}
+_LEAD_EDITABLE_FIELDS = (
+    "practice_name", "contact_name", "contact_email", "contact_phone",
+    "service_rcm", "service_payor", "service_workflow", "service_compliance",
+    "status", "est_value", "owner", "notes",
+)
+
+
+def _lead_row_to_dict(row) -> dict:
+    d = dict(row)
+    lines = [label for label, col in (
+        ("RCM", "service_rcm"), ("Payor", "service_payor"),
+        ("Workflow", "service_workflow"), ("Compliance", "service_compliance"),
+    ) if d.get(col)]
+    d["service_lines"] = lines
+    d["is_combination"] = len(lines) >= 2
+    return d
+
+
+def list_leads(category: str = None) -> list:
+    cat = (category or "all").strip().lower()
+    where = []
+    if cat == "closed":
+        where.append("is_closed=1")
+    else:
+        where.append("is_closed=0")
+        if cat == "rcm":
+            where.append("service_rcm=1")
+        elif cat == "payor":
+            where.append("service_payor=1")
+        elif cat == "workflow":
+            where.append("service_workflow=1")
+        elif cat == "compliance":
+            where.append("service_compliance=1")
+        elif cat == "combination":
+            where.append("(service_rcm+service_payor+service_workflow+service_compliance) >= 2")
+    sql = "SELECT * FROM leads WHERE " + " AND ".join(where) + " ORDER BY updated_at DESC, id DESC"
+    conn = get_db()
+    try:
+        return [_lead_row_to_dict(r) for r in conn.execute(sql).fetchall()]
+    finally:
+        conn.close()
+
+
+def create_lead(data: dict) -> int:
+    status = (data.get("status") or "New").strip() or "New"
+    is_closed = 1 if status.lower() in LEAD_CLOSED_STATUSES else 0
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO leads
+               (practice_name, contact_name, contact_email, contact_phone,
+                service_rcm, service_payor, service_workflow, service_compliance,
+                status, est_value, owner, notes, is_closed)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                (data.get("practice_name") or "").strip(),
+                (data.get("contact_name") or "").strip(),
+                (data.get("contact_email") or "").strip(),
+                (data.get("contact_phone") or "").strip(),
+                1 if data.get("service_rcm") else 0,
+                1 if data.get("service_payor") else 0,
+                1 if data.get("service_workflow") else 0,
+                1 if data.get("service_compliance") else 0,
+                status,
+                float(data.get("est_value") or 0),
+                (data.get("owner") or "").strip(),
+                (data.get("notes") or "").strip(),
+                is_closed,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_lead(lead_id: int, changes: dict) -> bool:
+    sets = {}
+    for k, v in (changes or {}).items():
+        if k not in _LEAD_EDITABLE_FIELDS:
+            continue
+        if k.startswith("service_"):
+            sets[k] = 1 if v else 0
+        elif k == "est_value":
+            sets[k] = float(v or 0)
+        else:
+            sets[k] = (str(v).strip() if v is not None else "")
+    if "status" in sets:
+        sets["is_closed"] = 1 if sets["status"].lower() in LEAD_CLOSED_STATUSES else 0
+    if not sets:
+        return False
+    sets["updated_at"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+    cols = ", ".join(f"{k}=?" for k in sets)
+    vals = list(sets.values()) + [lead_id]
+    conn = get_db()
+    try:
+        conn.execute(f"UPDATE leads SET {cols} WHERE id=?", vals)
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_leads_weekly_report(week_start: str = None) -> dict:
+    """Weekly (Mon–Sun) business-development snapshot for the Victor / BizDev view."""
+    if week_start:
+        try:
+            anchor = datetime.strptime(week_start, "%Y-%m-%d")
+        except Exception:
+            anchor = datetime.now()
+    else:
+        anchor = datetime.now()
+    monday = (anchor - timedelta(days=anchor.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    next_monday = monday + timedelta(days=7)
+    ws = monday.strftime("%Y-%m-%d %H:%M:%S")
+    we = next_monday.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        def _count(where, args=()):
+            return cur.execute(f"SELECT COUNT(*) FROM leads WHERE {where}", args).fetchone()[0]
+
+        categories = {
+            "rcm": _count("is_closed=0 AND service_rcm=1"),
+            "payor": _count("is_closed=0 AND service_payor=1"),
+            "workflow": _count("is_closed=0 AND service_workflow=1"),
+            "compliance": _count("is_closed=0 AND service_compliance=1"),
+            "combination": _count("is_closed=0 AND (service_rcm+service_payor+service_workflow+service_compliance)>=2"),
+            "closed": _count("is_closed=1"),
+            "open_total": _count("is_closed=0"),
+        }
+        new_this_week = _count("created_at>=? AND created_at<?", (ws, we))
+        closed_this_week = _count("is_closed=1 AND updated_at>=? AND updated_at<?", (ws, we))
+        pipeline_value = cur.execute(
+            "SELECT COALESCE(SUM(est_value),0) FROM leads WHERE is_closed=0").fetchone()[0]
+        won_value = cur.execute(
+            "SELECT COALESCE(SUM(est_value),0) FROM leads WHERE LOWER(status)='won' "
+            "AND updated_at>=? AND updated_at<?", (ws, we)).fetchone()[0]
+        rows = cur.execute(
+            "SELECT * FROM leads WHERE (created_at>=? AND created_at<?) "
+            "OR (updated_at>=? AND updated_at<?) ORDER BY updated_at DESC LIMIT 100",
+            (ws, we, ws, we)).fetchall()
+        return {
+            "week_start": monday.strftime("%Y-%m-%d"),
+            "week_end": (next_monday - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "categories": categories,
+            "new_this_week": new_this_week,
+            "closed_this_week": closed_this_week,
+            "pipeline_value": round(float(pipeline_value), 2),
+            "won_value_this_week": round(float(won_value), 2),
+            "rows": [_lead_row_to_dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
 
 def get_eod_team_report(report_date: str = None) -> dict:
     """Build the full end-of-day report for the team.
