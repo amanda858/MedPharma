@@ -433,6 +433,15 @@ def _require_admin(hub_session: Optional[str] = Cookie(None)):
     return user
 
 
+def _require_chat_manager(hub_session: Optional[str] = Cookie(None)):
+    """Chat rooms can be created/managed by internal users: admin, staff,
+    and business-development (bizdev) — so BizDev can message the team."""
+    user = _require_user(hub_session)
+    if (user.get("role") or "") not in ("admin", "staff", "bizdev"):
+        raise HTTPException(status_code=403, detail="Chat access required")
+    return user
+
+
 def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
     """Return the authenticated full-admin user (role='admin') or raise 403.
     Used for sensitive operations: manage clients, audit log, leads."""
@@ -5416,6 +5425,12 @@ def _is_admin_user(user: dict) -> bool:
     return (user or {}).get("role") == "admin"
 
 
+def _is_internal_user(user: dict) -> bool:
+    """Internal MedPharma team members (admin/staff/bizdev) — they can see the
+    full team roster to start chats. Clients are NOT internal."""
+    return (user or {}).get("role") in ("admin", "staff", "bizdev")
+
+
 def _require_room_access(user: dict, room_id: int) -> dict:
     room = get_room(room_id)
     if not room:
@@ -5446,7 +5461,7 @@ def chat_create_room(body: ChatRoomCreate, request: Request, hub_session: Option
     deep link directly to the room. Returns a per-user delivery report
     so the UI can warn the operator if any emails didn't go out.
     """
-    user = _require_admin(hub_session)
+    user = _require_chat_manager(hub_session)
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Room name is required")
@@ -5551,7 +5566,7 @@ def chat_add_member(room_id: int, body: ChatMemberIn, request: Request,
     Sends the new member a "you were added to chat" email with a deep
     link. Returns delivery status so the UI can confirm or warn.
     """
-    user = _require_admin(hub_session)
+    user = _require_chat_manager(hub_session)
     room = get_room(room_id)
     if not room:
         raise HTTPException(404, "Chat room not found")
@@ -5747,7 +5762,7 @@ def chat_eligible_users(hub_session: Optional[str] = Cookie(None)):
     have been granted access to their own account (so they can DM their team).
     """
     user = _require_user(hub_session)
-    if _is_admin_user(user):
+    if _is_internal_user(user):
         return {"users": list_chat_eligible_users()}
     # Client view: limit to staff/admin assigned to this client.
     uid = int(user.get("id") or 0)
