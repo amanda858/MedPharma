@@ -1073,6 +1073,17 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_def}")
     conn.commit()
 
+    # ── Migrate existing DBs: BizDev lead follow-up tracking ─────────────
+    cur.execute("PRAGMA table_info(leads)")
+    lead_cols = {row[1] for row in cur.fetchall()}
+    for col, col_def in (
+        ("last_follow_up_at", "TEXT DEFAULT ''"),
+        ("last_reminder_at", "TEXT DEFAULT ''"),
+    ):
+        if col not in lead_cols:
+            cur.execute(f"ALTER TABLE leads ADD COLUMN {col} {col_def}")
+    conn.commit()
+
     # ── Migrate existing DBs: add expires_at column to sessions ──────────
     cur.execute("PRAGMA table_info(sessions)")
     session_cols = {row[1] for row in cur.fetchall()}
@@ -3426,11 +3437,29 @@ def get_productivity_report(start_date: str = None,
 # ─── Business-development leads (sales pipeline) ──────────────────────────────
 
 LEAD_CLOSED_STATUSES = {"won", "lost", "closed"}
+# BizDev follow-up cadence: a lead with no contact in this many days is "due".
+LEAD_FOLLOWUP_DAYS = 2
 _LEAD_EDITABLE_FIELDS = (
     "practice_name", "contact_name", "contact_email", "contact_phone",
     "service_rcm", "service_payor", "service_workflow", "service_compliance",
     "status", "est_value", "owner", "notes",
 )
+
+
+def _parse_dt(value):
+    """Best-effort parse of the various timestamp formats stored in leads."""
+    if not value:
+        return None
+    s = str(value).strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s[:len(fmt) + 2] if len(s) >= len(fmt) else s, fmt)
+        except Exception:
+            continue
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
 
 
 def _lead_row_to_dict(row) -> dict:
@@ -3441,6 +3470,18 @@ def _lead_row_to_dict(row) -> dict:
     ) if d.get(col)]
     d["service_lines"] = lines
     d["is_combination"] = len(lines) >= 2
+    # Follow-up status: time since last contact (a logged follow-up, or creation).
+    last_contact = _parse_dt(d.get("last_follow_up_at")) or _parse_dt(d.get("created_at"))
+    if last_contact:
+        days = (datetime.now() - last_contact).total_seconds() / 86400.0
+        d["days_since_contact"] = int(days)
+    else:
+        d["days_since_contact"] = None
+    d["followup_due"] = bool(
+        not d.get("is_closed")
+        and d["days_since_contact"] is not None
+        and d["days_since_contact"] >= LEAD_FOLLOWUP_DAYS
+    )
     return d
 
 
@@ -3536,6 +3577,71 @@ def delete_lead(lead_id: int) -> bool:
         cur = conn.execute("DELETE FROM leads WHERE id=?", (lead_id,))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def mark_lead_followed_up(lead_id: int) -> bool:
+    """Record that a BizDev follow-up just happened — resets the 2-day clock."""
+    now = datetime.now().isoformat(sep=" ", timespec="seconds")
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE leads SET last_follow_up_at=?, updated_at=? WHERE id=?",
+            (now, now, lead_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_leads_due_followup() -> list:
+    """Open leads with no contact in the last LEAD_FOLLOWUP_DAYS days.
+
+    Used by the BizDev UI banner so Victor always sees who needs a touch."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE is_closed=0 "
+            "ORDER BY COALESCE(last_follow_up_at, created_at) ASC, id ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+    due = [_lead_row_to_dict(r) for r in rows]
+    return [d for d in due if d.get("followup_due")]
+
+
+def claim_leads_for_reminder() -> list:
+    """Return open, overdue leads that haven't been reminded in the last
+    LEAD_FOLLOWUP_DAYS days, and stamp last_reminder_at=now on them.
+
+    This drives the scheduled "every 2 days" email so a single overdue lead
+    is not re-emailed daily — only once per cadence window."""
+    now = datetime.now()
+    now_s = now.isoformat(sep=" ", timespec="seconds")
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE is_closed=0"
+        ).fetchall()
+        to_remind = []
+        for r in rows:
+            d = _lead_row_to_dict(r)
+            if not d.get("followup_due"):
+                continue
+            last_rem = _parse_dt(d.get("last_reminder_at"))
+            if last_rem and (now - last_rem).total_seconds() / 86400.0 < LEAD_FOLLOWUP_DAYS:
+                continue
+            to_remind.append(d)
+        if to_remind:
+            ids = [d["id"] for d in to_remind]
+            conn.executemany(
+                "UPDATE leads SET last_reminder_at=? WHERE id=?",
+                [(now_s, i) for i in ids],
+            )
+            conn.commit()
+        return to_remind
     finally:
         conn.close()
 

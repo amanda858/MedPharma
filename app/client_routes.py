@@ -57,7 +57,7 @@ from app.client_db import (
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
     list_leads, create_lead, update_lead, get_leads_weekly_report,
-    delete_lead,
+    delete_lead, mark_lead_followed_up, list_leads_due_followup,
 )
 
 from app.notifications import (
@@ -1277,6 +1277,16 @@ def admin_client_report_send_all(report_date: Optional[str] = None,
     return send_all_client_daily_reports(report_date=report_date, force=bool(force))
 
 
+@router.post("/leads-followups/send-reminders")
+def api_send_followup_reminders(hub_session: Optional[str] = Cookie(None)):
+    """Fire the BizDev follow-up reminders now (in-app + email). This is what
+    the 9 AM EST scheduler runs automatically every day; exposed so BizDev or
+    an admin can trigger it on demand."""
+    _require_leads_access(hub_session)
+    from app.notifications import send_bizdev_followup_reminders
+    return send_bizdev_followup_reminders()
+
+
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
@@ -1376,6 +1386,24 @@ def api_leads_weekly_report(week_start: Optional[str] = None,
                             hub_session: Optional[str] = Cookie(None)):
     _require_leads_access(hub_session)
     return get_leads_weekly_report(week_start)
+
+
+@router.get("/leads-followups-due")
+def api_leads_followups_due(hub_session: Optional[str] = Cookie(None)):
+    """Open leads that haven't been contacted in 2+ days — the BizDev
+    follow-up queue shown in the Leads view."""
+    _require_leads_access(hub_session)
+    due = list_leads_due_followup()
+    return {"count": len(due), "leads": due}
+
+
+@router.post("/leads/{lead_id}/follow-up")
+def api_mark_lead_followup(lead_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Log a follow-up for a lead — resets its 2-day reminder clock."""
+    _require_leads_access(hub_session)
+    if not mark_lead_followed_up(lead_id):
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return {"ok": True}
 
 
 # ─── Profile (own client profile) ──────────────────────────────────────────────────────────

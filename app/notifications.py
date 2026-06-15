@@ -3392,6 +3392,99 @@ def _send_demo_client_report(report: dict) -> dict:
     }
 
 
+def send_bizdev_followup_reminders() -> dict:
+    """Remind BizDev (and admins) about leads that haven't been followed up
+    in 2+ days. Fires in-app notifications always, and emails when an email
+    provider is configured. Runs on a 2-day cadence per lead so a single
+    overdue lead is not re-sent every day."""
+    from app.client_db import claim_leads_for_reminder, list_chat_eligible_users, fanout_notification
+
+    due = claim_leads_for_reminder()
+    if not due:
+        return {"ok": True, "due": 0, "emailed": 0, "notified": 0}
+
+    recipients = [u for u in list_chat_eligible_users()
+                  if (u.get("role") or "") in ("bizdev", "admin")]
+    if not recipients:
+        return {"ok": True, "due": len(due), "emailed": 0, "notified": 0,
+                "note": "no bizdev/admin recipients"}
+
+    # In-app notification for every recipient — works with no email provider.
+    notified = 0
+    try:
+        ids = [int(u["id"]) for u in recipients if u.get("id")]
+        title = f"⏰ {len(due)} lead{'s' if len(due) != 1 else ''} need follow-up"
+        body = "; ".join(
+            f"{d.get('practice_name') or d.get('contact_name') or ('Lead #' + str(d.get('id')))}"
+            f" ({d.get('days_since_contact')}d)"
+            for d in due[:10]
+        )
+        notified = fanout_notification(ids, "lead_followup", title, body,
+                                       link="/hub?panel=leads",
+                                       related_type="lead")
+    except Exception as e:
+        log.error(f"bizdev follow-up in-app notify failed: {e}")
+
+    # Build the email body.
+    def _lead_line(d):
+        name = d.get("practice_name") or d.get("contact_name") or f"Lead #{d.get('id')}"
+        who = d.get("contact_name") or ""
+        phone = d.get("contact_phone") or ""
+        email = d.get("contact_email") or ""
+        days = d.get("days_since_contact")
+        bits = [f"{name} — {days} days since last contact"]
+        meta = ", ".join(x for x in (who, phone, email) if x)
+        if meta:
+            bits.append(f"   {meta}")
+        if d.get("status"):
+            bits.append(f"   Status: {d.get('status')}")
+        return "\n".join(bits)
+
+    text_lines = "\n\n".join(_lead_line(d) for d in due)
+    subject = f"⏰ BizDev follow-ups due: {len(due)} lead{'s' if len(due) != 1 else ''}"
+    text_body = (
+        "These leads haven't been contacted in 2+ days and are due for a "
+        "follow-up:\n\n"
+        f"{text_lines}\n\n"
+        "Open the Leads pipeline in the MedPharma Hub, follow up, then click "
+        "\"Mark followed up\" on each lead to reset its 2-day clock.\n"
+    )
+    rows_html = "".join(
+        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>"
+        f"<b>{(d.get('practice_name') or d.get('contact_name') or ('Lead #' + str(d.get('id'))))}</b>"
+        f"<br><span style='color:#64748b;font-size:12px'>"
+        f"{', '.join(x for x in (d.get('contact_name') or '', d.get('contact_phone') or '', d.get('contact_email') or '') if x)}</span></td>"
+        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;color:#b91c1c;font-weight:600'>"
+        f"{d.get('days_since_contact')} days</td></tr>"
+        for d in due
+    )
+    html_body = (
+        "<div style='font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:600px;margin:0 auto;color:#0f172a'>"
+        "<h2 style='color:#1d4ed8;margin:0 0 6px'>⏰ Follow-ups due</h2>"
+        f"<p>These {len(due)} lead(s) haven't been contacted in 2+ days:</p>"
+        "<table style='width:100%;border-collapse:collapse;font-size:14px'>"
+        f"{rows_html}</table>"
+        "<p style='font-size:13px;color:#475569;margin-top:16px'>Open the Leads "
+        "pipeline, follow up, then click <b>Mark followed up</b> to reset the "
+        "2-day clock.</p></div>"
+    )
+
+    emailed = 0
+    for u in recipients:
+        addr = (u.get("email") or "").strip()
+        if not addr or "@" not in addr:
+            continue
+        try:
+            sent, _via = _send_email_to(addr, subject, text_body, html_body)
+            if sent:
+                emailed += 1
+        except Exception as e:
+            log.error(f"bizdev follow-up email to {addr} failed: {e}")
+
+    log.info(f"BizDev follow-up reminders: due={len(due)} notified={notified} emailed={emailed}")
+    return {"ok": True, "due": len(due), "emailed": emailed, "notified": notified}
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -3445,6 +3538,15 @@ def start_daily_scheduler():
             CronTrigger(hour=18, minute=35, timezone=est),
             id="daily_client_reports",
             name="6:35 PM EST Per-Client Production Reports",
+            replace_existing=True,
+        )
+
+        # 9:00 AM EST — BizDev follow-up reminders (every 2 days per lead)
+        scheduler.add_job(
+            send_bizdev_followup_reminders,
+            CronTrigger(hour=9, minute=0, timezone=est),
+            id="bizdev_followup_reminders",
+            name="9 AM EST BizDev Follow-up Reminders",
             replace_existing=True,
         )
 

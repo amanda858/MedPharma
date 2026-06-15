@@ -3225,6 +3225,9 @@
             </div>
           </div>
 
+          <!-- Follow-ups due banner (leads not contacted in 2+ days) -->
+          <div id="leadsFollowupBanner" style="display:none;margin-bottom:14px"></div>
+
           <!-- Add / Edit form (hidden until +Add or Edit) -->
           <div class="card" id="leadFormCard" style="display:none;margin-bottom:16px;padding:18px">
             <div style="font-weight:700;margin-bottom:12px" id="leadFormTitle">New Lead</div>
@@ -3270,11 +3273,11 @@
                 <thead>
                   <tr>
                     <th>Practice</th><th>Contact</th><th>Services</th>
-                    <th>Status</th><th>Est. Value</th><th>Updated</th><th></th>
+                    <th>Status</th><th>Est. Value</th><th>Follow-up</th><th>Updated</th><th></th>
                   </tr>
                 </thead>
                 <tbody id="leadsTbody">
-                  <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>
+                  <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -4486,36 +4489,106 @@
     async function loadLeads(cat) {
       const tb = document.getElementById('leadsTbody');
       if (!tb) return;
-      tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>`;
       try {
         const r = await fetch(`/hub/api/leads?category=${encodeURIComponent(cat)}`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         renderLeads(d.leads || []);
       } catch (e) {
-        tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:#dc2626">Could not load leads.</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:#dc2626">Could not load leads.</td></tr>`;
       }
+      loadFollowupsDue();
+    }
+
+    async function loadFollowupsDue() {
+      const banner = document.getElementById('leadsFollowupBanner');
+      if (!banner) return;
+      try {
+        const r = await fetch('/hub/api/leads-followups-due');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const due = d.leads || [];
+        if (!due.length) {
+          banner.style.display = 'none';
+          banner.innerHTML = '';
+          return;
+        }
+        const names = due.slice(0, 6).map(l =>
+          `${esc(l.practice_name || l.contact_name || ('Lead #' + l.id))} (${l.days_since_contact}d)`
+        ).join(', ');
+        const more = due.length > 6 ? ` +${due.length - 6} more` : '';
+        banner.style.display = '';
+        banner.innerHTML = `
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px">
+              <div style="font-weight:700;color:#b91c1c">⏰ ${due.length} lead${due.length === 1 ? '' : 's'} need a follow-up</div>
+              <div style="font-size:12px;color:#7f1d1d;margin-top:2px">No contact in 2+ days: ${names}${more}</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="sendFollowupReminders(this)">✉️ Email reminders now</button>
+          </div>`;
+      } catch (e) {
+        banner.style.display = 'none';
+      }
+    }
+
+    async function sendFollowupReminders(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+      try {
+        const r = await fetch('/hub/api/leads-followups/send-reminders', { method: 'POST' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if (d.emailed) {
+          toast(`Reminders sent — ${d.emailed} email${d.emailed === 1 ? '' : 's'}, ${d.notified} in-app`, 'success');
+        } else {
+          toast(`${d.due} follow-up${d.due === 1 ? '' : 's'} flagged in-app. Set up Email Setup to also send emails.`, 'warning');
+        }
+      } catch (e) {
+        toast('Could not send reminders', 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '✉️ Email reminders now'; }
+      }
+    }
+
+    async function markFollowedUp(id) {
+      try {
+        const r = await fetch(`/hub/api/leads/${id}/follow-up`, { method: 'POST' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        toast('Follow-up logged — 2-day clock reset', 'success');
+        loadLeads(leadsCurrentCat);
+      } catch (e) { toast('Could not log follow-up', 'error'); }
     }
 
     function renderLeads(rows) {
       const tb = document.getElementById('leadsTbody');
       if (!tb) return;
       if (!rows.length) {
-        tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">No leads in this category yet.</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">No leads in this category yet.</td></tr>`;
         return;
       }
       tb.innerHTML = rows.map(l => {
         const svc = (l.service_lines || []).join(', ') + (l.is_combination ? ' <span class="badge" style="background:#eef2ff;color:#4338ca">Combo</span>' : '');
         const val = l.est_value ? ('$' + Number(l.est_value).toLocaleString()) : '—';
         const upd = (l.updated_at || '').slice(0, 10);
-        return `<tr>
+        const dsc = l.days_since_contact;
+        let follow;
+        if (l.followup_due) {
+          follow = `<span style="color:#b91c1c;font-weight:600">⏰ ${dsc}d</span>`;
+        } else if (dsc !== null && dsc !== undefined) {
+          follow = `<span style="color:var(--gray-400)">${dsc}d</span>`;
+        } else {
+          follow = '—';
+        }
+        return `<tr${l.followup_due ? ' style="background:#fff7f7"' : ''}>
           <td>${esc(l.practice_name || '—')}</td>
           <td>${esc(l.contact_name || '')}${l.contact_email ? `<br><span style="color:var(--gray-400);font-size:11px">${esc(l.contact_email)}</span>` : ''}</td>
           <td>${svc || '—'}</td>
           <td>${esc(l.status || '')}</td>
           <td>${val}</td>
+          <td>${follow}</td>
           <td>${esc(upd)}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick='editLead(${JSON.stringify(l)})'>Edit</button>
+          <td><button class="btn btn-secondary btn-sm" onclick="markFollowedUp(${l.id})" title="Log a follow-up and reset the 2-day clock">✓ Followed up</button>
+              <button class="btn btn-secondary btn-sm" onclick='editLead(${JSON.stringify(l)})'>Edit</button>
               <button class="btn btn-secondary btn-sm" style="color:#dc2626" onclick="deleteLead(${l.id})">Delete</button></td>
         </tr>`;
       }).join('');
