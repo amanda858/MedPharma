@@ -1233,8 +1233,18 @@ def authenticate(username: str, password: str):
     try:
         _ensure_auth_columns(conn)
         cur = conn.cursor()
-        cur.execute("SELECT * FROM clients WHERE username=? AND is_active=1", (username,))
+        uname = (username or "").strip()
+        # Primary match: exact username.
+        cur.execute("SELECT * FROM clients WHERE username=? AND is_active=1", (uname,))
         row = cur.fetchone()
+        if not row:
+            # Fallback: let users sign in with the email on file too
+            # (case-insensitive), so e.g. "admin@medprosc.com" works as well
+            # as the "admin" username.
+            cur.execute(
+                "SELECT * FROM clients WHERE LOWER(email)=LOWER(?) AND is_active=1 "
+                "ORDER BY id LIMIT 1", (uname,))
+            row = cur.fetchone()
         if not row:
             return None, None
         c = dict(row)
