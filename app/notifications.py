@@ -1869,10 +1869,9 @@ def send_team_progress_reports():
 # ─── End-of-Day Team Report (internal — Lexi only) ───────────────────────
 
 # Default recipients for the EOD per-user / per-client breakdown email.
-# Override at runtime with the EOD_REPORT_EMAIL env var (comma-separated).
-# Per Lexi's directive (2026-06-10): only lexi@medprosc.com receives the
-# internal team breakdown.
-EOD_REPORT_DEFAULT_RECIPIENTS = ["lexi@medprosc.com"]
+# Override at runtime with the EOD_REPORT_EMAIL setting (Email Setup tab) or
+# the EOD_REPORT_EMAIL env var (comma-separated).
+EOD_REPORT_DEFAULT_RECIPIENTS = ["lexi@medprosc.com", "eric@medprosc.com"]
 
 # Users to suppress from the per-user breakdown (admins, observers, etc).
 # Override with EOD_REPORT_EXCLUDE_USERS env (comma-separated usernames).
@@ -1889,7 +1888,16 @@ _MEDPHARMA_HUB_URL  = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.
 
 
 def _eod_recipients() -> list[str]:
-    raw = os.getenv("EOD_REPORT_EMAIL", "").strip()
+    # Prefer the DB setting (managed from the Email Setup tab) so recipients
+    # can be changed without a redeploy; fall back to env, then defaults.
+    raw = ""
+    try:
+        from app.client_db import get_app_setting
+        raw = (get_app_setting("EOD_REPORT_EMAIL") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = os.getenv("EOD_REPORT_EMAIL", "").strip()
     if raw:
         return [e.strip() for e in raw.split(",") if e.strip()]
     return list(EOD_REPORT_DEFAULT_RECIPIENTS)
