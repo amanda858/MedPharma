@@ -5715,41 +5715,12 @@ def chat_post_message(room_id: int, body: ChatMessageIn,
     try:
         notify_activity(user.get("username", ""), "sent message",
                         "Chat", f"room '{room.get('name','?')}' {body_marker}")
-        # Forward client-originated activity to admin email so they can react
-        # quickly — but DO NOT include the message body. The notification only
-        # tells the admin "open the room to view"; the body itself stays inside
-        # the encrypted, access-controlled chat panel.
-        if not _is_admin_user(user):
-            from app.notifications import _send_email  # type: ignore
-            subject = f"💬 New chat message in '{room.get('name','room')}' from {user.get('username','client')}"
-            try:
-                from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-                hub_base = (_hub_base or "").strip().rstrip("/")
-            except Exception:
-                hub_base = ""
-            deep_link = f"{hub_base}/hub?chat={room_id}" if hub_base else f"/hub?chat={room_id}"
-            text_alert = (
-                f"{user.get('username','client')} sent a new message in chat "
-                f"room '{room.get('name','room')}' (#{room_id}).\n\n"
-                f"Open the room to view (PHI is not included in this "
-                f"notification for HIPAA compliance):\n{deep_link}"
-            )
-            html = (
-                f"<p><b>{user.get('username','client')}</b> sent a new message "
-                f"in chat room <b>{room.get('name','room')}</b> (#{room_id}).</p>"
-                f"<p style='color:#475569;font-size:13px'>The message body is "
-                f"intentionally not included in this email. Open the room to "
-                f"view (HIPAA-protected content stays inside the hub).</p>"
-                f"<p style='margin:18px 0'>"
-                f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
-                f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
-                f"font-weight:600'>Open the chat room →</a></p>"
-            )
-            threading.Thread(
-                target=_send_email,
-                args=(subject, text_alert, html),
-                daemon=True,
-            ).start()
+        # NOTE: we intentionally DO NOT email on every message anymore. That
+        # buried real signal in noise. Instead, a scheduled job
+        # (send_chat_unread_reminders) emails a one-time nudge only to people
+        # who were @mentioned and still haven't read the message after 2 hours.
+        # Read messages never trigger an email. The in-app unread badge above
+        # handles the live "you have a new message" indicator.
     except Exception:
         log.exception("chat notify failed")
     return {"ok": True, "id": msg_id}

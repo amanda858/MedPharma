@@ -3608,6 +3608,84 @@ def send_bizdev_weekly_report(week_start: str = None) -> dict:
             "week": rng}
 
 
+def send_chat_unread_reminders(min_age_minutes: int = 120):
+    """Email a one-time nudge to anyone who was @mentioned in a chat message
+    they STILL haven't read after ``min_age_minutes`` (default 2 hours).
+
+    This replaces the old "email on every message" behaviour. Read messages
+    never trigger a reminder, and each mention is reminded at most once — so
+    the inbox stays quiet unless someone is genuinely being waited on.
+    PHI-safe: the message body is never included, only "open the room to view".
+    """
+    try:
+        from app.client_db import (list_unread_mention_reminders,
+                                    mark_chat_reminder_sent)
+    except Exception:
+        log.exception("chat reminder: db helpers unavailable")
+        return {"ok": False, "sent": 0}
+
+    try:
+        pending = list_unread_mention_reminders(min_age_minutes=min_age_minutes)
+    except Exception:
+        log.exception("chat reminder: failed to list pending reminders")
+        return {"ok": False, "sent": 0}
+
+    if not pending:
+        return {"ok": True, "sent": 0}
+
+    try:
+        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
+        hub_base = (_hub_base or "").strip().rstrip("/")
+    except Exception:
+        hub_base = ""
+
+    sent = 0
+    for item in pending:
+        addr = (item.get("email") or "").strip()
+        if not addr or "@" not in addr:
+            continue
+        room_name = item.get("room_name") or "a chat room"
+        room_id = item.get("room_id")
+        sender = item.get("sender_name") or "a teammate"
+        who = (item.get("contact_name") or item.get("username") or "there").split()[0]
+        deep_link = (f"{hub_base}/hub?chat={room_id}" if hub_base
+                     else f"/hub?chat={room_id}")
+        subject = f"💬 You were mentioned in '{room_name}' — still unread"
+        text_body = (
+            f"Hi {who},\n\n"
+            f"{sender} mentioned you in the chat room '{room_name}' over two "
+            f"hours ago and it's still unread.\n\n"
+            f"Open the room to read and reply (the message itself isn't "
+            f"included here for HIPAA compliance):\n{deep_link}\n"
+        )
+        html_body = (
+            f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
+            f"<p>Hi {who},</p>"
+            f"<p><b>{sender}</b> mentioned you in the chat room "
+            f"<b>{room_name}</b> over two hours ago and it's still unread.</p>"
+            f"<p style='color:#475569;font-size:13px'>The message body isn't "
+            f"included in this email (HIPAA-protected content stays inside the "
+            f"hub). Open the room to read and reply.</p>"
+            f"<p style='margin:18px 0'>"
+            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
+            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
+            f"font-weight:600'>Open the chat room →</a></p>"
+            f"</div>"
+        )
+        try:
+            ok, _via = _send_email_to(addr, subject, text_body, html_body)
+            if ok:
+                sent += 1
+            # Mark sent regardless so a hard-failing address doesn't loop every
+            # cycle; in-app unread badge still nudges them inside the hub.
+            mark_chat_reminder_sent(item["message_id"], item["user_id"])
+        except Exception:
+            log.exception("chat reminder: send failed for %s", addr)
+
+    log.info(f"Chat unread-mention reminders: sent={sent} of {len(pending)} pending")
+    return {"ok": True, "sent": sent, "pending": len(pending)}
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -3679,6 +3757,17 @@ def start_daily_scheduler():
             CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=est),
             id="bizdev_weekly_report",
             name="Mon 8 AM EST BizDev Weekly Report",
+            replace_existing=True,
+        )
+
+        # Every 30 min — nudge people @mentioned in chat who still haven't
+        # read the message after 2 hours (replaces email-on-every-message).
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.add_job(
+            send_chat_unread_reminders,
+            IntervalTrigger(minutes=30, timezone=est),
+            id="chat_unread_reminders",
+            name="Every 30 min Chat Unread-Mention Reminders (2h)",
             replace_existing=True,
         )
 

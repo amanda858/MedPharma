@@ -915,6 +915,16 @@ def init_client_hub_db():
             FOREIGN KEY (user_id) REFERENCES clients(id) ON DELETE CASCADE
         );
 
+        -- One row per (message × mentioned user) once a 2-hour "you were
+        -- mentioned and haven't read it" reminder email has been sent, so we
+        -- never email the same person twice for the same message.
+        CREATE TABLE IF NOT EXISTS chat_reminders (
+            message_id INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            sent_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (message_id, user_id)
+        );
+
         -- ── In-app notifications (decoupled from email) ─────────────────────
         -- One row per (recipient × event). Lets the hub show "you've been
         -- invited / you have a new message / your EOD report is ready" even
@@ -5659,6 +5669,138 @@ def mark_room_read(room_id: int, user_id: int) -> int:
         )
         conn.commit()
         return last_id
+    finally:
+        conn.close()
+
+
+def _extract_mentions(body: str) -> set[str]:
+    """Return the lowercased @tokens found in a message body, e.g.
+    "hey @victor @susan" -> {"victor", "susan"}. Tokens are word-ish runs
+    after an @ (letters, digits, dot, underscore, hyphen), min length 2."""
+    import re
+    if not body:
+        return set()
+    return {m.lower() for m in re.findall(r"@([A-Za-z0-9._-]{2,})", body)}
+
+
+def _user_mention_aliases(member: dict) -> set[str]:
+    """All lowercased handles a person could be @mentioned by: their
+    username, the local-part of their email, and the first word of their
+    contact name."""
+    aliases: set[str] = set()
+    uname = (member.get("username") or "").strip().lower()
+    if uname:
+        aliases.add(uname)
+        # username may itself be an email — also add its local part
+        if "@" in uname:
+            aliases.add(uname.split("@", 1)[0])
+    email = (member.get("email") or "").strip().lower()
+    if email and "@" in email:
+        aliases.add(email.split("@", 1)[0])
+    contact = (member.get("contact_name") or "").strip().lower()
+    if contact:
+        first = contact.split()[0] if contact.split() else ""
+        if len(first) >= 2:
+            aliases.add(first)
+    return {a for a in aliases if len(a) >= 2}
+
+
+def list_unread_mention_reminders(min_age_minutes: int = 120,
+                                  max_age_minutes: int = 10080) -> list[dict]:
+    """Find chat messages that @mention a room member who still hasn't read
+    them after ``min_age_minutes`` (default 2 hours) and for whom no reminder
+    has been sent yet.
+
+    Only messages between ``min_age_minutes`` and ``max_age_minutes`` old (so
+    we never spam about ancient backlog) in non-archived rooms are considered.
+
+    Returns one dict per (message × recipient):
+        {message_id, room_id, room_name, sender_name, created_at,
+         user_id, username, contact_name, email}
+    """
+    try:
+        from app.security import decrypt_message
+    except Exception:
+        decrypt_message = lambda v: v  # noqa: E731
+    conn = get_db()
+    out: list[dict] = []
+    try:
+        rows = conn.execute(
+            """SELECT m.id, m.room_id, m.sender_id, m.sender_name, m.body,
+                      m.created_at, r.name AS room_name
+               FROM chat_messages m
+               JOIN chat_rooms r ON r.id = m.room_id
+               WHERE COALESCE(r.archived,0)=0
+                 AND m.created_at <= datetime('now', ?)
+                 AND m.created_at >= datetime('now', ?)
+               ORDER BY m.id""",
+            (f"-{int(min_age_minutes)} minutes",
+             f"-{int(max_age_minutes)} minutes"),
+        ).fetchall()
+        for row in rows:
+            msg = dict(row)
+            body = decrypt_message(msg.get("body"))
+            mentions = _extract_mentions(body)
+            if not mentions:
+                continue
+            members = conn.execute(
+                """SELECT rm.user_id, c.username, c.contact_name, c.email
+                   FROM chat_room_members rm
+                   JOIN clients c ON c.id = rm.user_id
+                   WHERE rm.room_id=?""",
+                (msg["room_id"],),
+            ).fetchall()
+            for mrow in members:
+                member = dict(mrow)
+                uid = int(member.get("user_id") or 0)
+                if uid <= 0 or uid == int(msg.get("sender_id") or 0):
+                    continue
+                if not member.get("email"):
+                    continue
+                if not (_user_mention_aliases(member) & mentions):
+                    continue
+                # already read?
+                read = conn.execute(
+                    """SELECT last_read_message_id FROM chat_reads
+                       WHERE room_id=? AND user_id=?""",
+                    (msg["room_id"], uid),
+                ).fetchone()
+                last_read = int((read[0] if read else 0) or 0)
+                if last_read >= int(msg["id"]):
+                    continue
+                # already reminded?
+                done = conn.execute(
+                    "SELECT 1 FROM chat_reminders WHERE message_id=? AND user_id=?",
+                    (msg["id"], uid),
+                ).fetchone()
+                if done:
+                    continue
+                out.append({
+                    "message_id": int(msg["id"]),
+                    "room_id": int(msg["room_id"]),
+                    "room_name": msg.get("room_name") or "",
+                    "sender_name": msg.get("sender_name") or "",
+                    "created_at": msg.get("created_at") or "",
+                    "user_id": uid,
+                    "username": member.get("username") or "",
+                    "contact_name": member.get("contact_name") or "",
+                    "email": member.get("email") or "",
+                })
+        return out
+    finally:
+        conn.close()
+
+
+def mark_chat_reminder_sent(message_id: int, user_id: int) -> None:
+    """Record that a 2-hour mention reminder was emailed for this message so
+    we never send it again."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_reminders (message_id, user_id) VALUES (?,?)",
+            (int(message_id), int(user_id)),
+        )
+        conn.commit()
     finally:
         conn.close()
 
