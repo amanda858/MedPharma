@@ -3706,48 +3706,48 @@ def start_daily_scheduler():
         est = pytz.timezone("US/Eastern")
         scheduler = BackgroundScheduler(daemon=True)
 
-        # 5:30 PM EST — Production reminders
+        # 5:30 PM EST — Production reminders (weekdays only, Mon–Fri)
         scheduler.add_job(
             send_production_reminders,
-            CronTrigger(hour=17, minute=30, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=17, minute=30, timezone=est),
             id="daily_production_reminders",
-            name="5:30 PM EST Production Reminders",
+            name="5:30 PM EST Production Reminders (Mon–Fri)",
             replace_existing=True,
         )
 
-        # 6:00 PM EST — Account summary report
+        # 6:00 PM EST — Account summary report (weekdays only, Mon–Fri)
         scheduler.add_job(
             send_daily_account_summary,
-            CronTrigger(hour=18, minute=0, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=est),
             id="daily_account_summary",
-            name="6 PM EST Overall Account Summary",
+            name="6 PM EST Overall Account Summary (Mon–Fri)",
             replace_existing=True,
         )
 
         # 6:30 PM EST — End-of-Day per-user / per-client / per-tab team report
         scheduler.add_job(
             send_eod_team_report,
-            CronTrigger(hour=18, minute=30, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=est),
             id="daily_eod_team_report",
-            name="6:30 PM EST EOD Team Report (lexi)",
+            name="6:30 PM EST EOD Team Report (lexi) (Mon–Fri)",
             replace_existing=True,
         )
 
         # 6:35 PM EST — Per-client production reports (with Excel attachments)
         scheduler.add_job(
             send_all_client_daily_reports,
-            CronTrigger(hour=18, minute=35, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=35, timezone=est),
             id="daily_client_reports",
-            name="6:35 PM EST Per-Client Production Reports",
+            name="6:35 PM EST Per-Client Production Reports (Mon–Fri)",
             replace_existing=True,
         )
 
-        # 9:00 AM EST — BizDev follow-up reminders (every 2 days per lead)
+        # 9:00 AM EST — BizDev follow-up reminders (weekdays only, Mon–Fri)
         scheduler.add_job(
             send_bizdev_followup_reminders,
-            CronTrigger(hour=9, minute=0, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=est),
             id="bizdev_followup_reminders",
-            name="9 AM EST BizDev Follow-up Reminders",
+            name="9 AM EST BizDev Follow-up Reminders (Mon–Fri)",
             replace_existing=True,
         )
 
@@ -3805,27 +3805,29 @@ def _start_thread_scheduler():
                     now_est = datetime.now(est_tz)
 
                 today = now_est.date()
+                # Skip weekends (Mon=0 … Sun=6) for daily business reports.
+                is_weekday = now_est.weekday() < 5
 
                 # 5:30 PM — Production reminders
-                if now_est.hour == 17 and 30 <= now_est.minute < 35 and last_reminder_date != today:
+                if is_weekday and now_est.hour == 17 and 30 <= now_est.minute < 35 and last_reminder_date != today:
                     last_reminder_date = today
                     log.info("Thread scheduler firing production reminders")
                     send_production_reminders()
 
                 # 6:00 PM — Daily account summary
-                if now_est.hour == 18 and now_est.minute < 5 and last_sent_date != today:
+                if is_weekday and now_est.hour == 18 and now_est.minute < 5 and last_sent_date != today:
                     last_sent_date = today
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
                 # 6:30 PM — End-of-Day per-user / per-client / per-tab report
-                if now_est.hour == 18 and 30 <= now_est.minute < 35 and last_eod_date != today:
+                if is_weekday and now_est.hour == 18 and 30 <= now_est.minute < 35 and last_eod_date != today:
                     last_eod_date = today
                     log.info("Thread scheduler firing EOD team report")
                     send_eod_team_report()
 
                 # 6:35 PM — Per-client production reports with Excel
-                if now_est.hour == 18 and 35 <= now_est.minute < 40 and last_clients_date != today:
+                if is_weekday and now_est.hour == 18 and 35 <= now_est.minute < 40 and last_clients_date != today:
                     last_clients_date = today
                     log.info("Thread scheduler firing per-client production reports")
                     send_all_client_daily_reports()
