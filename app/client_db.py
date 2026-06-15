@@ -1079,6 +1079,7 @@ def init_client_hub_db():
     for col, col_def in (
         ("last_follow_up_at", "TEXT DEFAULT ''"),
         ("last_reminder_at", "TEXT DEFAULT ''"),
+        ("deleted_at", "TEXT DEFAULT ''"),
     ):
         if col not in lead_cols:
             cur.execute(f"ALTER TABLE leads ADD COLUMN {col} {col_def}")
@@ -3497,7 +3498,7 @@ def _lead_row_to_dict(row) -> dict:
 
 def list_leads(category: str = None) -> list:
     cat = (category or "all").strip().lower()
-    where = []
+    where = ["COALESCE(deleted_at,'')=''"]
     if cat == "closed":
         where.append("is_closed=1")
     else:
@@ -3582,11 +3583,42 @@ def update_lead(lead_id: int, changes: dict) -> bool:
 
 
 def delete_lead(lead_id: int) -> bool:
+    """Soft-delete: archive the lead (set deleted_at) instead of erasing it,
+    so it can be recovered from the 'Deleted leads' view. Real data is never
+    lost to a stray click."""
     conn = get_db()
     try:
-        cur = conn.execute("DELETE FROM leads WHERE id=?", (lead_id,))
+        cur = conn.execute(
+            "UPDATE leads SET deleted_at=? WHERE id=? "
+            "AND COALESCE(deleted_at,'')=''",
+            (datetime.now().isoformat(), lead_id))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def restore_lead(lead_id: int) -> bool:
+    """Bring a soft-deleted lead back into the active pipeline."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE leads SET deleted_at='' WHERE id=? "
+            "AND COALESCE(deleted_at,'')<>''", (lead_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_deleted_leads() -> list:
+    """Return archived (soft-deleted) leads, most-recently-deleted first."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE COALESCE(deleted_at,'')<>'' "
+            "ORDER BY deleted_at DESC, id DESC").fetchall()
+        return [_lead_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -3613,7 +3645,7 @@ def list_leads_due_followup() -> list:
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT * FROM leads WHERE is_closed=0 "
+            "SELECT * FROM leads WHERE is_closed=0 AND COALESCE(deleted_at,'')='' "
             "ORDER BY COALESCE(last_follow_up_at, created_at) ASC, id ASC"
         ).fetchall()
     finally:
@@ -3633,7 +3665,7 @@ def claim_leads_for_reminder() -> list:
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT * FROM leads WHERE is_closed=0"
+            "SELECT * FROM leads WHERE is_closed=0 AND COALESCE(deleted_at,'')=''"
         ).fetchall()
         to_remind = []
         for r in rows:
@@ -3675,7 +3707,9 @@ def get_leads_weekly_report(week_start: str = None) -> dict:
         cur = conn.cursor()
 
         def _count(where, args=()):
-            return cur.execute(f"SELECT COUNT(*) FROM leads WHERE {where}", args).fetchone()[0]
+            return cur.execute(
+                f"SELECT COUNT(*) FROM leads WHERE COALESCE(deleted_at,'')='' AND ({where})",
+                args).fetchone()[0]
 
         categories = {
             "rcm": _count("is_closed=0 AND service_rcm=1"),
@@ -3689,13 +3723,13 @@ def get_leads_weekly_report(week_start: str = None) -> dict:
         new_this_week = _count("created_at>=? AND created_at<?", (ws, we))
         closed_this_week = _count("is_closed=1 AND updated_at>=? AND updated_at<?", (ws, we))
         pipeline_value = cur.execute(
-            "SELECT COALESCE(SUM(est_value),0) FROM leads WHERE is_closed=0").fetchone()[0]
+            "SELECT COALESCE(SUM(est_value),0) FROM leads WHERE is_closed=0 AND COALESCE(deleted_at,'')=''").fetchone()[0]
         won_value = cur.execute(
             "SELECT COALESCE(SUM(est_value),0) FROM leads WHERE LOWER(status)='won' "
-            "AND updated_at>=? AND updated_at<?", (ws, we)).fetchone()[0]
+            "AND COALESCE(deleted_at,'')='' AND updated_at>=? AND updated_at<?", (ws, we)).fetchone()[0]
         rows = cur.execute(
-            "SELECT * FROM leads WHERE (created_at>=? AND created_at<?) "
-            "OR (updated_at>=? AND updated_at<?) ORDER BY updated_at DESC LIMIT 100",
+            "SELECT * FROM leads WHERE COALESCE(deleted_at,'')='' AND ((created_at>=? AND created_at<?) "
+            "OR (updated_at>=? AND updated_at<?)) ORDER BY updated_at DESC LIMIT 100",
             (ws, we, ws, we)).fetchall()
         return {
             "week_start": monday.strftime("%Y-%m-%d"),

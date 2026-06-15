@@ -58,6 +58,7 @@ from app.client_db import (
     ALLOWED_SETTING_KEYS,
     list_leads, create_lead, update_lead, get_leads_weekly_report,
     delete_lead, mark_lead_followed_up, list_leads_due_followup,
+    restore_lead, list_deleted_leads,
 )
 
 from app.notifications import (
@@ -1398,6 +1399,22 @@ def api_delete_lead(lead_id: int, hub_session: Optional[str] = Cookie(None)):
     _require_leads_access(hub_session)
     if not delete_lead(lead_id):
         raise HTTPException(status_code=404, detail="Lead not found")
+    return {"ok": True}
+
+
+@router.get("/leads-deleted")
+def api_list_deleted_leads(hub_session: Optional[str] = Cookie(None)):
+    """Archived (soft-deleted) leads, so a stray delete can be recovered."""
+    _require_leads_access(hub_session)
+    return {"leads": list_deleted_leads()}
+
+
+@router.post("/leads/{lead_id}/restore")
+def api_restore_lead(lead_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Bring a soft-deleted lead back into the active pipeline."""
+    _require_leads_access(hub_session)
+    if not restore_lead(lead_id):
+        raise HTTPException(status_code=404, detail="Deleted lead not found")
     return {"ok": True}
 
 

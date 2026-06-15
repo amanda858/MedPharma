@@ -3222,6 +3222,7 @@
             <div class="page-actions">
               <button class="btn btn-primary btn-sm" onclick="openLeadForm()">+ Add Lead</button>
               <button class="btn btn-secondary btn-sm" onclick="loadLeads(leadsCurrentCat)">🔄 Refresh</button>
+              <button class="btn btn-secondary btn-sm" onclick="loadDeletedLeads()" title="Recover deleted leads">🗑 Deleted</button>
             </div>
           </div>
 
@@ -4612,12 +4613,55 @@
     }
 
     async function deleteLead(id) {
-      if (!confirm('Delete this lead permanently?')) return;
+      if (!confirm('Move this lead to Deleted? You can restore it anytime from the 🗑 Deleted view.')) return;
       try {
         const r = await fetch(`/hub/api/leads/${id}`, { method: 'DELETE' });
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Delete failed');
-        toast('Lead deleted', 'success');
+        toast('Lead moved to Deleted — recover it from 🗑 Deleted', 'success');
         loadLeads(leadsCurrentCat);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function loadDeletedLeads() {
+      const tb = document.getElementById('leadsTbody');
+      const title = document.getElementById('leadsTitle');
+      if (!tb) return;
+      if (title) title.textContent = '🗑 Deleted Leads';
+      tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">Loading deleted leads…</td></tr>`;
+      try {
+        const r = await fetch('/hub/api/leads-deleted');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const rows = d.leads || [];
+        if (!rows.length) {
+          tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">No deleted leads. 🎉 <a href="#" onclick="loadLeads(leadsCurrentCat);return false;">Back to pipeline</a></td></tr>`;
+          return;
+        }
+        tb.innerHTML = rows.map(l => {
+          const svc = (l.service_lines || []).join(', ') || '—';
+          const del = (l.deleted_at || '').slice(0, 16).replace('T', ' ');
+          return `<tr style="opacity:.75">
+            <td>${esc(l.practice_name || '—')}</td>
+            <td>${esc(l.contact_name || '')}${l.contact_email ? `<br><span style="color:var(--gray-400);font-size:11px">${esc(l.contact_email)}</span>` : ''}</td>
+            <td>${svc}</td>
+            <td>${esc(l.status || '')}</td>
+            <td>—</td>
+            <td><span style="color:var(--gray-400);font-size:11px">deleted ${esc(del)}</span></td>
+            <td></td>
+            <td><button class="btn btn-primary btn-sm" onclick="restoreLead(${l.id})">↩ Restore</button></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:#dc2626">Could not load deleted leads.</td></tr>`;
+      }
+    }
+
+    async function restoreLead(id) {
+      try {
+        const r = await fetch(`/hub/api/leads/${id}/restore`, { method: 'POST' });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Restore failed');
+        toast('Lead restored to the pipeline', 'success');
+        loadDeletedLeads();
       } catch (e) { toast(e.message, 'error'); }
     }
 
