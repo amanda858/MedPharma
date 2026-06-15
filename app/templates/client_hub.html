@@ -9455,18 +9455,18 @@
         closeModal('chatRoomModal');
         toast('Room created', 'success');
         const invites = Array.isArray(j && j.invites) ? j.invites : [];
-        const sent = invites.filter(i => i.sent).length;
+        const notified = invites.filter(i => i.sent).length;
         const failed = invites.filter(i => !i.sent && i.via !== 'skipped (creator)');
-        if (sent) toast(`Invite email sent to ${sent} member${sent === 1 ? '' : 's'}`, 'success');
+        if (notified) toast(`${notified} member${notified === 1 ? '' : 's'} notified`, 'success');
         if (failed.length) {
           const lines = failed.map(i =>
-            `\u2022 ${i.username || ('#' + i.user_id)} — ${i.via || 'send failed'}` +
+            `\u2022 ${i.username || ('#' + i.user_id)} — ${i.via || 'not notified'}` +
             (i.email ? ` (${i.email})` : '')
           ).join('\n');
           alert(
-            `Room "${name}" was created and ${sent} invite email${sent === 1 ? '' : 's'} went out.\n\n` +
-            `${failed.length} invite${failed.length === 1 ? ' did not' : 's did not'} send:\n\n${lines}\n\n` +
-            `These members are still in the room. Tell them directly and they'll see the 💬 badge when they sign in.`
+            `Room "${name}" was created.\n\n` +
+            `${failed.length} member${failed.length === 1 ? '' : 's'} could not be emailed:\n\n${lines}\n\n` +
+            `They're still in the room and will see the 💬 badge as soon as they sign in.`
           );
         }
         await loadChatRooms();
@@ -9564,10 +9564,12 @@
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         const j = await r.json();
         const inv = (j && j.invite) || {};
-        if (inv.sent) {
+        if (inv.sent && inv.via === 'in-app notification') {
+          toast('Member added — they\u2019ll see the 💬 badge when they sign in', 'success');
+        } else if (inv.sent) {
           toast(`Member added \u2014 invite email sent to ${inv.email}`, 'success');
         } else if (inv.via === 'no email on file') {
-          toast(`Member added, but no email on file so no invite was sent`, 'warning');
+          toast('Member added — they\u2019ll see the 💬 badge when they sign in', 'success');
         } else if (inv.via && inv.via !== 'skipped (creator)') {
           toast(`Member added, but invite email did not send (${inv.via})`, 'warning');
         } else {

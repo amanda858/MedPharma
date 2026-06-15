@@ -228,6 +228,29 @@ def _lookup_users_by_ids(user_ids: list[int]) -> list[dict]:
         conn.close()
 
 
+def _email_provider_configured() -> bool:
+    """True when a SendGrid key or full SMTP creds are available (DB or env).
+
+    When this is False the hub still works perfectly — members are notified
+    in-app via the 💬 badge — so we use this to avoid surfacing scary
+    "email failed" errors when email simply isn't set up."""
+    try:
+        from app.client_db import get_app_setting as _gs
+        sg = (_gs("SENDGRID_API_KEY") or "").strip()
+        smtp_h = (_gs("SMTP_HOST") or "").strip()
+        smtp_u = (_gs("SMTP_USER") or "").strip()
+        smtp_pw = (_gs("SMTP_PASS") or "").strip()
+    except Exception:
+        sg = smtp_h = smtp_u = smtp_pw = ""
+    sg = sg or (os.getenv("SENDGRID_API_KEY") or "").strip()
+    smtp_h = smtp_h or (os.getenv("SMTP_HOST") or "").strip()
+    smtp_u = smtp_u or (os.getenv("SMTP_USER") or "").strip()
+    smtp_pw = smtp_pw or (os.getenv("SMTP_PASS") or "").strip()
+    if sg:
+        return True
+    return bool(smtp_h and smtp_u and smtp_pw)
+
+
 def _send_chat_invite_emails(
     request: Request,
     room_id: int,
@@ -242,6 +265,11 @@ def _send_chat_invite_emails(
     targets = _lookup_users_by_ids(user_ids)
     if not targets:
         return report
+
+    # When no email provider is configured, members are still notified in-app
+    # via the 💬 badge — so report success via "in-app notification" instead
+    # of failing loudly. Email is strictly optional for chat to work.
+    email_on = _email_provider_configured()
 
     base_url = str(request.base_url).rstrip("/")
     # Deep-link straight into the chat panel for that room.
@@ -259,11 +287,20 @@ def _send_chat_invite_emails(
                 "via": "skipped (creator)",
             })
             continue
+        # No email provider configured → the member is still notified in-app
+        # via the 💬 badge. Report it as delivered so the UI stays clean.
+        if not email_on:
+            report.append({
+                "user_id": u["id"], "username": u["username"],
+                "email": (u.get("email") or "").strip(), "sent": True,
+                "via": "in-app notification",
+            })
+            continue
         email = (u.get("email") or "").strip()
         if not email or "@" not in email:
             report.append({
                 "user_id": u["id"], "username": u["username"],
-                "email": "", "sent": False, "via": "no email on file",
+                "email": "", "sent": True, "via": "in-app notification",
             })
             continue
         display = (u.get("contact_name") or u.get("username") or "there").strip()
@@ -690,6 +727,15 @@ def get_clients(hub_session: Optional[str] = Cookie(None)):
     return list_clients()
 
 
+# Core modules a brand-new client gets by default. The advanced payor modules
+# (credentialing / enrollment / edi) are intentionally excluded — they must be
+# turned on explicitly per client via the intake module picker.
+NEW_CLIENT_DEFAULT_MODULES = [
+    "dashboard", "profile", "claims", "providers",
+    "reporting", "production", "documents", "chat",
+]
+
+
 @router.post("/clients")
 def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
@@ -701,6 +747,12 @@ def add_client(body: ClientIn, hub_session: Optional[str] = Cookie(None)):
     enabled_modules    = payload.pop("enabled_modules", None)
     daily_report_optin = payload.pop("daily_report_optin", True)
     report_recipients  = payload.pop("report_recipients", None) or []
+    # When the intake form doesn't specify modules, default to the CORE set
+    # only. The advanced payor modules (credentialing / enrollment / EDI) stay
+    # OFF unless the admin explicitly enables them — otherwise every brand-new
+    # client would show modules they never asked for.
+    if enabled_modules is None:
+        enabled_modules = list(NEW_CLIENT_DEFAULT_MODULES)
     # Optional client password — require minimum length when one is provided.
     supplied_pw = (payload.get("password") or "").strip()
     if supplied_pw and len(supplied_pw) < 8:
