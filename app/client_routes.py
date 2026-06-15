@@ -2936,10 +2936,20 @@ async def upload_file(
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .ods, .odf, .pdf, .doc, .docx files allowed")
+    ALLOWED_UPLOAD_EXTS = (
+        ".xlsx", ".xls", ".csv", ".ods", ".odf", ".odt", ".odp",
+        ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".txt", ".rtf",
+    )
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(400, "Unsupported file type. Allowed: Word (.doc/.docx), Excel (.xlsx/.xls/.csv), OpenDocument (.odt/.ods/.odp/.odf), PDF, PowerPoint (.ppt/.pptx), .txt, .rtf")
 
-    file_type = "excel" if ext in (".xlsx", ".xls", ".csv", ".ods", ".odf") else "pdf"
+    spreadsheet_exts = (".xlsx", ".xls", ".csv", ".ods", ".odf")
+    if ext in spreadsheet_exts:
+        file_type = "excel"
+    elif ext == ".pdf":
+        file_type = "pdf"
+    else:
+        file_type = "document"
     unique_name = f"{uuid.uuid4().hex}{ext}"
     dest = os.path.join(UPLOAD_DIR, unique_name)
 

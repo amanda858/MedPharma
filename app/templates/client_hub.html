@@ -1545,6 +1545,61 @@
       display: block
     }
 
+    /* Upload dropdown menu */
+    .upload-menu-wrap {
+      position: relative;
+      display: inline-block
+    }
+
+    .upload-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      background: #fff;
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .14);
+      z-index: 200;
+      min-width: 260px;
+      max-width: 88vw;
+      overflow: hidden;
+      padding: 6px
+    }
+
+    .upload-menu.open {
+      display: block
+    }
+
+    .upload-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--gray-700)
+    }
+
+    .upload-menu-item:hover {
+      background: var(--gray-50)
+    }
+
+    .upload-menu-item .umi-ic {
+      font-size: 20px;
+      line-height: 1
+    }
+
+    .upload-menu-item small {
+      color: var(--gray-400);
+      font-size: 11px
+    }
+
     @media(max-width:768px) {
 
       /* Hamburger visible */
@@ -2818,13 +2873,26 @@
           <div class="page-header">
             <div class="page-title">📂 Documents</div>
             <div class="page-actions" style="gap:8px;display:flex;align-items:center;flex-wrap:wrap">
-              <button class="btn btn-secondary btn-sm" onclick="toggleAddFolder()">📁 Add Folder</button>
+              <div class="upload-menu-wrap">
+                <button class="btn btn-primary btn-sm" onclick="toggleUploadMenu(event)">⬆ Upload ▾</button>
+                <div id="uploadMenu" class="upload-menu">
+                  <button class="upload-menu-item" onclick="closeUploadMenu();document.getElementById('filePickerInput').click()">
+                    <span class="umi-ic">📄</span>
+                    <span><b>Upload a file</b><br><small>Word, Excel, PDF, OpenDocument, PowerPoint…</small></span>
+                  </button>
+                  <button class="upload-menu-item" onclick="closeUploadMenu();toggleSharefileForm()">
+                    <span class="umi-ic">🔗</span>
+                    <span><b>Add a link</b><br><small>ShareFile / SharePoint / any web URL</small></span>
+                  </button>
+                  <button class="upload-menu-item" onclick="closeUploadMenu();toggleAddFolder()">
+                    <span class="umi-ic">📁</span>
+                    <span><b>Add a folder</b><br><small>Create a new document category</small></span>
+                  </button>
+                </div>
+              </div>
               <button class="btn btn-secondary btn-sm" onclick="toggleRenameDocTabs()" id="renameDocTabsBtn">✏️ Manage
                 Folders</button>
-              <button class="btn btn-primary btn-sm" onclick="document.getElementById('filePickerInput').click()">⬆
-                Upload File</button>
-              <button class="btn btn-secondary btn-sm" onclick="toggleSharefileForm()" style="background:#f0fdf4;border-color:#86efac;color:#15803d">🔗 Add Sharefile Link</button>
-              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.ods,.odf,.pdf,.doc,.docx" style="display:none"
+              <input type="file" id="filePickerInput" accept=".xlsx,.xls,.csv,.ods,.odf,.odt,.odp,.pdf,.doc,.docx,.ppt,.pptx,.txt,.rtf" style="display:none"
                 onchange="handleFileSelect(this)" multiple>
             </div>
           </div>
@@ -2895,8 +2963,8 @@
             <div style="font-size:32px;margin-bottom:8px">📄</div>
             <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Drag &amp; drop files here or click Upload
             </div>
-            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">.xlsx &nbsp;•&nbsp; .xls &nbsp;•&nbsp; .csv
-              &nbsp;•&nbsp; .pdf &nbsp;•&nbsp; .doc &nbsp;•&nbsp; .docx</div>
+            <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Word (.doc/.docx) &nbsp;•&nbsp; Excel (.xlsx/.xls/.csv)
+              &nbsp;•&nbsp; PDF &nbsp;•&nbsp; OpenDocument (.odt/.ods/.odp) &nbsp;•&nbsp; PowerPoint &nbsp;•&nbsp; .txt / .rtf</div>
             <div style="margin-top:10px">
               <input id="fileDesc" class="form-control" placeholder="Description (optional)"
                 style="width:240px;display:inline-block">
@@ -7830,6 +7898,22 @@
       if (input.files) Array.from(input.files).forEach(f => uploadFile(f));
       input.value = '';
     }
+
+    // ── Upload dropdown menu ─────────────────────────────────────────────
+    function toggleUploadMenu(e) {
+      if (e) e.stopPropagation();
+      const m = document.getElementById('uploadMenu');
+      if (m) m.classList.toggle('open');
+    }
+    function closeUploadMenu() {
+      const m = document.getElementById('uploadMenu');
+      if (m) m.classList.remove('open');
+    }
+    document.addEventListener('click', function (e) {
+      const inWrap = e.target.closest && e.target.closest('.upload-menu-wrap');
+      if (!inWrap) closeUploadMenu();
+    });
+
     function handleFileDrop(e) {
       e.preventDefault();
       Array.from(e.dataTransfer.files).forEach(f => uploadFile(f));
