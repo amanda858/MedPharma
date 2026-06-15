@@ -52,7 +52,7 @@ from app.client_db import (
     list_client_access, set_client_access, list_clients_for_user,
     create_notification, fanout_notification, list_notifications,
     count_unread_notifications, mark_notification_read,
-    mark_all_notifications_read,
+    mark_all_notifications_read, delete_notification, delete_notifications,
     save_eod_report, list_eod_reports, get_eod_report,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
@@ -5098,6 +5098,26 @@ def notifications_mark_all_read(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     n = mark_all_notifications_read(int(user["id"]))
     return {"ok": True, "marked": n}
+
+
+@router.delete("/notifications/{nid}")
+def notifications_delete(nid: int,
+                         hub_session: Optional[str] = Cookie(None)):
+    """Permanently remove a single notification for this user."""
+    user = _require_user(hub_session)
+    ok = delete_notification(int(user["id"]), int(nid))
+    return {"ok": ok}
+
+
+@router.post("/notifications/clear")
+def notifications_clear(kind: Optional[str] = None, read_only: int = 0,
+                        hub_session: Optional[str] = Cookie(None)):
+    """Bulk-delete this user's notifications. Optional ``kind`` filter (e.g.
+    'chat_message') and ``read_only=1`` to keep unread ones."""
+    user = _require_user(hub_session)
+    n = delete_notifications(int(user["id"]), kind=(kind or None),
+                             read_only=bool(int(read_only or 0)))
+    return {"ok": True, "deleted": n}
 
 
 # ── EOD report history (persisted reports, viewable in-app) ────────────────

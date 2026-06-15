@@ -2987,6 +2987,51 @@ def mark_all_notifications_read(user_id: int) -> int:
         conn.close()
 
 
+def delete_notification(user_id: int, notification_id: int) -> bool:
+    """Permanently remove a single notification belonging to this user."""
+    if not user_id or not notification_id:
+        return False
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM notifications WHERE id=? AND user_id=?",
+            (int(notification_id), int(user_id)),
+        )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def delete_notifications(user_id: int, kind: str | None = None,
+                         read_only: bool = False) -> int:
+    """Bulk-delete this user's notifications.
+
+    ``kind``      — if given, only delete notifications of that kind
+                    (e.g. 'chat_message').
+    ``read_only`` — if True, only delete ones already marked read.
+    Returns the number of rows removed.
+    """
+    if not user_id:
+        return 0
+    sql = "DELETE FROM notifications WHERE user_id=?"
+    params: list = [int(user_id)]
+    if kind:
+        sql += " AND kind=?"
+        params.append(kind)
+    if read_only:
+        sql += " AND is_read=1"
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, tuple(params))
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
 # ─── EOD Report Archive ─────────────────────────────────────────────────
 
 def save_eod_report(report_date: str, headlines: dict, summary: dict,

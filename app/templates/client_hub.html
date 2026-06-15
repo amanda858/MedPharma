@@ -8768,7 +8768,7 @@
       return `
         <div class="alert-card ${unread ? 'warning' : 'info'}"
              data-notif-id="${n.id}" ${linkAttr}
-             style="cursor:${n.link ? 'pointer' : 'default'};opacity:${unread ? 1 : 0.7}"
+             style="cursor:${n.link ? 'pointer' : 'default'};opacity:${unread ? 1 : 0.7};position:relative"
              onclick="openNotification(${n.id}, ${n.link ? `'${esc(n.link)}'` : 'null'})">
           <div class="alert-icon">${icon}</div>
           <div class="alert-body">
@@ -8778,6 +8778,10 @@
             <div class="alert-detail">${esc(n.body || '')}</div>
             <div style="font-size:11px;color:var(--gray-400);margin-top:4px">${esc(ts)}</div>
           </div>
+          <button title="Delete this notification"
+                  onclick="event.stopPropagation();deleteNotification(${n.id})"
+                  style="position:absolute;top:8px;right:8px;border:none;background:transparent;
+                         color:#94a3b8;font-size:18px;line-height:1;cursor:pointer;padding:2px 6px">×</button>
         </div>`;
     }
 
@@ -8805,6 +8809,22 @@
     async function markAllNotificationsRead() {
       try {
         await fetch('/hub/api/notifications/read-all', { method: 'POST' });
+      } catch (e) { console.error(e); }
+      loadAlerts();
+    }
+
+    async function deleteNotification(notifId) {
+      try {
+        await fetch(`/hub/api/notifications/${notifId}`, { method: 'DELETE' });
+      } catch (e) { console.error(e); }
+      loadAlerts();
+    }
+
+    async function clearAllNotifications() {
+      if (!confirm('Delete all notifications? This cannot be undone.')) return;
+      try {
+        await fetch('/hub/api/notifications/clear', { method: 'POST' });
+        toast('Notifications cleared', 'success');
       } catch (e) { console.error(e); }
       loadAlerts();
     }
@@ -8856,7 +8876,10 @@
         html += `<div class="card" style="margin-bottom:14px">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <div class="card-title">🔔 Notifications ${unreadNotifs ? `<span class="badge badge-red" style="margin-left:8px">${unreadNotifs} new</span>` : ''}</div>
-            ${unreadNotifs ? `<button class="btn btn-secondary btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>` : ''}
+            <div style="display:flex;gap:8px">
+              ${unreadNotifs ? `<button class="btn btn-secondary btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>` : ''}
+              <button class="btn btn-danger-outline btn-sm" onclick="clearAllNotifications()">🗑 Clear all</button>
+            </div>
           </div>
           <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
             ${notifs.map(_notifCardHtml).join('')}
