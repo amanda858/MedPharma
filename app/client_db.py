@@ -3530,6 +3530,16 @@ def update_lead(lead_id: int, changes: dict) -> bool:
         conn.close()
 
 
+def delete_lead(lead_id: int) -> bool:
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM leads WHERE id=?", (lead_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def get_leads_weekly_report(week_start: str = None) -> dict:
     """Weekly (Mon–Sun) business-development snapshot for the Victor / BizDev view."""
     if week_start:

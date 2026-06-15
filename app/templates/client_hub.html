@@ -4515,7 +4515,8 @@
           <td>${esc(l.status || '')}</td>
           <td>${val}</td>
           <td>${esc(upd)}</td>
-          <td><button class="btn btn-secondary btn-sm" onclick='editLead(${JSON.stringify(l)})'>Edit</button></td>
+          <td><button class="btn btn-secondary btn-sm" onclick='editLead(${JSON.stringify(l)})'>Edit</button>
+              <button class="btn btn-secondary btn-sm" style="color:#dc2626" onclick="deleteLead(${l.id})">Delete</button></td>
         </tr>`;
       }).join('');
     }
@@ -4535,6 +4536,16 @@
     function closeLeadForm() {
       const c = document.getElementById('leadFormCard');
       if (c) c.style.display = 'none';
+    }
+
+    async function deleteLead(id) {
+      if (!confirm('Delete this lead permanently?')) return;
+      try {
+        const r = await fetch(`/hub/api/leads/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Delete failed');
+        toast('Lead deleted', 'success');
+        loadLeads(leadsCurrentCat);
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     function editLead(l) {

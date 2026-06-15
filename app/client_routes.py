@@ -57,6 +57,7 @@ from app.client_db import (
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
     list_leads, create_lead, update_lead, get_leads_weekly_report,
+    delete_lead,
 )
 
 from app.notifications import (
@@ -1307,6 +1308,14 @@ def api_update_lead(lead_id: int, body: LeadUpdateIn,
     ok = update_lead(lead_id, changes)
     if not ok:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    return {"ok": True}
+
+
+@router.delete("/leads/{lead_id}")
+def api_delete_lead(lead_id: int, hub_session: Optional[str] = Cookie(None)):
+    _require_leads_access(hub_session)
+    if not delete_lead(lead_id):
+        raise HTTPException(status_code=404, detail="Lead not found")
     return {"ok": True}
 
 
