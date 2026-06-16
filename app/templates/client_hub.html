@@ -1949,7 +1949,7 @@
   <div id="accountSelect" style="display:none">
     <div class="account-header">
       <div class="brand">
-        <h1>MedPharma</h1>
+        <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma" style="height:40px;width:auto;display:block;margin-bottom:4px">
         <span>Internal Hub</span>
       </div>
       <button class="btn-logout" onclick="doLogout()">Sign Out</button>
@@ -3645,7 +3645,7 @@
         <button class="modal-close" onclick="closeModal('userInviteModal')">&times;</button>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Display Company/Team *</label><input class="form-control" id="fUCompany" placeholder="e.g. MedPharma SC"></div>
+        <div class="form-group"><label>Display Company/Team *</label><input class="form-control" id="fUCompany" placeholder="e.g. MedPharma"></div>
         <div class="form-group"><label>Full Name</label><input class="form-control" id="fUContact" placeholder="User full name"></div>
       </div>
       <div class="form-grid">
@@ -4428,9 +4428,9 @@
         </div>`;
       } else {
         grid.innerHTML = clientsList.map(c => `
-    <div class="account-card" onclick="selectAccount(${c.id}, '${esc(c.company)}')">
+    <div class="account-card" onclick="selectAccount(${c.id}, '${esc(brand(c.company))}')">
       <div class="ac-icon">🏥</div>
-      <div class="ac-name">${esc(c.company)}</div>
+      <div class="ac-name">${esc(brand(c.company))}</div>
       <div class="ac-contact">${esc(c.contact_name || '')}${c.email ? ` · ${esc(c.email)}` : ''}</div>
       <div class="ac-badge"><span>●</span> Active</div>
     </div>
@@ -4469,7 +4469,7 @@
       activeSubProfile = null;  // reset sub-profile when switching accounts
       document.getElementById('accountSelect').style.display = 'none';
       document.getElementById('appShell').style.display = 'block';
-      document.getElementById('topAccount').innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(company)} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
+      document.getElementById('topAccount').innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(brand(company))} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
       document.getElementById('topUser').textContent = currentUser.username;
       // Role pill: admin = 'Admin', staff = 'Staff', client = hidden
       const rolePill = document.getElementById('topRole');
@@ -6233,7 +6233,7 @@
         if (el) el.value = '';
       });
       const companyEl = document.getElementById('fUCompany');
-      if (companyEl) companyEl.value = (currentUser && currentUser.company) || 'MedPharma SC';
+      if (companyEl) companyEl.value = brand((currentUser && currentUser.company) || 'MedPharma');
       const roleEl = document.getElementById('fURole');
       if (roleEl) {
         roleEl.value = 'staff';
@@ -6485,6 +6485,11 @@
       const d = document.createElement('div');
       d.textContent = String(str);
       return d.innerHTML;
+    }
+
+    // Show the company brand without the legal "SC" suffix anywhere in the UI.
+    function brand(name) {
+      return String(name || '').replace(/\bMedPharma\s+SC\b/i, 'MedPharma');
     }
 
     function toast(msg, type = '') {
@@ -8860,7 +8865,7 @@
         if (dashPanel && dashPanel.classList.contains('active')) loadDashboard();
         // Also update the account selector's company display
         const topEl = document.getElementById('topAccount');
-        if (topEl && data.company) topEl.innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(data.company)} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
+        if (topEl && data.company) topEl.innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(brand(data.company))} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
       } catch (e) { toast(e.message, 'error'); }
     }
 
