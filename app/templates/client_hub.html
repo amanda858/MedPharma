@@ -2115,7 +2115,13 @@
                 <div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:4px;font-weight:600" id="dashGreetingLine"></div>
                 <div style="font-size:12px;color:rgba(255,255,255,.55);margin-top:2px">MedPharma SC — Revenue Cycle Management &amp; Credentialing Solutions</div>
               </div>
-              <div style="display:flex;gap:8px;align-items:center">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <div id="dashAdminControls" style="display:none;gap:8px;align-items:center">
+                  <button class="btn btn-sm" onclick="openActiveClientModules()" title="Turn services (Credentialing, Enrollment, EDI…) on or off for this client"
+                    style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">🧩 Modules</button>
+                  <button class="btn btn-sm" onclick="openActiveClientAccess()" title="Add or remove team members who can work this client"
+                    style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3)">👥 Users</button>
+                </div>
                 <select id="dashPeriod" class="form-control btn-sm" onchange="loadDashboard()"
                   style="width:auto;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(8px)">
                   <option value="mtd" style="color:#333">Month to Date</option>
@@ -7943,6 +7949,26 @@
       Array.from(e.dataTransfer.files).forEach(f => uploadFile(f));
     }
 
+    // Make file drag-and-drop work ANYWHERE in the app — not just the small
+    // drop zone. Without this, dropping a file outside the zone makes the
+    // browser open/download it instead of uploading. Now any drop uploads to
+    // the active client's Documents. (#dropZone handles its own drops.)
+    ['dragenter', 'dragover'].forEach(evt => {
+      window.addEventListener(evt, function (e) {
+        const types = e.dataTransfer && e.dataTransfer.types;
+        if (types && Array.from(types).includes('Files')) e.preventDefault();
+      });
+    });
+    window.addEventListener('drop', function (e) {
+      if (!(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)) return;
+      e.preventDefault();
+      // The dedicated drop zone handles its own drops; don't double-upload.
+      if (e.target.closest && e.target.closest('#dropZone')) return;
+      if (!activeClientId) { toast('Select a client account first, then drop your files', 'error'); return; }
+      navTo('files');
+      Array.from(e.dataTransfer.files).forEach(f => uploadFile(f));
+    });
+
     async function uploadFile(file) {
       // Verify session is still valid before uploading
       if (!(await checkSession())) return;
@@ -9534,6 +9560,32 @@
         if (!enabled) { s.classList.remove('module-hidden'); return; }
         s.classList.toggle('module-hidden', !enabled.has(key));
       });
+
+      updateDashAdminControls();
+    }
+
+    // Self-service per-client controls shown on the Dashboard hero (admins/staff
+    // only, when a specific client is in context). Let the user opt services
+    // in/out and manage who can access the client without leaving the dashboard.
+    function _activeClientLabel() {
+      try {
+        const c = (typeof clientsList !== 'undefined' && Array.isArray(clientsList))
+          ? clientsList.find(x => x.id === activeClientId) : null;
+        return c ? (c.company || c.username) : 'this client';
+      } catch (_) { return 'this client'; }
+    }
+    function openActiveClientModules() {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      openClientModulesModal(activeClientId, _activeClientLabel());
+    }
+    function openActiveClientAccess() {
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      openClientAccessModal(activeClientId, _activeClientLabel());
+    }
+    function updateDashAdminControls() {
+      const el = document.getElementById('dashAdminControls');
+      if (!el) return;
+      el.style.display = (isStaffOrAdmin() && activeClientId) ? 'flex' : 'none';
     }
 
     // Called from selectAccount() / loadProfile() etc. to refresh the cache
