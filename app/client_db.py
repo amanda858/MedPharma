@@ -2089,6 +2089,150 @@ def get_claims(client_id: int = None, status: str = None, sub_profile: str = Non
     return rows
 
 
+# ── A/R aging + worklist priority weighting ──────────────────────────────────
+# Statuses that still have collectible money in play (open A/R). Paid/Closed are
+# done. Intake/Verification/Coding aren't billed yet, so they carry less A/R
+# urgency than something already submitted/denied.
+_AR_OPEN_STATUSES = ("Intake", "Verification", "Coding", "Billed/Submitted",
+                     "Rejected", "Denied", "A/R Follow-Up", "Appeals")
+_AR_STATUS_WEIGHT = {
+    "Denied": 1.6, "Rejected": 1.5, "Appeals": 1.4, "A/R Follow-Up": 1.3,
+    "Billed/Submitted": 1.0, "Coding": 0.7, "Verification": 0.6, "Intake": 0.5,
+}
+
+
+def _parse_any_date(value):
+    """Parse the loose date strings claims carry ('YYYY-MM-DD', 'MM/DD/YYYY',
+    ISO timestamps) into a date, or None."""
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    s = s.replace("T", " ").split(" ")[0]
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _ar_bucket(days):
+    if days <= 30:
+        return "0-30"
+    if days <= 60:
+        return "31-60"
+    if days <= 90:
+        return "61-90"
+    if days <= 120:
+        return "91-120"
+    return "120+"
+
+
+def get_ar_worklist(client_id: int = None, owner: str = None,
+                    bucket: str = None, sub_profile: str = None,
+                    limit: int = 300) -> dict:
+    """Build a prioritized Accounts-Receivable worklist.
+
+    Returns open claims (balance > 0, not Paid/Closed) scored by
+    `balance × age_weight × status_weight`, plus aging-bucket rollups, so a
+    biller can work the highest-recovery claims first instead of guessing.
+    """
+    today = datetime.now().date()
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        q = """SELECT cm.*, c.company AS client_company
+               FROM claims_master cm
+               JOIN clients c ON c.id = cm.client_id
+               WHERE cm.BalanceRemaining > 0
+                 AND cm.ClaimStatus NOT IN ('Paid', 'Closed')"""
+        params = []
+        if client_id is not None:
+            q += " AND cm.client_id=?"
+            params.append(client_id)
+        if owner:
+            q += " AND lower(cm.Owner)=?"
+            params.append(owner.strip().lower())
+        if sub_profile:
+            q += " AND cm.sub_profile=?"
+            params.append(sub_profile)
+        rows = [dict(r) for r in cur.execute(q, params).fetchall()]
+    finally:
+        conn.close()
+
+    buckets = {b: {"count": 0, "balance": 0.0} for b in ("0-30", "31-60", "61-90", "91-120", "120+")}
+    total_balance = 0.0
+    items = []
+    for r in rows:
+        bal = float(r.get("BalanceRemaining") or 0)
+        # Age from date of service, falling back to bill date, then created_at.
+        ref = (_parse_any_date(r.get("DOS")) or _parse_any_date(r.get("BillDate"))
+               or _parse_any_date(r.get("created_at")))
+        age = (today - ref).days if ref else 0
+        if age < 0:
+            age = 0
+        bk = _ar_bucket(age)
+        # Age weight ramps up the older the money gets.
+        if age <= 30:
+            age_w = 1.0
+        elif age <= 60:
+            age_w = 1.5
+        elif age <= 90:
+            age_w = 2.2
+        elif age <= 120:
+            age_w = 3.2
+        else:
+            age_w = 4.5
+        status_w = _AR_STATUS_WEIGHT.get(r.get("ClaimStatus") or "", 1.0)
+        # Overdue next action gives an extra nudge.
+        due = _parse_any_date(r.get("NextActionDueDate"))
+        overdue = bool(due and due < today)
+        score = bal * age_w * status_w * (1.25 if overdue else 1.0)
+
+        buckets[bk]["count"] += 1
+        buckets[bk]["balance"] += bal
+        total_balance += bal
+
+        items.append({
+            "id": r.get("id"),
+            "client_id": r.get("client_id"),
+            "client_company": r.get("client_company") or "",
+            "ClaimKey": r.get("ClaimKey") or "",
+            "PatientName": r.get("PatientName") or "",
+            "Payor": r.get("Payor") or "",
+            "ProviderName": r.get("ProviderName") or "",
+            "DOS": r.get("DOS") or "",
+            "ClaimStatus": r.get("ClaimStatus") or "",
+            "BalanceRemaining": round(bal, 2),
+            "Owner": r.get("Owner") or "",
+            "NextAction": r.get("NextAction") or "",
+            "NextActionDueDate": r.get("NextActionDueDate") or "",
+            "DenialReason": r.get("DenialReason") or "",
+            "aging_days": age,
+            "aging_bucket": bk,
+            "overdue": overdue,
+            "priority_score": round(score, 2),
+        })
+
+    items.sort(key=lambda it: it["priority_score"], reverse=True)
+    if bucket:
+        items = [it for it in items if it["aging_bucket"] == bucket]
+    items = items[: max(1, int(limit or 300))]
+
+    for b in buckets.values():
+        b["balance"] = round(b["balance"], 2)
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "total_open_count": len(rows),
+        "total_open_balance": round(total_balance, 2),
+        "buckets": buckets,
+        "items": items,
+    }
+
+
 def get_claim(claim_id: int):
     conn = get_db()
     try:

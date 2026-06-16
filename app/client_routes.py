@@ -28,6 +28,7 @@ from app.client_db import (
     get_practice_profiles, upsert_practice_profile, delete_practice_profile,
     list_providers, create_provider, update_provider, delete_provider,
     get_claims, get_claim, create_claim, update_claim, delete_claim,
+    get_ar_worklist,
     get_payments, create_payment, delete_payment,
     get_notes, add_note,
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
@@ -1856,6 +1857,21 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
 @router.get("/claims/statuses")
 def claim_statuses():
     return CLAIM_STATUSES
+
+
+@router.get("/claims/ar-worklist")
+def claims_ar_worklist(client_id: Optional[int] = None, owner: Optional[str] = None,
+                       bucket: Optional[str] = None, sub_profile: Optional[str] = None,
+                       limit: int = 300, hub_session: Optional[str] = Cookie(None)):
+    """Prioritized Accounts-Receivable worklist — highest-recovery open claims
+    first, with aging-bucket rollups."""
+    user = _require_user(hub_session)
+    scope = client_id if client_id is not None else _client_scope(user)
+    # Non-staff/admin users are always scoped to their own account.
+    if user["role"] not in ("admin", "staff"):
+        scope = user["id"]
+    return get_ar_worklist(scope, owner=owner, bucket=bucket,
+                           sub_profile=sub_profile, limit=limit)
 
 
 @router.get("/claims/{claim_id}")
