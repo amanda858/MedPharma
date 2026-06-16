@@ -3297,8 +3297,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
                hub_session: Optional[str] = Cookie(None)):
     """Generate a comprehensive cross-section report for CSV / print, with sub-profile breakdowns."""
-    user = _require_user(hub_session)
-    _assert_client_can_view(user, client_id)
+    user = _require_full_admin(hub_session)
     from app.client_db import get_db
     from datetime import date, datetime
 
@@ -4694,8 +4693,7 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    user = _require_user(hub_session)
-    _assert_client_can_view(user, client_id)
+    user = _require_full_admin(hub_session)
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -4895,8 +4893,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                               hub_session: Optional[str] = Cookie(None),
                               request: Request = None):
     """Generate and return a branded PDF report."""
-    user = _require_user(hub_session)
-    _assert_client_can_view(user, client_id)
+    user = _require_full_admin(hub_session)
     from app.client_db import get_db
     from datetime import date
     from io import BytesIO
