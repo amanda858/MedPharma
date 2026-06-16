@@ -829,11 +829,86 @@ class ClientAccessIn(BaseModel):
     user_ids: list[int] = []
 
 
+def _client_display_name(cid: int) -> str:
+    """Human-friendly name for a client account, used in notifications."""
+    try:
+        for c in list_clients() or []:
+            if int(c.get("id", 0) or 0) == int(cid):
+                return (c.get("company") or c.get("contact_name")
+                        or c.get("username") or f"Client #{cid}").strip()
+    except Exception:
+        pass
+    return f"Client #{cid}"
+
+
+def _notify_client_access_granted(cid: int, new_user_ids: list[int],
+                                  admin: dict, request: Optional[Request]) -> int:
+    """Email + in-app notify users who were just granted access to a client.
+    Returns the number of emails successfully sent. Never raises."""
+    if not new_user_ids:
+        return 0
+    client_name = _client_display_name(cid)
+    access = {int(u.get("id", 0) or 0): u for u in list_client_access(cid)}
+    base_url = str(request.base_url).rstrip("/") if request else ""
+    hub_link = f"{base_url}/hub" if base_url else "/hub"
+    inviter = (admin.get("contact_name") or admin.get("username")
+               or "An administrator").strip()
+    sent_count = 0
+    for uid in new_user_ids:
+        u = access.get(int(uid))
+        if not u:
+            continue
+        name = (u.get("contact_name") or u.get("username") or "there").strip()
+        try:
+            create_notification(
+                user_id=int(uid),
+                kind="access",
+                title="New client access granted",
+                body=f"{inviter} gave you access to {client_name}.",
+                link="/hub",
+                related_type="client",
+                related_id=int(cid),
+            )
+        except Exception:
+            log.exception("access in-app notification failed for user %s", uid)
+        email = (u.get("email") or "").strip()
+        if email and "@" in email:
+            subject = f"You've been granted access to {client_name}"
+            text_body = (
+                f"Hi {name},\n\n"
+                f"{inviter} has given you access to the {client_name} account "
+                f"in the MedPharma Hub.\n\n"
+                f"Log in here: {hub_link}\n\n"
+                "If you did not expect this, contact your administrator."
+            )
+            html_body = (
+                f"<p>Hi {name},</p>"
+                f"<p>{inviter} has given you access to the <b>{client_name}</b> "
+                f"account in the MedPharma Hub.</p>"
+                f"<p><a href=\"{hub_link}\" style=\"padding:10px 16px;background:#1d4ed8;"
+                f"color:#fff;text-decoration:none;border-radius:6px;\">Open the Hub</a></p>"
+                f"<p style=\"font-size:12px;color:#64748b\">Or copy this link: {hub_link}</p>"
+            )
+            try:
+                sent, _via = _send_direct_email(email, subject, text_body, html_body)
+                if sent:
+                    sent_count += 1
+            except Exception:
+                log.exception("access email failed for user %s", uid)
+    return sent_count
+
+
 @router.put("/clients/{cid}/access")
-def put_client_access(cid: int, body: ClientAccessIn, hub_session: Optional[str] = Cookie(None)):
+def put_client_access(cid: int, body: ClientAccessIn, request: Request,
+                      hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
-    count = set_client_access(cid, body.user_ids or [], granted_by=admin.get("username", ""))
-    return {"ok": True, "count": count}
+    requested = [int(u) for u in (body.user_ids or []) if str(u).isdigit()]
+    # Capture who already had access so we only notify the *newly* added users.
+    existing_ids = {int(u.get("id", 0) or 0) for u in list_client_access(cid)}
+    count = set_client_access(cid, requested, granted_by=admin.get("username", ""))
+    new_ids = [u for u in requested if u not in existing_ids]
+    notified = _notify_client_access_granted(cid, new_ids, admin, request)
+    return {"ok": True, "count": count, "notified": notified}
 
 
 @router.get("/admin/users")
