@@ -50,6 +50,7 @@ from app.client_db import (
     list_room_members, add_room_member, remove_room_member,
     user_can_access_room, add_room_message, list_room_messages,
     mark_room_read, chat_unread_total, list_chat_eligible_users,
+    get_or_create_dm_room,
     list_room_read_state,
     list_client_access, set_client_access, list_clients_for_user,
     accounts_assigned_to_user,
@@ -61,7 +62,7 @@ from app.client_db import (
     ALLOWED_SETTING_KEYS,
     list_leads, create_lead, update_lead, get_leads_weekly_report,
     delete_lead, mark_lead_followed_up, list_leads_due_followup,
-    restore_lead, list_deleted_leads,
+    restore_lead, list_deleted_leads, get_leads_pipeline,
 )
 
 from app.notifications import (
@@ -1543,6 +1544,13 @@ def api_leads_weekly_report(week_start: Optional[str] = None,
                             hub_session: Optional[str] = Cookie(None)):
     _require_leads_access(hub_session)
     return get_leads_weekly_report(week_start)
+
+
+@router.get("/leads-pipeline")
+def api_leads_pipeline(hub_session: Optional[str] = Cookie(None)):
+    """Weighted sales-pipeline forecast for the Business Development view."""
+    _require_leads_access(hub_session)
+    return get_leads_pipeline()
 
 
 @router.get("/leads-followups-due")
@@ -5617,6 +5625,10 @@ class ChatMemberIn(BaseModel):
     role: Optional[str] = "member"
 
 
+class DirectMessageOpen(BaseModel):
+    user_id: int
+
+
 def _is_admin_user(user: dict) -> bool:
     # Only full admins can see/manage every chat room. Staff are regular
     # members — they only see rooms they’ve been explicitly added to. This
@@ -5945,6 +5957,30 @@ def chat_eligible_users(hub_session: Optional[str] = Cookie(None)):
         if (u.get("role") or "").lower() in ("admin", "staff")
     ]
     return {"users": out}
+
+
+@router.post("/chat/dm")
+def chat_open_dm(body: DirectMessageOpen, hub_session: Optional[str] = Cookie(None)):
+    """Open (or create) a private 1:1 direct-message room with another user.
+
+    Returns the DM room id. Idempotent — the same pair of users always
+    resolves to the same room regardless of who opens it first."""
+    user = _require_user(hub_session)
+    try:
+        other_id = int(body.user_id or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "user_id is required")
+    if other_id <= 0:
+        raise HTTPException(400, "user_id is required")
+    me_id = int(user.get("id") or 0)
+    if other_id == me_id:
+        raise HTTPException(400, "You cannot message yourself")
+    # The other user must be someone this user is allowed to chat with.
+    eligible_ids = {int(u["id"]) for u in (chat_eligible_users(hub_session) or {}).get("users", [])}
+    if other_id not in eligible_ids:
+        raise HTTPException(403, "You cannot start a direct message with this user")
+    room_id = get_or_create_dm_room(me_id, other_id, created_by=user.get("username", ""))
+    return {"ok": True, "id": room_id}
 
 
 # ─── Client Seed Backup ───────────────────────────────────────────────────────

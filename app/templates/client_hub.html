@@ -2582,6 +2582,7 @@
             <div class="page-actions" id="chatPageActions" style="display:flex;gap:8px">
               <button class="btn btn-secondary btn-sm" id="chatSoundToggle" onclick="toggleChatSound()" title="Toggle the new-message chime">🔊 Sound On</button>
               <button class="btn btn-secondary btn-sm" onclick="loadChatRooms()">↻ Refresh</button>
+              <button class="btn btn-secondary btn-sm" id="chatNewDmBtn" onclick="openDmPicker()" title="Start a private 1:1 message">✉️ New DM</button>
               <button class="btn btn-primary btn-sm" id="chatNewRoomBtn" style="display:none" onclick="openChatRoomModal()">+ New Room</button>
             </div>
           </div>
@@ -3387,6 +3388,16 @@
           <!-- Follow-ups due banner (leads not contacted in 2+ days) -->
           <div id="leadsFollowupBanner" style="display:none;margin-bottom:14px"></div>
 
+          <!-- Weighted pipeline forecast -->
+          <div id="leadsPipelineCard" class="card" style="margin-bottom:14px;padding:16px;display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+              <div style="font-size:16px;font-weight:800;color:var(--gray-900)">📊 Pipeline Forecast</div>
+              <div style="display:flex;gap:16px;flex-wrap:wrap" id="leadsPipelineHeadline"></div>
+            </div>
+            <div id="leadsPipelineStages" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px"></div>
+            <div id="leadsPipelineStalled" style="margin-top:12px"></div>
+          </div>
+
           <!-- Add / Edit form (hidden until +Add or Edit) -->
           <div class="card" id="leadFormCard" style="display:none;margin-bottom:16px;padding:18px">
             <div style="font-weight:700;margin-bottom:12px" id="leadFormTitle">New Lead</div>
@@ -4048,6 +4059,24 @@
     </div>
   </div>
 
+  <!-- ═══ NEW DIRECT MESSAGE MODAL (any user: start a private 1:1) ═══ -->
+  <div class="modal-overlay" id="dmPickerModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2>✉️ New Direct Message</h2>
+        <button class="modal-close" onclick="closeModal('dmPickerModal')">&times;</button>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px">
+        Start a private, encrypted 1:1 conversation. Only you and the person you pick can see it.
+      </div>
+      <input class="form-control" id="dmPickerSearch" placeholder="Search people…" oninput="filterDmPicker()" style="margin-bottom:10px">
+      <div id="dmPickerList"
+        style="max-height:320px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px">
+        <div style="padding:16px;color:#94a3b8;font-size:12px">Loading people…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ CHAT MEMBERS MODAL (admin: manage members of an existing room) ═══ -->
   <div class="modal-overlay" id="chatMembersModal">
     <div class="modal modal-sm">
@@ -4693,6 +4722,47 @@
         tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:#dc2626">Could not load leads.</td></tr>`;
       }
       loadFollowupsDue();
+      loadLeadsPipeline();
+    }
+
+    async function loadLeadsPipeline() {
+      const card = document.getElementById('leadsPipelineCard');
+      if (!card) return;
+      try {
+        const r = await fetch('/hub/api/leads-pipeline');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        renderLeadsPipeline(d);
+        card.style.display = '';
+      } catch (e) { card.style.display = 'none'; }
+    }
+
+    function renderLeadsPipeline(d) {
+      const head = document.getElementById('leadsPipelineHeadline');
+      if (head) head.innerHTML = `
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Weighted Forecast</div><div style="font-size:20px;font-weight:800;color:#16a34a">$${fmt(d.weighted_forecast || 0)}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Open Pipeline</div><div style="font-size:20px;font-weight:800;color:#2563eb">$${fmt(d.total_open_value || 0)}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Won</div><div style="font-size:20px;font-weight:800;color:#7c3aed">$${fmt(d.won_value || 0)}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Conversion</div><div style="font-size:20px;font-weight:800;color:var(--gray-700)">${d.conversion_rate || 0}%</div></div>`;
+      const stagesEl = document.getElementById('leadsPipelineStages');
+      const colors = ['#94a3b8', '#60a5fa', '#3b82f6', '#8b5cf6', '#22c55e'];
+      if (stagesEl) stagesEl.innerHTML = (d.stages || []).map((s, i) => `
+        <div style="border:1px solid var(--gray-200);border-radius:10px;padding:10px 12px;background:#fff">
+          <div style="font-size:11px;font-weight:700;color:${colors[i % colors.length]};text-transform:uppercase">${esc(s.stage)} <span style="color:var(--gray-400)">· ${s.probability}%</span></div>
+          <div style="font-size:17px;font-weight:800;color:var(--gray-900);margin-top:2px">$${fmt(s.weighted)}</div>
+          <div style="font-size:11px;color:var(--gray-500)">${s.count} lead${s.count === 1 ? '' : 's'} · $${fmt(s.value)} total</div>
+        </div>`).join('');
+      const stalledEl = document.getElementById('leadsPipelineStalled');
+      const stalled = d.stalled || [];
+      if (stalledEl) {
+        if (!stalled.length) {
+          stalledEl.innerHTML = '';
+        } else {
+          const names = stalled.slice(0, 8).map(s => `${esc(s.practice_name)} (${s.days_since_contact}d)`).join(', ');
+          const more = stalled.length > 8 ? ` +${stalled.length - 8} more` : '';
+          stalledEl.innerHTML = `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 12px;font-size:12px;color:#9a3412"><b>🥶 ${stalled.length} stalled lead${stalled.length === 1 ? '' : 's'}</b> (no contact past the follow-up window): ${names}${more}</div>`;
+        }
+      }
     }
 
     async function loadFollowupsDue() {
@@ -9930,18 +10000,21 @@
       if (!list) return;
       if (!CHAT.rooms.length) {
         list.innerHTML = `<div style="padding:24px 18px;color:#94a3b8;font-size:13px">
-          No chat rooms yet.${CHAT.isAdmin ? ' Click <b>+ New Room</b> to create one.' : ''}
+          No conversations yet. Click <b>✉️ New DM</b> to message a teammate${CHAT.isAdmin ? ', or <b>+ New Room</b> to create a group' : ''}.
         </div>`;
         return;
       }
       list.innerHTML = CHAT.rooms.map(r => {
         const unread = parseInt(r.unread || r.unread_count || 0, 10);
         const isActive = r.id === CHAT.activeRoomId;
-        const sub = r.client_company ? esc(r.client_company) : (r.description ? esc(r.description) : '');
+        const isDm = !!r.is_dm;
+        const sub = isDm ? 'Direct message'
+          : (r.client_company ? esc(r.client_company) : (r.description ? esc(r.description) : ''));
+        const icon = isDm ? '👤 ' : '';
         return `<div onclick="selectChatRoom(${r.id})"
           style="padding:12px 14px;border-bottom:1px solid #eef2f7;cursor:pointer;${isActive ? 'background:#eef4ff;border-left:3px solid #2563eb' : ''}">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <div style="font-weight:600;font-size:13px;color:#0f172a;${unread ? 'font-weight:700' : ''}">${esc(r.name)}</div>
+            <div style="font-weight:600;font-size:13px;color:#0f172a;${unread ? 'font-weight:700' : ''}">${icon}${esc(r.name)}</div>
             ${unread ? `<span class="badge badge-red" style="font-size:10px">${unread}</span>` : ''}
           </div>
           ${sub ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${sub}</div>` : ''}
@@ -9964,11 +10037,15 @@
       if (CHAT.activeRoom) {
         titleEl.textContent = CHAT.activeRoom.name;
         const bits = [];
-        if (CHAT.activeRoom.description) bits.push(CHAT.activeRoom.description);
-        if (CHAT.activeRoom.client_company) bits.push('Client: ' + CHAT.activeRoom.client_company);
+        if (CHAT.activeRoom.is_dm) {
+          bits.push('Private direct message');
+        } else {
+          if (CHAT.activeRoom.description) bits.push(CHAT.activeRoom.description);
+          if (CHAT.activeRoom.client_company) bits.push('Client: ' + CHAT.activeRoom.client_company);
+        }
         subEl.textContent = bits.join(' · ');
         composer.style.display = '';
-        actsEl.innerHTML = CHAT.isAdmin ? `
+        actsEl.innerHTML = (CHAT.isAdmin && !CHAT.activeRoom.is_dm) ? `
           <button class="btn btn-secondary btn-sm" onclick="openChatMembersModal(${CHAT.activeRoomId})">👥 Members</button>
           <button class="btn btn-danger-outline btn-sm" onclick="deleteChatRoom(${CHAT.activeRoomId})">🗑 Delete</button>
         ` : '';
@@ -10139,6 +10216,66 @@
           loadChatMessages();
         }
       }, CHAT.pollMs);
+    }
+
+    // ── New Direct Message (1:1) ──
+    let _dmCandidates = [];
+    async function openDmPicker() {
+      const myId = parseInt((currentUser && currentUser.id) || 0, 10);
+      document.getElementById('dmPickerSearch').value = '';
+      const list = document.getElementById('dmPickerList');
+      list.innerHTML = '<div style="padding:16px;color:#94a3b8;font-size:12px">Loading people…</div>';
+      document.getElementById('dmPickerModal').classList.add('open');
+      try {
+        const r = await fetch('/hub/api/chat/users');
+        const d = await r.json();
+        _dmCandidates = (d.users || []).filter(u => parseInt(u.id, 10) !== myId);
+        renderDmPicker(_dmCandidates);
+      } catch (e) {
+        list.innerHTML = `<div style="padding:16px;color:#ef4444;font-size:12px">Could not load people: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderDmPicker(users) {
+      const list = document.getElementById('dmPickerList');
+      if (!list) return;
+      if (!users.length) {
+        list.innerHTML = '<div style="padding:16px;color:#94a3b8;font-size:12px">No one to message.</div>';
+        return;
+      }
+      list.innerHTML = users.map(u => {
+        const name = esc(u.contact_name || u.company || u.username);
+        const role = esc(u.role || '');
+        return `<div onclick="startDm(${u.id})"
+          style="padding:11px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+          <span style="font-weight:600;font-size:13px;color:#0f172a">${name}</span>
+          <span style="color:#94a3b8;font-size:11px">${role}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function filterDmPicker() {
+      const q = (document.getElementById('dmPickerSearch').value || '').toLowerCase().trim();
+      if (!q) { renderDmPicker(_dmCandidates); return; }
+      renderDmPicker(_dmCandidates.filter(u =>
+        ((u.contact_name || '') + ' ' + (u.company || '') + ' ' + (u.username || '')).toLowerCase().includes(q)
+      ));
+    }
+
+    async function startDm(userId) {
+      try {
+        const r = await fetch('/hub/api/chat/dm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: parseInt(userId, 10) })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
+        const j = await r.json();
+        closeModal('dmPickerModal');
+        await loadChatRooms();
+        if (j && j.id) selectChatRoom(j.id);
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     // ── Chat Room create/edit modal ──

@@ -877,7 +877,8 @@ def init_client_hub_db():
             client_id   INTEGER,                 -- optional: anchor room to a client account
             created_by  TEXT DEFAULT '',
             created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-            archived    INTEGER DEFAULT 0
+            archived    INTEGER DEFAULT 0,
+            is_dm       INTEGER DEFAULT 0        -- 1 = private 1:1 direct-message room
         );
         CREATE INDEX IF NOT EXISTS idx_rooms_client ON chat_rooms(client_id);
 
@@ -1102,6 +1103,13 @@ def init_client_hub_db():
     ):
         if col not in tp_cols:
             cur.execute(f"ALTER TABLE team_production ADD COLUMN {col} {col_def}")
+    conn.commit()
+
+    # ── Migrate existing DBs: 1:1 direct-message chat rooms ──────────────
+    cur.execute("PRAGMA table_info(chat_rooms)")
+    cr_cols = {row[1] for row in cur.fetchall()}
+    if "is_dm" not in cr_cols:
+        cur.execute("ALTER TABLE chat_rooms ADD COLUMN is_dm INTEGER DEFAULT 0")
     conn.commit()
 
     # ── Migrate existing DBs: BizDev lead follow-up tracking ─────────────
@@ -3965,6 +3973,101 @@ def get_leads_weekly_report(week_start: str = None) -> dict:
         conn.close()
 
 
+# ── Business-development pipeline forecast ────────────────────────────────────
+# Ordered sales stages and the probability each will close. Weighted forecast =
+# Σ(est_value × stage probability) across open leads — a realistic revenue
+# expectation, not just a raw pipeline total.
+LEAD_PIPELINE_STAGES = ["New", "Contacted", "Qualified", "Proposal", "Negotiation"]
+LEAD_STAGE_PROBABILITY = {
+    "new": 0.10, "contacted": 0.20, "qualified": 0.40,
+    "proposal": 0.60, "negotiation": 0.80, "won": 1.0, "lost": 0.0,
+}
+
+
+def get_leads_pipeline() -> dict:
+    """Weighted sales pipeline for the Business Development view.
+
+    Returns per-stage counts/value/weighted forecast, headline totals (open
+    value, weighted forecast, won value), conversion rate, and the leads that
+    have gone stale (no contact past the follow-up window) so nothing rots.
+    """
+    conn = get_db()
+    try:
+        rows = [_lead_row_to_dict(r) for r in conn.execute(
+            "SELECT * FROM leads WHERE COALESCE(deleted_at,'')=''"
+        ).fetchall()]
+    finally:
+        conn.close()
+
+    stages = {s: {"stage": s, "count": 0, "value": 0.0, "weighted": 0.0}
+              for s in LEAD_PIPELINE_STAGES}
+    total_open_value = 0.0
+    total_weighted = 0.0
+    open_count = 0
+    won_count = 0
+    won_value = 0.0
+    lost_count = 0
+    stalled = []
+
+    for r in rows:
+        status = (r.get("status") or "New").strip()
+        skey = status.lower()
+        val = float(r.get("est_value") or 0)
+        prob = LEAD_STAGE_PROBABILITY.get(skey, 0.10)
+        if skey == "won":
+            won_count += 1
+            won_value += val
+            continue
+        if skey == "lost" or r.get("is_closed"):
+            lost_count += 1
+            continue
+        # Open lead.
+        open_count += 1
+        total_open_value += val
+        total_weighted += val * prob
+        if status not in stages:
+            stages[status] = {"stage": status, "count": 0, "value": 0.0, "weighted": 0.0}
+        stages[status]["count"] += 1
+        stages[status]["value"] += val
+        stages[status]["weighted"] += val * prob
+        if r.get("followup_due"):
+            stalled.append({
+                "id": r.get("id"),
+                "practice_name": r.get("practice_name") or "—",
+                "status": status,
+                "owner": r.get("owner") or "",
+                "est_value": round(val, 2),
+                "days_since_contact": r.get("days_since_contact"),
+            })
+
+    stage_list = []
+    for s in LEAD_PIPELINE_STAGES:
+        b = stages.get(s, {"stage": s, "count": 0, "value": 0.0, "weighted": 0.0})
+        stage_list.append({
+            "stage": s,
+            "probability": int(LEAD_STAGE_PROBABILITY.get(s.lower(), 0.1) * 100),
+            "count": b["count"],
+            "value": round(b["value"], 2),
+            "weighted": round(b["weighted"], 2),
+        })
+    stalled.sort(key=lambda x: (x["days_since_contact"] or 0), reverse=True)
+    closed_total = won_count + lost_count
+    conversion_rate = round((won_count / closed_total) * 100, 1) if closed_total else 0.0
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "stages": stage_list,
+        "open_count": open_count,
+        "total_open_value": round(total_open_value, 2),
+        "weighted_forecast": round(total_weighted, 2),
+        "won_count": won_count,
+        "won_value": round(won_value, 2),
+        "lost_count": lost_count,
+        "conversion_rate": conversion_rate,
+        "stalled": stalled,
+    }
+
+
 def get_eod_team_report(report_date: str = None) -> dict:
     """Build the full end-of-day report for the team.
 
@@ -5640,6 +5743,10 @@ def _row_to_room(row) -> dict:
         return {}
     d = dict(row)
     d["archived"] = bool(d.get("archived"))
+    d["is_dm"] = bool(d.get("is_dm"))
+    # For 1:1 DMs the stored room name is internal; show the other person's name.
+    if d.get("is_dm") and d.get("dm_other_name"):
+        d["name"] = d["dm_other_name"]
     # Decrypt the last-message preview so the room list shows readable text.
     if "last_body" in d and d["last_body"]:
         try:
@@ -5661,11 +5768,23 @@ def list_rooms_for_user(user_id: int, is_admin: bool = False,
         if not is_admin:
             where.append("r.id IN (SELECT room_id FROM chat_room_members WHERE user_id=?)")
             params.append(user_id)
+        else:
+            # Admins see every group room, but private 1:1 DMs stay private —
+            # only the two participants can ever see a DM, never an admin snooping.
+            where.append(
+                "(COALESCE(r.is_dm,0)=0 OR r.id IN "
+                "(SELECT room_id FROM chat_room_members WHERE user_id=?))"
+            )
+            params.append(user_id)
         if not include_archived:
             where.append("COALESCE(r.archived,0)=0")
         sql = """
             SELECT r.id, r.name, r.description, r.client_id, r.created_by,
                    r.created_at, r.archived,
+                   COALESCE(r.is_dm,0) AS is_dm,
+                   (SELECT COALESCE(NULLIF(c2.contact_name,''), c2.username)
+                      FROM chat_room_members m2 JOIN clients c2 ON c2.id=m2.user_id
+                      WHERE m2.room_id=r.id AND m2.user_id<>? LIMIT 1) AS dm_other_name,
                    c.company AS client_company,
                    (SELECT COUNT(*) FROM chat_room_members rm WHERE rm.room_id=r.id) AS member_count,
                    (SELECT body FROM chat_messages m
@@ -5686,7 +5805,7 @@ def list_rooms_for_user(user_id: int, is_admin: bool = False,
             FROM chat_rooms r
             LEFT JOIN clients c ON c.id = r.client_id
         """
-        params = [user_id, user_id] + params
+        params = [user_id, user_id, user_id] + params
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY (last_at IS NULL), datetime(last_at) DESC, r.created_at DESC"
@@ -5748,6 +5867,54 @@ def create_room(name: str, description: str = "", client_id: int | None = None,
             seen.add(uid_i)
         conn.commit()
         return room_id
+    finally:
+        conn.close()
+
+
+def get_or_create_dm_room(user_a_id: int, user_b_id: int,
+                          created_by: str = "") -> int:
+    """Return the existing 1:1 DM room between two users, creating it if needed.
+
+    A DM room is a chat room flagged ``is_dm=1`` whose only two members are
+    ``user_a_id`` and ``user_b_id``. Look-up is order-independent so opening a
+    DM from either side resolves to the same room."""
+    a, b = int(user_a_id), int(user_b_id)
+    if a == b:
+        raise ValueError("Cannot start a direct message with yourself")
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT r.id FROM chat_rooms r
+               WHERE COALESCE(r.is_dm,0)=1
+                 AND (SELECT COUNT(*) FROM chat_room_members m WHERE m.room_id=r.id)=2
+                 AND EXISTS(SELECT 1 FROM chat_room_members WHERE room_id=r.id AND user_id=?)
+                 AND EXISTS(SELECT 1 FROM chat_room_members WHERE room_id=r.id AND user_id=?)
+               LIMIT 1""",
+            (a, b),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+        names = {}
+        for uid in (a, b):
+            r = conn.execute(
+                "SELECT COALESCE(NULLIF(contact_name,''), username) AS n FROM clients WHERE id=?",
+                (uid,),
+            ).fetchone()
+            names[uid] = (r["n"] if r else str(uid))
+        cur = conn.execute(
+            """INSERT INTO chat_rooms (name, description, client_id, created_by, is_dm)
+               VALUES (?,?,?,?,1)""",
+            (f"DM: {names[a]} / {names[b]}", "", None, created_by),
+        )
+        room_id = cur.lastrowid
+        for uid in (a, b):
+            conn.execute(
+                """INSERT OR IGNORE INTO chat_room_members
+                   (room_id, user_id, role, added_by) VALUES (?,?,?,?)""",
+                (room_id, uid, "member", created_by),
+            )
+        conn.commit()
+        return int(room_id)
     finally:
         conn.close()
 
@@ -5827,15 +5994,25 @@ def remove_room_member(room_id: int, user_id: int) -> bool:
 
 
 def user_can_access_room(room_id: int, user_id: int, is_admin: bool = False) -> bool:
-    if is_admin:
-        return True
     conn = get_db()
     try:
-        row = conn.execute(
+        is_member = bool(conn.execute(
             "SELECT 1 FROM chat_room_members WHERE room_id=? AND user_id=?",
             (room_id, user_id),
-        ).fetchone()
-        return bool(row)
+        ).fetchone())
+        if is_member:
+            return True
+        # Admins can access any group room — but never a private 1:1 DM they
+        # aren't part of.
+        if is_admin:
+            row = conn.execute(
+                "SELECT COALESCE(is_dm,0) AS is_dm FROM chat_rooms WHERE id=?",
+                (room_id,),
+            ).fetchone()
+            if row and int(row["is_dm"]):
+                return False
+            return True
+        return False
     finally:
         conn.close()
 
