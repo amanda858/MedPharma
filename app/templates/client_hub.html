@@ -1704,6 +1704,30 @@
       .account-header {
         padding: 20px 16px
       }
+
+      /* Nothing should force the page wider than the screen (so people can
+         read in portrait without rotating to landscape). */
+      html, body {
+        max-width: 100%;
+        overflow-x: hidden
+      }
+      img {
+        max-width: 100%
+      }
+
+      /* Team Chat: stack the room list above the conversation in portrait so
+         the message column isn't squeezed into an unreadable sliver. */
+      .chat-grid {
+        grid-template-columns: 1fr !important
+      }
+      #chatRoomsList {
+        max-height: 34vh !important;
+        border-right: none !important;
+        border-bottom: 1px solid var(--gray-200) !important
+      }
+      #chatMessages {
+        max-height: 50vh !important
+      }
     }
 
     @media(max-width:420px) {
@@ -2530,7 +2554,7 @@
             </div>
           </div>
           <div class="card" style="padding:0;overflow:hidden">
-            <div style="display:grid;grid-template-columns:280px 1fr;min-height:560px">
+            <div class="chat-grid" style="display:grid;grid-template-columns:280px 1fr;min-height:560px">
               <!-- Rooms list -->
               <div id="chatRoomsList"
                 style="border-right:1px solid var(--gray-200);overflow-y:auto;max-height:75vh;background:#fafbfc">
@@ -4109,6 +4133,7 @@
         if (r.ok) {
           const u = await r.json();
           currentUser = u;
+          startKeepalive();
           await showAccountSelector();
         }
       } catch (_) { }
@@ -4239,6 +4264,7 @@
         if (!r.ok) throw new Error(d.detail || 'Invalid credentials');
 
         currentUser = d.user;
+        startKeepalive();
         if (currentUser && currentUser.must_change_password) {
           forceCurrentPassword = password;
           showForcedPasswordMode(currentUser.username || username);
@@ -4279,6 +4305,7 @@
 
     async function doLogout() {
       stopGlobalJobsMonitor();
+      if (_keepaliveTimer) { clearInterval(_keepaliveTimer); _keepaliveTimer = null; }
       try { await fetch('/hub/api/logout', { method: 'POST' }); } catch (_) { }
       // Full page reload to /hub guarantees clean auth state — no stale cookie can auto-login
       window.location.href = '/hub';
@@ -6532,9 +6559,28 @@
     async function checkSession() {
       try {
         const r = await _nativeFetch('/hub/api/me', { credentials: 'same-origin' });
-        if (!r.ok) { toast('Session expired — please sign in again', 'error'); doLogout(); return false; }
+        // Only a genuine 401 (token actually invalid/expired) signs the user
+        // out. A 5xx / cold-start from the server must NOT log people out —
+        // that was kicking people mid-session while the instance woke up.
+        if (r.status === 401) { toast('Session expired — please sign in again', 'error'); doLogout(); return false; }
+        if (!r.ok) { toast('Server is waking up — please try again in a moment', 'error'); return false; }
         return true;
       } catch (_) { toast('Cannot reach server — please try again', 'error'); return false; }
+    }
+
+    // Keepalive: ping the server every few minutes while the app is open so the
+    // session stays warm all day (people can chat without being timed out) and
+    // the hosting instance doesn't idle out under them. Only a real 401 logs
+    // them out; transient errors are ignored and retried next tick.
+    let _keepaliveTimer = null;
+    function startKeepalive() {
+      if (_keepaliveTimer) return;
+      _keepaliveTimer = setInterval(async () => {
+        try {
+          const r = await _nativeFetch('/hub/api/me', { credentials: 'same-origin' });
+          if (r.status === 401) doLogout();
+        } catch (_) { /* transient network / cold start — ignore */ }
+      }, 240000);
     }
 
     // ═══════════════════════════════════════
