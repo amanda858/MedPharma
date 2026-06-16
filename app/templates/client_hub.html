@@ -7750,7 +7750,15 @@
     }
 
     function renderDocTabs() {
-      const tabs = ['All', ...currentDocTabs];
+      // Hide the Credentialing Docs category unless the client actually has the
+      // Credentialing service turned on. When no client is in context
+      // (activeClientModules === null) keep everything visible for the team.
+      let visibleDocTabs = currentDocTabs;
+      if (activeClientModules && !activeClientModules.includes('credentialing')) {
+        visibleDocTabs = currentDocTabs.filter(t => t !== 'Credentialing Docs');
+        if (activeDocTab === 'Credentialing Docs') activeDocTab = 'All';
+      }
+      const tabs = ['All', ...visibleDocTabs];
       document.getElementById('docCategoryTabs').innerHTML = tabs.map(t => {
         const cnt = t === 'All' ? allDocFiles.length : allDocFiles.filter(f => f.category === t).length;
         return `<button class="qtab ${t === activeDocTab ? 'active' : ''}" onclick="setDocTab('${t.replace(/'/g, "\\'")}')">
