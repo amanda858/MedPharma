@@ -5243,11 +5243,20 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
 
 # ─── File uploads ──────────────────────────────────────────────────────────
 
-def list_files(client_id: int = None):
+def list_files(client_id=None):
     conn = get_db()
     try:
         cur = conn.cursor()
-        if client_id:
+        if isinstance(client_id, (list, tuple, set)):
+            ids = [int(x) for x in client_id if x]
+            if not ids:
+                return []
+            placeholders = ",".join("?" * len(ids))
+            cur.execute(
+                f"SELECT * FROM client_files WHERE client_id IN ({placeholders}) ORDER BY created_at DESC",
+                ids,
+            )
+        elif client_id:
             cur.execute("SELECT * FROM client_files WHERE client_id=? ORDER BY created_at DESC", (client_id,))
         else:
             cur.execute("SELECT * FROM client_files ORDER BY created_at DESC")
@@ -5383,13 +5392,23 @@ def rename_report_note(client_id: int, old_name: str, new_name: str):
 
 # ── Sharefile links ────────────────────────────────────────────────────────────
 
-def list_sharefile_links(client_id: int) -> list:
+def list_sharefile_links(client_id) -> list:
     conn = get_db()
     try:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM sharefile_links WHERE client_id=? ORDER BY created_at DESC",
-            (client_id,)
-        ).fetchall()]
+        if isinstance(client_id, (list, tuple, set)):
+            ids = [int(x) for x in client_id if x]
+            if not ids:
+                return []
+            placeholders = ",".join("?" * len(ids))
+            rows = [dict(r) for r in conn.execute(
+                f"SELECT * FROM sharefile_links WHERE client_id IN ({placeholders}) ORDER BY created_at DESC",
+                ids,
+            ).fetchall()]
+        else:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM sharefile_links WHERE client_id=? ORDER BY created_at DESC",
+                (client_id,)
+            ).fetchall()]
     finally:
         conn.close()
     return rows
@@ -5978,7 +5997,29 @@ def set_client_access(client_id: int, user_ids: list[int], granted_by: str = "")
         conn.close()
 
 
-def list_clients_for_user(user_id: int) -> list[int]:
+def accounts_assigned_to_user(user_id: int) -> list[int]:
+    """Account client_ids this user has been EXPLICITLY granted access to.
+
+    Unlike ``list_clients_for_user`` this does NOT apply the legacy
+    default-open rule — it returns only accounts with a real
+    ``client_user_access`` row for ``user_id``. Used so every user assigned to
+    an account sees the same documents and attachments the admin uploads for
+    that account.
+    """
+    uid = int(user_id or 0)
+    if not uid:
+        return []
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT client_id FROM client_user_access WHERE user_id=?",
+            (uid,),
+        ).fetchall()
+        return [int(r[0]) for r in rows if r[0] is not None]
+    finally:
+        conn.close()
+
+
     """Client IDs visible to ``user_id``.
 
     Legacy/default-open behavior is preserved for existing clients that have no

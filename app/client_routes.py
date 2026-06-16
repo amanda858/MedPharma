@@ -50,6 +50,7 @@ from app.client_db import (
     user_can_access_room, add_room_message, list_room_messages,
     mark_room_read, chat_unread_total, list_chat_eligible_users,
     list_client_access, set_client_access, list_clients_for_user,
+    accounts_assigned_to_user,
     create_notification, fanout_notification, list_notifications,
     count_unread_notifications, mark_notification_read,
     mark_all_notifications_read, delete_notification, delete_notifications,
@@ -478,6 +479,48 @@ def _assert_client_can_view(user: dict, client_id: int) -> None:
         raise HTTPException(status_code=403, detail="You don’t have access to that account.")
     if int(user.get("id", 0) or 0) != int(client_id or 0):
         raise HTTPException(status_code=403, detail="You can only view your own account.")
+
+
+def _doc_account_ids(user: dict) -> list[int]:
+    """Account ids whose documents/attachments a CLIENT user may see: their own
+    account plus every account they've been explicitly assigned to. This makes
+    a single admin upload visible to ALL users on the account."""
+    own = int(user.get("id", 0) or 0)
+    ids = set()
+    if own:
+        ids.add(own)
+    try:
+        for cid in accounts_assigned_to_user(own):
+            ids.add(int(cid))
+    except Exception:
+        pass
+    return list(ids)
+
+
+def _doc_scope(user: dict, client_id: Optional[int] = None):
+    """Resolve which account(s) of documents a request should read.
+
+    - admin/staff: the explicitly requested ``client_id`` (None => all).
+    - client user: their own account PLUS every account assigned to them, so
+      everyone on an account shares the same documents and attachments.
+    """
+    if user.get("role") in ("admin", "staff"):
+        return client_id  # None => all
+    return _doc_account_ids(user)
+
+
+def _client_upload_account(user: dict) -> int:
+    """Account a CLIENT user's own uploads/links should land in. A user who is
+    assigned to exactly one account uploads INTO that shared account so the
+    whole team sees it; account-owner logins (no assignment) use their own id."""
+    own = int(user.get("id", 0) or 0)
+    try:
+        assigned = [int(c) for c in accounts_assigned_to_user(own) if int(c) != own]
+    except Exception:
+        assigned = []
+    if len(assigned) == 1:
+        return assigned[0]
+    return own
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -2988,7 +3031,7 @@ def relink_kindercare_production(body: ProductionRelinkIn, hub_session: Optional
 @router.get("/files")
 def get_files(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    scope = client_id if client_id is not None else _doc_scope(user)
     files = list_files(scope)
     return {"files": files}
 
@@ -3002,7 +3045,16 @@ async def upload_file(
     hub_session: Optional[str] = Cookie(None),
 ):
     user = _require_user(hub_session)
-    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
+    if client_id is not None:
+        scope = client_id
+    elif user.get("role") in ("admin", "staff"):
+        scope = _client_scope(user)
+        if scope is None:
+            scope = user["id"]
+    else:
+        # Client sub-users upload into the shared account they belong to so the
+        # rest of the team on that account sees the file too.
+        scope = _client_upload_account(user)
 
     # Validate type
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -4492,8 +4544,12 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
 def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
     """Download the original uploaded file."""
     user = _require_user(hub_session)
-    scope = _client_scope(user)
-    rec = get_file_record(file_id, scope)
+    if user.get("role") in ("admin", "staff"):
+        rec = get_file_record(file_id, _client_scope(user))
+    else:
+        rec = get_file_record(file_id, None)
+        if rec and int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            rec = None
     if not rec:
         raise HTTPException(404, "File not found")
     path = os.path.join(UPLOAD_DIR, rec["filename"])
@@ -5475,7 +5531,7 @@ class SharefileLinkIn(BaseModel):
 @router.get("/sharefile-links")
 def get_sharefile_links(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    scope = client_id if client_id is not None else _doc_scope(user)
     return {"links": list_sharefile_links(scope)}
 
 
@@ -5486,7 +5542,13 @@ def create_sharefile_link(
     hub_session: Optional[str] = Cookie(None),
 ):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    if client_id:
+        scope = client_id
+    elif user.get("role") in ("admin", "staff"):
+        scope = _client_scope(user)
+    else:
+        # Client sub-users add the link to the shared account they belong to.
+        scope = _client_upload_account(user)
     if not scope:
         raise HTTPException(400, "Select a client account first, then add the link")
     if not payload.label.strip():
