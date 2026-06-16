@@ -49,6 +49,7 @@ from app.client_db import (
     list_room_members, add_room_member, remove_room_member,
     user_can_access_room, add_room_message, list_room_messages,
     mark_room_read, chat_unread_total, list_chat_eligible_users,
+    list_room_read_state,
     list_client_access, set_client_access, list_clients_for_user,
     accounts_assigned_to_user,
     create_notification, fanout_notification, list_notifications,
@@ -5823,6 +5824,7 @@ def chat_get_messages(room_id: int, limit: int = 200,
         "room_id": room_id,
         "messages": msgs,
         "last_read_message_id": last_read,
+        "reads": list_room_read_state(room_id),
     }
 
 

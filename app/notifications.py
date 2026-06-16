@@ -3686,6 +3686,86 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
     return {"ok": True, "sent": sent, "pending": len(pending)}
 
 
+def send_chat_catchup_reminders(min_age_minutes: int = 15):
+    """Email a gentle "please catch up on team chat" nudge to anyone who STILL
+    has unread chat messages older than ``min_age_minutes`` (default 15).
+
+    Only people who haven't read are emailed — the moment someone opens the
+    room and reads, they drop off the list. A per-user high-water mark means
+    each person gets at most one nudge per wave of new messages (no per-message
+    spam). PHI-safe: the message body is never included.
+    """
+    try:
+        from app.client_db import (list_stale_unread_users,
+                                    mark_catchup_reminded)
+    except Exception:
+        log.exception("chat catch-up: db helpers unavailable")
+        return {"ok": False, "sent": 0}
+
+    try:
+        pending = list_stale_unread_users(min_age_minutes=min_age_minutes)
+    except Exception:
+        log.exception("chat catch-up: failed to list stale unread users")
+        return {"ok": False, "sent": 0}
+
+    if not pending:
+        return {"ok": True, "sent": 0}
+
+    try:
+        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
+        hub_base = (_hub_base or "").strip().rstrip("/")
+    except Exception:
+        hub_base = ""
+    deep_link = f"{hub_base}/hub?panel=chat" if hub_base else "/hub?panel=chat"
+
+    sent = 0
+    for item in pending:
+        addr = (item.get("email") or "").strip()
+        if not addr or "@" not in addr:
+            continue
+        who = (item.get("contact_name") or item.get("username") or "there").split()[0]
+        n = int(item.get("unread_count") or 0)
+        count_phrase = (f"{n} unread message{'s' if n != 1 else ''}"
+                        if n else "unread messages")
+        subject = "💬 Please catch up on team communication"
+        text_body = (
+            f"Hi {who},\n\n"
+            f"You have {count_phrase} in MedPharma Hub Team Chat that have been "
+            f"sitting unread for more than {int(min_age_minutes)} minutes.\n\n"
+            f"Please make sure you're up to date on team communication — open "
+            f"the chat to read and reply (message content isn't included here "
+            f"for HIPAA compliance):\n{deep_link}\n"
+        )
+        html_body = (
+            f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
+            f"<p>Hi {who},</p>"
+            f"<p>You have <b>{count_phrase}</b> in <b>MedPharma Hub Team Chat</b> "
+            f"that have been sitting unread for more than "
+            f"{int(min_age_minutes)} minutes.</p>"
+            f"<p>Please make sure you're up to date on team communication.</p>"
+            f"<p style='color:#475569;font-size:13px'>The message content isn't "
+            f"included in this email (HIPAA-protected content stays inside the "
+            f"hub). Open the chat to read and reply.</p>"
+            f"<p style='margin:18px 0'>"
+            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
+            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
+            f"font-weight:600'>Open Team Chat →</a></p>"
+            f"</div>"
+        )
+        try:
+            ok, _via = _send_email_to(addr, subject, text_body, html_body)
+            if ok:
+                sent += 1
+            # Stamp the high-water mark regardless so a hard-failing address
+            # doesn't loop every cycle; the in-app unread badge still nudges.
+            mark_catchup_reminded(item["user_id"], item.get("max_unread_id") or 0)
+        except Exception:
+            log.exception("chat catch-up: send failed for %s", addr)
+
+    log.info(f"Chat catch-up reminders: sent={sent} of {len(pending)} pending")
+    return {"ok": True, "sent": sent, "pending": len(pending)}
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -3771,6 +3851,16 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
+        # Every 5 min — gentle "catch up on team communication" nudge to anyone
+        # with chat messages still unread after 15 minutes (one nudge per wave).
+        scheduler.add_job(
+            send_chat_catchup_reminders,
+            IntervalTrigger(minutes=5, timezone=est),
+            id="chat_catchup_reminders",
+            name="Every 5 min Chat Catch-up Reminders (15 min unread)",
+            replace_existing=True,
+        )
+
         scheduler.start()
         log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD team, 6:35 client reports")
     except ImportError:
@@ -3791,6 +3881,7 @@ def _start_thread_scheduler():
         last_sent_date = None
         last_eod_date = None
         last_clients_date = None
+        last_catchup_at = None
         while True:
             try:
                 # Get current time in US/Eastern
@@ -3831,6 +3922,15 @@ def _start_thread_scheduler():
                     last_clients_date = today
                     log.info("Thread scheduler firing per-client production reports")
                     send_all_client_daily_reports()
+
+                # Every ~5 min — chat catch-up nudge (15-min unread). Runs all
+                # week, not just weekdays, since chat happens any time.
+                if last_catchup_at is None or (now_est - last_catchup_at).total_seconds() >= 300:
+                    last_catchup_at = now_est
+                    try:
+                        send_chat_catchup_reminders()
+                    except Exception:
+                        log.exception("thread scheduler chat catch-up failed")
 
             except Exception as e:
                 log.error(f"Thread scheduler error: {e}")

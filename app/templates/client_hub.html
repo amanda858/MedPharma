@@ -9815,7 +9815,7 @@
         const r = await fetch(`/hub/api/chat/rooms/${CHAT.activeRoomId}/messages?limit=200`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
-        renderChatMessages(d.messages || []);
+        renderChatMessages(d.messages || [], d.reads || []);
         // Refresh badges since marking read may change the count.
         refreshChatBadge();
       } catch (e) {
@@ -9824,10 +9824,13 @@
       }
     }
 
-    function renderChatMessages(msgs) {
+    function renderChatMessages(msgs, reads) {
       const box = document.getElementById('chatMessages');
       if (!box) return;
       const myId = currentUser ? parseInt(currentUser.id, 10) : -1;
+      // Everyone in the room except me — these are the people whose read
+      // receipts matter on the messages I send.
+      const others = (reads || []).filter(u => parseInt(u.user_id, 10) !== myId);
       if (!msgs.length) {
         box.innerHTML = '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">No messages yet. Be the first to say hi 👋</div>';
         return;
@@ -9840,6 +9843,20 @@
         const roleBadge = m.sender_role && m.sender_role !== 'member'
           ? `<span style="background:#e0e7ff;color:#3730a3;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px">${esc(m.sender_role)}</span>` : '';
         const ts = m.created_at ? esc(m.created_at) : '';
+        // Read receipts — only shown on my own messages.
+        let receipt = '';
+        if (mine && others.length) {
+          const mid = parseInt(m.id, 10) || 0;
+          const readers = others.filter(u => parseInt(u.last_read_message_id, 10) >= mid);
+          const unread = others.filter(u => parseInt(u.last_read_message_id, 10) < mid);
+          if (readers.length >= others.length) {
+            receipt = `<div style="font-size:10px;color:#2563eb;text-align:right;margin-top:3px" title="Read by ${readers.map(u => esc(u.name)).join(', ')}">✓✓ Read by all</div>`;
+          } else if (readers.length) {
+            receipt = `<div style="font-size:10px;color:#64748b;text-align:right;margin-top:3px" title="Waiting on: ${unread.map(u => esc(u.name)).join(', ')}">✓ Read ${readers.length}/${others.length}</div>`;
+          } else {
+            receipt = `<div style="font-size:10px;color:#94a3b8;text-align:right;margin-top:3px" title="Waiting on: ${unread.map(u => esc(u.name)).join(', ')}">Sent · not read yet</div>`;
+          }
+        }
         return `<div style="display:flex;justify-content:${align};margin-bottom:10px">
           <div style="max-width:78%;padding:8px 12px;border:1px solid ${border};background:${bg};border-radius:12px">
             <div style="font-size:11px;color:#64748b;margin-bottom:2px">
@@ -9847,6 +9864,7 @@
               <span style="margin-left:6px;color:#94a3b8">${ts}</span>
             </div>
             <div style="font-size:13px;color:#111827;white-space:pre-wrap;word-break:break-word">${esc(m.body || '')}</div>
+            ${receipt}
           </div>
         </div>`;
       }).join('');

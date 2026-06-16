@@ -925,6 +925,16 @@ def init_client_hub_db():
             PRIMARY KEY (message_id, user_id)
         );
 
+        -- One row per user tracking the highest message id we've already sent
+        -- a "you have unread team chat" catch-up email about. Lets the 15-min
+        -- nudge fire once per wave of unread messages (never per-message spam),
+        -- and never re-nudge once the person has caught up.
+        CREATE TABLE IF NOT EXISTS chat_catchup_state (
+            user_id                  INTEGER PRIMARY KEY,
+            last_reminded_message_id INTEGER DEFAULT 0,
+            sent_at                  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- ── In-app notifications (decoupled from email) ─────────────────────
         -- One row per (recipient × event). Lets the hub show "you've been
         -- invited / you have a new message / your EOD report is ready" even
@@ -5875,6 +5885,100 @@ def mark_chat_reminder_sent(message_id: int, user_id: int) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO chat_reminders (message_id, user_id) VALUES (?,?)",
             (int(message_id), int(user_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_room_read_state(room_id: int) -> list[dict]:
+    """Per-member read position for a room, used to render read receipts.
+
+    Returns one row per room member:
+        {user_id, name, last_read_message_id}
+    where ``name`` prefers the contact name, falling back to username.
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT rm.user_id,
+                      c.username, c.contact_name,
+                      COALESCE(cr.last_read_message_id, 0) AS last_read
+               FROM chat_room_members rm
+               JOIN clients c ON c.id = rm.user_id
+               LEFT JOIN chat_reads cr
+                      ON cr.room_id = rm.room_id AND cr.user_id = rm.user_id
+               WHERE rm.room_id = ?""",
+            (room_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            out.append({
+                "user_id": int(d.get("user_id") or 0),
+                "name": (d.get("contact_name") or d.get("username") or "User"),
+                "last_read_message_id": int(d.get("last_read") or 0),
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def list_stale_unread_users(min_age_minutes: int = 15,
+                            max_age_minutes: int = 10080) -> list[dict]:
+    """Find every chat member who still has UNREAD messages older than
+    ``min_age_minutes`` (default 15) that we haven't already nudged them about.
+
+    Read messages never count (last_read advances past them), the sender is
+    never reminded about their own message, and a per-user high-water mark
+    (chat_catchup_state) means each person is emailed at most once per wave of
+    new messages — not once per message.
+
+    Returns one row per user:
+        {user_id, username, contact_name, email, max_unread_id, unread_count}
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT c.id            AS user_id,
+                      c.username      AS username,
+                      c.contact_name  AS contact_name,
+                      c.email         AS email,
+                      MAX(m.id)       AS max_unread_id,
+                      COUNT(*)        AS unread_count
+               FROM chat_messages m
+               JOIN chat_rooms r        ON r.id = m.room_id AND COALESCE(r.archived,0)=0
+               JOIN chat_room_members rm ON rm.room_id = m.room_id
+               JOIN clients c           ON c.id = rm.user_id
+               LEFT JOIN chat_reads cr  ON cr.room_id = m.room_id AND cr.user_id = rm.user_id
+               LEFT JOIN chat_catchup_state cs ON cs.user_id = rm.user_id
+               WHERE COALESCE(m.sender_id,0) <> rm.user_id
+                 AND m.id > COALESCE(cr.last_read_message_id, 0)
+                 AND m.id > COALESCE(cs.last_reminded_message_id, 0)
+                 AND m.created_at <= datetime('now', ?)
+                 AND m.created_at >= datetime('now', ?)
+                 AND c.email IS NOT NULL AND TRIM(c.email) <> ''
+               GROUP BY c.id""",
+            (f"-{int(min_age_minutes)} minutes",
+             f"-{int(max_age_minutes)} minutes"),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_catchup_reminded(user_id: int, last_message_id: int) -> None:
+    """Stamp the high-water mark after emailing a user the catch-up nudge, so
+    we don't re-nudge them about the same backlog of unread messages."""
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO chat_catchup_state (user_id, last_reminded_message_id, sent_at)
+               VALUES (?,?,CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 last_reminded_message_id = MAX(last_reminded_message_id, excluded.last_reminded_message_id),
+                 sent_at = excluded.sent_at""",
+            (int(user_id), int(last_message_id or 0)),
         )
         conn.commit()
     finally:
