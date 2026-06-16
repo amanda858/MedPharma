@@ -3111,7 +3111,7 @@
         <!-- ═══ TEAM PRODUCTION ═══ -->
         <div class="hub-panel" id="panel-production">
           <div class="page-header">
-            <div class="page-title">📋 Team Production</div>
+            <div class="page-title" id="prodPageTitle">📋 Team Production</div>
             <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-secondary btn-sm" style="background:#f0fdf4;border-color:#86efac;color:#15803d" onclick="eodReport()">🌙 End of Day Report</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('prodExcelInput').click()">📥 Import Excel</button>
@@ -3131,6 +3131,19 @@
 
           <!-- Daily Log Entry View -->
           <div id="prodLogView">
+            <!-- Admin only: Team Production Report filters (per client / per user / combined) -->
+            <div class="card" id="prodAdminFilters" style="display:none;margin-bottom:18px">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <label style="font-weight:600;font-size:13px">Client:</label>
+                <select class="form-control btn-sm" id="prodFilterClient" style="width:auto;min-width:220px" onchange="loadProduction()">
+                  <option value="">All clients (combined)</option>
+                </select>
+                <label style="font-weight:600;font-size:13px">User:</label>
+                <select class="form-control btn-sm" id="prodFilterUser" style="width:auto;min-width:200px" onchange="loadProduction()">
+                  <option value="">All users</option>
+                </select>
+              </div>
+            </div>
             <div class="card" style="margin-bottom:18px">
               <div class="card-header">
                 <div class="card-title">📝 Log Today's Work</div>
@@ -8515,8 +8528,39 @@
       }
     }
 
+    let _prodFiltersLoaded = false;
+    async function ensureProdFilterOptions() {
+      if (_prodFiltersLoaded) return;
+      const cSel = document.getElementById('prodFilterClient');
+      if (cSel && Array.isArray(clientsList)) {
+        cSel.innerHTML = '<option value="">All clients (combined)</option>' +
+          clientsList.filter(c => (c.role || 'client') === 'client')
+            .map(c => `<option value="${c.id}">${esc(brand(c.company || c.username))}</option>`).join('');
+        if (activeClientId) cSel.value = String(activeClientId);
+      }
+      try {
+        const r = await fetch('/hub/api/admin/users');
+        if (r.ok) {
+          const users = await r.json();
+          const uSel = document.getElementById('prodFilterUser');
+          if (uSel) uSel.innerHTML = '<option value="">All users</option>' +
+            (users || []).map(u => `<option value="${esc(u.username)}">${esc(u.contact_name || u.username)}</option>`).join('');
+        }
+      } catch (_) {}
+      _prodFiltersLoaded = true;
+    }
+
     async function loadProduction() {
-      if (!activeClientId) return;
+      const admin = isFullAdmin();
+      // Label: a regular user sees their own "User Production"; the admin gets
+      // the team-wide report with per-client / per-user filters.
+      const titleEl = document.getElementById('prodPageTitle');
+      if (titleEl) titleEl.textContent = admin ? '📋 Team Production Report' : '📋 User Production';
+      const adminFilters = document.getElementById('prodAdminFilters');
+      if (adminFilters) adminFilters.style.display = admin ? '' : 'none';
+
+      if (!admin && !activeClientId) return;
+
       // Set today's date as default
       const dateEl = document.getElementById('prodDate');
       if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
@@ -8530,14 +8574,27 @@
       }
       if (rptEnd && !rptEnd.value) rptEnd.value = new Date().toISOString().split('T')[0];
 
+      let clientParam = '';
+      let userParam = '';
+      if (admin) {
+        await ensureProdFilterOptions();
+        clientParam = document.getElementById('prodFilterClient')?.value || '';
+        userParam = document.getElementById('prodFilterUser')?.value || '';
+      } else {
+        clientParam = activeClientId || '';
+      }
+
       const filterDate = document.getElementById('prodFilterDate')?.value || '';
-      let url = `/hub/api/production?client_id=${activeClientId}`;
-      if (filterDate) url += `&start_date=${filterDate}&end_date=${filterDate}`;
+      const qs = [];
+      if (clientParam) qs.push(`client_id=${encodeURIComponent(clientParam)}`);
+      if (userParam) qs.push(`username=${encodeURIComponent(userParam)}`);
+      if (filterDate) qs.push(`start_date=${filterDate}`, `end_date=${filterDate}`);
+      const url = `/hub/api/production${qs.length ? '?' + qs.join('&') : ''}`;
 
       try {
         const r = await fetch(url);
         const d = await r.json();
-        setProductionFallbackBanner(Boolean(d.fallback_all_clients), d.selected_client_id || activeClientId);
+        setProductionFallbackBanner(Boolean(d.fallback_all_clients), d.selected_client_id || clientParam || activeClientId);
         const logs = d.logs || [];
         const tbody = document.getElementById('prodTbody');
         if (!logs.length) {
@@ -9584,6 +9641,15 @@
       });
 
       updateDashAdminControls();
+
+      // Production label: the admin gets the team-wide report, everyone else
+      // (staff / client) only sees their own "User Production".
+      try {
+        const prodLabel = isFullAdmin() ? '📋 Team Production Report' : '📋 User Production';
+        document.querySelectorAll('.nav-item[data-panel="production"]').forEach(el => {
+          el.textContent = prodLabel;
+        });
+      } catch (_) {}
     }
 
     // Self-service per-client controls shown on the Dashboard hero (admins/staff

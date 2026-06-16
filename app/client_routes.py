@@ -2426,22 +2426,22 @@ def _start_production_report_job(job_id: str, user: dict):
 def get_production(client_id: Optional[int] = None,
                    start_date: Optional[str] = None,
                    end_date: Optional[str] = None,
+                   username: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    if user.get("role") in ("admin", "staff"):
-        # Admin/staff: honor the selected client so production stays scoped to
-        # the team working that client. Only fall back to the all-client view
-        # when a specific client is selected but has no rows for this filter.
-        if client_id is not None:
-            logs = list_production_logs(client_id, start_date, end_date, username=None)
-            if logs:
-                return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
-            logs = list_production_logs(None, start_date, end_date, username=None)
-            return {"logs": logs, "fallback_all_clients": True, "selected_client_id": client_id}
-        # No client in context (Admin Workspace) → show the full team view.
-        logs = list_production_logs(None, start_date, end_date, username=None)
-        return {"logs": logs, "fallback_all_clients": False, "selected_client_id": None}
-
+    role = (user.get("role") or "").lower()
+    uname = (username or "").strip() or None
+    if role == "admin":
+        # Team Production Report: admin can filter per client, per user, or
+        # combined (both). No filter => the whole team across every account.
+        logs = list_production_logs(client_id, start_date, end_date, username=uname)
+        return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
+    if role == "staff":
+        # User Production: a staff user only ever sees their OWN logged work,
+        # across whichever accounts they're working.
+        logs = list_production_logs(None, start_date, end_date, username=user.get("username"))
+        return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
+    # Client account: production logged against their own account.
     scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
     return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
