@@ -2386,8 +2386,18 @@ def get_production(client_id: Optional[int] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     if user.get("role") in ("admin", "staff"):
+        # Admin/staff: honor the selected client so production stays scoped to
+        # the team working that client. Only fall back to the all-client view
+        # when a specific client is selected but has no rows for this filter.
+        if client_id is not None:
+            logs = list_production_logs(client_id, start_date, end_date, username=None)
+            if logs:
+                return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
+            logs = list_production_logs(None, start_date, end_date, username=None)
+            return {"logs": logs, "fallback_all_clients": True, "selected_client_id": client_id}
+        # No client in context (Admin Workspace) → show the full team view.
         logs = list_production_logs(None, start_date, end_date, username=None)
-        return {"logs": logs, "fallback_all_clients": True, "selected_client_id": client_id}
+        return {"logs": logs, "fallback_all_clients": False, "selected_client_id": None}
 
     scope = client_id or _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)

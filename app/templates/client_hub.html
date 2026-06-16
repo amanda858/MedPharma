@@ -1982,7 +1982,7 @@
         <button class="hamburger" id="hamburgerBtn" onclick="toggleMobileSidebar()" aria-label="Menu">
           <span></span><span></span><span></span>
         </button>
-        <span class="brand">MedPharma</span>
+        <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma" class="brand" style="height:36px;width:auto;display:block">
         <span class="account-chip" id="topAccount" onclick="switchAccount()" title="Click to switch account" style="cursor:pointer">&#8629; Switch Account</span>
       </div>
       <!-- Global Search Bar -->
@@ -2110,11 +2110,8 @@
             <div
               style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;position:relative;z-index:1">
               <div>
-                <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma"
-                  style="height:44px;width:auto;margin-bottom:12px;border-radius:6px;display:block">
-                <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:-.3px" id="dashTitle">Dashboard
-                </div>
-                <div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:4px;font-weight:600" id="dashGreetingLine"></div>
+                <div id="dashTitle" style="display:none"></div>
+                <div style="font-size:21px;color:#fff;font-weight:800;letter-spacing:-.3px" id="dashGreetingLine"></div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <div id="dashAdminControls" style="display:none;gap:8px;align-items:center">
@@ -5100,8 +5097,8 @@
       const greetSubtitleEl = document.getElementById('dashGreetingLine');
       if (greetSubtitleEl) {
         greetSubtitleEl.textContent = greetName
-          ? `${greetWord}, ${greetName}! — ${title}`
-          : `${greetWord}! — ${title}`;
+          ? `${greetWord}, ${greetName}!`
+          : `${greetWord}!`;
       }
 
       // Load today's activity card
