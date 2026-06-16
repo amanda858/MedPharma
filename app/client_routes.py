@@ -5417,6 +5417,8 @@ def create_sharefile_link(
 ):
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    if not scope:
+        raise HTTPException(400, "Select a client account first, then add the link")
     if not payload.label.strip():
         raise HTTPException(400, "Label is required")
     if not payload.url.strip().startswith(("http://", "https://")):
