@@ -1585,23 +1585,8 @@ def _notify_profile_change(client_id: int, actor: dict, body: ProfileUpdate, sco
                   "clients", client_id, details)
         notify_activity(actor_name, "updated", "Client Profile",
                         f"client #{client_id} ({scope_label}) — {details}")
-        # Module opt-outs change what the client sees — always send an
-        # immediate email to admin regardless of digest whitelist.
-        if body.enabled_modules is not None:
-            try:
-                from app.notifications import _send_email  # type: ignore
-                import threading as _th
-                subject = f"[CVOPro Hub] Module opt-outs updated — client #{client_id}"
-                text = (
-                    f"Actor: {actor_name} ({scope_label})\n"
-                    f"Client: #{client_id}\n"
-                    f"Enabled modules: {', '.join(sorted(body.enabled_modules)) or '(none)'}\n"
-                )
-                _th.Thread(target=_send_email,
-                           args=(subject, text, ""),
-                           daemon=True).start()
-            except Exception:
-                log.exception("immediate module-change email failed")
+        # Note: module opt-in/out changes are recorded in the audit trail and
+        # activity feed only — no email is sent (toggling modules is routine).
     except Exception:
         log.exception("profile change notification failed")
 
