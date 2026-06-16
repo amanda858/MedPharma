@@ -1083,6 +1083,17 @@ def init_client_hub_db():
             cur.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_def}")
     conn.commit()
 
+    # ── Migrate existing DBs: production-log attachments ─────────────────
+    cur.execute("PRAGMA table_info(team_production)")
+    tp_cols = {row[1] for row in cur.fetchall()}
+    for col, col_def in (
+        ("attachment_file_id", "INTEGER"),
+        ("attachment_name", "TEXT DEFAULT ''"),
+    ):
+        if col not in tp_cols:
+            cur.execute(f"ALTER TABLE team_production ADD COLUMN {col} {col_def}")
+    conn.commit()
+
     # ── Migrate existing DBs: BizDev lead follow-up tracking ─────────────
     cur.execute("PRAGMA table_info(leads)")
     lead_cols = {row[1] for row in cur.fetchall()}
@@ -5044,13 +5055,14 @@ def add_production_log(data: dict) -> int:
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO team_production (client_id, work_date, username, category, task_description, quantity, time_spent, notes)
-            VALUES (?,?,?,?,?,?,?,?)
+            INSERT INTO team_production (client_id, work_date, username, category, task_description, quantity, time_spent, notes, attachment_file_id, attachment_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
         """, (
             data["client_id"], data["work_date"], data["username"],
             data.get("category", ""), data.get("task_description", ""),
             data.get("quantity", 0), data.get("time_spent", 0),
-            data.get("notes", "")
+            data.get("notes", ""),
+            data.get("attachment_file_id"), data.get("attachment_name", "")
         ))
         conn.commit()
         new_id = cur.lastrowid

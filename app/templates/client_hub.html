@@ -3188,6 +3188,10 @@
                     <label>Notes</label>
                     <input class="form-control" id="prodNotes" placeholder="Optional notes…">
                   </div>
+                  <div class="form-group" style="grid-column:span 2">
+                    <label>📎 Attachment — Excel / PDF / Word (optional, for claims data)</label>
+                    <input class="form-control" type="file" id="prodAttachment" accept=".xlsx,.xls,.csv,.ods,.pdf,.doc,.docx">
+                  </div>
                 </div>
                 <div style="margin-top:12px;text-align:right">
                   <button class="btn btn-primary btn-sm" onclick="saveProductionLog()">➕ Add Entry</button>
@@ -8608,7 +8612,7 @@
           <td>${esc(l.task_description)}</td>
           <td style="text-align:center;font-weight:600">${l.quantity}</td>
           <td style="text-align:center;font-weight:600">${l.time_spent}h</td>
-          <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}</td>
+          <td style="font-size:12px;color:var(--gray-500)">${esc(l.notes || '')}${l.attachment_file_id ? ` <a href="/hub/api/files/${l.attachment_file_id}/download" target="_blank" style="color:var(--primary);font-weight:600;white-space:nowrap">📎 ${esc(l.attachment_name || 'file')}</a>` : ''}</td>
           <td>${(isStaffOrAdmin() || ((((currentUser && currentUser.username) || '')).toLowerCase() === String(l.username || '').toLowerCase()))
             ? `<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:11px" onclick="deleteProductionLog(${l.id})">🗑️</button>`
             : ''}</td>
@@ -8630,6 +8634,22 @@
       if (!data.work_date) { toast('Please select a date', 'error'); return; }
       if (!data.task_description) { toast('Please describe the task', 'error'); return; }
       if (data.time_spent <= 0) { toast('Please enter time spent', 'error'); return; }
+      // Optional attachment (Excel/PDF/Word) — upload first, then link to the entry.
+      const attEl = document.getElementById('prodAttachment');
+      if (attEl && attEl.files && attEl.files[0]) {
+        try {
+          const fd = new FormData();
+          fd.append('file', attEl.files[0]);
+          fd.append('category', 'General');
+          fd.append('client_id', activeClientId);
+          toast(`Uploading ${attEl.files[0].name}…`, 'info');
+          const ur = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+          const ud = await ur.json();
+          if (!ur.ok) throw new Error(ud.detail || 'Attachment upload failed');
+          data.attachment_file_id = ud.id || null;
+          data.attachment_name = attEl.files[0].name;
+        } catch (e) { toast(e.message, 'error'); return; }
+      }
       try {
         const r = await fetch('/hub/api/production', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
@@ -8640,6 +8660,7 @@
         document.getElementById('prodQty').value = '0';
         document.getElementById('prodHours').value = '0';
         document.getElementById('prodNotes').value = '';
+        if (attEl) attEl.value = '';
         loadProduction();
       } catch (e) { toast(e.message, 'error'); }
     }

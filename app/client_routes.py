@@ -1573,7 +1573,10 @@ def get_my_profile(hub_session: Optional[str] = Cookie(None)):
 
 @router.get("/profile/{cid}")
 def get_client_profile(cid: int, hub_session: Optional[str] = Cookie(None)):
-    _require_full_admin(hub_session)
+    # Staff (not just full admins) need to READ a client's profile so the hub
+    # can hide the modules the admin disabled. Writes stay admin-only (PUT).
+    user = _require_admin(hub_session)
+    _assert_client_can_view(user, cid)
     return get_profile(cid)
 
 
@@ -2214,6 +2217,8 @@ class ProductionLogIn(BaseModel):
     quantity: int = 0
     time_spent: float = 0
     notes: str = ""
+    attachment_file_id: Optional[int] = None
+    attachment_name: str = ""
 
 
 class ProductionRelinkIn(BaseModel):
