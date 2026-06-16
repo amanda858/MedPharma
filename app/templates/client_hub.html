@@ -2110,10 +2110,11 @@
             <div
               style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;position:relative;z-index:1">
               <div>
+                <img src="https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png" alt="MedPharma"
+                  style="height:44px;width:auto;margin-bottom:12px;border-radius:6px;display:block">
                 <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:-.3px" id="dashTitle">Dashboard
                 </div>
                 <div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:4px;font-weight:600" id="dashGreetingLine"></div>
-                <div style="font-size:12px;color:rgba(255,255,255,.55);margin-top:2px">MedPharma SC — Revenue Cycle Management &amp; Credentialing Solutions</div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <div id="dashAdminControls" style="display:none;gap:8px;align-items:center">
@@ -2168,7 +2169,7 @@
             </div>
           </div>
 
-          <div class="kpi-grid" id="kpiGrid"></div>
+          <div class="kpi-grid" id="kpiGrid" data-module-section="claims"></div>
           <!-- Data Summary Card -->
           <div class="card" id="dashSummaryCard" style="margin-bottom:18px;display:none">
             <div class="card-header">
@@ -2178,7 +2179,7 @@
               style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:4px 0">
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px" data-module-section="claims">
             <div class="card">
               <div class="card-header">
                 <div class="card-title">AR Aging Buckets</div>
@@ -2192,7 +2193,7 @@
               <div class="bar-list" id="statusChart"></div>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-bottom:18px">
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-bottom:18px" data-module-section="claims">
             <div class="card">
               <div class="card-header">
                 <div class="card-title">Top Denial Categories</div>
@@ -5087,6 +5088,8 @@
     function renderDashboard(d) {
       const adminView = isStaffOrAdmin();
       let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
+      // Brand shows as "MedPharma" (without the legal "SC" suffix) in the hub UI.
+      title = title.replace(/\bMedPharma\s+SC\b/i, 'MedPharma');
       if (activeSubProfile) title += ` — ${activeSubProfile}`;
       document.getElementById('dashTitle').textContent = title;
 
