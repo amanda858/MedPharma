@@ -6020,6 +6020,7 @@ def accounts_assigned_to_user(user_id: int) -> list[int]:
         conn.close()
 
 
+def list_clients_for_user(user_id: int) -> list[int]:
     """Client IDs visible to ``user_id``.
 
     Legacy/default-open behavior is preserved for existing clients that have no
