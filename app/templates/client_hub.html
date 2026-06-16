@@ -1545,6 +1545,12 @@
       display: block
     }
 
+    /* Per-client module opt-out: hides in-panel sections (dashboard cards,
+       reporting blocks) for services a client doesn't use. */
+    .module-hidden {
+      display: none !important
+    }
+
     /* Upload dropdown menu */
     .upload-menu-wrap {
       position: relative;
@@ -2195,13 +2201,13 @@
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-            <div class="card">
+            <div class="card" data-module-section="credentialing">
               <div class="card-header">
                 <div class="card-title">⚕️ Credentialing Status</div>
               </div>
               <div class="bar-list" id="credChart"></div>
             </div>
-            <div class="card">
+            <div class="card" data-module-section="enrollment">
               <div class="card-header">
                 <div class="card-title">📋 Enrollment Status</div>
               </div>
@@ -2656,13 +2662,13 @@
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-              <div class="card">
+              <div class="card" data-module-section="credentialing">
                 <div class="card-header">
                   <div class="card-title">📊 Credentialing Status</div>
                 </div>
                 <div id="chartCredStatus" style="padding:16px"></div>
               </div>
-              <div class="card">
+              <div class="card" data-module-section="enrollment">
                 <div class="card-header">
                   <div class="card-title">📊 Enrollment Status</div>
                 </div>
@@ -2707,19 +2713,19 @@
                 <div id="reportPayments"></div>
               </div>
             </div>
-            <div class="card" style="margin-bottom:16px">
+            <div class="card" style="margin-bottom:16px" data-module-section="credentialing">
               <div class="card-header">
                 <div class="card-title">Credentialing Status</div>
               </div>
               <div id="reportCred" style="overflow-x:auto"></div>
             </div>
-            <div class="card" style="margin-bottom:16px">
+            <div class="card" style="margin-bottom:16px" data-module-section="enrollment">
               <div class="card-header">
                 <div class="card-title">Enrollment Status</div>
               </div>
               <div id="reportEnroll" style="overflow-x:auto"></div>
             </div>
-            <div class="card" style="margin-bottom:16px">
+            <div class="card" style="margin-bottom:16px" data-module-section="edi">
               <div class="card-header">
                 <div class="card-title">EDI Setup Status</div>
               </div>
@@ -6939,6 +6945,24 @@
           const pd = await pr.json();
           if (pd.report_tabs && pd.report_tabs.length > 0) currentReportTabs = pd.report_tabs;
           else currentReportTabs = [...DEFAULT_REPORT_TABS];
+
+          // Gate the built-in service report tabs by the client's enabled
+          // Modules (per-client opt-in / opt-out). Claims / Credentialing /
+          // Enrollment / EDI only appear in Reporting if that module is ON for
+          // this client. Custom tabs are always kept. enabled_modules == null
+          // means "show everything" (no opt-out configured yet).
+          const mods = Array.isArray(pd.enabled_modules) ? new Set(pd.enabled_modules) : null;
+          if (mods) {
+            const tabModule = { claims: 'claims', credentialing: 'credentialing', enrollment: 'enrollment', edi: 'edi' };
+            currentReportTabs = currentReportTabs.filter(t => {
+              const mk = tabModule[String(t).toLowerCase()];
+              return mk ? mods.has(mk) : true;
+            });
+          }
+          // If the active tab was just filtered out, fall back to Overview.
+          if (activeReportTab !== 'Overview' && !currentReportTabs.some(t => t.toLowerCase() === activeReportTab.toLowerCase())) {
+            activeReportTab = 'Overview';
+          }
         }
       } catch (_) { }
       reportNotesCache = {};
@@ -9500,6 +9524,15 @@
         if (!enabled) { n.style.display = ''; return; }
         if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
         n.style.display = enabled.has(key) ? '' : 'none';
+      });
+
+      // Also gate in-panel sections (dashboard cards, reporting blocks) tagged
+      // with data-module-section, so a client without EDI/Credentialing/etc.
+      // never sees those widgets on the Dashboard or in Reporting either.
+      document.querySelectorAll('[data-module-section]').forEach(s => {
+        const key = s.getAttribute('data-module-section');
+        if (!enabled) { s.classList.remove('module-hidden'); return; }
+        s.classList.toggle('module-hidden', !enabled.has(key));
       });
     }
 
