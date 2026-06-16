@@ -3913,7 +3913,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # Skeleton: per-user, per-client, per-tab counts.
         TAB_KEYS = (
             "Claims", "Credentialing", "Enrollment", "EDI",
-            "Production", "Documents", "Notes", "Chat", "Audit", "Pageviews",
+            "Production", "Leads", "Documents", "Notes", "Chat", "Audit", "Pageviews",
         )
 
         def _new_tab_bucket():
@@ -4153,6 +4153,35 @@ def get_eod_team_report(report_date: str = None) -> dict:
         except Exception:
             pass
 
+        # ── 10) Business Development leads worked today (so the bizdev/Victor
+        #        appears in the daily report right alongside everyone else) ──
+        try:
+            for row in cur.execute(
+                "SELECT practice_name, status, est_value, owner, "
+                "       created_at, updated_at, "
+                "       date(created_at) AS cd, date(updated_at) AS ud "
+                "FROM leads "
+                "WHERE date(created_at)=? OR date(updated_at)=?",
+                (report_date, report_date),
+            ).fetchall():
+                owner = (row["owner"] or "").strip().lower()
+                if not owner:
+                    continue
+                action = "added" if row["cd"] == report_date else "updated"
+                ts = row["created_at"] if action == "added" else row["updated_at"]
+                try:
+                    val = float(row["est_value"] or 0)
+                except (TypeError, ValueError):
+                    val = 0
+                val_str = f" · ${val:,.0f}" if val else ""
+                _bump(owner, None, "Leads", {
+                    "action": action,
+                    "title": f"{row['practice_name'] or '—'} ({row['status'] or 'New'}){val_str}",
+                    "ts": ts or "",
+                })
+        except Exception:
+            pass
+
         # ── Finalize: convert defaultdicts to dicts and sort ──
         ordered = []
         for key in sorted(users.keys()):
@@ -4194,6 +4223,8 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "edi_new":          _scalar("SELECT COUNT(*) FROM edi_setup    WHERE date(created_at)=?", (report_date,)),
             "production_rows":  _scalar("SELECT COUNT(*) FROM team_production WHERE date(created_at)=? OR work_date=?", (report_date, report_date)),
             "production_hours": _scalar("SELECT ROUND(COALESCE(SUM(time_spent),0),2) FROM team_production WHERE date(created_at)=? OR work_date=?", (report_date, report_date)),
+            "leads_new":        _scalar("SELECT COUNT(*) FROM leads WHERE date(created_at)=?", (report_date,)),
+            "leads_touched":    _scalar("SELECT COUNT(*) FROM leads WHERE date(updated_at)=? AND date(created_at)<>?", (report_date, report_date)),
             "notes_new":        _scalar("SELECT COUNT(*) FROM notes_log    WHERE date(created_at)=?", (report_date,)),
             "files_uploaded":   _scalar("SELECT COUNT(*) FROM client_files WHERE date(created_at)=?", (report_date,)),
             "chat_messages":    _scalar("SELECT COUNT(*) FROM chat_messages WHERE date(created_at)=?", (report_date,)),

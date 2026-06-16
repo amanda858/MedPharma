@@ -2543,6 +2543,7 @@
           <div class="page-header">
             <div class="page-title">💬 Team Chat</div>
             <div class="page-actions" id="chatPageActions" style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" id="chatSoundToggle" onclick="toggleChatSound()" title="Toggle the new-message chime">🔊 Sound On</button>
               <button class="btn btn-secondary btn-sm" onclick="loadChatRooms()">↻ Refresh</button>
               <button class="btn btn-primary btn-sm" id="chatNewRoomBtn" style="display:none" onclick="openChatRoomModal()">+ New Room</button>
             </div>
@@ -9785,6 +9786,7 @@
 
     async function loadChatRooms() {
       try {
+        syncChatSoundToggle();
         const r = await fetch('/hub/api/chat/rooms');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
@@ -9883,6 +9885,31 @@
           osc.stop(t + 0.6);
         });
       } catch (_) { /* audio unavailable — ignore */ }
+    }
+
+    // Update the speaker button label/icon to match the saved mute preference.
+    function syncChatSoundToggle() {
+      const btn = document.getElementById('chatSoundToggle');
+      if (!btn) return;
+      const off = localStorage.getItem('chatSoundOff') === '1';
+      btn.textContent = off ? '🔇 Sound Off' : '🔊 Sound On';
+      btn.title = off ? 'New-message chime is OFF — click to turn on'
+                      : 'New-message chime is ON — click to mute';
+    }
+
+    // Speaker toggle — mutes/unmutes the chat chime (persisted per device).
+    function toggleChatSound() {
+      const off = localStorage.getItem('chatSoundOff') === '1';
+      if (off) {
+        localStorage.removeItem('chatSoundOff');
+        syncChatSoundToggle();
+        playChatDing(); // preview the sound when turning it back on
+        toast('Chat sound on', 'success');
+      } else {
+        localStorage.setItem('chatSoundOff', '1');
+        syncChatSoundToggle();
+        toast('Chat sound muted', 'info');
+      }
     }
 
     async function loadChatMessages() {

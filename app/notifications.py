@@ -1928,6 +1928,7 @@ _EOD_TAB_ICONS = {
     "Enrollment":    "📝",
     "EDI":           "🔌",
     "Production":    "⏱️",
+    "Leads":         "📈",
     "Documents":     "📁",
     "Notes":         "🗒️",
     "Chat":          "💬",
@@ -1943,6 +1944,7 @@ _TAB_TO_MODULE = {
     "Enrollment":    "enrollment",
     "EDI":           "edi",
     "Production":    "production",
+    "Leads":         None,        # business development — always shown
     "Documents":     "documents",
     "Notes":         "claims",   # notes ride with claims
     "Chat":          "chat",
@@ -2085,6 +2087,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
         f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
         f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
+        f"Business Development leads: {headlines.get('leads_new', 0)} new · {headlines.get('leads_touched', 0)} updated",
         f"Notes: {headlines.get('notes_new', 0)} · Files uploaded: {headlines.get('files_uploaded', 0)} · Chat messages: {headlines.get('chat_messages', 0)} · Audit events: {headlines.get('audit_events', 0)}",
         "",
         "Per-operator breakdown:",
