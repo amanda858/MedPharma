@@ -6143,8 +6143,26 @@ def _user_mention_aliases(member: dict) -> set[str]:
     return {a for a in aliases if len(a) >= 2}
 
 
+def _recently_active_user_ids(conn, active_within_minutes: int = 10) -> set[int]:
+    """Users with recent hub activity (heartbeat or any authenticated request).
+
+    Chat reminder emails should not fire while someone is actively in the app.
+    """
+    mins = max(1, int(active_within_minutes or 10))
+    rows = conn.execute(
+        """SELECT DISTINCT client_id
+           FROM activity_events
+           WHERE client_id IS NOT NULL
+             AND occurred_at >= datetime('now', 'localtime', ?)
+        """,
+        (f"-{mins} minutes",),
+    ).fetchall()
+    return {int(r[0]) for r in rows if r and r[0] is not None}
+
+
 def list_unread_mention_reminders(min_age_minutes: int = 120,
-                                  max_age_minutes: int = 10080) -> list[dict]:
+                                  max_age_minutes: int = 10080,
+                                  active_within_minutes: int = 10) -> list[dict]:
     """Find chat messages that @mention a room member who still hasn't read
     them after ``min_age_minutes`` (default 2 hours) and for whom no reminder
     has been sent yet.
@@ -6163,6 +6181,9 @@ def list_unread_mention_reminders(min_age_minutes: int = 120,
     conn = get_db()
     out: list[dict] = []
     try:
+        active_ids = _recently_active_user_ids(
+            conn, active_within_minutes=active_within_minutes
+        )
         rows = conn.execute(
             """SELECT m.id, m.room_id, m.sender_id, m.sender_name, m.body,
                       m.created_at, r.name AS room_name
@@ -6192,6 +6213,8 @@ def list_unread_mention_reminders(min_age_minutes: int = 120,
                 member = dict(mrow)
                 uid = int(member.get("user_id") or 0)
                 if uid <= 0 or uid == int(msg.get("sender_id") or 0):
+                    continue
+                if uid in active_ids:
                     continue
                 if not member.get("email"):
                     continue
@@ -6277,7 +6300,8 @@ def list_room_read_state(room_id: int) -> list[dict]:
 
 
 def list_stale_unread_users(min_age_minutes: int = 15,
-                            max_age_minutes: int = 10080) -> list[dict]:
+                            max_age_minutes: int = 10080,
+                            active_within_minutes: int = 10) -> list[dict]:
     """Find every chat member who still has UNREAD messages older than
     ``min_age_minutes`` (default 15) that we haven't already nudged them about.
 
@@ -6309,10 +6333,16 @@ def list_stale_unread_users(min_age_minutes: int = 15,
                  AND m.id > COALESCE(cs.last_reminded_message_id, 0)
                  AND m.created_at <= datetime('now', ?)
                  AND m.created_at >= datetime('now', ?)
+                                 AND NOT EXISTS (
+                                         SELECT 1 FROM activity_events ae
+                                         WHERE ae.client_id = c.id
+                                             AND ae.occurred_at >= datetime('now', 'localtime', ?)
+                                 )
                  AND c.email IS NOT NULL AND TRIM(c.email) <> ''
                GROUP BY c.id""",
             (f"-{int(min_age_minutes)} minutes",
-             f"-{int(max_age_minutes)} minutes"),
+                         f"-{int(max_age_minutes)} minutes",
+                         f"-{max(1, int(active_within_minutes or 10))} minutes"),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
