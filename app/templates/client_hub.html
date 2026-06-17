@@ -3417,8 +3417,6 @@
                   <option>Proposal</option><option>Negotiation</option>
                   <option value="Won">Won (Closed)</option><option value="Lost">Lost (Closed)</option>
                 </select></div>
-              <div><label style="font-size:12px;color:var(--gray-500)">Est. Value ($)</label>
-                <input id="leadValue" type="number" min="0" step="100" style="width:100%;padding:8px;border:1px solid var(--gray-300);border-radius:6px"></div>
             </div>
             <div style="margin-top:12px">
               <label style="font-size:12px;color:var(--gray-500);display:block;margin-bottom:6px">Service Lines (check all that apply — 2+ = Combination)</label>
@@ -3443,11 +3441,11 @@
                 <thead>
                   <tr>
                     <th>Lead Name</th><th>Contact</th><th>Services</th>
-                    <th>Status</th><th>Est. Value</th><th>Follow-up</th><th>Updated</th><th></th>
+                    <th>Status</th><th>Follow-up</th><th>Updated</th><th></th>
                   </tr>
                 </thead>
                 <tbody id="leadsTbody">
-                  <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>
+                  <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -4740,17 +4738,17 @@
     function renderLeadsPipeline(d) {
       const head = document.getElementById('leadsPipelineHeadline');
       if (head) head.innerHTML = `
-        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Weighted Forecast</div><div style="font-size:20px;font-weight:800;color:#16a34a">$${fmt(d.weighted_forecast || 0)}</div></div>
-        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Open Pipeline</div><div style="font-size:20px;font-weight:800;color:#2563eb">$${fmt(d.total_open_value || 0)}</div></div>
-        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Won</div><div style="font-size:20px;font-weight:800;color:#7c3aed">$${fmt(d.won_value || 0)}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Open Leads</div><div style="font-size:20px;font-weight:800;color:#2563eb">${d.open_count || 0}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Won</div><div style="font-size:20px;font-weight:800;color:#16a34a">${d.won_count || 0}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Lost</div><div style="font-size:20px;font-weight:800;color:#dc2626">${d.lost_count || 0}</div></div>
         <div style="text-align:right"><div style="font-size:10px;color:var(--gray-500);text-transform:uppercase;font-weight:700">Conversion</div><div style="font-size:20px;font-weight:800;color:var(--gray-700)">${d.conversion_rate || 0}%</div></div>`;
       const stagesEl = document.getElementById('leadsPipelineStages');
       const colors = ['#94a3b8', '#60a5fa', '#3b82f6', '#8b5cf6', '#22c55e'];
       if (stagesEl) stagesEl.innerHTML = (d.stages || []).map((s, i) => `
         <div style="border:1px solid var(--gray-200);border-radius:10px;padding:10px 12px;background:#fff">
           <div style="font-size:11px;font-weight:700;color:${colors[i % colors.length]};text-transform:uppercase">${esc(s.stage)} <span style="color:var(--gray-400)">· ${s.probability}%</span></div>
-          <div style="font-size:17px;font-weight:800;color:var(--gray-900);margin-top:2px">$${fmt(s.weighted)}</div>
-          <div style="font-size:11px;color:var(--gray-500)">${s.count} lead${s.count === 1 ? '' : 's'} · $${fmt(s.value)} total</div>
+          <div style="font-size:17px;font-weight:800;color:var(--gray-900);margin-top:2px">${s.count}</div>
+          <div style="font-size:11px;color:var(--gray-500)">lead${s.count === 1 ? '' : 's'}</div>
         </div>`).join('');
       const stalledEl = document.getElementById('leadsPipelineStalled');
       const stalled = d.stalled || [];
@@ -4827,12 +4825,11 @@
       const tb = document.getElementById('leadsTbody');
       if (!tb) return;
       if (!rows.length) {
-        tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">No leads in this category yet.</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">No leads in this category yet.</td></tr>`;
         return;
       }
       tb.innerHTML = rows.map(l => {
         const svc = (l.service_lines || []).join(', ') + (l.is_combination ? ' <span class="badge" style="background:#eef2ff;color:#4338ca">Combo</span>' : '');
-        const val = l.est_value ? ('$' + Number(l.est_value).toLocaleString()) : '—';
         const upd = (l.updated_at || '').slice(0, 10);
         const dsc = l.days_since_contact;
         let follow;
@@ -4848,7 +4845,6 @@
           <td>${esc(l.contact_name || '')}${l.contact_email ? `<br><span style="color:var(--gray-400);font-size:11px">${esc(l.contact_email)}</span>` : ''}</td>
           <td>${svc || '—'}</td>
           <td>${esc(l.status || '')}</td>
-          <td>${val}</td>
           <td>${follow}</td>
           <td>${esc(upd)}</td>
           <td><button class="btn btn-secondary btn-sm" onclick="markFollowedUp(${l.id})" title="Log a follow-up and reset the 2-day clock">✓ Followed up</button>
@@ -4861,7 +4857,7 @@
     function openLeadForm() {
       document.getElementById('leadEditId').value = '';
       document.getElementById('leadFormTitle').textContent = 'New Lead';
-      ['leadPractice','leadContact','leadEmail','leadPhone','leadValue','leadNotes'].forEach(id => document.getElementById(id).value = '');
+      ['leadPractice','leadContact','leadEmail','leadPhone','leadNotes'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('leadStatus').value = 'New';
       ['leadSvcRcm','leadSvcPayor','leadSvcWorkflow','leadSvcCompliance'].forEach(id => document.getElementById(id).checked = false);
       // Pre-check the service line matching the current category.
@@ -4897,7 +4893,7 @@
         const d = await r.json();
         const rows = d.leads || [];
         if (!rows.length) {
-          tb.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray-400)">No deleted leads. 🎉 <a href="#" onclick="loadLeads(leadsCurrentCat);return false;">Back to pipeline</a></td></tr>`;
+          tb.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--gray-400)">No deleted leads. 🎉 <a href="#" onclick="loadLeads(leadsCurrentCat);return false;">Back to pipeline</a></td></tr>`;
           return;
         }
         tb.innerHTML = rows.map(l => {
@@ -4908,7 +4904,6 @@
             <td>${esc(l.contact_name || '')}${l.contact_email ? `<br><span style="color:var(--gray-400);font-size:11px">${esc(l.contact_email)}</span>` : ''}</td>
             <td>${svc}</td>
             <td>${esc(l.status || '')}</td>
-            <td>—</td>
             <td><span style="color:var(--gray-400);font-size:11px">deleted ${esc(del)}</span></td>
             <td></td>
             <td><button class="btn btn-primary btn-sm" onclick="restoreLead(${l.id})">↩ Restore</button></td>
@@ -4935,7 +4930,6 @@
       document.getElementById('leadContact').value = l.contact_name || '';
       document.getElementById('leadEmail').value = l.contact_email || '';
       document.getElementById('leadPhone').value = l.contact_phone || '';
-      document.getElementById('leadValue').value = l.est_value || '';
       document.getElementById('leadNotes').value = l.notes || '';
       document.getElementById('leadStatus').value = l.status || 'New';
       document.getElementById('leadSvcRcm').checked = !!l.service_rcm;
@@ -4957,7 +4951,7 @@
         service_workflow: document.getElementById('leadSvcWorkflow').checked,
         service_compliance: document.getElementById('leadSvcCompliance').checked,
         status: document.getElementById('leadStatus').value,
-        est_value: parseFloat(document.getElementById('leadValue').value || '0') || 0,
+        est_value: 0,
         notes: document.getElementById('leadNotes').value.trim(),
       };
       if (!payload.practice_name) { toast('Lead name is required', 'error'); return; }
