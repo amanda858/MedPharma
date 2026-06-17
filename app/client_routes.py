@@ -5752,9 +5752,8 @@ def chat_update_room(room_id: int, body: ChatRoomUpdate,
 
 @router.delete("/chat/rooms/{room_id}")
 def chat_delete_room(room_id: int, hub_session: Optional[str] = Cookie(None)):
-    user = _require_admin(hub_session)
-    if not get_room(room_id):
-        raise HTTPException(404, "Chat room not found")
+    user = _require_user(hub_session)
+    _require_room_access(user, room_id)
     delete_room(room_id)
     log_audit(None, user.get("username", ""), "chat_room_delete",
               "chat_rooms", room_id, "Deleted room")

@@ -10039,10 +10039,10 @@
         }
         subEl.textContent = bits.join(' · ');
         composer.style.display = '';
-        actsEl.innerHTML = (CHAT.isAdmin && !CHAT.activeRoom.is_dm) ? `
-          <button class="btn btn-secondary btn-sm" onclick="openChatMembersModal(${CHAT.activeRoomId})">👥 Members</button>
+        actsEl.innerHTML = `
+          ${CHAT.isAdmin && !CHAT.activeRoom.is_dm ? `<button class="btn btn-secondary btn-sm" onclick="openChatMembersModal(${CHAT.activeRoomId})">👥 Members</button>` : ''}
           <button class="btn btn-danger-outline btn-sm" onclick="deleteChatRoom(${CHAT.activeRoomId})">🗑 Delete</button>
-        ` : '';
+        `;
       }
       await loadChatMessages();
       _startChatPoll();
