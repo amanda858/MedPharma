@@ -2462,10 +2462,18 @@ def get_production(client_id: Optional[int] = None,
     role = (user.get("role") or "").lower()
     uname = (username or "").strip() or None
     if role == "admin":
-        # Team Production Report: admin can filter per client, per user, or
-        # combined (both). No filter => the whole team across every account.
-        logs = list_production_logs(client_id, start_date, end_date, username=uname)
-        return {"logs": logs, "fallback_all_clients": False, "selected_client_id": client_id}
+        # Team Production Report: admins always see the whole team across every
+        # account so nothing a worker logged is hidden behind a per-client
+        # filter. A requested client_id is surfaced via fallback_all_clients so
+        # the UI can show a "showing all accounts" banner instead of silently
+        # dropping the selection. An explicit username filter still narrows the
+        # view to a single operator across all of their accounts.
+        logs = list_production_logs(None, start_date, end_date, username=uname)
+        return {
+            "logs": logs,
+            "fallback_all_clients": client_id is not None,
+            "selected_client_id": client_id,
+        }
     if role == "staff":
         # User Production: a staff user only ever sees their OWN logged work,
         # across whichever accounts they're working.
