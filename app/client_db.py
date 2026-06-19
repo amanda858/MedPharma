@@ -4132,14 +4132,27 @@ def get_eod_team_report(report_date: str = None) -> dict:
         }
         team_lookup: dict[str, dict] = {}
         canonical_meta: dict[str, dict] = {}
+        # Alias map: a person's contact name (e.g. 'victor') → their canonical
+        # login username (e.g. 'victor@medprosc.com'). Owner-attributed rows
+        # (leads, claims, credentialing, …) often store a display name rather
+        # than the login, while presence/chat/audit are tracked by login. This
+        # lets the aggregator merge both into a SINGLE operator card so an
+        # admin sees everything a worker (like Victor) did in one place.
+        alias_to_user: dict[str, str] = {}
         for row in cur.execute(
             "SELECT lower(username) AS u, COALESCE(NULLIF(contact_name,''), username) AS name, "
+            "       lower(NULLIF(contact_name,'')) AS cname, "
             "       email, role FROM clients "
             "WHERE COALESCE(is_active,1)=1"
         ).fetchall():
             d = dict(row)
             team_lookup[d["u"]] = d
             canonical_meta[d["u"]] = d
+            # Map the contact-name alias to this login (don't clobber a real
+            # login that happens to equal someone else's contact name).
+            alias = (d.get("cname") or "").strip()
+            if alias and alias != d["u"] and alias not in team_lookup:
+                alias_to_user.setdefault(alias, d["u"])
         # Overlay: each legacy short username inherits its canonical row's
         # contact_name + email if the canonical row exists.
         for short, canonical in _LEGACY_TO_CANONICAL.items():
@@ -4147,6 +4160,16 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 meta = dict(canonical_meta[canonical])
                 meta["u"] = short
                 team_lookup[short] = meta
+                # Short login is itself an alias target for the canonical row.
+                alias_to_user.setdefault(canonical, short)
+
+        def _canonical_user_key(raw: str) -> str:
+            """Resolve an owner/author string to a single canonical operator key.
+            Falls back to the lowercased input when no alias is known."""
+            key = (raw or "").strip().lower() or "unknown"
+            if key in team_lookup:
+                return key
+            return alias_to_user.get(key, key)
 
         def _client_name(cid):
             try:
@@ -4195,7 +4218,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         })
 
         def _u(username: str) -> dict:
-            key = (username or "").strip().lower() or "unknown"
+            key = _canonical_user_key(username)
             slot = users[key]
             slot["username"] = key
             meta = team_lookup.get(key, {})

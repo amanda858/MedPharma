@@ -2114,32 +2114,38 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
     # ── HTML headline ribbon (single row, table-based so Outlook is happy) ──
     def _ribbon_cell(label, value, color="#1d4ed8"):
         return (
-            f'<td align="center" valign="top" width="20%" style="padding:14px 6px">'
+            f'<td align="center" valign="top" width="16%" style="padding:14px 6px">'
             f'<div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;font-weight:700">{label}</div>'
             f'<div style="font-size:24px;color:{color};font-weight:800;margin-top:4px;line-height:1.1">{value}</div>'
             f'</td>'
         )
+
+    # Combined Business Development figure so admins see what BizDev (Victor)
+    # did at a glance: new leads + leads touched today.
+    bizdev_total = headlines.get("leads_new", 0) + headlines.get("leads_touched", 0)
 
     ribbon_row1 = (
         _ribbon_cell("Operators", len(users)) +
         _ribbon_cell("Claims new", headlines.get("claims_new", 0)) +
         _ribbon_cell("Claims touched", headlines.get("claims_touched", 0), "#2563eb") +
         _ribbon_cell("Credentialing", headlines.get("cred_new", 0), "#7c3aed") +
-        _ribbon_cell("Enrollment", headlines.get("enroll_new", 0), "#7c3aed")
+        _ribbon_cell("Enrollment", headlines.get("enroll_new", 0), "#7c3aed") +
+        _ribbon_cell("EDI", headlines.get("edi_new", 0), "#0891b2")
     )
     ribbon_row2 = (
-        _ribbon_cell("EDI", headlines.get("edi_new", 0), "#0891b2") +
+        _ribbon_cell("BizDev", bizdev_total, "#7c3aed") +
         _ribbon_cell("Prod hrs", f"{headlines.get('production_hours', 0)}", "#16a34a") +
         _ribbon_cell("Notes", headlines.get("notes_new", 0), "#0f766e") +
         _ribbon_cell("Files", headlines.get("files_uploaded", 0), "#0f766e") +
-        _ribbon_cell("Chat", headlines.get("chat_messages", 0), "#db2777")
+        _ribbon_cell("Chat", headlines.get("chat_messages", 0), "#db2777") +
+        _ribbon_cell("Audit", headlines.get("audit_events", 0), "#64748b")
     )
 
     ribbon_html = (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         'style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin:0 0 18px">'
         f'<tr>{ribbon_row1}</tr>'
-        '<tr><td colspan="5" style="border-top:1px solid #e2e8f0;padding:0;line-height:0">&nbsp;</td></tr>'
+        '<tr><td colspan="6" style="border-top:1px solid #e2e8f0;padding:0;line-height:0">&nbsp;</td></tr>'
         f'<tr>{ribbon_row2}</tr>'
         '</table>'
     )
