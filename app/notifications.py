@@ -2066,6 +2066,11 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         date_long = d.strftime("%A, %B %d, %Y")
     except Exception:
         date_long = date_iso
+    # Escape before the date is embedded into the HTML shell/subtitle so a
+    # crafted report_date (passed to the in-app report view) can never inject
+    # markup. No-op for a normal date string. Uses stdlib html.escape.
+    import html as _html_mod
+    date_long = _html_mod.escape(date_long)
 
     headlines = report.get("headlines", {}) or {}
     tabs_all = report.get("tab_keys", []) or list(_EOD_TAB_ICONS.keys())

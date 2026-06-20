@@ -8987,19 +8987,11 @@
     }
 
     function eodReport() {
-      // One-click end-of-day report: set dates to today, switch to report view, generate + open PDF
+      // One-click comprehensive End-of-Day team report: who was active, what
+      // they did, what they uploaded, and what client/module they worked —
+      // the same report emailed to the team at 6:30 PM EST. Opens in a new tab.
       const today = new Date().toISOString().split('T')[0];
-      document.getElementById('prodRptStart').value = today;
-      document.getElementById('prodRptEnd').value   = today;
-      toggleProductionView('report');
-      loadProductionReport().then(() => {
-        // Auto-open branded PDF after short delay so content renders
-        setTimeout(() => {
-          let url = `/hub/api/production/report/download?start_date=${today}&end_date=${today}`;
-          if (activeClientId) url += `&client_id=${activeClientId}`;
-          window.open(url, '_blank');
-        }, 600);
-      });
+      window.open(`/hub/api/reports/eod/view?report_date=${today}`, '_blank');
     }
 
     function downloadProductionReport() {

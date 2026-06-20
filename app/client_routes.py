@@ -5312,6 +5312,40 @@ def eod_archive_view(report_id: int,
     return rec
 
 
+@router.get("/reports/eod/view")
+def eod_team_report_view(report_date: Optional[str] = None,
+                         hub_session: Optional[str] = Cookie(None)):
+    """Render the comprehensive end-of-day team report as a standalone HTML
+    page for in-app viewing/printing (admin/staff only).
+
+    Unlike the production-log PDF, this is the full picture: who was active,
+    what they did, what they uploaded, and what client/module they worked —
+    the same report emailed to the team at 6:30 PM EST. Defaults to today.
+    """
+    _require_admin(hub_session)
+    from fastapi.responses import HTMLResponse
+    from app.client_db import get_eod_team_report
+    from app.notifications import _render_eod_report_html
+    # Resolve report_date on every path so the raw query parameter never flows
+    # onward: default to today, or validate + rebuild from integer components
+    # and HTML-escape. Guarantees a crafted value can't be reflected into the
+    # report (reflected XSS) and returns a clean 400 on bad input.
+    from datetime import date as _date
+    from html import escape as _esc
+    if report_date is None:
+        report_date = _date.today().isoformat()
+    else:
+        try:
+            parts = report_date.strip().split("-")
+            y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+            report_date = _esc(_date(y, m, d).isoformat())
+        except (ValueError, IndexError, TypeError, AttributeError):
+            raise HTTPException(400, "report_date must be YYYY-MM-DD")
+    report = get_eod_team_report(report_date)
+    _text_body, html_body = _render_eod_report_html(report)
+    return HTMLResponse(content=html_body)
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 
 @router.get("/audit-log")
