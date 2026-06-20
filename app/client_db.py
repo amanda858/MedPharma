@@ -519,6 +519,24 @@ def _ensure_medpharma_team_accounts(cur):
             (em, uname),
         )
 
+    # Keep the ROLE on the legacy short rows in sync with the canonical team
+    # roles too. Without this, someone signing in with the short 'eric' login
+    # could land on a non-admin row and miss everything the admins see. Eric is
+    # a full admin (same as Lexi/admin), so the short login must be admin too.
+    legacy_role_map = {
+        "admin":   "admin",
+        "rcm":     "admin",
+        "eric":    "admin",
+        "susan":   "staff",
+        "melissa": "staff",
+        "jessica": "staff",
+    }
+    for uname, role in legacy_role_map.items():
+        cur.execute(
+            "UPDATE clients SET role=? WHERE username=?",
+            (role, uname),
+        )
+
 
 
 # ─── Schema ───────────────────────────────────────────────────────────────────

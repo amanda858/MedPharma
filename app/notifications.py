@@ -1887,6 +1887,23 @@ _MEDPHARMA_SITE_URL = "https://medpharmasc.com"
 _MEDPHARMA_HUB_URL  = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
 
 
+def _hub_deep_link(query: str) -> str:
+    """Build an ABSOLUTE deep link into the hub for use in emails.
+
+    Email clients can't follow a relative URL like ``/hub?chat=5`` — there is
+    no host to resolve it against, so the "Open the chat" button does nothing.
+    Always return a fully-qualified ``https://…/hub?<query>`` URL, derived from
+    the HUB_BASE_URL env (default points at the production hub).
+    """
+    base = (_MEDPHARMA_HUB_URL or "").strip().rstrip("/")
+    if not base:
+        base = "https://medpharma-hub.onrender.com/hub"
+    if not base.lower().endswith("/hub"):
+        base = base + "/hub"
+    query = (query or "").lstrip("?")
+    return f"{base}?{query}" if query else base
+
+
 def _eod_recipients() -> list[str]:
     # Prefer the DB setting (managed from the Email Setup tab) so recipients
     # can be changed without a redeploy; fall back to env, then defaults.
@@ -3647,12 +3664,6 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-
     sent = 0
     for item in pending:
         addr = (item.get("email") or "").strip()
@@ -3662,8 +3673,9 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
         room_id = item.get("room_id")
         sender = item.get("sender_name") or "a teammate"
         who = (item.get("contact_name") or item.get("username") or "there").split()[0]
-        deep_link = (f"{hub_base}/hub?chat={room_id}" if hub_base
-                     else f"/hub?chat={room_id}")
+        # Always an absolute URL — a relative '/hub?chat=' link can't be opened
+        # from an email client (no host to resolve against).
+        deep_link = _hub_deep_link(f"chat={room_id}")
         subject = f"💬 You were mentioned in '{room_name}' — still unread"
         text_body = (
             f"Hi {who},\n\n"
@@ -3725,12 +3737,8 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-    deep_link = f"{hub_base}/hub?panel=chat" if hub_base else "/hub?panel=chat"
+    # Always an absolute URL so the "Open Team Chat" button works from an email.
+    deep_link = _hub_deep_link("panel=chat")
 
     sent = 0
     for item in pending:
