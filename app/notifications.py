@@ -3792,7 +3792,9 @@ def start_daily_scheduler():
     """
         Start APScheduler to fire:
             - send_production_reminders at 5:30 PM EST (for jessica & rcm)
-            - send_daily_account_summary at 6:00 PM EST
+            - send_daily_account_summary at 9:00 PM EST
+            - send_eod_team_report at 9:05 PM EST
+            - send_all_client_daily_reports at 9:10 PM EST
     Safe to call multiple times — only starts once.
     """
     global _scheduler_started
@@ -3817,30 +3819,30 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # 6:00 PM EST — Account summary report (weekdays only, Mon–Fri)
+        # 9:00 PM EST — Account summary report (weekdays only, Mon–Fri)
         scheduler.add_job(
             send_daily_account_summary,
-            CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=21, minute=0, timezone=est),
             id="daily_account_summary",
-            name="6 PM EST Overall Account Summary (Mon–Fri)",
+            name="9 PM EST Overall Account Summary (Mon–Fri)",
             replace_existing=True,
         )
 
-        # 6:30 PM EST — End-of-Day per-user / per-client / per-tab team report
+        # 9:05 PM EST — End-of-Day per-user / per-client / per-tab team report
         scheduler.add_job(
             send_eod_team_report,
-            CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=21, minute=5, timezone=est),
             id="daily_eod_team_report",
-            name="6:30 PM EST EOD Team Report (lexi) (Mon–Fri)",
+            name="9:05 PM EST EOD Team Report (lexi) (Mon–Fri)",
             replace_existing=True,
         )
 
-        # 6:35 PM EST — Per-client production reports (with Excel attachments)
+        # 9:10 PM EST — Per-client production reports (with Excel attachments)
         scheduler.add_job(
             send_all_client_daily_reports,
-            CronTrigger(day_of_week="mon-fri", hour=18, minute=35, timezone=est),
+            CronTrigger(day_of_week="mon-fri", hour=21, minute=10, timezone=est),
             id="daily_client_reports",
-            name="6:35 PM EST Per-Client Production Reports (Mon–Fri)",
+            name="9:10 PM EST Per-Client Production Reports (Mon–Fri)",
             replace_existing=True,
         )
 
@@ -3884,7 +3886,7 @@ def start_daily_scheduler():
         )
 
         scheduler.start()
-        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 6:00 summary, 6:30 EOD team, 6:35 client reports")
+        log.info("Daily scheduler started — 5:30 reminders, 9:00 PM summary, 9:05 PM EOD team, 9:10 PM client reports (Mon–Fri)")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -3895,7 +3897,7 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 5:30 and 6:00 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 5:30 PM reminders and 9 PM EST reports."""
     import time as _time
 
     def _check_loop():
@@ -3927,20 +3929,20 @@ def _start_thread_scheduler():
                     log.info("Thread scheduler firing production reminders")
                     send_production_reminders()
 
-                # 6:00 PM — Daily account summary
-                if is_weekday and now_est.hour == 18 and now_est.minute < 5 and last_sent_date != today:
+                # 9:00 PM — Daily account summary
+                if is_weekday and now_est.hour == 21 and now_est.minute < 5 and last_sent_date != today:
                     last_sent_date = today
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # 6:30 PM — End-of-Day per-user / per-client / per-tab report
-                if is_weekday and now_est.hour == 18 and 30 <= now_est.minute < 35 and last_eod_date != today:
+                # 9:05 PM — End-of-Day per-user / per-client / per-tab report
+                if is_weekday and now_est.hour == 21 and 5 <= now_est.minute < 10 and last_eod_date != today:
                     last_eod_date = today
                     log.info("Thread scheduler firing EOD team report")
                     send_eod_team_report()
 
-                # 6:35 PM — Per-client production reports with Excel
-                if is_weekday and now_est.hour == 18 and 35 <= now_est.minute < 40 and last_clients_date != today:
+                # 9:10 PM — Per-client production reports with Excel
+                if is_weekday and now_est.hour == 21 and 10 <= now_est.minute < 15 and last_clients_date != today:
                     last_clients_date = today
                     log.info("Thread scheduler firing per-client production reports")
                     send_all_client_daily_reports()
@@ -3960,4 +3962,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 EOD team + 6:35 client reports")
+    log.info("Fallback thread scheduler started — 5:30 reminders + 9:00 PM summary + 9:05 PM EOD team + 9:10 PM client reports")

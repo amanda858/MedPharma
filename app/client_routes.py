@@ -73,6 +73,7 @@ from app.notifications import (
     get_notification_status,
     get_notification_debug,
     send_daily_account_summary,
+    _hub_deep_link,
 )
 from rule_intercept import intercept_excel_upload
 
@@ -276,9 +277,11 @@ def _send_chat_invite_emails(
     # of failing loudly. Email is strictly optional for chat to work.
     email_on = _email_provider_configured()
 
-    base_url = str(request.base_url).rstrip("/")
-    # Deep-link straight into the chat panel for that room.
-    setup_link = f"{base_url}/hub?chat={room_id}"
+    # Deep-link straight into the chat panel for that room. Use an ABSOLUTE
+    # production URL (via HUB_BASE_URL) — a relative '/hub?chat=' link, or one
+    # built from request.base_url behind a proxy (http://0.0.0.0:port), can't
+    # be opened from an email client.
+    setup_link = _hub_deep_link(f"chat={room_id}")
     inviter = (inviter_name or "Your team").strip() or "Your team"
     safe_room = (room_name or "a chat room").strip() or "a chat room"
 
