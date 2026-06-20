@@ -457,10 +457,18 @@ def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
 
 
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin/staff sees all data)."""
+    """Return client_id filter — None means all (admin/staff sees all data).
+
+    For client users this resolves to the *shared account* their data belongs
+    to (via ``_client_upload_account``), not their raw login id. This keeps
+    reads (claims, credentialing, enrollment, EDI, dashboard, payments, files)
+    consistent with where uploads/imports land, so a team member sees the data
+    they — or anyone else on the same account — uploaded. Account-owner logins
+    (no assignment) still resolve to their own id, so their behaviour is
+    unchanged."""
     if user.get("role") in ("admin", "staff"):
         return None
-    return user["id"]
+    return _client_upload_account(user)
 
 
 def _assert_client_can_view(user: dict, client_id: int) -> None:
@@ -1875,9 +1883,9 @@ def claims_ar_worklist(client_id: Optional[int] = None, owner: Optional[str] = N
     first, with aging-bucket rollups."""
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else _client_scope(user)
-    # Non-staff/admin users are always scoped to their own account.
+    # Non-staff/admin users are always scoped to their own shared account.
     if user["role"] not in ("admin", "staff"):
-        scope = user["id"]
+        scope = _client_upload_account(user)
     return get_ar_worklist(scope, owner=owner, bucket=bucket,
                            sub_profile=sub_profile, limit=limit)
 
@@ -1896,7 +1904,7 @@ def add_claim(body: ClaimIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
     if user["role"] not in ("admin", "staff"):
-        data["client_id"] = user["id"]
+        data["client_id"] = _client_upload_account(user)
     cid = create_claim(data)
     notify_activity(user["username"], "created", "Claims",
                     f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
@@ -2039,7 +2047,7 @@ def add_cred(body: CredIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
     if user["role"] not in ("admin", "staff"):
-        data["client_id"] = user["id"]
+        data["client_id"] = _client_upload_account(user)
     rid = create_credentialing(data)
     notify_activity(user["username"], "created", "Credentialing",
                     f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
@@ -2110,7 +2118,7 @@ def add_enroll(body: EnrollIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
     if user["role"] not in ("admin", "staff"):
-        data["client_id"] = user["id"]
+        data["client_id"] = _client_upload_account(user)
     eid = create_enrollment(data)
     notify_activity(user["username"], "created", "Enrollment",
                     f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
@@ -2180,7 +2188,7 @@ def add_edi(body: EDIIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     data = body.model_dump()
     if user["role"] not in ("admin", "staff"):
-        data["client_id"] = user["id"]
+        data["client_id"] = _client_upload_account(user)
     eid = create_edi(data)
     notify_activity(user["username"], "created", "EDI Setup",
                     f"Provider: {data.get('ProviderName','')}, Payor: {data.get('Payor','')}")
