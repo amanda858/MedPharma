@@ -4610,10 +4610,19 @@ async def replace_file(
     The old file remains until the new upload is validated and persisted.
     If it's an Excel in a data category, the data is re-imported."""
     user = _require_user(hub_session)
-    scope = _client_scope(user)
-    rec = get_file_record(file_id, scope)
+    # Authorize like listing/download so any teammate on a shared account can
+    # replace its uploads, not just the original uploader/admin.
+    if user.get("role") in ("admin", "staff"):
+        rec = get_file_record(file_id, _client_scope(user))
+    else:
+        rec = get_file_record(file_id, None)
+        if rec and int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            rec = None
     if not rec:
         raise HTTPException(404, "File not found")
+    # Operate on the file's own account so the update + re-import land where the
+    # rest of the team can see them.
+    scope = rec["client_id"]
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
@@ -4713,16 +4722,24 @@ async def replace_file(
 @router.delete("/files/{file_id}")
 def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = _client_scope(user)
+    # Authorize the same way listing/download does so every teammate on a shared
+    # account can delete its uploads — not just the original uploader/admin.
+    if user.get("role") in ("admin", "staff"):
+        rec = get_file_record(file_id, _client_scope(user))
+    else:
+        rec = get_file_record(file_id, None)
+        if rec and int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            rec = None
+    if not rec:
+        raise HTTPException(404, "File not found")
     # Also delete the physical file from disk
-    rec = get_file_record(file_id, scope)
-    if rec:
-        path = os.path.join(UPLOAD_DIR, rec["filename"])
-        if os.path.isfile(path):
-            os.remove(path)
-    delete_file_record(file_id, scope)
+    path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if os.path.isfile(path):
+        os.remove(path)
+    # Delete the record scoped to the file's own account so it always removes.
+    delete_file_record(file_id, rec["client_id"])
     notify_activity(user["username"], "deleted file", "Documents",
-                    rec["original_name"] if rec else "")
+                    rec["original_name"])
     return {"ok": True}
 
 

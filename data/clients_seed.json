@@ -18,5 +18,15 @@
     "role": "staff",
     "service_type": "",
     "notes": ""
+  },
+  {
+    "username": "shared",
+    "company": "Shared Practice",
+    "contact_name": "",
+    "email": "s@x.com",
+    "phone": "",
+    "role": "client",
+    "service_type": "",
+    "notes": ""
   }
 ]
