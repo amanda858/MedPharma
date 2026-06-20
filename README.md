@@ -25,7 +25,7 @@ To send real email/SMS (Eric owner reports from Jessica + RCM activity), set the
 
 - `NOTIFY_EMAIL=eric@medprosc.com`
 - `NOTIFY_PHONE=+18036263500`
-- `NOTIFY_ON_USERS=jessica,rcm`
+- `NOTIFY_ON_USERS=jessica`
 - `SENDGRID_FROM=notifications@medprosc.com`
 
 Choose **one email provider**:
