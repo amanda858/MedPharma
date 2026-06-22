@@ -2089,6 +2089,9 @@
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
+          <div class="nav-section">Business Development</div>
+          <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
+          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 BizDev Weekly Report</div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -4687,6 +4690,12 @@
       showLeads('rcm', 'leads_rcm');
       try { loadChatRooms(); } catch (_) {}
       consumeChatDeepLink();
+    }
+
+    // Admin shortcut: open the BizDev leads panel from the admin sidebar
+    // without switching into full bizdev-only mode.
+    function adminShowLeads(cat, panelKey) {
+      showLeads(cat, panelKey);
     }
 
     function showLeads(cat, panelKey) {
