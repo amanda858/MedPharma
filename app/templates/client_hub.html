@@ -5116,6 +5116,16 @@
       const sel = document.getElementById('prodCategory');
       if (!sel) return;
       const cats = getCategoriesForPracticeType(pt);
+      // Business Development is an internal MedPharma function (admin/staff —
+      // e.g. admin & Eric logging team-productivity work). Regular client
+      // accounts never log BD work, so only expose it to admin/staff. Insert
+      // it just before the catch-all "Other" entry.
+      if (typeof isStaffOrAdmin === 'function' && isStaffOrAdmin()
+          && !cats.includes('Business Development')) {
+        const otherIdx = cats.indexOf('Other');
+        if (otherIdx >= 0) cats.splice(otherIdx, 0, 'Business Development');
+        else cats.push('Business Development');
+      }
       const current = sel.value;
       sel.innerHTML = cats.map(c => `<option value="${c}"${c === current ? ' selected' : ''}>${c}</option>`).join('');
     }

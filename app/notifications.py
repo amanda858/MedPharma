@@ -200,6 +200,16 @@ _buffer_lock = threading.Lock()
 AUTO_FLUSH_ACTION_THRESHOLD = int(os.getenv("NOTIFY_AUTO_FLUSH_THRESHOLD", "20"))
 AUTO_FLUSH_MAX_AGE_MINUTES = int(os.getenv("NOTIFY_AUTO_FLUSH_MAX_AGE_MINUTES", "60"))
 
+# Individual Progress report ("MEETS STANDARDS / NEEDS IMPROVEMENT") toggle.
+# These per-user scorecard emails were unwanted noise, so they are OFF by
+# default. The buffer is still drained (so it never grows unbounded) — only
+# the email/SMS send is suppressed. Set INDIVIDUAL_PROGRESS_REPORT_ENABLED=1
+# (or true/yes/on) to turn them back on without a code change.
+def _individual_progress_enabled() -> bool:
+    return os.getenv("INDIVIDUAL_PROGRESS_REPORT_ENABLED", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
 
 def _should_notify(username: str) -> bool:
     """Return True if this user's activity should trigger notifications."""
@@ -427,6 +437,17 @@ def flush_and_notify(username: str):
         session_start = _session_start.pop(key, None)
 
     if not activities or not _should_notify(username):
+        return
+
+    # Individual Progress scorecard emails are disabled by default (unwanted
+    # "NEEDS IMPROVEMENT" noise). We still popped the buffer above so it is
+    # cleared; we just don't build or send the report unless re-enabled.
+    if not _individual_progress_enabled():
+        log.info(
+            "Individual Progress report suppressed for %s "
+            "(INDIVIDUAL_PROGRESS_REPORT_ENABLED is off) — %d buffered action(s) cleared",
+            username, len(activities),
+        )
         return
 
     # ── Timing ──

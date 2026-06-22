@@ -6423,6 +6423,13 @@ def list_chat_eligible_users() -> list[dict]:
         "melissa": "melissa@medprosc.com",
         "jessica": "jessica@medprosc.com",
     }
+    # Accounts that exist only as a system/department login and must never
+    # appear in the user-facing roster (chat picker, Team Production user
+    # filter, client-access list). 'rcm' is a billing department alias, not a
+    # real person, so it is suppressed from every UI list while still being a
+    # valid login. Match on both the legacy short form and the canonical
+    # email-style username (lower-cased) so neither row leaks through.
+    _HIDDEN_ROSTER_USERS = {"rcm", "rcm@medprosc.com"}
     conn = get_db()
     try:
         rows = conn.execute(
@@ -6438,6 +6445,8 @@ def list_chat_eligible_users() -> list[dict]:
         deduped = []
         for r in rows:
             uname = r["username"]
+            if (uname or "").lower() in _HIDDEN_ROSTER_USERS:
+                continue  # system/department login — never show in the roster
             canonical = _LEGACY_TO_CANONICAL.get(uname)
             if canonical and canonical in present and canonical != uname:
                 continue  # hide legacy short row, canonical is in the list
