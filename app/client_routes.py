@@ -959,9 +959,15 @@ def put_client_access(cid: int, body: ClientAccessIn, request: Request,
 
 @router.get("/admin/users")
 def list_admin_users(hub_session: Optional[str] = Cookie(None)):
-    """All active admin/staff users available to be granted client access."""
+    """Internal MedPharma team users for admin pickers.
+
+    Includes admin, staff and bizdev (Business Development / Victor) so the
+    Team Production user filter can surface Business Development. The
+    client-access-grant UI re-filters this list to admin/staff on its own.
+    """
     _require_full_admin(hub_session)
-    users = [u for u in list_chat_eligible_users() if (u.get("role") or "").lower() in ("admin", "staff")]
+    users = [u for u in list_chat_eligible_users()
+             if (u.get("role") or "").lower() in ("admin", "staff", "bizdev")]
     return users
 
 
