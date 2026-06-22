@@ -12,6 +12,11 @@ jobs:
       - name: Trigger Render deploy — medpharma-hub
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            "https://api.render.com/deploy/srv-d6c8fb3nv86c73e79oug?key=Ca5j4QUjIPM")
+            "https://api.render.com/deploy/srv-d6c8fb3nv86c73e79oug?key=${{ secrets.RENDER_DEPLOY_KEY }}")
           echo "Render deploy HTTP status: $STATUS"
-          [ "$STATUS" = "200" ] || [ "$STATUS" = "202" ] && echo "Deploy triggered successfully" || exit 1
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "202" ]; then
+            echo "Deploy triggered successfully"
+          else
+            echo "::error::Deploy hook returned unexpected status $STATUS"
+            exit 1
+          fi
