@@ -22,6 +22,13 @@ _DEFAULT_CLIENTS_SEED_PATH = (
 )
 _CLIENTS_SEED_PATH = os.getenv("CLIENTS_SEED_PATH", _DEFAULT_CLIENTS_SEED_PATH)
 
+# Accounts that exist only as a system/department login (no real person) and
+# must never appear in any user-facing roster, picker, or production report.
+# 'rcm' is a billing-department alias that was retired; it stays purged from
+# every UI list (and its stale data rows are cleaned on startup) even though
+# the row may transiently reappear from an old seed before cleanup runs.
+_HIDDEN_ROSTER_USERS = {"rcm", "rcm@medprosc.com"}
+
 
 def _sanitize_seed_entry(entry: dict) -> dict:
     return {
@@ -537,6 +544,20 @@ def _ensure_medpharma_team_accounts(cur):
         )
     except Exception as _exc:
         log.warning("_ensure_medpharma_team_accounts: belt-and-suspenders RCM delete failed: %s", _exc)
+
+    # Also purge RCM's stale data rows keyed by username on every startup.
+    # The one-shot purge_rcm_account_v1 migration only runs once, so any
+    # team_production / presence / activity rows that survived (or were
+    # written before the purge) keep surfacing 'rcm' in the Team Production
+    # report. Clearing them every startup removes RCM from production for good.
+    for _tbl in ("team_production", "user_presence", "activity_events"):
+        try:
+            cur.execute(
+                f"DELETE FROM {_tbl} WHERE LOWER(username) IN ('rcm','rcm@medprosc.com')"
+            )
+        except Exception:
+            # Table may not exist on older schemas — non-fatal.
+            pass
 
 
 
@@ -5344,6 +5365,9 @@ def list_production_logs(client_id: int = None, start_date: str = None, end_date
         cond = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         cur.execute(f"SELECT * FROM team_production {cond} ORDER BY work_date DESC, created_at DESC", p)
         rows = [dict(r) for r in cur.fetchall()]
+        # Hide retired system/department logins (e.g. 'rcm') from the log view.
+        rows = [r for r in rows
+                if str(r.get("username") or "").strip().lower() not in _HIDDEN_ROSTER_USERS]
     finally:
         conn.close()
     return rows
@@ -5479,6 +5503,10 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             GROUP BY username ORDER BY username
         """, p)
         by_user = [dict(r) for r in cur.fetchall()]
+        # Never surface system/department logins (e.g. retired 'rcm') in the
+        # Team Production report, even if stale rows linger in team_production.
+        by_user = [u for u in by_user
+                   if str(u.get("username") or "").strip().lower() not in _HIDDEN_ROSTER_USERS]
 
         # Include all active users in scope, even if they have zero rows in this period.
         if client_id:
@@ -5493,7 +5521,9 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 cur.execute("SELECT username FROM clients WHERE is_active=1 AND id=?", (client_id,))
         else:
             cur.execute("SELECT username FROM clients WHERE is_active=1 ORDER BY username")
-        scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall() if (r["username"] or "").strip()]
+        scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall()
+                            if (r["username"] or "").strip()
+                            and str(r["username"]).strip().lower() not in _HIDDEN_ROSTER_USERS]
 
         by_user_map = {str(u.get("username") or "").strip(): u for u in by_user if str(u.get("username") or "").strip()}
         for username in scoped_usernames:
@@ -5525,6 +5555,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             ORDER BY work_date DESC, username, category
         """, p)
         details = [dict(r) for r in cur.fetchall()]
+        details = [d for d in details
+                   if str(d.get("username") or "").strip().lower() not in _HIDDEN_ROSTER_USERS]
 
         # Time management flags — users averaging < 6 hrs/day worked
         flags = []
@@ -6425,11 +6457,7 @@ def list_chat_eligible_users() -> list[dict]:
     }
     # Accounts that exist only as a system/department login and must never
     # appear in the user-facing roster (chat picker, Team Production user
-    # filter, client-access list). 'rcm' is a billing department alias, not a
-    # real person, so it is suppressed from every UI list while still being a
-    # valid login. Match on both the legacy short form and the canonical
-    # email-style username (lower-cased) so neither row leaks through.
-    _HIDDEN_ROSTER_USERS = {"rcm", "rcm@medprosc.com"}
+    # filter, client-access list). See module-level _HIDDEN_ROSTER_USERS.
     conn = get_db()
     try:
         rows = conn.execute(
