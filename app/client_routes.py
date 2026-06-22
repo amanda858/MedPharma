@@ -1848,8 +1848,9 @@ def send_daily_report_now(hub_session: Optional[str] = Cookie(None)):
     try:
         send_daily_account_summary()
         return {"ok": True, "message": "Daily report sent to configured recipients"}
-    except Exception as e:
-        raise HTTPException(500, f"Failed to send daily report: {e}")
+    except Exception:
+        log.exception("Failed to send daily report")
+        raise HTTPException(500, "Failed to send daily report")
 
 
 @router.get("/production/snapshot")
