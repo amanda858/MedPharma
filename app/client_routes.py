@@ -1401,11 +1401,14 @@ def get_production(client_id: Optional[int] = None,
                    end_date: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    role = (user.get("role") or "").lower()
     # Admin sees ALL production entries across all accounts (not scoped to selected client)
-    if user.get("role") == "admin":
+    if role == "admin":
         scope = None  # no client filter — show all
+    elif role == "staff":
+        scope = client_id
     else:
-        scope = client_id or _client_scope(user)
+        scope = _client_scope(user)
     logs = list_production_logs(scope, start_date, end_date, username=None)
     # Staff fallback: when a selected account has no rows, return all production rows
     if user.get("role") == "staff" and client_id is not None and not logs:
