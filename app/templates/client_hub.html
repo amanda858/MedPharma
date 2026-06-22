@@ -8798,7 +8798,11 @@
           const users = await r.json();
           const uSel = document.getElementById('prodFilterUser');
           if (uSel) uSel.innerHTML = '<option value="">All users</option>' +
-            (users || []).map(u => `<option value="${esc(u.username)}">${esc(u.contact_name || u.username)}</option>`).join('');
+            (users || []).map(u => {
+              const label = u.contact_name || u.username;
+              const suffix = u.role === 'bizdev' ? ' (Business Development)' : '';
+              return `<option value="${esc(u.username)}">${esc(label)}${suffix}</option>`;
+            }).join('');
         }
       } catch (_) {}
       _prodFiltersLoaded = true;
