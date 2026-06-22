@@ -2994,7 +2994,7 @@ def get_user_production_snapshot(work_date: str = None) -> dict:
 
         # Per-user aggregated stats
         cur.execute("""
-            SELECT username,
+            SELECT MIN(username) as username,
                    COUNT(*) as entry_count,
                    SUM(quantity) as total_qty,
                    SUM(time_spent) as total_hours,
