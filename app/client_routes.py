@@ -1439,13 +1439,14 @@ def remove_production_log(log_id: int, hub_session: Optional[str] = Cookie(None)
         delete_production_log(log_id)
     else:
         conn = get_db()
+        scope = _client_scope(user)
         try:
-            row = conn.execute("SELECT username FROM team_production WHERE id=?", (log_id,)).fetchone()
+            row = conn.execute("SELECT username, client_id FROM team_production WHERE id=?", (log_id,)).fetchone()
             if not row:
                 raise HTTPException(404, "Entry not found")
-            if row["username"] != user.get("username"):
+            if row["username"] != user.get("username") or row["client_id"] != scope:
                 raise HTTPException(403, "You can only delete your own production entries")
-            conn.execute("DELETE FROM team_production WHERE id=?", (log_id,))
+            conn.execute("DELETE FROM team_production WHERE id=? AND client_id=?", (log_id, scope))
             conn.commit()
         finally:
             conn.close()
