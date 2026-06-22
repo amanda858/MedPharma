@@ -3034,7 +3034,7 @@ def get_user_production_snapshot(work_date: str = None) -> dict:
 
         # File uploads for the day
         cur.execute("""
-            SELECT uploaded_by, COUNT(*) as file_count
+            SELECT MIN(uploaded_by) as uploaded_by, COUNT(*) as file_count
             FROM client_files
             WHERE date(created_at)=? AND lower(category)='production'
             GROUP BY lower(uploaded_by)
