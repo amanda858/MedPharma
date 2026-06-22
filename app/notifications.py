@@ -154,7 +154,7 @@ def _live_config() -> dict:
 
 # Users whose activity triggers notifications (team members only).
 # Owner (Eric) should receive reports, not be tracked as a worker by default.
-# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica,rcm"
+# Supports comma-separated env var, e.g. NOTIFY_ON_USERS="jessica"
 # Use NOTIFY_ON_USERS="*" to enable for all users.
 # Default is "*" so every staff/client action funnels to the admin inbox; set
 # NOTIFY_ON_USERS in the environment to restrict it to a specific allowlist.
@@ -211,7 +211,6 @@ def _should_notify(username: str) -> bool:
         "jessica": {"jess", "jessica"},
         "eric": {"eric", "admin"},
         "admin": {"eric", "admin"},
-        "rcm": {"rcm"},
     }
     aliases = alias_map.get(u, {u})
     return any(a in NOTIFY_ON_USERS for a in aliases)
@@ -1177,7 +1176,7 @@ def get_notification_debug() -> dict:
             "SMTP_USER": mask(cfg["SMTP_USER"]),
             "SMTP_PASS": mask(cfg["SMTP_PASS"]),
             "NOTIFY_IN_APP_ONLY": os.getenv("NOTIFY_IN_APP_ONLY", "1"),
-            "NOTIFY_ON_USERS": os.getenv("NOTIFY_ON_USERS", "jessica,rcm"),
+            "NOTIFY_ON_USERS": os.getenv("NOTIFY_ON_USERS", "jessica"),
         },
         "effective": {
             "in_app_only_mode": cfg["IN_APP_ONLY_MODE"],
@@ -1653,7 +1652,6 @@ def send_daily_account_summary():
 # User emails for individual reminders
 USER_EMAILS = {
     "jessica": "jessica@medprosc.com",
-    "rcm": "rcm@medprosc.com",
 }
 
 _scheduler_started = False
@@ -1661,7 +1659,7 @@ _scheduler_started = False
 
 def send_production_reminders():
     """
-    Send reminder emails to jessica@medprosc.com and rcm@medprosc.com
+    Send reminder emails to jessica@medprosc.com
     at 5:30 PM EST if they have NOT uploaded any production data today.
     """
     from datetime import date

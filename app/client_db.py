@@ -224,19 +224,6 @@ def _apply_startup_user_migrations(conn):
                 ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
             )
 
-    def _migrate_rcm_admin():
-        cur.execute(
-            "UPDATE clients SET role='admin', company='MedPharma SC' "
-            "WHERE username='rcm' AND role='client'"
-        )
-        cur.execute("SELECT COUNT(*) FROM clients WHERE username='rcm'")
-        if cur.fetchone()[0] == 0:
-            rcm_salt = secrets.token_hex(16)
-            cur.execute(
-                "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-                ("rcm", _hash_pw("rcm123", rcm_salt), rcm_salt, "MedPharma SC", "RCM", "", "admin")
-            )
-
     def _deactivate_placeholder_clients():
         for _uname, _company in (("eric", "Luminary (OMT/MHP)"), ("trupath", "TruPath")):
             cur.execute(
@@ -292,30 +279,6 @@ def _apply_startup_user_migrations(conn):
             cur.execute(
                 "UPDATE clients SET is_active=0 WHERE username=? AND username<>?",
                 (legacy_username, email),
-            )
-
-    def _provision_rcm_email():
-        """Ensure rcm@medprosc.com exists as an admin login with password
-        rcm123 (per operator request). Keeps the legacy short 'rcm' admin
-        login working in parallel."""
-        email = "rcm@medprosc.com"
-        pw = "rcm123"
-        salt = secrets.token_hex(16)
-        pw_hash = _hash_pw(pw, salt)
-        row = cur.execute("SELECT id FROM clients WHERE username=?", (email,)).fetchone()
-        if row:
-            cur.execute(
-                "UPDATE clients SET password=?, salt=?, role='admin', "
-                "company='MedPharma SC', contact_name=COALESCE(NULLIF(contact_name,''),'RCM'), "
-                "email=?, is_active=1, must_change_password=0 WHERE id=?",
-                (pw_hash, salt, email, row[0]),
-            )
-        else:
-            cur.execute(
-                "INSERT INTO clients "
-                "(username,password,salt,company,contact_name,email,role,is_active) "
-                "VALUES (?,?,?,?,?,?,?,1)",
-                (email, pw_hash, salt, "MedPharma SC", "RCM", email, "admin"),
             )
 
     def _provision_eric_medprosc():
@@ -393,15 +356,62 @@ def _apply_startup_user_migrations(conn):
         except Exception as _e:
             log.warning("purge_legacy_placeholders: delete clients failed: %s", _e)
 
+    def _purge_rcm_account():
+        """One-shot: permanently delete the rcm / rcm@medprosc.com accounts
+        from the live persistent-disk DB so they don't survive a redeploy.
+        Best-effort cascade across every table that references client_id;
+        individual failures are swallowed so startup cannot be broken.
+        """
+        try:
+            cur.execute(
+                "SELECT id FROM clients WHERE LOWER(username) IN ('rcm','rcm@medprosc.com')"
+            )
+            rcm_ids = [r[0] for r in cur.fetchall()]
+
+            if rcm_ids:
+                cur.execute("PRAGMA foreign_keys = OFF")
+                qs = ",".join("?" * len(rcm_ids))
+                for tbl in (
+                    "practice_profiles", "claims_master", "payments", "notes_log",
+                    "credentialing", "enrollment", "edi_setup", "providers",
+                    "client_files", "sharefile_links", "report_notes",
+                    "team_production", "audit_log", "activity_events",
+                    "client_user_access", "chat_room_members", "chat_messages",
+                    "chat_rooms", "notifications", "jobs",
+                ):
+                    try:
+                        cur.execute(f"DELETE FROM {tbl} WHERE client_id IN ({qs})", rcm_ids)
+                    except Exception:
+                        pass
+                try:
+                    cur.execute(f"DELETE FROM clients WHERE id IN ({qs})", rcm_ids)
+                except Exception as exc:
+                    log.warning("purge_rcm_account: delete clients row failed: %s", exc)
+                finally:
+                    cur.execute("PRAGMA foreign_keys = ON")
+
+            # Also remove team_production / user_presence / activity_events rows
+            # keyed by username (not client_id) for either username form.
+            for tbl in ("team_production", "user_presence", "activity_events"):
+                try:
+                    cur.execute(
+                        f"DELETE FROM {tbl} WHERE LOWER(username) IN ('rcm','rcm@medprosc.com')"
+                    )
+                except Exception:
+                    pass
+
+            log.info("purge_rcm_account: RCM account purged from live DB (ids=%s)", rcm_ids)
+        except Exception as exc:
+            log.warning("purge_rcm_account: migration failed (non-fatal): %s", exc)
+
     _run_migration_once(conn, "legacy_profiles_v1", _fix_legacy_profiles)
     _run_migration_once(conn, "jessica_staff_v1", _migrate_jessica_staff)
-    _run_migration_once(conn, "rcm_admin_v1", _migrate_rcm_admin)
     _run_migration_once(conn, "placeholder_clients_inactive_v1", _deactivate_placeholder_clients)
     _run_migration_once(conn, "luminary_profile_clear_v1", _clear_luminary_profile_fields)
     _run_migration_once(conn, "provision_susan_melissa_v1", _provision_susan_melissa)
-    _run_migration_once(conn, "provision_rcm_email_v1", _provision_rcm_email)
     _run_migration_once(conn, "provision_eric_medprosc_v1", _provision_eric_medprosc)
     _run_migration_once(conn, "purge_legacy_placeholders_v1", _purge_legacy_placeholder_clients)
+    _run_migration_once(conn, "purge_rcm_account_v1", _purge_rcm_account)
 
     # ── ALWAYS-ENSURE: real MedPharma team accounts ──────────────────────────
     # `_run_migration_once` records its key in `app_migrations` and never runs
@@ -454,7 +464,7 @@ def _ensure_medpharma_team_accounts(cur):
     rows, preserves any operator-changed password on existing rows.
 
     IMPORTANT: This function does NOT deactivate the legacy short-username
-    duplicates ('admin', 'rcm', 'jessica', etc.). Doing so locked operators
+    duplicates ('admin', 'jessica', etc.). Doing so locked operators
     out (commit ee7faf6). Both username forms keep working as login
     aliases. De-duplication for the UI (chat picker, Manage Clients team
     list) happens at the API layer in list_chat_eligible_users() so the
@@ -468,7 +478,6 @@ def _ensure_medpharma_team_accounts(cur):
     team = [
         # (canonical username, role, contact, starter_password, notify_email)
         ("admin@medprosc.com",   "admin", "Lexi",    "admin123",   "lexi@medprosc.com"),
-        ("rcm@medprosc.com",     "admin", "RCM",     "rcm123",     "rcm@medprosc.com"),
         ("eric@medprosc.com",    "admin", "Eric",    "eric123",    "eric@medprosc.com"),
         ("susan@medprosc.com",   "staff", "Susan",   "susan123",   "susan@medprosc.com"),
         ("melissa@medprosc.com", "staff", "Melissa", "melissa123", "melissa@medprosc.com"),
@@ -496,10 +505,10 @@ def _ensure_medpharma_team_accounts(cur):
 
     # Self-heal: reactivate legacy short logins that an earlier buggy
     # version of this function (commit ee7faf6) deactivated. Operators
-    # use 'admin' / 'rcm' / etc. to sign in and must not be locked out.
+    # use 'admin' / etc. to sign in and must not be locked out.
     cur.execute(
         "UPDATE clients SET is_active=1 "
-        "WHERE username IN ('admin','rcm','jessica','susan','melissa','eric') "
+        "WHERE username IN ('admin','jessica','susan','melissa','eric') "
         "AND COALESCE(is_active,1)=0"
     )
 
@@ -507,7 +516,6 @@ def _ensure_medpharma_team_accounts(cur):
     # sent under the short username still reach the right inbox.
     legacy_email_map = {
         "admin":   "lexi@medprosc.com",
-        "rcm":     "rcm@medprosc.com",
         "eric":    "eric@medprosc.com",
         "susan":   "susan@medprosc.com",
         "melissa": "melissa@medprosc.com",
@@ -518,6 +526,17 @@ def _ensure_medpharma_team_accounts(cur):
             "UPDATE clients SET email=? WHERE username=?",
             (em, uname),
         )
+
+    # Belt-and-suspenders: hard-delete any stray RCM rows that slipped
+    # through (e.g. re-seeded from clients_seed.json before this guard ran).
+    # Keeps RCM fully gone on every startup, not just after the one-time
+    # purge_rcm_account_v1 migration.
+    try:
+        cur.execute(
+            "DELETE FROM clients WHERE LOWER(username) IN ('rcm','rcm@medprosc.com')"
+        )
+    except Exception as _exc:
+        log.warning("_ensure_medpharma_team_accounts: belt-and-suspenders RCM delete failed: %s", _exc)
 
 
 
@@ -1206,13 +1225,6 @@ def _seed_data(conn):
     cur.execute(
         "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
         ("jessica", _hash_pw("jessica123", jsalt), jsalt, "MedPharma SC", "Jessica", "", "staff")
-    )
-
-    # RCM — MedPharma admin login (sees all client accounts).
-    rsalt = secrets.token_hex(16)
-    cur.execute(
-        "INSERT INTO clients (username,password,salt,company,contact_name,email,role) VALUES (?,?,?,?,?,?,?)",
-        ("rcm", _hash_pw("rcm123", rsalt), rsalt, "MedPharma SC", "RCM", "", "admin")
     )
 
     # NOTE: Real client accounts (Luminary, TruPath, etc.) are no longer
@@ -4124,7 +4136,6 @@ def get_eod_team_report(report_date: str = None) -> dict:
         # email we want notifications to land in.
         _LEGACY_TO_CANONICAL = {
             "admin":   "admin@medprosc.com",
-            "rcm":     "rcm@medprosc.com",
             "eric":    "eric@medprosc.com",
             "susan":   "susan@medprosc.com",
             "melissa": "melissa@medprosc.com",
@@ -6399,7 +6410,7 @@ def chat_unread_total(user_id: int, is_admin: bool = False) -> int:
 def list_chat_eligible_users() -> list[dict]:
     """All active users that can be added to a chat room.
 
-    De-duplicates legacy short-username rows ('admin', 'rcm', 'jessica',
+    De-duplicates legacy short-username rows ('admin', 'jessica',
     'susan', 'melissa', 'eric') against their canonical email-style row
     ('admin@medprosc.com', etc.) so each real person only appears once in
     the New Room picker. Both rows still authenticate for login.
@@ -6407,7 +6418,6 @@ def list_chat_eligible_users() -> list[dict]:
     # legacy short username -> canonical email-style username
     _LEGACY_TO_CANONICAL = {
         "admin":   "admin@medprosc.com",
-        "rcm":     "rcm@medprosc.com",
         "eric":    "eric@medprosc.com",
         "susan":   "susan@medprosc.com",
         "melissa": "melissa@medprosc.com",
