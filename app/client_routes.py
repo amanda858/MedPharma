@@ -4493,27 +4493,59 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     errors = []
     counter = 1
 
+    # Pass 1: fuzzy-map every row, and tally how many times each file-provided
+    # claim/account number appears. A single claim frequently spans several
+    # service-line rows (one per CPT), all sharing the same claim number. The
+    # upsert key is (client_id, ClaimKey), so without disambiguation every line
+    # after the first overwrites the previous one — only the last line's charge
+    # survives and the admin "billed" total is badly under-counted. Counting the
+    # occurrences here lets Pass 2 keep each service line as its own row.
+    mapped_rows = []
+    base_key_counts = {}
+    for row in rows:
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
+            if db_col:
+                mapped[db_col] = val
+        if not mapped:
+            continue
+        base_key = str(mapped.get("ClaimKey", "")).strip()
+        if base_key:
+            base_key_counts[base_key] = base_key_counts.get(base_key, 0) + 1
+        mapped_rows.append(mapped)
+
     try:
-        for row in rows:
-            # Use fuzzy column matching for flexible header support
-            mapped = {}
-            for raw_key, val in row.items():
-                db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
-                if db_col:
-                    mapped[db_col] = val
-
-            if not mapped:
-                continue
-
-            # Generate a stable ClaimKey when the source file has no claim/account
-            # number. Use a deterministic hash of the claim's identifying fields so
-            # (a) distinct claims never collide — even across several files uploaded
-            # the same day — and (b) re-uploading the same claim updates the same row
-            # instead of silently overwriting an unrelated one. The old behaviour used
-            # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
-            # the day reused those exact keys and clobbered earlier claims — which is
-            # why freshly imported data never moved the admin totals.
-            if not mapped.get("ClaimKey"):
+        for mapped in mapped_rows:
+            base_key = str(mapped.get("ClaimKey", "")).strip()
+            if base_key:
+                # Multi-service-line claim: keep each line distinct by appending a
+                # deterministic per-line suffix derived from the line's financial /
+                # service fields. Re-uploading the same file regenerates identical
+                # suffixes, so the upsert updates in place and totals never double
+                # count. Single-line claims keep the bare claim number untouched so
+                # the common case (and the claim number shown in the UI) is unchanged.
+                mapped["ClaimKey"] = base_key
+                if base_key_counts.get(base_key, 0) > 1:
+                    line_sig = "|".join(
+                        str(mapped.get(f, "")).strip().lower()
+                        for f in ("CPTCode", "DOS", "ChargeAmount", "AllowedAmount",
+                                  "AdjustmentAmount", "PaidAmount", "Description",
+                                  "BillDate", "PaidDate", "DenialReason")
+                    )
+                    digest = hashlib.sha1(
+                        f"{base_key}|{line_sig}".encode("utf-8")
+                    ).hexdigest()[:8].upper()
+                    mapped["ClaimKey"] = f"{base_key}-L{digest}"
+            else:
+                # Generate a stable ClaimKey when the source file has no claim/account
+                # number. Use a deterministic hash of the claim's identifying fields so
+                # (a) distinct claims never collide — even across several files uploaded
+                # the same day — and (b) re-uploading the same claim updates the same row
+                # instead of silently overwriting an unrelated one. The old behaviour used
+                # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
+                # the day reused those exact keys and clobbered earlier claims — which is
+                # why freshly imported data never moved the admin totals.
                 sig = "|".join(
                     str(mapped.get(f, "")).strip().lower()
                     for f in ("PatientName", "PatientID", "Payor", "ProviderName",
