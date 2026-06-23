@@ -2576,6 +2576,34 @@
               </table>
             </div>
           </div>
+
+          <!-- Billed by Staff Member (rolls up each staff member's assigned accounts) -->
+          <div class="page-header" style="margin-top:28px">
+            <div class="page-title">Billed by Staff Member</div>
+            <div class="page-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadBillingByStaff()">↻ Refresh</button>
+            </div>
+          </div>
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:12px">
+            Each staff member's billed total is the sum of charges across the accounts they're assigned to (Manage Clients → 👥 Access). Accounts shared by two staff members are counted once in the comprehensive total.
+          </div>
+          <div class="card" style="padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Staff Member</th>
+                    <th>Role</th>
+                    <th>Assigned Accounts</th>
+                    <th style="text-align:right">Claims</th>
+                    <th style="text-align:right">Billed</th>
+                  </tr>
+                </thead>
+                <tbody id="billingByStaffTbody"></tbody>
+                <tfoot id="billingByStaffTfoot"></tfoot>
+              </table>
+            </div>
+          </div>
         </div>
 
         <!-- ═══ TEAM CHAT ═══ -->
@@ -5173,7 +5201,7 @@
       if (panel === 'enrollment') loadEnroll();
       if (panel === 'edi') loadEdi();
       if (panel === 'providers') loadProviders();
-      if (panel === 'clients') loadClients();
+      if (panel === 'clients') { loadClients(); loadBillingByStaff(); }
       if (panel === 'files') loadDocuments();
       if (panel === 'profile') loadProfile();
       if (panel === 'reporting') loadReport();
@@ -6346,7 +6374,54 @@
   </tr>`).join('');
     }
 
-    async function deleteClient(cid, username) {
+    async function loadBillingByStaff() {
+      const tbody = document.getElementById('billingByStaffTbody');
+      const tfoot = document.getElementById('billingByStaffTfoot');
+      if (!tbody) return;
+      try {
+        const r = await fetch('/hub/api/admin/billing/by-staff', { credentials: 'same-origin' });
+        if (!r.ok) {
+          // Non-admins get 403; just blank the section quietly.
+          tbody.innerHTML = '';
+          if (tfoot) tfoot.innerHTML = '';
+          return;
+        }
+        const d = await r.json();
+        const staff = d.staff || [];
+        if (!staff.length) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#6b7280;padding:18px">No staff members are assigned to any accounts yet.</td></tr>`;
+        } else {
+          tbody.innerHTML = staff.map(s => {
+            const accts = (s.accounts || []);
+            const acctText = accts.length
+              ? accts.map(a => `${esc(brand(a.company) || ('#' + a.client_id))} ($${fmt(a.billed)})`).join(', ')
+              : '—';
+            return `<tr>
+    <td style="font-weight:600">${esc(s.contact_name || s.username)}</td>
+    <td><span class="badge ${s.role === 'admin' ? 'badge-purple' : 'badge-blue'}">${esc(s.role)}</span></td>
+    <td style="font-size:12px">${acctText}</td>
+    <td style="text-align:right">${s.claim_count}</td>
+    <td style="text-align:right;font-weight:600">$${fmt(s.total_billed)}</td>
+  </tr>`;
+          }).join('');
+        }
+        if (tfoot) {
+          tfoot.innerHTML = `<tr style="border-top:2px solid #e5e7eb">
+    <td colspan="4" style="font-weight:700;text-align:right">Comprehensive total billed (assigned accounts)</td>
+    <td style="text-align:right;font-weight:700">$${fmt(d.comprehensive_total_billed)}</td>
+  </tr>` + ((d.unassigned_billed || 0) > 0 ? `<tr>
+    <td colspan="4" style="text-align:right;color:#6b7280;font-size:12px">Billed on accounts with no staff assigned</td>
+    <td style="text-align:right;color:#6b7280;font-size:12px">$${fmt(d.unassigned_billed)}</td>
+  </tr><tr>
+    <td colspan="4" style="text-align:right;font-weight:600">All accounts total billed</td>
+    <td style="text-align:right;font-weight:600">$${fmt(d.total_billed_all_accounts)}</td>
+  </tr>` : '');
+        }
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:18px">Failed to load: ${esc(e.message)}</td></tr>`;
+        if (tfoot) tfoot.innerHTML = '';
+      }
+    }
       if (!confirm(`Remove account "${username}"? This cannot be undone.`)) return;
       try {
         const r = await fetch(`/hub/api/clients/${cid}`, {

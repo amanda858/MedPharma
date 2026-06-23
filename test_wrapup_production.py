@@ -214,6 +214,80 @@ def test_staff_accounts_keep_unscoped_clients_visible(hub_env):
         assert "Hidden Client" not in companies
 
 
+def test_billing_by_staff_rolls_up_assigned_accounts(hub_env):
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        staff_id = client_db.create_client({
+            "username": "biller_one",
+            "password": "billerone123",
+            "company": "MedPharma SC",
+            "contact_name": "Biller One",
+            "email": "biller_one@example.com",
+            "phone": "555-1400",
+            "role": "staff",
+        })
+        acct_a = client_db.create_client({
+            "username": "acct_a",
+            "password": "accta123456",
+            "company": "Acct A Client",
+            "contact_name": "Acct A",
+            "email": "acct_a@example.com",
+            "phone": "555-1401",
+            "role": "client",
+        })
+        acct_b = client_db.create_client({
+            "username": "acct_b",
+            "password": "acctb123456",
+            "company": "Acct B Client",
+            "contact_name": "Acct B",
+            "email": "acct_b@example.com",
+            "phone": "555-1402",
+            "role": "client",
+        })
+        # Unassigned account: billed but no staff granted access.
+        acct_unassigned = client_db.create_client({
+            "username": "acct_unassigned",
+            "password": "acctu1234567",
+            "company": "Acct Unassigned",
+            "contact_name": "Acct U",
+            "email": "acct_u@example.com",
+            "phone": "555-1403",
+            "role": "client",
+        })
+
+        client_db.set_client_access(acct_a, [staff_id], granted_by="admin")
+        client_db.set_client_access(acct_b, [staff_id], granted_by="admin")
+
+        client_db.create_claim({"client_id": acct_a, "ClaimKey": "A-1", "ChargeAmount": 1000})
+        client_db.create_claim({"client_id": acct_a, "ClaimKey": "A-2", "ChargeAmount": 500})
+        client_db.create_claim({"client_id": acct_b, "ClaimKey": "B-1", "ChargeAmount": 2000})
+        client_db.create_claim({"client_id": acct_unassigned, "ClaimKey": "U-1", "ChargeAmount": 750})
+
+        # Non-admins are forbidden.
+        _login(client, "biller_one", "billerone123")
+        denied = client.get("/hub/api/admin/billing/by-staff")
+        assert denied.status_code == 403, denied.text
+        client.post("/hub/api/logout")
+
+        _login(client, "admin", "admin123")
+        resp = client.get("/hub/api/admin/billing/by-staff")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+
+        staff = {s["user_id"]: s for s in data["staff"]}
+        assert staff_id in staff
+        biller = staff[staff_id]
+        assert biller["total_billed"] == 3500.0
+        assert biller["claim_count"] == 3
+        accts = {a["client_id"]: a for a in biller["accounts"]}
+        assert accts[acct_a]["billed"] == 1500.0
+        assert accts[acct_b]["billed"] == 2000.0
+
+        assert data["comprehensive_total_billed"] == 3500.0
+        assert data["total_billed_all_accounts"] == 4250.0
+        assert data["unassigned_billed"] == 750.0
+
+
 def test_report_tabs_default_to_claims_only_and_allow_optional_modules(hub_env):
     client_db, hub_app = hub_env
     with TestClient(hub_app.app) as client:

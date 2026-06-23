@@ -6601,3 +6601,108 @@ def list_clients_for_user(user_id: int) -> list[int]:
         return [int(r[0]) for r in rows]
     finally:
         conn.close()
+
+
+def get_billing_by_staff() -> dict:
+    """Billed charges grouped by the staff/admin member assigned to each account.
+
+    Staff/admin users are linked to accounts through ``client_user_access``;
+    every claim belongs to an account (``claims_master.client_id``). For each
+    staff member this rolls the ChargeAmount of all claims in their assigned
+    accounts into a per-account breakdown and a per-staff total, then a
+    comprehensive grand total across all assigned accounts (de-duplicated so an
+    account shared by two staff members is only counted once).
+
+    Returns a dict with:
+      - ``staff``: list of {user_id, username, contact_name, role,
+        claim_count, total_billed, accounts:[{client_id, company,
+        claim_count, billed}]}
+      - ``comprehensive_total_billed``: total billed across the distinct set of
+        accounts assigned to at least one staff member.
+      - ``total_billed_all_accounts``: total billed across every account,
+        including accounts with no staff assigned.
+      - ``unassigned_billed``: billed on accounts that have no staff assigned.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        # Per-(staff, account) billed totals. LEFT JOIN so an assigned account
+        # with no claims still surfaces (billed 0) rather than vanishing.
+        cur.execute(
+            """
+            SELECT u.id            AS user_id,
+                   u.username       AS username,
+                   u.contact_name   AS contact_name,
+                   u.role           AS role,
+                   a.id             AS account_id,
+                   a.company        AS company,
+                   COUNT(cm.id)                       AS claim_count,
+                   COALESCE(SUM(cm.ChargeAmount), 0)  AS billed
+            FROM clients u
+            JOIN client_user_access cua ON cua.user_id = u.id
+            JOIN clients a              ON a.id = cua.client_id
+            LEFT JOIN claims_master cm  ON cm.client_id = cua.client_id
+            WHERE LOWER(COALESCE(u.role, '')) IN ('admin', 'staff')
+              AND COALESCE(u.is_active, 1) = 1
+            GROUP BY u.id, a.id
+            ORDER BY u.contact_name, u.username, a.company
+            """
+        )
+
+        staff_map: dict[int, dict] = {}
+        for r in cur.fetchall():
+            uid = int(r["user_id"])
+            entry = staff_map.get(uid)
+            if entry is None:
+                entry = {
+                    "user_id": uid,
+                    "username": r["username"],
+                    "contact_name": r["contact_name"] or "",
+                    "role": r["role"] or "",
+                    "claim_count": 0,
+                    "total_billed": 0.0,
+                    "accounts": [],
+                }
+                staff_map[uid] = entry
+            billed = float(r["billed"] or 0)
+            claim_count = int(r["claim_count"] or 0)
+            entry["accounts"].append({
+                "client_id": int(r["account_id"]),
+                "company": r["company"] or "",
+                "claim_count": claim_count,
+                "billed": round(billed, 2),
+            })
+            entry["claim_count"] += claim_count
+            entry["total_billed"] = round(entry["total_billed"] + billed, 2)
+
+        staff = sorted(
+            staff_map.values(),
+            key=lambda e: (-e["total_billed"], e["contact_name"] or e["username"]),
+        )
+
+        # Comprehensive total: billed across DISTINCT assigned accounts so a
+        # shared account is not double-counted by summing per-staff totals.
+        comprehensive = cur.execute(
+            """
+            SELECT COALESCE(SUM(ChargeAmount), 0)
+            FROM claims_master
+            WHERE client_id IN (SELECT DISTINCT client_id FROM client_user_access)
+            """
+        ).fetchone()[0]
+
+        total_all = cur.execute(
+            "SELECT COALESCE(SUM(ChargeAmount), 0) FROM claims_master"
+        ).fetchone()[0]
+
+        comprehensive = round(float(comprehensive or 0), 2)
+        total_all = round(float(total_all or 0), 2)
+
+        return {
+            "staff": staff,
+            "comprehensive_total_billed": comprehensive,
+            "total_billed_all_accounts": total_all,
+            "unassigned_billed": round(total_all - comprehensive, 2),
+        }
+    finally:
+        conn.close()

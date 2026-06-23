@@ -54,7 +54,7 @@ from app.client_db import (
     get_or_create_dm_room,
     list_room_read_state,
     list_client_access, set_client_access, list_clients_for_user,
-    accounts_assigned_to_user,
+    accounts_assigned_to_user, get_billing_by_staff,
     create_notification, fanout_notification, list_notifications,
     count_unread_notifications, mark_notification_read,
     mark_all_notifications_read, delete_notification, delete_notifications,
@@ -970,6 +970,18 @@ def list_admin_users(hub_session: Optional[str] = Cookie(None)):
     users = [u for u in list_chat_eligible_users()
              if (u.get("role") or "").lower() in ("admin", "staff", "bizdev")]
     return users
+
+
+@router.get("/admin/billing/by-staff")
+def admin_billing_by_staff(hub_session: Optional[str] = Cookie(None)):
+    """Billed charges per staff member, grouped by their assigned accounts.
+
+    Admin-only. Each staff/admin member's billed total is the sum of
+    ChargeAmount across the accounts they're assigned to (via Manage Clients →
+    Access), with a per-account breakdown and a comprehensive grand total.
+    """
+    _require_full_admin(hub_session)
+    return get_billing_by_staff()
 
 
 @router.post("/admin/users/invite")
