@@ -32,6 +32,8 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+from app.config import business_now, business_today_iso
+
 log = logging.getLogger("notifications")
 
 
@@ -1347,7 +1349,7 @@ def send_daily_account_summary():
         log.error(f"Failed to fetch daily account summary data: {e}")
         return
 
-    now = datetime.now()
+    now = business_now()
     date_str = now.strftime("%m/%d/%Y")
     date_str_long = now.strftime("%B %d, %Y")
     day_of_week = now.strftime("%A")
@@ -1632,7 +1634,7 @@ def send_production_reminders():
     at 5:30 PM EST if they have NOT uploaded any production data today.
     """
     from datetime import date
-    today = date.today().isoformat()
+    today = business_today_iso()
 
     for username, email in USER_EMAILS.items():
         try:
@@ -2280,7 +2282,7 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
         return {"ok": False, "error": str(e)}
 
     if not report_date:
-        report_date = _dt.now().strftime("%Y-%m-%d")
+        report_date = business_today_iso()
 
     try:
         report = get_eod_team_report(report_date)
@@ -2428,7 +2430,7 @@ def _build_demo_eod_report() -> dict:
     shape as get_eod_team_report() — fed directly to the renderer.
     """
     from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
+    today = business_today_iso()
     tab_keys = ["Claims", "Credentialing", "Enrollment", "EDI", "Production",
                 "Documents", "Notes", "Chat", "Audit", "Pageviews"]
 
@@ -3102,7 +3104,7 @@ def send_client_daily_report(client_id: int, report_date: str = None,
             log.error(f"client_db.get_client_daily_report import failed: {e}")
             return {"ok": False, "error": str(e), "client_id": client_id}
         if not report_date:
-            report_date = _dt.now().strftime("%Y-%m-%d")
+            report_date = business_today_iso()
         report = get_client_daily_report(client_id, report_date)
         if not report or not report.get("ok"):
             return {"ok": False, "error": (report or {}).get("error", "no report"),
@@ -3233,7 +3235,7 @@ def _build_demo_client_daily_report() -> dict:
     layout when the live DB has no activity for the target client.
     """
     from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
+    today = business_today_iso()
     ts = lambda hh, mm: f"{today} {hh:02d}:{mm:02d}:00"
     return {
         "ok": True,

@@ -4869,7 +4869,7 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
     finally:
         conn.close()
 
-    production_snapshot = get_user_production_snapshot(date.today().isoformat())
+    production_snapshot = get_user_production_snapshot()
     prod_users = production_snapshot.get("user_stats", [])
     prod_total_entries = production_snapshot.get("total_entries", 0)
     prod_total_hours = production_snapshot.get("total_hours", 0)

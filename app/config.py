@@ -9,6 +9,45 @@ NPI_API_VERSION = "2.1"
 # CLIA Data source (CMS public data)
 CLIA_DATA_URL = "https://data.cms.gov/provider-compliance/certification-and-compliance/clia-laboratory"
 
+# ── Business timezone ──
+# The team operates on US/Eastern time and the daily report scheduler fires in
+# that zone. "Today" rollups (dashboards, end-of-day reports, production
+# snapshots) must therefore be anchored to the business timezone, NOT the
+# server's UTC clock — otherwise a report that runs at 9 PM ET lands on the next
+# UTC calendar day, querying an empty future day so the figures appear stuck and
+# the day's work does not reflect.
+BUSINESS_TIMEZONE = os.getenv("BUSINESS_TIMEZONE", "America/New_York")
+
+
+def business_now():
+    """Current datetime in the business timezone (US/Eastern by default).
+
+    Resolves the zone via the stdlib ``zoneinfo`` first, then ``pytz``, and
+    finally a fixed UTC-5 offset, so it works whether or not the optional tz
+    packages are installed.
+    """
+    from datetime import datetime, timedelta, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(BUSINESS_TIMEZONE))
+    except Exception:
+        try:
+            import pytz
+            return datetime.now(pytz.timezone(BUSINESS_TIMEZONE))
+        except Exception:
+            return datetime.now(timezone(timedelta(hours=-5)))
+
+
+def business_today():
+    """Current date (``date`` object) in the business timezone."""
+    return business_now().date()
+
+
+def business_today_iso():
+    """Current date as a ``YYYY-MM-DD`` string in the business timezone."""
+    return business_now().strftime("%Y-%m-%d")
+
+
 # App settings
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))

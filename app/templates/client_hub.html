@@ -6741,6 +6741,17 @@
       return d.innerHTML;
     }
 
+    // Local YYYY-MM-DD for a Date (defaults to now). Uses the browser's local
+    // calendar day rather than toISOString()'s UTC day, so evening entries in
+    // US timezones aren't pushed onto the next day's date.
+    function localDateStr(d) {
+      const dt = d ? new Date(d) : new Date();
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const day = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
     // Show the company brand without the legal "SC" suffix anywhere in the UI.
     function brand(name) {
       return String(name || '').replace(/\bMedPharma\s+SC\b/i, 'MedPharma');
@@ -8546,7 +8557,7 @@
     async function loadTodayActivity() {
       const el = document.getElementById('dashTodayBody');
       if (!el) return;
-      const today = new Date().toISOString().split('T')[0];
+      const today = localDateStr();
       let url = `/hub/api/production?start_date=${today}&end_date=${today}`;
       if (activeClientId) url += `&client_id=${activeClientId}`;
       try {
@@ -8845,16 +8856,16 @@
 
       // Set today's date as default
       const dateEl = document.getElementById('prodDate');
-      if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().split('T')[0];
+      if (dateEl && !dateEl.value) dateEl.value = localDateStr();
 
       // Set default report dates (last 7 days)
       const rptStart = document.getElementById('prodRptStart');
       const rptEnd = document.getElementById('prodRptEnd');
       if (rptStart && !rptStart.value) {
         const d = new Date(); d.setDate(d.getDate() - 7);
-        rptStart.value = d.toISOString().split('T')[0];
+        rptStart.value = localDateStr(d);
       }
-      if (rptEnd && !rptEnd.value) rptEnd.value = new Date().toISOString().split('T')[0];
+      if (rptEnd && !rptEnd.value) rptEnd.value = localDateStr();
 
       let clientParam = '';
       let userParam = '';
@@ -9048,7 +9059,7 @@
         start = new Date(today.getFullYear(), today.getMonth(), 1);
         end = today;
       }
-      const fmt = d => d.toISOString().split('T')[0];
+      const fmt = d => localDateStr(d);
       document.getElementById('prodRptStart').value = fmt(start);
       document.getElementById('prodRptEnd').value   = fmt(end);
       loadProductionReport();
@@ -9056,7 +9067,7 @@
 
     function eodReport() {
       // One-click end-of-day report: set dates to today, switch to report view, generate + open PDF
-      const today = new Date().toISOString().split('T')[0];
+      const today = localDateStr();
       document.getElementById('prodRptStart').value = today;
       document.getElementById('prodRptEnd').value   = today;
       toggleProductionView('report');
