@@ -457,23 +457,10 @@ def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
     return user
 
 
-def _is_eric(user: dict) -> bool:
-    """True when the authenticated user is Eric. Reporting is the only
-    comprehensive (all-client) view that a non-admin may access, and only Eric
-    is granted that exception alongside full admins."""
-    for field in (user.get("username"), user.get("contact_name")):
-        if not field:
-            continue
-        s = str(field).strip().lower()
-        if s == "eric" or "eric" in s.split():
-            return True
-    return False
-
-
 def _require_reporting_access(hub_session: Optional[str] = Cookie(None)):
-    """Comprehensive reporting is restricted to full admins and Eric only."""
+    """Comprehensive reporting is restricted to full admins only."""
     user = _require_user(hub_session)
-    if user.get("role") == "admin" or _is_eric(user):
+    if user.get("role") == "admin":
         return user
     raise HTTPException(status_code=403, detail="Reporting access required")
 
@@ -1495,11 +1482,11 @@ class LeadUpdateIn(BaseModel):
 
 
 def _require_leads_access(hub_session: Optional[str]):
-    """Business Development (leads pipeline) is restricted to full admins and
-    Eric only — no other user (including the bizdev/staff roles) may view or
-    work the leads pipeline."""
+    """Business Development (leads pipeline) is restricted to full admins only —
+    no other user (including the bizdev/staff roles) may view or work the leads
+    pipeline."""
     user = _require_user(hub_session)
-    if user.get("role") == "admin" or _is_eric(user):
+    if user.get("role") == "admin":
         return user
     raise HTTPException(status_code=403, detail="Business Development access required")
 

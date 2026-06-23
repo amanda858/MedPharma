@@ -35,21 +35,6 @@ from email.mime.multipart import MIMEMultipart
 log = logging.getLogger("notifications")
 
 
-def _is_eric_user(user: dict) -> bool:
-    """True when the user is Eric. Business Development notifications are
-    restricted to full admins and Eric only (mirrors the routing rules in
-    client_routes._is_eric)."""
-    if not user:
-        return False
-    for field in (user.get("username"), user.get("contact_name")):
-        if not field:
-            continue
-        s = str(field).strip().lower()
-        if s == "eric" or "eric" in s.split():
-            return True
-    return False
-
-
 def _normalize_phone(value: str) -> str:
     """Normalize phone input to E.164 when possible (US-focused fallback)."""
     raw = (value or "").strip()
@@ -3382,10 +3367,10 @@ def send_bizdev_followup_reminders() -> dict:
         return {"ok": True, "due": 0, "emailed": 0, "notified": 0}
 
     recipients = [u for u in list_chat_eligible_users()
-                  if (u.get("role") or "") == "admin" or _is_eric_user(u)]
+                  if (u.get("role") or "") == "admin"]
     if not recipients:
         return {"ok": True, "due": len(due), "emailed": 0, "notified": 0,
-                "note": "no admin/Eric recipients"}
+                "note": "no admin recipients"}
 
     # In-app notification for every recipient — works with no email provider.
     notified = 0
