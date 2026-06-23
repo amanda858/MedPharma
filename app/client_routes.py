@@ -3294,6 +3294,38 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
             denial_agg[dc] = denial_agg.get(dc, 0) + 1
     top_denials = sorted([{"category": k, "count": v} for k, v in denial_agg.items()], key=lambda x: -x["count"])[:10]
 
+    # Billing activity — counts/charges of claims billed (by BillDate) in recent
+    # windows so admins can watch real-time billing throughput. This is computed
+    # independently of the report's DOS period filter (a claim billed today may
+    # have an old date-of-service), but still honors the sub-profile filter.
+    from datetime import date as _date, timedelta as _td
+    _today = _date.today()
+    _yesterday = _today - _td(days=1)
+    _week_start = _today - _td(days=6)          # last 7 days inclusive
+    _month_start = _today.replace(day=1)
+    act_base = (f"SELECT BillDate, COALESCE(ChargeAmount,0) AS ChargeAmount "
+                f"FROM claims_master WHERE client_id=?{sp_clause} "
+                f"AND BillDate IS NOT NULL AND BillDate != ''")
+    act_rows = conn.execute(act_base, [client_id] + sp_params).fetchall()
+    _windows = {
+        "today": (_today.isoformat(), _today.isoformat()),
+        "yesterday": (_yesterday.isoformat(), _yesterday.isoformat()),
+        "this_week": (_week_start.isoformat(), _today.isoformat()),
+        "this_month": (_month_start.isoformat(), _today.isoformat()),
+    }
+    billing_activity = {k: {"count": 0, "charged": 0.0} for k in _windows}
+    for r in act_rows:
+        bd = (r["BillDate"] or "")[:10]
+        if not bd:
+            continue
+        charge = float(r["ChargeAmount"] or 0)
+        for key, (lo, hi) in _windows.items():
+            if lo <= bd <= hi:
+                billing_activity[key]["count"] += 1
+                billing_activity[key]["charged"] += charge
+    for key in billing_activity:
+        billing_activity[key]["charged"] = round(billing_activity[key]["charged"], 2)
+
     # Credentialing
     cred_base = f"SELECT * FROM credentialing WHERE client_id=?{sp_clause}"
     cred_rows = [dict(r) for r in conn.execute(cred_base, [client_id] + sp_params).fetchall()]
@@ -3334,7 +3366,8 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 
     return {
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
-                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
+                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials,
+                    "billing_activity": billing_activity},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
         "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},

@@ -2833,6 +2833,17 @@
 
           <!-- Tab Content: Claims -->
           <div id="reportTabContent-claims" style="display:none">
+            <div class="card" style="margin-bottom:16px;border-left:4px solid var(--success)">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <div class="card-title">💵 Billed Activity</div>
+                <button class="btn btn-secondary btn-sm" onclick="loadReport()">↻ Refresh</button>
+              </div>
+              <div style="padding:8px 16px 4px;font-size:12px;color:var(--gray-500)">
+                Claims billed (by Bill Date) — updates live as the team bills.
+              </div>
+              <div id="rptClaimsBilledActivity"
+                   style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px 16px 18px"></div>
+            </div>
             <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
               <div class="card-header">
                 <div class="card-title">📊 Claims Report</div>
@@ -6979,6 +6990,27 @@
     function renderClaimsTabContent() {
       if (!lastReportData) return;
       const cl = lastReportData.claims || {};
+
+      // Billed Activity cards (by Bill Date) — live billing throughput
+      const ba = cl.billing_activity || {};
+      const baCards = [
+        { key: 'today', label: 'Billed Today', color: '#059669' },
+        { key: 'yesterday', label: 'Billed Yesterday', color: '#2563eb' },
+        { key: 'this_week', label: 'This Week (7 days)', color: '#7c3aed' },
+        { key: 'this_month', label: 'This Month', color: '#d97706' },
+      ];
+      const baEl = document.getElementById('rptClaimsBilledActivity');
+      if (baEl) {
+        baEl.innerHTML = baCards.map(c => {
+          const w = ba[c.key] || { count: 0, charged: 0 };
+          return `<div style="background:var(--gray-50);border:1px solid var(--gray-100);border-left:4px solid ${c.color};border-radius:8px;padding:12px 14px">
+            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">${c.label}</div>
+            <div style="font-size:24px;font-weight:700;color:${c.color};line-height:1.2">${w.count || 0}</div>
+            <div style="font-size:12px;color:var(--gray-600)">$${fmt(w.charged || 0)} charged</div>
+          </div>`;
+        }).join('');
+      }
+
       const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));
       renderBarChart('rptClaimsStatusChart', claimStatusData, 'value', 'label');
 
