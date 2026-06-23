@@ -35,6 +35,21 @@ from email.mime.multipart import MIMEMultipart
 log = logging.getLogger("notifications")
 
 
+def _is_eric_user(user: dict) -> bool:
+    """True when the user is Eric. Business Development notifications are
+    restricted to full admins and Eric only (mirrors the routing rules in
+    client_routes._is_eric)."""
+    if not user:
+        return False
+    for field in (user.get("username"), user.get("contact_name")):
+        if not field:
+            continue
+        s = str(field).strip().lower()
+        if s == "eric" or "eric" in s.split():
+            return True
+    return False
+
+
 def _normalize_phone(value: str) -> str:
     """Normalize phone input to E.164 when possible (US-focused fallback)."""
     raw = (value or "").strip()
@@ -3367,10 +3382,10 @@ def send_bizdev_followup_reminders() -> dict:
         return {"ok": True, "due": 0, "emailed": 0, "notified": 0}
 
     recipients = [u for u in list_chat_eligible_users()
-                  if (u.get("role") or "") in ("bizdev", "admin")]
+                  if (u.get("role") or "") == "admin" or _is_eric_user(u)]
     if not recipients:
         return {"ok": True, "due": len(due), "emailed": 0, "notified": 0,
-                "note": "no bizdev/admin recipients"}
+                "note": "no admin/Eric recipients"}
 
     # In-app notification for every recipient — works with no email provider.
     notified = 0
@@ -3446,121 +3461,6 @@ def send_bizdev_followup_reminders() -> dict:
 
     log.info(f"BizDev follow-up reminders: due={len(due)} notified={notified} emailed={emailed}")
     return {"ok": True, "due": len(due), "emailed": emailed, "notified": notified}
-
-
-def send_bizdev_weekly_report(week_start: str = None) -> dict:
-    """Email Victor's weekly Business-Development report to the team
-    (Lexi + Eric, or whoever EOD_REPORT_EMAIL is set to). Runs Monday 8 AM EST
-    and is also exposed for on-demand sending.
-
-    Business Development is about the *type* of clients in the pipeline
-    (RCM / Payor / Workflow / Compliance / Combination) — NOT dollar value.
-    No monetary figures appear anywhere in this report.
-    """
-    from app.client_db import get_leads_weekly_report
-
-    rep = get_leads_weekly_report(week_start)
-    cats = rep.get("categories", {}) or {}
-    rng = f"{rep.get('week_start','')} – {rep.get('week_end','')}"
-
-    # Public MedPharma logo (same asset shown on the hub login screen).
-    LOGO_URL = "https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
-
-    cat_lines = "\n".join([
-        f"  • RCM: {cats.get('rcm', 0)}",
-        f"  • Payor: {cats.get('payor', 0)}",
-        f"  • Workflow: {cats.get('workflow', 0)}",
-        f"  • Compliance: {cats.get('compliance', 0)}",
-        f"  • Combination (2+ services): {cats.get('combination', 0)}",
-        f"  • Open total: {cats.get('open_total', 0)}",
-        f"  • Closed: {cats.get('closed', 0)}",
-    ])
-    text_body = (
-        f"MedPharma — Business Development Weekly Report\n"
-        f"Week: {rng}\n\n"
-        f"New leads this week: {rep.get('new_this_week', 0)}\n"
-        f"Closed this week: {rep.get('closed_this_week', 0)}\n"
-        f"Open pipeline (leads): {cats.get('open_total', 0)}\n\n"
-        f"Pipeline by client type:\n{cat_lines}\n"
-    )
-
-    def _esc(s):
-        return _esc_html(s) if s is not None else ""
-
-    def _types(r):
-        lines = r.get("service_lines") or []
-        if len(lines) >= 2:
-            return "Combination (" + ", ".join(lines) + ")"
-        return ", ".join(lines) or "—"
-
-    rows_html = "".join(
-        f"<tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>"
-        f"<b>{_esc(r.get('practice_name') or r.get('contact_name') or ('Lead #' + str(r.get('id'))))}</b></td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>{_esc(_types(r))}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>{_esc(r.get('status') or '')}</td>"
-        f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0'>{_esc(r.get('owner') or '')}</td></tr>"
-        for r in (rep.get("rows") or [])[:40]
-    ) or "<tr><td colspan='4' style='padding:10px;color:#64748b'>No lead activity this week.</td></tr>"
-
-    def _chip(label, val, color):
-        return (
-            f"<td style='padding:0 6px'><div style='background:{color}15;border:1px solid {color}40;"
-            f"border-radius:10px;padding:10px 6px;text-align:center'>"
-            f"<div style='font-size:22px;font-weight:800;color:{color}'>{val}</div>"
-            f"<div style='font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:.4px'>{label}</div>"
-            f"</div></td>"
-        )
-
-    html_body = (
-        "<div style='font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:660px;margin:0 auto;color:#0f172a'>"
-        # ── Branded header with the actual MedPharma logo ──
-        "<div style='background:#0b2233;border-radius:12px 12px 0 0;padding:22px 24px;text-align:center'>"
-        f"<img src='{LOGO_URL}' alt='MedPharma' style='max-width:280px;width:80%;height:auto;display:block;margin:0 auto'>"
-        "</div>"
-        "<div style='border:1px solid #e2e8f0;border-top:0;border-radius:0 0 12px 12px;padding:24px'>"
-        "<h2 style='color:#1d4ed8;margin:0 0 4px'>Business Development — Weekly Report</h2>"
-        f"<p style='color:#64748b;margin:0 0 18px'>{rng} &nbsp;·&nbsp; Pipeline by client type</p>"
-        # ── Top-line counts (no dollars) ──
-        "<table style='width:100%;border-collapse:separate;border-spacing:0;margin-bottom:8px'><tr>"
-        f"{_chip('New This Week', rep.get('new_this_week', 0), '#2563eb')}"
-        f"{_chip('Open Pipeline', cats.get('open_total', 0), '#7c3aed')}"
-        f"{_chip('Closed This Week', rep.get('closed_this_week', 0), '#0891b2')}"
-        "</tr></table>"
-        # ── Breakdown by client type ──
-        "<h3 style='font-size:15px;margin:18px 0 8px'>Open pipeline by client type</h3>"
-        "<table style='width:100%;border-collapse:separate;border-spacing:0;margin-bottom:8px'><tr>"
-        f"{_chip('RCM', cats.get('rcm', 0), '#2563eb')}"
-        f"{_chip('Payor', cats.get('payor', 0), '#059669')}"
-        f"{_chip('Workflow', cats.get('workflow', 0), '#d97706')}"
-        f"{_chip('Compliance', cats.get('compliance', 0), '#dc2626')}"
-        f"{_chip('Combination', cats.get('combination', 0), '#7c3aed')}"
-        "</tr></table>"
-        # ── Lead activity table (type-focused, no value) ──
-        "<h3 style='font-size:15px;margin:18px 0 8px'>Lead activity this week</h3>"
-        "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
-        "<tr style='text-align:left;color:#64748b'><th style='padding:6px 10px'>Practice</th><th style='padding:6px 10px'>Client Type</th><th style='padding:6px 10px'>Status</th><th style='padding:6px 10px'>Owner</th></tr>"
-        f"{rows_html}</table>"
-        "<p style='color:#94a3b8;font-size:12px;margin-top:18px'>MedPharma © 2026 · medpharmasc.com</p>"
-        "</div></div>"
-    )
-
-    recipients = _eod_recipients()
-    subject = f"MedPharma · BizDev Weekly Report — {rng}"
-    sent = []
-    failed = []
-    for addr in recipients:
-        addr = (addr or "").strip()
-        if not addr or "@" not in addr:
-            continue
-        try:
-            ok, via = _send_email_to(addr, subject, text_body, html_body)
-            (sent if ok else failed).append({"email": addr, "via": via})
-        except Exception as e:
-            failed.append({"email": addr, "via": f"error: {e}"})
-
-    log.info(f"BizDev weekly report: sent={len(sent)} failed={len(failed)} recipients={recipients}")
-    return {"ok": True, "recipients": recipients, "sent": sent, "failed": failed,
-            "week": rng}
 
 
 def send_chat_unread_reminders(min_age_minutes: int = 120):
@@ -3773,15 +3673,6 @@ def start_daily_scheduler():
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=est),
             id="bizdev_followup_reminders",
             name="9 AM EST BizDev Follow-up Reminders (Mon–Fri)",
-            replace_existing=True,
-        )
-
-        # Monday 8:00 AM EST — BizDev weekly pipeline report to the team
-        scheduler.add_job(
-            send_bizdev_weekly_report,
-            CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=est),
-            id="bizdev_weekly_report",
-            name="Mon 8 AM EST BizDev Weekly Report",
             replace_existing=True,
         )
 

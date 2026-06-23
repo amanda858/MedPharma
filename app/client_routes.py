@@ -61,7 +61,7 @@ from app.client_db import (
     save_eod_report, list_eod_reports, get_eod_report,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
-    list_leads, create_lead, update_lead, get_leads_weekly_report,
+    list_leads, create_lead, update_lead,
     delete_lead, mark_lead_followed_up, list_leads_due_followup,
     restore_lead, list_deleted_leads, get_leads_pipeline,
 )
@@ -455,6 +455,27 @@ def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Full admin access required")
     return user
+
+
+def _is_eric(user: dict) -> bool:
+    """True when the authenticated user is Eric. Reporting is the only
+    comprehensive (all-client) view that a non-admin may access, and only Eric
+    is granted that exception alongside full admins."""
+    for field in (user.get("username"), user.get("contact_name")):
+        if not field:
+            continue
+        s = str(field).strip().lower()
+        if s == "eric" or "eric" in s.split():
+            return True
+    return False
+
+
+def _require_reporting_access(hub_session: Optional[str] = Cookie(None)):
+    """Comprehensive reporting is restricted to full admins and Eric only."""
+    user = _require_user(hub_session)
+    if user.get("role") == "admin" or _is_eric(user):
+        return user
+    raise HTTPException(status_code=403, detail="Reporting access required")
 
 
 def _client_scope(user: dict) -> Optional[int]:
@@ -1425,16 +1446,6 @@ def api_send_followup_reminders(hub_session: Optional[str] = Cookie(None)):
     return send_bizdev_followup_reminders()
 
 
-@router.post("/leads-weekly-report/send")
-def api_send_weekly_report(week_start: Optional[str] = None,
-                           hub_session: Optional[str] = Cookie(None)):
-    """Email Victor's weekly BizDev pipeline report to the team (Lexi + Eric).
-    This is what the Monday 8 AM EST scheduler sends automatically; exposed so
-    BizDev or an admin can send it on demand."""
-    _require_leads_access(hub_session)
-    from app.notifications import send_bizdev_weekly_report
-    return send_bizdev_weekly_report(week_start)
-
 
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
@@ -1483,15 +1494,14 @@ class LeadUpdateIn(BaseModel):
     notes: Optional[str] = None
 
 
-_LEADS_ROLES = {"bizdev", "admin", "staff"}
-
-
 def _require_leads_access(hub_session: Optional[str]):
-    """Leads pipeline is for the Business Development role (plus admin/staff)."""
+    """Business Development (leads pipeline) is restricted to full admins and
+    Eric only — no other user (including the bizdev/staff roles) may view or
+    work the leads pipeline."""
     user = _require_user(hub_session)
-    if (user.get("role") or "").lower() not in _LEADS_ROLES:
-        raise HTTPException(status_code=403, detail="Business Development access required")
-    return user
+    if user.get("role") == "admin" or _is_eric(user):
+        return user
+    raise HTTPException(status_code=403, detail="Business Development access required")
 
 
 @router.get("/leads")
@@ -1544,13 +1554,6 @@ def api_restore_lead(lead_id: int, hub_session: Optional[str] = Cookie(None)):
     if not restore_lead(lead_id):
         raise HTTPException(status_code=404, detail="Deleted lead not found")
     return {"ok": True}
-
-
-@router.get("/leads-weekly-report")
-def api_leads_weekly_report(week_start: Optional[str] = None,
-                            hub_session: Optional[str] = Cookie(None)):
-    _require_leads_access(hub_session)
-    return get_leads_weekly_report(week_start)
 
 
 @router.get("/leads-pipeline")
@@ -3275,6 +3278,45 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         status_agg[st]["paid"] += float(c.get("PaidAmount") or 0)
     by_status = [{"status": k, **v} for k, v in status_agg.items()]
 
+    # Billed activity — charge dollars actually billed, grouped by BillDate window.
+    # Computed independently of the DOS period filter so the admin always sees how
+    # much was billed recently (today / yesterday / last 7 days / this month),
+    # respecting the sub_profile scope.
+    from datetime import date as _ba_date
+    _today = _ba_date.today()
+    _yesterday = _today.fromordinal(_today.toordinal() - 1)
+    _week_start = _today.fromordinal(_today.toordinal() - 6)  # inclusive last 7 days
+    _month_start = _today.replace(day=1)
+    billing_activity = {
+        "today": {"count": 0, "charged": 0.0},
+        "yesterday": {"count": 0, "charged": 0.0},
+        "this_week": {"count": 0, "charged": 0.0},
+        "this_month": {"count": 0, "charged": 0.0},
+    }
+    ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
+              f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
+    for r in conn.execute(ba_sql, [client_id] + sp_params).fetchall():
+        bd = str(r["BillDate"] or "").strip()[:10]
+        try:
+            d = _ba_date.fromisoformat(bd)
+        except Exception:
+            continue
+        amt = float(r["ChargeAmount"] or 0)
+        if d == _today:
+            billing_activity["today"]["count"] += 1
+            billing_activity["today"]["charged"] += amt
+        if d == _yesterday:
+            billing_activity["yesterday"]["count"] += 1
+            billing_activity["yesterday"]["charged"] += amt
+        if d >= _week_start:
+            billing_activity["this_week"]["count"] += 1
+            billing_activity["this_week"]["charged"] += amt
+        if d >= _month_start:
+            billing_activity["this_month"]["count"] += 1
+            billing_activity["this_month"]["charged"] += amt
+    for _k in billing_activity:
+        billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
+
     denial_agg = {}
     for c in claims:
         dc = c.get("DenialCategory") or ""
@@ -3322,7 +3364,8 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 
     return {
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
-                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
+                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials,
+                    "billing_activity": billing_activity},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
         "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
@@ -3334,7 +3377,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
                hub_session: Optional[str] = Cookie(None)):
     """Generate a comprehensive cross-section report for CSV / print, with sub-profile breakdowns."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.client_db import get_db
     from datetime import date, datetime
 
@@ -4493,27 +4536,59 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     errors = []
     counter = 1
 
+    # Pass 1: fuzzy-map every row, and tally how many times each file-provided
+    # claim/account number appears. A single claim frequently spans several
+    # service-line rows (one per CPT), all sharing the same claim number. The
+    # upsert key is (client_id, ClaimKey), so without disambiguation every line
+    # after the first overwrites the previous one — only the last line's charge
+    # survives and the admin "billed" total is badly under-counted. Counting the
+    # occurrences here lets Pass 2 keep each service line as its own row.
+    mapped_rows = []
+    base_key_counts = {}
+    for row in rows:
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
+            if db_col:
+                mapped[db_col] = val
+        if not mapped:
+            continue
+        base_key = str(mapped.get("ClaimKey", "")).strip()
+        if base_key:
+            base_key_counts[base_key] = base_key_counts.get(base_key, 0) + 1
+        mapped_rows.append(mapped)
+
     try:
-        for row in rows:
-            # Use fuzzy column matching for flexible header support
-            mapped = {}
-            for raw_key, val in row.items():
-                db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
-                if db_col:
-                    mapped[db_col] = val
-
-            if not mapped:
-                continue
-
-            # Generate a stable ClaimKey when the source file has no claim/account
-            # number. Use a deterministic hash of the claim's identifying fields so
-            # (a) distinct claims never collide — even across several files uploaded
-            # the same day — and (b) re-uploading the same claim updates the same row
-            # instead of silently overwriting an unrelated one. The old behaviour used
-            # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
-            # the day reused those exact keys and clobbered earlier claims — which is
-            # why freshly imported data never moved the admin totals.
-            if not mapped.get("ClaimKey"):
+        for mapped in mapped_rows:
+            base_key = str(mapped.get("ClaimKey", "")).strip()
+            if base_key:
+                # Multi-service-line claim: keep each line distinct by appending a
+                # deterministic per-line suffix derived from the line's financial /
+                # service fields. Re-uploading the same file regenerates identical
+                # suffixes, so the upsert updates in place and totals never double
+                # count. Single-line claims keep the bare claim number untouched so
+                # the common case (and the claim number shown in the UI) is unchanged.
+                mapped["ClaimKey"] = base_key
+                if base_key_counts.get(base_key, 0) > 1:
+                    line_sig = "|".join(
+                        str(mapped.get(f, "")).strip().lower()
+                        for f in ("CPTCode", "DOS", "ChargeAmount", "AllowedAmount",
+                                  "AdjustmentAmount", "PaidAmount", "Description",
+                                  "BillDate", "PaidDate", "DenialReason")
+                    )
+                    digest = hashlib.sha1(
+                        f"{base_key}|{line_sig}".encode("utf-8")
+                    ).hexdigest()[:8].upper()
+                    mapped["ClaimKey"] = f"{base_key}-L{digest}"
+            else:
+                # Generate a stable ClaimKey when the source file has no claim/account
+                # number. Use a deterministic hash of the claim's identifying fields so
+                # (a) distinct claims never collide — even across several files uploaded
+                # the same day — and (b) re-uploading the same claim updates the same row
+                # instead of silently overwriting an unrelated one. The old behaviour used
+                # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
+                # the day reused those exact keys and clobbered earlier claims — which is
+                # why freshly imported data never moved the admin totals.
                 sig = "|".join(
                     str(mapped.get(f, "")).strip().lower()
                     for f in ("PatientName", "PatientID", "Payor", "ProviderName",
@@ -4622,7 +4697,18 @@ def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
         raise HTTPException(404, "File not found")
     path = os.path.join(UPLOAD_DIR, rec["filename"])
     if not os.path.isfile(path):
-        raise HTTPException(404, "File not found on disk")
+        # The DB still references the file but the bytes are gone from disk. This
+        # happens when uploads are written to non-persistent storage (e.g. the
+        # UPLOAD_DIR is not a mounted persistent volume) and the server restarts.
+        # Surface a clear message instead of a generic 404 so the cause is obvious.
+        log.warning("Download failed — file row %s (%s) missing on disk at %s",
+                    file_id, rec.get("original_name"), path)
+        raise HTTPException(
+            410,
+            "This file is no longer available in storage. It was uploaded earlier "
+            "but the stored copy is missing — please re-upload it. (If this keeps "
+            "happening, uploads are not being saved to persistent storage.)",
+        )
     from fastapi.responses import FileResponse
     return FileResponse(
         path,
@@ -4762,7 +4848,7 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -4962,7 +5048,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                               hub_session: Optional[str] = Cookie(None),
                               request: Request = None):
     """Generate and return a branded PDF report."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.client_db import get_db
     from datetime import date
     from io import BytesIO

@@ -2089,9 +2089,10 @@
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
-          <div class="nav-section">Business Development</div>
-          <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
-          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 BizDev Weekly Report</div>
+          <div id="bizdevAdminNav">
+            <div class="nav-section">Business Development</div>
+            <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
+          </div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -2108,8 +2109,6 @@
           <div class="nav-item"        data-panel="leads_compliance"  data-leadcat="compliance"  onclick="showLeads('compliance','leads_compliance')">🛡️ Compliance Leads</div>
           <div class="nav-item"        data-panel="leads_combination" data-leadcat="combination" onclick="showLeads('combination','leads_combination')">🔗 Combination Leads</div>
           <div class="nav-item"        data-panel="leads_closed"      data-leadcat="closed"      onclick="showLeads('closed','leads_closed')">✅ Closed Leads</div>
-          <div class="nav-section">Reporting</div>
-          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 Weekly Report</div>
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadgeBiz" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
@@ -2194,6 +2193,15 @@
           </div>
 
           <div class="kpi-grid" id="kpiGrid" data-module-section="claims"></div>
+          <!-- Billed Activity Card — lines billed + charge value, by Bill Date.
+               Visible to every user, scoped to their own data. -->
+          <div class="card" id="dashBilledActivityCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--success);display:none">
+            <div class="card-header">
+              <div class="card-title">💵 Billed Activity</div>
+              <div style="font-size:11px;color:var(--gray-500)">Lines billed and charge value by Bill Date</div>
+            </div>
+            <div id="dashBilledActivity" style="padding:16px"></div>
+          </div>
           <!-- Data Summary Card -->
           <div class="card" id="dashSummaryCard" style="margin-bottom:18px;display:none">
             <div class="card-header">
@@ -2805,6 +2813,13 @@
 
           <!-- Tab Content: Claims -->
           <div id="reportTabContent-claims" style="display:none">
+            <div class="card" style="margin-bottom:16px;border-left:4px solid var(--success)">
+              <div class="card-header">
+                <div class="card-title">💵 Billed Activity</div>
+                <div style="font-size:11px;color:var(--gray-500)">Charges billed by date (independent of the period filter)</div>
+              </div>
+              <div id="rptClaimsBilledActivity" style="padding:16px"></div>
+            </div>
             <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
               <div class="card-header">
                 <div class="card-title">📊 Claims Report</div>
@@ -3452,19 +3467,6 @@
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
-
-        <!-- ═══ BIZDEV: WEEKLY REPORT ═══ -->
-        <div class="hub-panel" id="panel-leadreport">
-          <div class="page-header">
-            <div class="page-title">📅 Weekly Business Development Report</div>
-            <div class="page-actions">
-              <button class="btn btn-secondary btn-sm" onclick="loadLeadReport()">🔄 Refresh</button>
-            </div>
-          </div>
-          <div id="leadReportContent">
-            <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>
           </div>
         </div>
 
@@ -4152,6 +4154,19 @@
     function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
     function isFullAdmin()    { return currentUser && currentUser.role === 'admin'; }
     function isBizdev()       { return currentUser && currentUser.role === 'bizdev'; }
+    // Reporting is restricted to full admins and Eric only — no other user may see
+    // or open the Reporting tab.
+    function canViewReporting() {
+      if (!currentUser) return false;
+      if (isFullAdmin()) return true;
+      const fields = [currentUser.username, currentUser.contact_name]
+        .filter(Boolean)
+        .map(s => String(s).toLowerCase());
+      return fields.some(s => s === 'eric' || s.split(/\s+/).includes('eric'));
+    }
+    // Business Development (leads pipeline) is restricted to full admins and
+    // Eric only — same rule as Reporting. No other user sees the leads nav.
+    function canViewLeads() { return canViewReporting(); }
 
     // ═══════════════════════════════════════
     // GLOBAL FETCH WRAPPER — auth for ALL API calls
@@ -4601,9 +4616,12 @@
       if (isStaffOrAdmin()) {
         document.getElementById('adminFullNav').style.display = 'block';
         document.getElementById('clientNav').style.display = 'none';
-        // Reporting is run by the admin only — staff don't generate reports.
+        // Reporting is restricted to admins and Eric — no one else gets the tab.
         const navReporting = document.getElementById('navReporting');
-        if (navReporting) navReporting.style.display = isFullAdmin() ? '' : 'none';
+        if (navReporting) navReporting.style.display = canViewReporting() ? '' : 'none';
+        // Business Development (leads) is likewise restricted to admins and Eric.
+        const bizdevAdminNav = document.getElementById('bizdevAdminNav');
+        if (bizdevAdminNav) bizdevAdminNav.style.display = canViewLeads() ? '' : 'none';
       } else {
         document.getElementById('adminFullNav').style.display = 'none';
         document.getElementById('clientNav').style.display = 'block';
@@ -4977,51 +4995,6 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
-    async function loadLeadReport() {
-      const box = document.getElementById('leadReportContent');
-      if (!box) return;
-      box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>`;
-      try {
-        const r = await fetch('/hub/api/leads-weekly-report');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        const c = d.categories || {};
-        const stat = (label, val) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:16px">
-          <div style="font-size:24px;font-weight:800;color:#4338ca">${val}</div>
-          <div style="font-size:12px;color:var(--gray-500)">${label}</div></div>`;
-        const rowsHtml = (d.rows || []).map(l => `<tr>
-          <td>${esc(l.practice_name || '—')}</td>
-          <td>${esc((l.service_lines || []).length >= 2 ? ('Combination (' + (l.service_lines || []).join(', ') + ')') : ((l.service_lines || []).join(', ') || '—'))}</td>
-          <td>${esc(l.status || '')}</td>
-          <td>${esc(l.owner || '—')}</td>
-          <td>${esc((l.updated_at || '').slice(0, 10))}</td></tr>`).join('')
-          || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--gray-400)">No activity recorded this week.</td></tr>`;
-        box.innerHTML = `
-          <div class="card" style="margin-bottom:14px;padding:14px">
-            <div style="font-weight:700">Week of ${esc(d.week_start)} → ${esc(d.week_end)} <span style="color:var(--gray-400);font-weight:400">(Mon–Sun) · Pipeline by client type</span></div>
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-            ${stat('New This Week', d.new_this_week || 0)}
-            ${stat('Closed This Week', d.closed_this_week || 0)}
-            ${stat('Open Pipeline', c.open_total || 0)}
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-            ${stat('RCM', c.rcm || 0)}${stat('Payor', c.payor || 0)}
-            ${stat('Workflow', c.workflow || 0)}${stat('Compliance', c.compliance || 0)}
-            ${stat('Combination', c.combination || 0)}${stat('Closed (all)', c.closed || 0)}
-          </div>
-          <div class="card" style="padding:0">
-            <div style="padding:12px 16px;font-weight:700;border-bottom:1px solid var(--gray-200)">This Week's Activity</div>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Lead Name</th><th>Client Type</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead>
-              <tbody>${rowsHtml}</tbody>
-            </table></div>
-          </div>`;
-      } catch (e) {
-        box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:#dc2626">Could not load the weekly report.</div>`;
-      }
-    }
-
     // Show a "5 team members" line on the empty selector so admins/staff
     // can see at a glance that the system already has people in it.
     async function refreshSelectorTeamLine() {
@@ -5145,8 +5118,8 @@
     // NAVIGATION
     // ═══════════════════════════════════════
     function navTo(panel) {
-      // Reporting is admin-only — non-admins can't open or generate reports.
-      if (panel === 'reporting' && !isFullAdmin()) {
+      // Reporting is restricted to admins and Eric — no other user can open it.
+      if (panel === 'reporting' && !canViewReporting()) {
         toast('Reports are generated by the admin only.', 'error');
         panel = isStaffOrAdmin() ? 'dashboard' : 'production';
       }
@@ -5193,7 +5166,6 @@
       if (panel === 'audit') loadAuditLog();
       if (panel === 'emailsetup') loadEmailSetup();
       if (panel === 'chat') loadChatRooms();
-      if (panel === 'leadreport') loadLeadReport();
     }
 
     // Open the panel referenced by URL hash on first load (e.g. /hub#production)
@@ -5203,7 +5175,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit','chat','emailsetup','leadreport'];
+                       'production','alerts','audit','chat','emailsetup'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
@@ -5329,6 +5301,31 @@
       <div class="kpi-label">${k.label}</div>
     </div>
   `).join('');
+
+      // Billed Activity — lines billed + charge value by Bill Date, scoped to the
+      // user's own data so every user monitors their own billing activity.
+      const ba = d.billing_activity || {};
+      const baCards = [
+        { key: 'today', label: 'Billed Today' },
+        { key: 'yesterday', label: 'Billed Yesterday' },
+        { key: 'this_week', label: 'This Week (7d)' },
+        { key: 'this_month', label: 'This Month' },
+      ];
+      const baCard = document.getElementById('dashBilledActivityCard');
+      const baEl = document.getElementById('dashBilledActivity');
+      const baHasData = baCards.some(c => (ba[c.key] && (ba[c.key].count || ba[c.key].charged)));
+      if (baCard) baCard.style.display = baHasData ? '' : 'none';
+      if (baEl && baHasData) {
+        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+          baCards.map(c => {
+            const v = ba[c.key] || { count: 0, charged: 0 };
+            return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(v.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${v.count} line${v.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
+            </div>`;
+          }).join('') + `</div>`;
+      }
 
       // Data Summary Card (shows record counts per section)
       const summaryCard = document.getElementById('dashSummaryCard');
@@ -6904,6 +6901,29 @@
     function renderClaimsTabContent() {
       if (!lastReportData) return;
       const cl = lastReportData.claims || {};
+
+      // Billed activity — recent billing by Bill Date (shows what was billed
+      // today / yesterday / this week / this month, regardless of the period filter)
+      const ba = cl.billing_activity || {};
+      const baCards = [
+        { key: 'today', label: 'Billed Today' },
+        { key: 'yesterday', label: 'Billed Yesterday' },
+        { key: 'this_week', label: 'This Week (7d)' },
+        { key: 'this_month', label: 'This Month' },
+      ];
+      const baEl = document.getElementById('rptClaimsBilledActivity');
+      if (baEl) {
+        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+          baCards.map(c => {
+            const v = ba[c.key] || { count: 0, charged: 0 };
+            return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(v.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${v.count} claim${v.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
+            </div>`;
+          }).join('') + `</div>`;
+      }
+
       const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));
       renderBarChart('rptClaimsStatusChart', claimStatusData, 'value', 'label');
 
@@ -8895,17 +8915,38 @@
       // Optional attachment (Excel/PDF/Word) — upload first, then link to the entry.
       const attEl = document.getElementById('prodAttachment');
       if (attEl && attEl.files && attEl.files[0]) {
+        const attFile = attEl.files[0];
+        // Route spreadsheet worklists through the matching data importer so the
+        // attachment's patient / claim / charge rows actually populate the
+        // billing totals instead of sitting as a passive document. Map the
+        // production category to a data-import bucket; spreadsheets default to
+        // Claims because the attachment field is explicitly "for claims data".
+        const attExt = (attFile.name.split('.').pop() || '').toLowerCase();
+        const isSpreadsheet = ['xlsx', 'xls', 'csv', 'ods'].includes(attExt);
+        let uploadCategory = 'General';
+        if (isSpreadsheet) {
+          const prodCat = (document.getElementById('prodCategory').value || '').toLowerCase();
+          if (prodCat.includes('credential')) uploadCategory = 'Credentialing';
+          else if (prodCat.includes('enroll')) uploadCategory = 'Enrollment';
+          else if (prodCat.includes('edi')) uploadCategory = 'EDI';
+          else uploadCategory = 'Claims';
+        }
         try {
           const fd = new FormData();
-          fd.append('file', attEl.files[0]);
-          fd.append('category', 'General');
+          fd.append('file', attFile);
+          fd.append('category', uploadCategory);
           fd.append('client_id', activeClientId);
-          toast(`Uploading ${attEl.files[0].name}…`, 'info');
+          toast(`Uploading ${attFile.name}…`, 'info');
           const ur = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
           const ud = await ur.json();
           if (!ur.ok) throw new Error(ud.detail || 'Attachment upload failed');
           data.attachment_file_id = ud.id || null;
-          data.attachment_name = attEl.files[0].name;
+          data.attachment_name = attFile.name;
+          if (ud.imported) {
+            toast(`✅ Imported ${ud.imported} ${ud.import_category || ''} record${ud.imported === 1 ? '' : 's'} from ${attFile.name}`, 'success');
+          } else if (isSpreadsheet && ud.import_errors && ud.import_errors.length) {
+            toast(`Attachment saved, but import had issues: ${ud.import_errors[0]}`, 'error');
+          }
         } catch (e) { toast(e.message, 'error'); return; }
       }
       try {
@@ -9909,6 +9950,11 @@
         if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
         n.style.display = enabled.has(key) ? '' : 'none';
       });
+
+      // Reporting is restricted to admins and Eric regardless of which modules a
+      // client has enabled — never let module visibility re-reveal the tab.
+      const navReporting = document.getElementById('navReporting');
+      if (navReporting && !canViewReporting()) navReporting.style.display = 'none';
 
       // Also gate in-panel sections (dashboard cards, reporting blocks) tagged
       // with data-module-section, so a client without EDI/Credentialing/etc.

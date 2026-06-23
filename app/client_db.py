@@ -2349,6 +2349,12 @@ def update_claim(claim_id: int, data: dict):
             if f in data:
                 parts.append(f"{f}=?")
                 params.append(data[f])
+        # Stamp BillDate the day a claim is first marked Billed/Submitted so the
+        # report can reflect *when* billing happened. Only fill it if empty and the
+        # caller didn't explicitly provide a BillDate.
+        if data.get("ClaimStatus") == "Billed/Submitted" and "BillDate" not in data:
+            parts.append("BillDate=CASE WHEN COALESCE(BillDate,'')='' THEN ? ELSE BillDate END")
+            params.append(now[:10])
         params.append(claim_id)
         cur.execute(f"UPDATE claims_master SET {','.join(parts)} WHERE id=?", params)
         conn.commit()
@@ -2777,6 +2783,45 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             else:           aging["days_90_plus"] += bal
         aging = {k: round(v, 2) for k, v in aging.items()}
 
+        # Billed Activity — count of claim lines billed and their charge value,
+        # grouped by BillDate window (today / yesterday / last 7 days / this month).
+        # Scoped to the same client_id + sub_profile as the rest of the dashboard so
+        # every user monitors their own billing activity. Computed independently of
+        # the DOS date filter (base_cond) so recent billing always shows.
+        billing_activity = {
+            "today": {"count": 0, "charged": 0.0},
+            "yesterday": {"count": 0, "charged": 0.0},
+            "this_week": {"count": 0, "charged": 0.0},
+            "this_month": {"count": 0, "charged": 0.0},
+        }
+        _ba_today = today
+        _ba_yesterday = today.fromordinal(today.toordinal() - 1)
+        _ba_week_start = today.fromordinal(today.toordinal() - 6)  # inclusive last 7 days
+        _ba_month_start = today.replace(day=1)
+        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master
+                        {base_cond} {'AND' if base_cond else 'WHERE'} COALESCE(BillDate,'') != ''""", base_p)
+        for _bd_raw, _amt_raw in cur.fetchall():
+            _bd = str(_bd_raw or "").strip()[:10]
+            try:
+                _d = date.fromisoformat(_bd)
+            except (ValueError, TypeError):
+                continue
+            _amt = float(_amt_raw or 0)
+            if _d == _ba_today:
+                billing_activity["today"]["count"] += 1
+                billing_activity["today"]["charged"] += _amt
+            if _d == _ba_yesterday:
+                billing_activity["yesterday"]["count"] += 1
+                billing_activity["yesterday"]["charged"] += _amt
+            if _d >= _ba_week_start:
+                billing_activity["this_week"]["count"] += 1
+                billing_activity["this_week"]["charged"] += _amt
+            if _d >= _ba_month_start:
+                billing_activity["this_month"]["count"] += 1
+                billing_activity["this_month"]["charged"] += _amt
+        for _k in billing_activity:
+            billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
+
         # Status distribution (flat: status → count, for frontend bar chart)
         cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {cond} GROUP BY ClaimStatus", p)
         status_dist = {r[0]: r[1] for r in cur.fetchall()}
@@ -2835,6 +2880,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "total_charge": round(total_charge, 2),
             "total_paid": round(total_paid, 2),
             "ar_aging": aging,
+            "billing_activity": billing_activity,
             "status_distribution": status_dist,
             "payor_mix": payor_mix,
             "denial_categories": denial_cats,
@@ -5052,6 +5098,11 @@ def bulk_update_claims(claim_ids: list, data: dict, client_id: int = None):
         # Always update LastTouchedDate
         if "LastTouchedDate" not in data:
             parts.append("LastTouchedDate=?")
+            params.append(datetime.now().isoformat()[:10])
+        # Stamp BillDate the day claims are first marked Billed/Submitted (only if
+        # empty) so recent-billing activity is captured for the report.
+        if data.get("ClaimStatus") == "Billed/Submitted" and "BillDate" not in data:
+            parts.append("BillDate=CASE WHEN COALESCE(BillDate,'')='' THEN ? ELSE BillDate END")
             params.append(datetime.now().isoformat()[:10])
         placeholders = ",".join("?" for _ in claim_ids)
         sql = f"UPDATE claims_master SET {', '.join(parts)} WHERE id IN ({placeholders})"
