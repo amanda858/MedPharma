@@ -1961,7 +1961,11 @@ def add_payment(claim_key: str, body: PaymentIn, hub_session: Optional[str] = Co
     data = body.model_dump()
     data["client_id"] = cid
     data["ClaimKey"] = claim_key
+    # Attribute the posting to the logged-in user so payment posting shows up in
+    # the production report / EOD tally (this is part of how the team is paid).
+    data["PostedBy"] = user.get("username") or ""
     pid = create_payment(data)
+    notify_activity(user["username"], "posted payment", "Payments", f"{claim_key}")
     return {"id": pid, "ok": True}
 
 
@@ -2739,18 +2743,21 @@ def download_production_report(
     by_user  = data.get("by_user", [])
     by_cat   = data.get("by_category", [])
     details  = data.get("details", [])
+    pay_details = data.get("payment_details", [])
     flags    = data.get("time_management_flags", [])
 
     # ── Team summary rows ──────────────────────────────────────────────
     def _user_rows():
         if not by_user:
-            return "<tr><td colspan='6' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+            return "<tr><td colspan='8' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
         return "".join(
             f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
             f"<td>{u.get('days_worked',0)}</td>"
             f"<td>{u.get('total_entries',0)}</td>"
             f"<td>{u.get('total_quantity',0)}</td>"
             f"<td>{u.get('total_hours',0)}h</td>"
+            f"<td>{u.get('payments_posted',0)}</td>"
+            f"<td>${u.get('payments_amount',0):,.2f}</td>"
             f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
             for u in by_user
         )
@@ -2778,6 +2785,18 @@ def download_production_report(
             f"<td style='text-align:center'>{d.get('time_spent',0)}h</td>"
             f"<td style='font-size:12px;color:#6b7280'>{_esc(str(d.get('notes','') or ''))}</td></tr>"
             for d in details
+        )
+
+    def _payment_rows():
+        if not pay_details:
+            return "<tr><td colspan='5' style='text-align:center;color:#9ca3af'>No payments posted in this period</td></tr>"
+        return "".join(
+            f"<tr><td>{_esc(str(pd.get('post_date','')))}</td>"
+            f"<td>{_esc(str(pd.get('username','')))}</td>"
+            f"<td>{_esc(str(pd.get('ClaimKey','')))}</td>"
+            f"<td>{_esc(str(pd.get('PayerType','') or ''))}</td>"
+            f"<td style='text-align:right'>${float(pd.get('PaymentAmount') or 0):,.2f}</td></tr>"
+            for pd in pay_details
         )
 
     def _flag_section():
@@ -2843,6 +2862,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
     <span><b>Users:</b> {len(by_user)}</span>
+    <span><b>Payments Posted:</b> {data.get('payments_total_count', 0)} (${data.get('payments_total_amount', 0):,.2f})</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
 
@@ -2851,8 +2871,16 @@ def download_production_report(
   <section class="section">
     <h2>👥 Work Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>💵 Payments Posted by User</h2>
+    <table>
+      <thead><tr><th>Post Date</th><th>Posted By</th><th>Claim</th><th>Payer</th><th>Amount</th></tr></thead>
+      <tbody>{_payment_rows()}</tbody>
     </table>
   </section>
 

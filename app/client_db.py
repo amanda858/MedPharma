@@ -673,6 +673,7 @@ def init_client_hub_db():
             CheckNumber     TEXT DEFAULT '',
             ERA             TEXT DEFAULT '',
             Notes           TEXT DEFAULT '',
+            PostedBy        TEXT DEFAULT '',   -- hub user who posted this payment
             sub_profile     TEXT DEFAULT '',
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id)
@@ -1143,6 +1144,13 @@ def init_client_hub_db():
     ):
         if col not in tp_cols:
             cur.execute(f"ALTER TABLE team_production ADD COLUMN {col} {col_def}")
+    conn.commit()
+
+    # ── Migrate existing DBs: payment posting attribution ────────────────
+    cur.execute("PRAGMA table_info(payments)")
+    pay_cols = {row[1] for row in cur.fetchall()}
+    if "PostedBy" not in pay_cols:
+        cur.execute("ALTER TABLE payments ADD COLUMN PostedBy TEXT DEFAULT ''")
     conn.commit()
 
     # ── Migrate existing DBs: 1:1 direct-message chat rooms ──────────────
@@ -2390,12 +2398,13 @@ def create_payment(data: dict) -> int:
     try:
         cur = conn.cursor()
         cur.execute("""INSERT INTO payments
-            (client_id,ClaimKey,PostDate,PaymentAmount,AdjustmentAmount,PayerType,CheckNumber,ERA,Notes,sub_profile)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (client_id,ClaimKey,PostDate,PaymentAmount,AdjustmentAmount,PayerType,CheckNumber,ERA,Notes,PostedBy,sub_profile)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (data["client_id"], data["ClaimKey"], data.get("PostDate", ""),
              data.get("PaymentAmount", 0), data.get("AdjustmentAmount", 0),
              data.get("PayerType", "Primary"), data.get("CheckNumber", ""),
-             data.get("ERA", ""), data.get("Notes", ""), data.get("sub_profile", "")))
+             data.get("ERA", ""), data.get("Notes", ""), data.get("PostedBy", ""),
+             data.get("sub_profile", "")))
         # Recalculate PaidAmount on claim
         cur.execute("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE client_id=? AND ClaimKey=?",
                     (data["client_id"], data["ClaimKey"]))
@@ -4237,7 +4246,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
 
         # Skeleton: per-user, per-client, per-tab counts.
         TAB_KEYS = (
-            "Claims", "Credentialing", "Enrollment", "EDI",
+            "Claims", "Payments", "Credentialing", "Enrollment", "EDI",
             "Production", "Leads", "Documents", "Notes", "Chat", "Audit", "Pageviews",
         )
 
@@ -4350,6 +4359,31 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 "action": action,
                 "title": f"{row['ClaimKey']} ({row['ClaimStatus']})",
                 "ts": ts or "",
+            })
+
+        # ── 3b) Payments posted today, attributed to the poster ──
+        # Payment posting is part of how the team is paid, so credit each
+        # payment to the hub user who posted it (PostedBy). Older rows with no
+        # PostedBy are skipped (same as ownerless claims) since there is no
+        # reliable way to attribute them.
+        for row in cur.execute(
+            "SELECT client_id, ClaimKey, PaymentAmount, PayerType, PostDate, "
+            "       PostedBy, created_at "
+            "FROM payments WHERE date(created_at)=?",
+            (report_date,),
+        ).fetchall():
+            poster = (row["PostedBy"] or "").strip().lower()
+            if not poster:
+                continue
+            try:
+                amt = float(row["PaymentAmount"] or 0)
+            except (TypeError, ValueError):
+                amt = 0.0
+            amt_str = f" · ${amt:,.2f}" if amt else ""
+            _bump(poster, row["client_id"], "Payments", {
+                "action": "posted",
+                "title": f"{row['ClaimKey']} ({row['PayerType'] or 'Payment'}){amt_str}",
+                "ts": row["created_at"] or "",
             })
 
         # ── 4) Credentialing / Enrollment / EDI created/updated today ──
@@ -4543,6 +4577,8 @@ def get_eod_team_report(report_date: str = None) -> dict:
         headlines = {
             "claims_new":       _scalar("SELECT COUNT(*) FROM claims_master WHERE date(created_at)=?", (report_date,)),
             "claims_touched":   _scalar("SELECT COUNT(*) FROM claims_master WHERE date(updated_at)=? AND date(created_at)<>?", (report_date, report_date)),
+            "payments_posted":  _scalar("SELECT COUNT(*) FROM payments WHERE date(created_at)=?", (report_date,)),
+            "payments_amount":  _scalar("SELECT ROUND(COALESCE(SUM(PaymentAmount),0),2) FROM payments WHERE date(created_at)=?", (report_date,)),
             "cred_new":         _scalar("SELECT COUNT(*) FROM credentialing WHERE date(created_at)=?", (report_date,)),
             "enroll_new":       _scalar("SELECT COUNT(*) FROM enrollment   WHERE date(created_at)=?", (report_date,)),
             "edi_new":          _scalar("SELECT COUNT(*) FROM edi_setup    WHERE date(created_at)=?", (report_date,)),
@@ -5510,6 +5546,32 @@ def get_user_production_snapshot(work_date: str = None):
         )
         file_uploads = {str(r["username"]): int(r["file_count"] or 0) for r in cur.fetchall()}
 
+        # Payments posted on this date, attributed to the poster (PostedBy).
+        cur.execute(
+            """
+            SELECT TRIM(PostedBy) AS username,
+                   COUNT(*) AS payments_posted,
+                   ROUND(COALESCE(SUM(PaymentAmount),0),2) AS payments_amount
+            FROM payments
+            WHERE COALESCE(NULLIF(PostDate,''), date(created_at))=?
+              AND TRIM(COALESCE(PostedBy,'')) != ''
+            GROUP BY TRIM(PostedBy)
+            """,
+            (target_date,),
+        )
+        payments_by_user = {}
+        payments_total_count = 0
+        payments_total_amount = 0.0
+        for r in cur.fetchall():
+            uname = str(r["username"] or "").strip()
+            if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            cnt = int(r["payments_posted"] or 0)
+            amt = float(r["payments_amount"] or 0)
+            payments_by_user[uname] = {"payments_posted": cnt, "payments_amount": amt}
+            payments_total_count += cnt
+            payments_total_amount += amt
+
         total_entries = len(entries)
         total_hours = round(sum(float(e.get("time_spent") or 0) for e in entries), 1)
         total_quantity = int(sum(int(e.get("quantity") or 0) for e in entries))
@@ -5520,6 +5582,9 @@ def get_user_production_snapshot(work_date: str = None):
             "total_quantity": total_quantity,
             "user_stats": user_stats,
             "file_uploads": file_uploads,
+            "payments_by_user": payments_by_user,
+            "payments_total_count": payments_total_count,
+            "payments_total_amount": round(payments_total_amount, 2),
             "entries": entries,
         }
     finally:
@@ -5586,6 +5651,72 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                     "total_hours": 0,
                     "days_worked": 0,
                 }
+
+        # ── Payments posted (part of how the team is paid) ────────────────
+        # Attribute each payment to the hub user who posted it (PostedBy),
+        # filtered to the same date window. Payments carry no work_date, so the
+        # effective posting date is PostDate when present, else the row's
+        # created_at date.
+        pay_conditions, pay_p = [], []
+        if client_id:
+            pay_conditions.append("client_id=?")
+            pay_p.append(client_id)
+        if start_date:
+            pay_conditions.append("COALESCE(NULLIF(PostDate,''), date(created_at)) >= ?")
+            pay_p.append(start_date)
+        if end_date:
+            pay_conditions.append("COALESCE(NULLIF(PostDate,''), date(created_at)) <= ?")
+            pay_p.append(end_date)
+        pay_conditions.append("TRIM(COALESCE(PostedBy,'')) != ''")
+        pay_cond = "WHERE " + " AND ".join(pay_conditions)
+        cur.execute(f"""
+            SELECT TRIM(PostedBy) AS username,
+                   COUNT(*) AS payments_posted,
+                   ROUND(COALESCE(SUM(PaymentAmount),0),2) AS payments_amount
+            FROM payments {pay_cond}
+            GROUP BY TRIM(PostedBy)
+        """, pay_p)
+        payments_by_user = {}
+        for r in cur.fetchall():
+            uname = str(r["username"] or "").strip()
+            if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            payments_by_user[uname] = {
+                "payments_posted": int(r["payments_posted"] or 0),
+                "payments_amount": float(r["payments_amount"] or 0),
+            }
+
+        # Detailed payment log for the period (for the printable report).
+        cur.execute(f"""
+            SELECT COALESCE(NULLIF(PostDate,''), date(created_at)) AS post_date,
+                   TRIM(PostedBy) AS username, ClaimKey, PayerType,
+                   PaymentAmount, CheckNumber
+            FROM payments {pay_cond}
+            ORDER BY post_date DESC, username
+        """, pay_p)
+        payment_details = []
+        for r in cur.fetchall():
+            uname = str(r["username"] or "").strip()
+            if uname.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            payment_details.append(dict(r))
+
+        # Merge payment stats onto every user row (zero-fill), and make sure a
+        # poster who logged no production work still shows up in the report.
+        for uname, stats in payments_by_user.items():
+            if uname not in by_user_map:
+                by_user_map[uname] = {
+                    "username": uname,
+                    "total_entries": 0,
+                    "total_quantity": 0,
+                    "total_hours": 0,
+                    "days_worked": 0,
+                }
+        for uname, urow in by_user_map.items():
+            stats = payments_by_user.get(uname, {})
+            urow["payments_posted"] = int(stats.get("payments_posted", 0))
+            urow["payments_amount"] = float(stats.get("payments_amount", 0))
+
         by_user = [by_user_map[k] for k in sorted(by_user_map.keys(), key=lambda x: x.lower())]
 
         # Summary by category
@@ -5616,6 +5747,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             u["total_quantity"] = int(u.get("total_quantity") or 0)
             u["total_hours"] = float(u.get("total_hours") or 0)
             u["days_worked"] = int(u.get("days_worked") or 0)
+            u["payments_posted"] = int(u.get("payments_posted") or 0)
+            u["payments_amount"] = float(u.get("payments_amount") or 0)
             if u["days_worked"] > 0:
                 avg_hrs = round(u["total_hours"] / u["days_worked"], 1)
             else:
@@ -5631,6 +5764,9 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "by_user": by_user,
         "by_category": by_category,
         "details": details,
+        "payment_details": payment_details,
+        "payments_total_count": sum(int(u.get("payments_posted") or 0) for u in by_user),
+        "payments_total_amount": round(sum(float(u.get("payments_amount") or 0) for u in by_user), 2),
         "time_management_flags": flags,
     }
 

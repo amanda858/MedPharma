@@ -5823,7 +5823,7 @@
         <div class="pay-item">
           <div class="pay-left">
             <div class="pay-amount">$${fmt(p.PaymentAmount)}</div>
-            <div class="pay-meta">${p.PostDate || '—'} · ${esc(p.PayerType || '')}</div>
+            <div class="pay-meta">${p.PostDate || '—'} · ${esc(p.PayerType || '')}${p.PostedBy ? ' · posted by ' + esc(p.PostedBy) : ''}</div>
           </div>
           <div style="display:flex;gap:6px;align-items:center">
             ${p.AdjustmentAmount ? `<span style="font-size:12px;color:var(--gray-500)">Adj: -$${fmt(p.AdjustmentAmount)}</span>` : ''}
@@ -9111,6 +9111,7 @@
       const byUser = data.by_user || [];
       const byCat = data.by_category || [];
       const details = data.details || [];
+      const payDetails = data.payment_details || [];
       const flags = data.time_management_flags || [];
       // Store for CSV download
       window._prodReportRows = details;
@@ -9134,15 +9135,32 @@
       html += `<div class="card" style="margin-bottom:18px">
         <div class="card-header"><div class="card-title">👥 Work Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
-          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Avg Hrs/Day</th></tr></thead>
+          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Avg Hrs/Day</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
             <td style="font-weight:600">${esc(u.username)}</td>
             <td style="text-align:center">${u.days_worked}</td>
             <td style="text-align:center">${u.total_entries}</td>
             <td style="text-align:center;font-weight:600">${u.total_quantity || 0}</td>
             <td style="text-align:center;font-weight:600">${u.total_hours || 0}h</td>
+            <td style="text-align:center;font-weight:600">${u.payments_posted || 0}</td>
+            <td style="text-align:right;font-weight:600">$${(u.payments_amount || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
             <td style="text-align:center"><span class="badge ${(u.avg_hours_per_day || 0) < 6 ? 'badge-red' : 'badge-green'}">${u.avg_hours_per_day || 0}h</span></td>
-          </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+          </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+
+      // Payments posted (part of how the team is paid)
+      html += `<div class="card" style="margin-bottom:18px">
+        <div class="card-header"><div class="card-title">💵 Payments Posted by User</div></div>
+        <div class="table-wrap" style="margin-top:8px"><table>
+          <thead><tr><th>Post Date</th><th>Posted By</th><th>Claim</th><th>Payer</th><th>Amount</th></tr></thead>
+          <tbody>${payDetails.map(p => `<tr>
+            <td style="white-space:nowrap;font-weight:600">${esc(p.post_date || '')}</td>
+            <td><span class="badge badge-blue">${esc(p.username || '')}</span></td>
+            <td>${esc(p.ClaimKey || '')}</td>
+            <td>${esc(p.PayerType || '')}</td>
+            <td style="text-align:right;font-weight:600">$${(p.PaymentAmount || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+          </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--gray-400)">No payments posted in this period</td></tr>'}</tbody>
         </table></div>
       </div>`;
 

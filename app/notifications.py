@@ -1893,6 +1893,7 @@ def _esc_html(s) -> str:
 # Friendly per-tab icons (matches the sidebar in client_hub.html).
 _EOD_TAB_ICONS = {
     "Claims":        "💼",
+    "Payments":      "💵",
     "Credentialing": "🎓",
     "Enrollment":    "📝",
     "EDI":           "🔌",
@@ -1909,6 +1910,7 @@ _EOD_TAB_ICONS = {
 # When a client doesn't have the module enabled, we suppress the column.
 _TAB_TO_MODULE = {
     "Claims":        "claims",
+    "Payments":      "claims",   # payment posting rides with claims/billing
     "Credentialing": "credentialing",
     "Enrollment":    "enrollment",
     "EDI":           "edi",
@@ -2431,7 +2433,7 @@ def _build_demo_eod_report() -> dict:
     """
     from datetime import datetime as _dt
     today = business_today_iso()
-    tab_keys = ["Claims", "Credentialing", "Enrollment", "EDI", "Production",
+    tab_keys = ["Claims", "Payments", "Credentialing", "Enrollment", "EDI", "Production",
                 "Documents", "Notes", "Chat", "Audit", "Pageviews"]
 
     def _tabs(**vals):
