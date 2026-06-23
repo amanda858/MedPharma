@@ -1326,9 +1326,8 @@ def send_daily_account_summary():
     Includes per-user production breakdown.
     """
     try:
-        from app.client_db import get_daily_account_summary, get_user_production_snapshot
+        from app.client_db import get_daily_account_summary
         d = get_daily_account_summary()
-        prod_snapshot = get_user_production_snapshot()  # today's production
     except Exception as e:
         log.error(f"Failed to fetch daily account summary data: {e}")
         return
@@ -1340,40 +1339,6 @@ def send_daily_account_summary():
 
     # AI summary
     ai_summary = _generate_account_ai_summary(d, date_str_long)
-
-    # ── Per-user production rows for email ──
-    user_prod_rows_html = ""
-    prod_users = prod_snapshot.get("user_stats", [])
-    file_uploads = prod_snapshot.get("file_uploads", {})
-    if prod_users:
-        for u in prod_users:
-            files = file_uploads.get(u["username"], 0)
-            cats = u["categories"].replace(",", ", ") if u["categories"] else "—"
-            user_prod_rows_html += f"""
-            <tr>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-weight:600">{u['username'].title()}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{u['entry_count']}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px;font-weight:700;color:#2563eb">{u['total_hours']}h</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{u['total_qty']}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:13px">{files}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b">{cats}</td>
-            </tr>"""
-    else:
-        user_prod_rows_html = """<tr><td colspan="6" style="padding:16px;text-align:center;color:#94a3b8;font-size:13px">
-            ⚠️ No production data logged today. Jessica & RCM should submit daily work entries.
-        </td></tr>"""
-
-    # ── Production detail entries for email ──
-    prod_detail_html = ""
-    for entry in prod_snapshot.get("entries", [])[:20]:
-        prod_detail_html += f"""
-        <tr>
-            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['username'].title()}</td>
-            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['category']}</td>
-            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc">{entry['task_description'][:50]}</td>
-            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc;text-align:center">{entry['quantity']}</td>
-            <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #f8fafc;text-align:center">{entry['time_spent']}h</td>
-        </tr>"""
 
     # ── Status distribution rows ──
     status_rows_html = ""
@@ -1490,7 +1455,6 @@ def send_daily_account_summary():
                         <div><span style="font-weight:800;color:#22c55e;font-size:18px">{d['paid_today']}</span> <span style="font-size:12px;color:#64748b">Paid</span></div>
                         <div><span style="font-weight:800;color:#ef4444;font-size:18px">{d['denied_today']}</span> <span style="font-size:12px;color:#64748b">Denied</span></div>
                         <div><span style="font-weight:800;color:#16a34a;font-size:18px">{_fmt_money(d['payments_today'])}</span> <span style="font-size:12px;color:#64748b">Payments</span></div>
-                        <div><span style="font-weight:800;color:#7c3aed;font-size:18px">{d.get('production_submissions_today', 0)}</span> <span style="font-size:12px;color:#64748b">User Production</span></div>
                     </div>
                 </div>
 
@@ -1578,24 +1542,7 @@ def send_daily_account_summary():
                 </div>
 
                 <!-- USER PRODUCTION SNAPSHOT -->
-                <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #7c3aed;margin-bottom:16px;">
-                    👥 User Production — {date_str}
-                </div>
-                <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">
-                    <thead>
-                        <tr style="background:#f8fafc;">
-                            <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Employee</th>
-                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Entries</th>
-                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Hours</th>
-                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Qty</th>
-                            <th style="padding:8px 12px;text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Files</th>
-                            <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase">Categories</th>
-                        </tr>
-                    </thead>
-                    <tbody>{user_prod_rows_html}</tbody>
-                </table>
-
-                {'<div style="margin-bottom:24px;"><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Work Detail</div><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#f8fafc;"><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">User</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">Category</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:left">Description</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:center">Qty</th><th style="padding:4px 8px;font-size:10px;color:#94a3b8;text-transform:uppercase;text-align:center">Time</th></tr></thead><tbody>' + prod_detail_html + '</tbody></table></div>' if prod_detail_html else ''}
+                <!-- (removed: report now relies on imported claims data, not manual work logs) -->
 
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                 <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
@@ -1607,17 +1554,6 @@ def send_daily_account_summary():
     </html>"""
 
     # ── Plain text version ──
-    # Build per-user production lines
-    prod_text_lines = []
-    if prod_users:
-        for u in prod_users:
-            files = file_uploads.get(u["username"], 0)
-            prod_text_lines.append(
-                f"  {u['username'].title():12s}  {u['entry_count']} entries  |  {u['total_hours']}h  |  {u['total_qty']} qty  |  {files} files  |  {u['categories']}"
-            )
-    else:
-        prod_text_lines.append("  ⚠️ No production data logged today")
-
     body_lines = [
         "═══════════════════════════════════════════",
         "     MEDPHARMA DAILY REPORT",
@@ -1652,9 +1588,6 @@ def send_daily_account_summary():
         f"  Credentialing: {d['cred_total']} ({d['cred_approved']} approved, {d['cred_pending']} pending)",
         f"  EDI:           {d['edi_total']} ({d['edi_live']} live)",
         "",
-        f"───── USER PRODUCTION — {date_str} ─────",
-    ] + prod_text_lines + [
-        "",
         f"  SLA Breaches: {d['sla_breaches']}  |  System Actions Today: {d['today_actions']}",
     ]
     body = "\n".join(body_lines)
@@ -1663,7 +1596,7 @@ def send_daily_account_summary():
 
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
     log.info(f"MedPharma Daily Report email queued: {date_str}, AR {_fmt_money(d['total_ar'])}, "
-             f"{d['total_claims']} claims, {len(prod_users)} users logged production")
+             f"{d['total_claims']} claims")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3791,7 +3724,6 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
-            - send_production_reminders at 5:30 PM EST (for jessica & rcm)
             - send_daily_account_summary at 9:00 PM EST
     Safe to call multiple times — only starts once.
     """
@@ -3807,15 +3739,6 @@ def start_daily_scheduler():
 
         est = pytz.timezone("US/Eastern")
         scheduler = BackgroundScheduler(daemon=True)
-
-        # 5:30 PM EST — Production reminders (weekdays only, Mon–Fri)
-        scheduler.add_job(
-            send_production_reminders,
-            CronTrigger(day_of_week="mon-fri", hour=17, minute=30, timezone=est),
-            id="daily_production_reminders",
-            name="5:30 PM EST Production Reminders (Mon–Fri)",
-            replace_existing=True,
-        )
 
         # 9:00 PM EST — Account summary report (weekdays only, Mon–Fri)
         scheduler.add_job(
@@ -3884,7 +3807,7 @@ def start_daily_scheduler():
         )
 
         scheduler.start()
-        log.info("Daily scheduler started — 5:00 national pull, 5:30 reminders, 9:00 summary, 9:05 EOD team, 9:10 client reports")
+        log.info("Daily scheduler started — 5:00 national pull, 9:00 summary, 9:05 EOD team, 9:10 client reports")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
         log.warning("apscheduler not installed — falling back to threading-based scheduler")
@@ -3895,11 +3818,10 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 5:30 PM and 9:00 PM EST."""
+    """Fallback scheduler using threading — checks every 60s for 9:00 PM EST reports."""
     import time as _time
 
     def _check_loop():
-        last_reminder_date = None
         last_sent_date = None
         last_eod_date = None
         last_clients_date = None
@@ -3920,12 +3842,6 @@ def _start_thread_scheduler():
                 today = now_est.date()
                 # Skip weekends (Mon=0 … Sun=6) for daily business reports.
                 is_weekday = now_est.weekday() < 5
-
-                # 5:30 PM — Production reminders
-                if is_weekday and now_est.hour == 17 and 30 <= now_est.minute < 35 and last_reminder_date != today:
-                    last_reminder_date = today
-                    log.info("Thread scheduler firing production reminders")
-                    send_production_reminders()
 
                 # 9:00 PM — Daily account summary
                 if is_weekday and now_est.hour == 21 and now_est.minute < 5 and last_sent_date != today:
@@ -3960,4 +3876,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 5:30 reminders + 6:00 summary + 6:30 EOD team + 6:35 client reports")
+    log.info("Fallback thread scheduler started — 9:00 summary + 9:05 EOD team + 9:10 client reports")
