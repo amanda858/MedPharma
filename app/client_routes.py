@@ -3,6 +3,7 @@
 import os
 import json as _json
 import re
+import hashlib
 import logging
 import shutil
 import sqlite3
@@ -4504,14 +4505,46 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
             if not mapped:
                 continue
 
-            # Generate a ClaimKey if missing
+            # Generate a stable ClaimKey when the source file has no claim/account
+            # number. Use a deterministic hash of the claim's identifying fields so
+            # (a) distinct claims never collide — even across several files uploaded
+            # the same day — and (b) re-uploading the same claim updates the same row
+            # instead of silently overwriting an unrelated one. The old behaviour used
+            # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
+            # the day reused those exact keys and clobbered earlier claims — which is
+            # why freshly imported data never moved the admin totals.
             if not mapped.get("ClaimKey"):
-                mapped["ClaimKey"] = f"IMP-{today_str}-{counter:04d}"
+                sig = "|".join(
+                    str(mapped.get(f, "")).strip().lower()
+                    for f in ("PatientName", "PatientID", "Payor", "ProviderName",
+                              "NPI", "DOS", "CPTCode", "ChargeAmount")
+                )
+                if sig.strip("|"):
+                    digest = hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12].upper()
+                    mapped["ClaimKey"] = f"IMP-{digest}"
+                else:
+                    # Truly empty signature (blank row) — fall back to a unique key so
+                    # multiple blank rows don't all collapse onto a single record.
+                    mapped["ClaimKey"] = f"IMP-{today_str}-{uuid.uuid4().hex[:8].upper()}"
             counter += 1
 
             # Normalize claim status to standard values
             raw_status = mapped.get("ClaimStatus", "Intake")
             mapped["ClaimStatus"] = _normalize_status(raw_status)
+
+            # Derive the outstanding balance when the source file has no balance
+            # column. Without this a claims report that lists charges/payments but
+            # no explicit balance imported as AR=0, so the admin dashboard never
+            # reflected the real outstanding amount. Balance = Charge - Adjustment
+            # - Paid (never negative). Paid/Closed claims carry no AR.
+            if "BalanceRemaining" not in mapped:
+                if mapped["ClaimStatus"] in ("Paid", "Closed"):
+                    mapped["BalanceRemaining"] = 0.0
+                else:
+                    derived = (_parse_float(mapped.get("ChargeAmount", 0))
+                               - _parse_float(mapped.get("AdjustmentAmount", 0))
+                               - _parse_float(mapped.get("PaidAmount", 0)))
+                    mapped["BalanceRemaining"] = max(derived, 0.0)
 
             try:
                 cur.execute("""
