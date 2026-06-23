@@ -2805,6 +2805,13 @@
 
           <!-- Tab Content: Claims -->
           <div id="reportTabContent-claims" style="display:none">
+            <div class="card" style="margin-bottom:16px;border-left:4px solid var(--success)">
+              <div class="card-header">
+                <div class="card-title">💵 Billed Activity</div>
+                <div style="font-size:11px;color:var(--gray-500)">Charges billed by date (independent of the period filter)</div>
+              </div>
+              <div id="rptClaimsBilledActivity" style="padding:16px"></div>
+            </div>
             <div class="card" style="margin-bottom:16px;border-left:4px solid var(--info)">
               <div class="card-header">
                 <div class="card-title">📊 Claims Report</div>
@@ -6904,6 +6911,29 @@
     function renderClaimsTabContent() {
       if (!lastReportData) return;
       const cl = lastReportData.claims || {};
+
+      // Billed activity — recent billing by Bill Date (shows what was billed
+      // today / yesterday / this week / this month, regardless of the period filter)
+      const ba = cl.billing_activity || {};
+      const baCards = [
+        { key: 'today', label: 'Billed Today' },
+        { key: 'yesterday', label: 'Billed Yesterday' },
+        { key: 'this_week', label: 'This Week (7d)' },
+        { key: 'this_month', label: 'This Month' },
+      ];
+      const baEl = document.getElementById('rptClaimsBilledActivity');
+      if (baEl) {
+        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+          baCards.map(c => {
+            const v = ba[c.key] || { count: 0, charged: 0 };
+            return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(v.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${v.count} claim${v.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
+            </div>`;
+          }).join('') + `</div>`;
+      }
+
       const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));
       renderBarChart('rptClaimsStatusChart', claimStatusData, 'value', 'label');
 

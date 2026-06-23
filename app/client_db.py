@@ -2349,6 +2349,12 @@ def update_claim(claim_id: int, data: dict):
             if f in data:
                 parts.append(f"{f}=?")
                 params.append(data[f])
+        # Stamp BillDate the day a claim is first marked Billed/Submitted so the
+        # report can reflect *when* billing happened. Only fill it if empty and the
+        # caller didn't explicitly provide a BillDate.
+        if data.get("ClaimStatus") == "Billed/Submitted" and "BillDate" not in data:
+            parts.append("BillDate=CASE WHEN COALESCE(BillDate,'')='' THEN ? ELSE BillDate END")
+            params.append(now[:10])
         params.append(claim_id)
         cur.execute(f"UPDATE claims_master SET {','.join(parts)} WHERE id=?", params)
         conn.commit()
@@ -5052,6 +5058,11 @@ def bulk_update_claims(claim_ids: list, data: dict, client_id: int = None):
         # Always update LastTouchedDate
         if "LastTouchedDate" not in data:
             parts.append("LastTouchedDate=?")
+            params.append(datetime.now().isoformat()[:10])
+        # Stamp BillDate the day claims are first marked Billed/Submitted (only if
+        # empty) so recent-billing activity is captured for the report.
+        if data.get("ClaimStatus") == "Billed/Submitted" and "BillDate" not in data:
+            parts.append("BillDate=CASE WHEN COALESCE(BillDate,'')='' THEN ? ELSE BillDate END")
             params.append(datetime.now().isoformat()[:10])
         placeholders = ",".join("?" for _ in claim_ids)
         sql = f"UPDATE claims_master SET {', '.join(parts)} WHERE id IN ({placeholders})"

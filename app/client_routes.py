@@ -3275,6 +3275,45 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         status_agg[st]["paid"] += float(c.get("PaidAmount") or 0)
     by_status = [{"status": k, **v} for k, v in status_agg.items()]
 
+    # Billed activity — charge dollars actually billed, grouped by BillDate window.
+    # Computed independently of the DOS period filter so the admin always sees how
+    # much was billed recently (today / yesterday / last 7 days / this month),
+    # respecting the sub_profile scope.
+    from datetime import date as _ba_date
+    _today = _ba_date.today()
+    _yesterday = _today.fromordinal(_today.toordinal() - 1)
+    _week_start = _today.fromordinal(_today.toordinal() - 6)  # inclusive last 7 days
+    _month_start = _today.replace(day=1)
+    billing_activity = {
+        "today": {"count": 0, "charged": 0.0},
+        "yesterday": {"count": 0, "charged": 0.0},
+        "this_week": {"count": 0, "charged": 0.0},
+        "this_month": {"count": 0, "charged": 0.0},
+    }
+    ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
+              f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
+    for r in conn.execute(ba_sql, [client_id] + sp_params).fetchall():
+        bd = str(r["BillDate"] or "").strip()[:10]
+        try:
+            d = _ba_date.fromisoformat(bd)
+        except Exception:
+            continue
+        amt = float(r["ChargeAmount"] or 0)
+        if d == _today:
+            billing_activity["today"]["count"] += 1
+            billing_activity["today"]["charged"] += amt
+        if d == _yesterday:
+            billing_activity["yesterday"]["count"] += 1
+            billing_activity["yesterday"]["charged"] += amt
+        if d >= _week_start:
+            billing_activity["this_week"]["count"] += 1
+            billing_activity["this_week"]["charged"] += amt
+        if d >= _month_start:
+            billing_activity["this_month"]["count"] += 1
+            billing_activity["this_month"]["charged"] += amt
+    for _k in billing_activity:
+        billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
+
     denial_agg = {}
     for c in claims:
         dc = c.get("DenialCategory") or ""
@@ -3322,7 +3361,8 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 
     return {
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
-                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials},
+                    "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials,
+                    "billing_activity": billing_activity},
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
         "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
