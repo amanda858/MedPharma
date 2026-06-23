@@ -8925,17 +8925,38 @@
       // Optional attachment (Excel/PDF/Word) — upload first, then link to the entry.
       const attEl = document.getElementById('prodAttachment');
       if (attEl && attEl.files && attEl.files[0]) {
+        const attFile = attEl.files[0];
+        // Route spreadsheet worklists through the matching data importer so the
+        // attachment's patient / claim / charge rows actually populate the
+        // billing totals instead of sitting as a passive document. Map the
+        // production category to a data-import bucket; spreadsheets default to
+        // Claims because the attachment field is explicitly "for claims data".
+        const attExt = (attFile.name.split('.').pop() || '').toLowerCase();
+        const isSpreadsheet = ['xlsx', 'xls', 'csv', 'ods'].includes(attExt);
+        let uploadCategory = 'General';
+        if (isSpreadsheet) {
+          const prodCat = (document.getElementById('prodCategory').value || '').toLowerCase();
+          if (prodCat.includes('credential')) uploadCategory = 'Credentialing';
+          else if (prodCat.includes('enroll')) uploadCategory = 'Enrollment';
+          else if (prodCat.includes('edi')) uploadCategory = 'EDI';
+          else uploadCategory = 'Claims';
+        }
         try {
           const fd = new FormData();
-          fd.append('file', attEl.files[0]);
-          fd.append('category', 'General');
+          fd.append('file', attFile);
+          fd.append('category', uploadCategory);
           fd.append('client_id', activeClientId);
-          toast(`Uploading ${attEl.files[0].name}…`, 'info');
+          toast(`Uploading ${attFile.name}…`, 'info');
           const ur = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
           const ud = await ur.json();
           if (!ur.ok) throw new Error(ud.detail || 'Attachment upload failed');
           data.attachment_file_id = ud.id || null;
-          data.attachment_name = attEl.files[0].name;
+          data.attachment_name = attFile.name;
+          if (ud.imported) {
+            toast(`✅ Imported ${ud.imported} ${ud.import_category || ''} record${ud.imported === 1 ? '' : 's'} from ${attFile.name}`, 'success');
+          } else if (isSpreadsheet && ud.import_errors && ud.import_errors.length) {
+            toast(`Attachment saved, but import had issues: ${ud.import_errors[0]}`, 'error');
+          }
         } catch (e) { toast(e.message, 'error'); return; }
       }
       try {

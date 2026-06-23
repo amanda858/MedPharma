@@ -4694,7 +4694,18 @@ def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
         raise HTTPException(404, "File not found")
     path = os.path.join(UPLOAD_DIR, rec["filename"])
     if not os.path.isfile(path):
-        raise HTTPException(404, "File not found on disk")
+        # The DB still references the file but the bytes are gone from disk. This
+        # happens when uploads are written to non-persistent storage (e.g. the
+        # UPLOAD_DIR is not a mounted persistent volume) and the server restarts.
+        # Surface a clear message instead of a generic 404 so the cause is obvious.
+        log.warning("Download failed — file row %s (%s) missing on disk at %s",
+                    file_id, rec.get("original_name"), path)
+        raise HTTPException(
+            410,
+            "This file is no longer available in storage. It was uploaded earlier "
+            "but the stored copy is missing — please re-upload it. (If this keeps "
+            "happening, uploads are not being saved to persistent storage.)",
+        )
     from fastapi.responses import FileResponse
     return FileResponse(
         path,
