@@ -8,7 +8,7 @@ import hashlib
 import secrets
 import logging
 from datetime import datetime, date, timedelta
-from app.config import DATABASE_PATH
+from app.config import DATABASE_PATH, business_today, business_today_iso
 
 log = logging.getLogger(__name__)
 
@@ -2711,7 +2711,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # Base cond for non-claims tables (payments, credentialing, etc.)
         base_cond = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
 
-        today = date.today()
+        today = business_today()
         mtd_start = today.replace(day=1).isoformat()
         ytd_start = today.replace(month=1, day=1).isoformat()
 
@@ -2903,7 +2903,7 @@ def get_daily_account_summary():
     conn = get_db()
     try:
         cur = conn.cursor()
-        today = date.today()
+        today = business_today()
         today_str = today.isoformat()
         mtd_start = today.replace(day=1).isoformat()
         ytd_start = today.replace(month=1, day=1).isoformat()
@@ -4166,7 +4166,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
     """
     from collections import defaultdict
     if not report_date:
-        report_date = datetime.now().strftime("%Y-%m-%d")
+        report_date = business_today_iso()
     day_start = f"{report_date} 00:00:00"
     day_end   = f"{report_date} 23:59:59"
 
@@ -4615,7 +4615,7 @@ def get_client_daily_report(client_id: int, report_date: str = None) -> dict:
     import json as _json
     from collections import defaultdict
     if not report_date:
-        report_date = datetime.now().strftime("%Y-%m-%d")
+        report_date = business_today_iso()
 
     conn = get_db()
     try:
@@ -5467,7 +5467,7 @@ def delete_production_log(log_id: int, client_id: int = None, username: str = No
 
 def get_user_production_snapshot(work_date: str = None):
     """Return per-user production activity for a given date (defaults to today)."""
-    target_date = (work_date or date.today().isoformat()).strip()
+    target_date = (work_date or business_today_iso()).strip()
     conn = get_db()
     try:
         cur = conn.cursor()
