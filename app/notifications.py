@@ -1091,7 +1091,7 @@ def send_test_notification(triggered_by: str = "system") -> dict:
     Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE).
     Runs SYNCHRONOUSLY — no threading — to ensure errors are captured clearly."""
     cfg = _live_config()
-    now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+    now = business_now().strftime("%Y-%m-%d %I:%M %p")
     subject = f"MedPharma Hub Test Notification — {now}"
     emails = cfg["NOTIFY_EMAILS"]
     phone = cfg["NOTIFY_PHONE"]
@@ -1643,7 +1643,7 @@ def send_production_reminders():
                 log.info(f"Production reminder skipped for {username} — data already uploaded for {today}")
                 continue
 
-            subject = f"⏰ Reminder: Upload Your Daily Production — {datetime.now().strftime('%B %d, %Y')}"
+            subject = f"⏰ Reminder: Upload Your Daily Production — {business_now().strftime('%B %d, %Y')}"
             html_body = f"""
             <html>
             <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
@@ -1651,7 +1651,7 @@ def send_production_reminders():
                     <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 24px 28px;">
                         <h1 style="color: white; margin: 0; font-size: 20px; font-weight: 800;">⏰ Daily Production Reminder</h1>
                         <p style="color: rgba(255,255,255,0.9); margin: 6px 0 0; font-size: 14px;">
-                            {datetime.now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
+                            {business_now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
                         </p>
                     </div>
                     <div style="padding: 24px 28px;">

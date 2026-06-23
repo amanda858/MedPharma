@@ -2180,7 +2180,7 @@ def get_ar_worklist(client_id: int = None, owner: str = None,
     `balance × age_weight × status_weight`, plus aging-bucket rollups, so a
     biller can work the highest-recovery claims first instead of guessing.
     """
-    today = datetime.now().date()
+    today = business_today()
     conn = get_db()
     try:
         cur = conn.cursor()
