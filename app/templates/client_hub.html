@@ -3210,7 +3210,7 @@
                 </select>
               </div>
             </div>
-            <div class="card" style="margin-bottom:18px">
+            <div class="card" id="prodLogEntryCard" style="margin-bottom:18px">
               <div class="card-header">
                 <div class="card-title">📝 Log Today's Work</div>
               </div>
@@ -8816,6 +8816,10 @@
       if (titleEl) titleEl.textContent = admin ? '📋 Team Production Report' : '📋 User Production';
       const adminFilters = document.getElementById('prodAdminFilters');
       if (adminFilters) adminFilters.style.display = admin ? '' : 'none';
+      // Admins don't manually log work — they import claims/production data —
+      // so hide the "Log Today's Work" manual entry card for them.
+      const logEntryCard = document.getElementById('prodLogEntryCard');
+      if (logEntryCard) logEntryCard.style.display = admin ? 'none' : '';
 
       if (!admin && !activeClientId) return;
 
