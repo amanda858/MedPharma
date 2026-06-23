@@ -457,6 +457,27 @@ def _require_full_admin(hub_session: Optional[str] = Cookie(None)):
     return user
 
 
+def _is_eric(user: dict) -> bool:
+    """True when the authenticated user is Eric. Reporting is the only
+    comprehensive (all-client) view that a non-admin may access, and only Eric
+    is granted that exception alongside full admins."""
+    for field in (user.get("username"), user.get("contact_name")):
+        if not field:
+            continue
+        s = str(field).strip().lower()
+        if s == "eric" or "eric" in s.split():
+            return True
+    return False
+
+
+def _require_reporting_access(hub_session: Optional[str] = Cookie(None)):
+    """Comprehensive reporting is restricted to full admins and Eric only."""
+    user = _require_user(hub_session)
+    if user.get("role") == "admin" or _is_eric(user):
+        return user
+    raise HTTPException(status_code=403, detail="Reporting access required")
+
+
 def _client_scope(user: dict) -> Optional[int]:
     """Return client_id filter — None means all (admin/staff sees all data)."""
     if user.get("role") in ("admin", "staff"):
@@ -3374,7 +3395,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] = None,
                hub_session: Optional[str] = Cookie(None)):
     """Generate a comprehensive cross-section report for CSV / print, with sub-profile breakdowns."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.client_db import get_db
     from datetime import date, datetime
 
@@ -4845,7 +4866,7 @@ def delete_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
 @router.post("/report/{client_id}/ai-narrative")
 async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Send dashboard/report data to OpenAI GPT and return a professional narrative."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.config import OPENAI_API_KEY
     from app.client_db import get_db
     from datetime import date
@@ -5045,7 +5066,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
                               hub_session: Optional[str] = Cookie(None),
                               request: Request = None):
     """Generate and return a branded PDF report."""
-    user = _require_full_admin(hub_session)
+    user = _require_reporting_access(hub_session)
     from app.client_db import get_db
     from datetime import date
     from io import BytesIO
