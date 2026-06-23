@@ -4538,32 +4538,84 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
     errors = []
     counter = 1
 
+    # Net-new vs updated accounting so the admin upload message reflects the
+    # real number of rows that landed in claims_master (the per-row `imported`
+    # counter increments on every upsert, including overwrites, which made a
+    # large file look fully imported even when most rows collapsed onto one
+    # another).
     try:
-        for row in rows:
-            # Use fuzzy column matching for flexible header support
-            mapped = {}
-            for raw_key, val in row.items():
-                db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
-                if db_col:
-                    mapped[db_col] = val
+        before_count = cur.execute(
+            "SELECT COUNT(*) FROM claims_master WHERE client_id=?", (client_id,)
+        ).fetchone()[0]
+    except Exception:
+        before_count = None
 
-            if not mapped:
-                continue
+    # ── Pass 1: fuzzy-map every row and detect which claim numbers repeat ──
+    # A service-line export shares ONE claim/account number across all the
+    # service lines of a claim. Keying purely on that number makes the
+    # (client_id, ClaimKey) upsert collapse every line of a claim onto a single
+    # row (each line overwrites the previous), so e.g. 8,052 service lines
+    # shrink down to the count of distinct claim numbers. To keep every service
+    # line as its own record we append a deterministic line discriminator to any
+    # claim number that appears on more than one row. Claim numbers that appear
+    # only once keep their bare key, preserving idempotent status updates for
+    # claim-level workflow files.
+    mapped_rows = []
+    claimno_counts = {}
+    for row in rows:
+        mapped = {}
+        for raw_key, val in row.items():
+            db_col = _fuzzy_match_column(raw_key, COLUMN_MAP)
+            if db_col:
+                mapped[db_col] = val
+        if not mapped:
+            continue
+        # Capture an explicit service-line / sequence number when present so two
+        # otherwise-identical lines on the same claim stay distinct. This is used
+        # only for the line discriminator hash, never stored as a column.
+        line_no = ""
+        for raw_key, val in row.items():
+            k = str(raw_key).strip().lower()
+            if k in ("line", "line no", "line no.", "line number", "line #",
+                     "lineno", "line_no", "seq", "seq no", "sequence",
+                     "service line", "svc line", "line item", "detail"):
+                line_no = str(val).strip()
+                if line_no:
+                    break
+        claim_no = str(mapped.get("ClaimKey", "")).strip()
+        if claim_no:
+            claimno_counts[claim_no] = claimno_counts.get(claim_no, 0) + 1
+        mapped_rows.append((mapped, claim_no, line_no))
 
-            # Generate a stable ClaimKey when the source file has no claim/account
-            # number. Use a deterministic hash of the claim's identifying fields so
-            # (a) distinct claims never collide — even across several files uploaded
-            # the same day — and (b) re-uploading the same claim updates the same row
-            # instead of silently overwriting an unrelated one. The old behaviour used
-            # a per-file row counter (IMP-<date>-0001 …), so the 2nd, 3rd … upload of
-            # the day reused those exact keys and clobbered earlier claims — which is
-            # why freshly imported data never moved the admin totals.
-            if not mapped.get("ClaimKey"):
-                sig = "|".join(
-                    str(mapped.get(f, "")).strip().lower()
-                    for f in ("PatientName", "PatientID", "Payor", "ProviderName",
-                              "NPI", "DOS", "CPTCode", "ChargeAmount")
-                )
+    def _line_signature(_mapped, _line_no):
+        sig = "|".join(
+            str(_mapped.get(f, "")).strip().lower()
+            for f in ("PatientName", "PatientID", "Payor", "ProviderName",
+                      "NPI", "DOS", "CPTCode", "Description", "ChargeAmount")
+        )
+        if _line_no:
+            sig = f"{sig}|line={_line_no.lower()}"
+        return sig
+
+    try:
+        for mapped, claim_no, line_no in mapped_rows:
+            # Resolve the stored ClaimKey:
+            #  • claim number present and unique in this file → use it as-is
+            #    (a claim-level row; re-uploads update the same record);
+            #  • claim number present but shared by several rows → it's a
+            #    service-line export, so append a stable per-line hash;
+            #  • no claim number at all → fall back to a content hash of the
+            #    line's identifying fields (deterministic, so re-uploads update
+            #    the same row instead of clobbering an unrelated one).
+            if claim_no:
+                if claimno_counts.get(claim_no, 0) > 1:
+                    sig = _line_signature(mapped, line_no)
+                    digest = hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12].upper()
+                    mapped["ClaimKey"] = f"{claim_no}-L{digest}"
+                else:
+                    mapped["ClaimKey"] = claim_no
+            else:
+                sig = _line_signature(mapped, line_no)
                 if sig.strip("|"):
                     digest = hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12].upper()
                     mapped["ClaimKey"] = f"IMP-{digest}"
@@ -4642,6 +4694,20 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                 errors.append(f"Row {counter}: {e}")
 
         conn.commit()
+        if before_count is not None:
+            try:
+                after_count = cur.execute(
+                    "SELECT COUNT(*) FROM claims_master WHERE client_id=?", (client_id,)
+                ).fetchone()[0]
+                net_new = after_count - before_count
+                updated = imported - net_new
+                if updated > 0:
+                    errors.append(
+                        f"{net_new} new claim/service-line rows added; "
+                        f"{updated} existing rows updated."
+                    )
+            except Exception:
+                pass
     finally:
         conn.close()
     # Report unmapped headers as info for debugging
