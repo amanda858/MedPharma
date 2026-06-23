@@ -61,7 +61,7 @@ from app.client_db import (
     save_eod_report, list_eod_reports, get_eod_report,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
-    list_leads, create_lead, update_lead, get_leads_weekly_report,
+    list_leads, create_lead, update_lead,
     delete_lead, mark_lead_followed_up, list_leads_due_followup,
     restore_lead, list_deleted_leads, get_leads_pipeline,
 )
@@ -1446,16 +1446,6 @@ def api_send_followup_reminders(hub_session: Optional[str] = Cookie(None)):
     return send_bizdev_followup_reminders()
 
 
-@router.post("/leads-weekly-report/send")
-def api_send_weekly_report(week_start: Optional[str] = None,
-                           hub_session: Optional[str] = Cookie(None)):
-    """Email Victor's weekly BizDev pipeline report to the team (Lexi + Eric).
-    This is what the Monday 8 AM EST scheduler sends automatically; exposed so
-    BizDev or an admin can send it on demand."""
-    _require_leads_access(hub_session)
-    from app.notifications import send_bizdev_weekly_report
-    return send_bizdev_weekly_report(week_start)
-
 
 @router.delete("/clients/{cid}")
 def remove_client(cid: int, hub_session: Optional[str] = Cookie(None)):
@@ -1504,15 +1494,14 @@ class LeadUpdateIn(BaseModel):
     notes: Optional[str] = None
 
 
-_LEADS_ROLES = {"bizdev", "admin", "staff"}
-
-
 def _require_leads_access(hub_session: Optional[str]):
-    """Leads pipeline is for the Business Development role (plus admin/staff)."""
+    """Business Development (leads pipeline) is restricted to full admins and
+    Eric only — no other user (including the bizdev/staff roles) may view or
+    work the leads pipeline."""
     user = _require_user(hub_session)
-    if (user.get("role") or "").lower() not in _LEADS_ROLES:
-        raise HTTPException(status_code=403, detail="Business Development access required")
-    return user
+    if user.get("role") == "admin" or _is_eric(user):
+        return user
+    raise HTTPException(status_code=403, detail="Business Development access required")
 
 
 @router.get("/leads")
@@ -1565,13 +1554,6 @@ def api_restore_lead(lead_id: int, hub_session: Optional[str] = Cookie(None)):
     if not restore_lead(lead_id):
         raise HTTPException(status_code=404, detail="Deleted lead not found")
     return {"ok": True}
-
-
-@router.get("/leads-weekly-report")
-def api_leads_weekly_report(week_start: Optional[str] = None,
-                            hub_session: Optional[str] = Cookie(None)):
-    _require_leads_access(hub_session)
-    return get_leads_weekly_report(week_start)
 
 
 @router.get("/leads-pipeline")

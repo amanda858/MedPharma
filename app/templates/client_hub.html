@@ -2089,9 +2089,10 @@
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
-          <div class="nav-section">Business Development</div>
-          <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
-          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 BizDev Weekly Report</div>
+          <div id="bizdevAdminNav">
+            <div class="nav-section">Business Development</div>
+            <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
+          </div>
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
@@ -2108,8 +2109,6 @@
           <div class="nav-item"        data-panel="leads_compliance"  data-leadcat="compliance"  onclick="showLeads('compliance','leads_compliance')">🛡️ Compliance Leads</div>
           <div class="nav-item"        data-panel="leads_combination" data-leadcat="combination" onclick="showLeads('combination','leads_combination')">🔗 Combination Leads</div>
           <div class="nav-item"        data-panel="leads_closed"      data-leadcat="closed"      onclick="showLeads('closed','leads_closed')">✅ Closed Leads</div>
-          <div class="nav-section">Reporting</div>
-          <div class="nav-item" data-panel="leadreport" onclick="navTo('leadreport')">📅 Weekly Report</div>
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadgeBiz" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
@@ -3471,19 +3470,6 @@
           </div>
         </div>
 
-        <!-- ═══ BIZDEV: WEEKLY REPORT ═══ -->
-        <div class="hub-panel" id="panel-leadreport">
-          <div class="page-header">
-            <div class="page-title">📅 Weekly Business Development Report</div>
-            <div class="page-actions">
-              <button class="btn btn-secondary btn-sm" onclick="loadLeadReport()">🔄 Refresh</button>
-            </div>
-          </div>
-          <div id="leadReportContent">
-            <div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>
-          </div>
-        </div>
-
         <!-- ═══ ALERTS & NOTIFICATIONS ═══ -->
         <div class="hub-panel" id="panel-alerts">
           <div class="page-header">
@@ -4178,6 +4164,9 @@
         .map(s => String(s).toLowerCase());
       return fields.some(s => s === 'eric' || s.split(/\s+/).includes('eric'));
     }
+    // Business Development (leads pipeline) is restricted to full admins and
+    // Eric only — same rule as Reporting. No other user sees the leads nav.
+    function canViewLeads() { return canViewReporting(); }
 
     // ═══════════════════════════════════════
     // GLOBAL FETCH WRAPPER — auth for ALL API calls
@@ -4630,6 +4619,9 @@
         // Reporting is restricted to admins and Eric — no one else gets the tab.
         const navReporting = document.getElementById('navReporting');
         if (navReporting) navReporting.style.display = canViewReporting() ? '' : 'none';
+        // Business Development (leads) is likewise restricted to admins and Eric.
+        const bizdevAdminNav = document.getElementById('bizdevAdminNav');
+        if (bizdevAdminNav) bizdevAdminNav.style.display = canViewLeads() ? '' : 'none';
       } else {
         document.getElementById('adminFullNav').style.display = 'none';
         document.getElementById('clientNav').style.display = 'block';
@@ -5003,51 +4995,6 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
-    async function loadLeadReport() {
-      const box = document.getElementById('leadReportContent');
-      if (!box) return;
-      box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:var(--gray-400)">Loading weekly report…</div>`;
-      try {
-        const r = await fetch('/hub/api/leads-weekly-report');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        const c = d.categories || {};
-        const stat = (label, val) => `<div class="card" style="flex:1;min-width:140px;text-align:center;padding:16px">
-          <div style="font-size:24px;font-weight:800;color:#4338ca">${val}</div>
-          <div style="font-size:12px;color:var(--gray-500)">${label}</div></div>`;
-        const rowsHtml = (d.rows || []).map(l => `<tr>
-          <td>${esc(l.practice_name || '—')}</td>
-          <td>${esc((l.service_lines || []).length >= 2 ? ('Combination (' + (l.service_lines || []).join(', ') + ')') : ((l.service_lines || []).join(', ') || '—'))}</td>
-          <td>${esc(l.status || '')}</td>
-          <td>${esc(l.owner || '—')}</td>
-          <td>${esc((l.updated_at || '').slice(0, 10))}</td></tr>`).join('')
-          || `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--gray-400)">No activity recorded this week.</td></tr>`;
-        box.innerHTML = `
-          <div class="card" style="margin-bottom:14px;padding:14px">
-            <div style="font-weight:700">Week of ${esc(d.week_start)} → ${esc(d.week_end)} <span style="color:var(--gray-400);font-weight:400">(Mon–Sun) · Pipeline by client type</span></div>
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-            ${stat('New This Week', d.new_this_week || 0)}
-            ${stat('Closed This Week', d.closed_this_week || 0)}
-            ${stat('Open Pipeline', c.open_total || 0)}
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-            ${stat('RCM', c.rcm || 0)}${stat('Payor', c.payor || 0)}
-            ${stat('Workflow', c.workflow || 0)}${stat('Compliance', c.compliance || 0)}
-            ${stat('Combination', c.combination || 0)}${stat('Closed (all)', c.closed || 0)}
-          </div>
-          <div class="card" style="padding:0">
-            <div style="padding:12px 16px;font-weight:700;border-bottom:1px solid var(--gray-200)">This Week's Activity</div>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Lead Name</th><th>Client Type</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead>
-              <tbody>${rowsHtml}</tbody>
-            </table></div>
-          </div>`;
-      } catch (e) {
-        box.innerHTML = `<div class="card" style="text-align:center;padding:40px;color:#dc2626">Could not load the weekly report.</div>`;
-      }
-    }
-
     // Show a "5 team members" line on the empty selector so admins/staff
     // can see at a glance that the system already has people in it.
     async function refreshSelectorTeamLine() {
@@ -5219,7 +5166,6 @@
       if (panel === 'audit') loadAuditLog();
       if (panel === 'emailsetup') loadEmailSetup();
       if (panel === 'chat') loadChatRooms();
-      if (panel === 'leadreport') loadLeadReport();
     }
 
     // Open the panel referenced by URL hash on first load (e.g. /hub#production)
@@ -5229,7 +5175,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'providers','clients','files','profile','reporting',
-                       'production','alerts','audit','chat','emailsetup','leadreport'];
+                       'production','alerts','audit','chat','emailsetup'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
