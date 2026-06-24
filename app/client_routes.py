@@ -3320,6 +3320,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         "yesterday": {"count": 0, "charged": 0.0},
         "this_week": {"count": 0, "charged": 0.0},
         "this_month": {"count": 0, "charged": 0.0},
+        "all_time": {"count": 0, "charged": 0.0},
     }
     ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
               f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
@@ -3330,6 +3331,9 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         except Exception:
             continue
         amt = float(r["ChargeAmount"] or 0)
+        # All-time billed since inception — every claim line with a Bill Date.
+        billing_activity["all_time"]["count"] += 1
+        billing_activity["all_time"]["charged"] += amt
         if d == _today:
             billing_activity["today"]["count"] += 1
             billing_activity["today"]["charged"] += amt

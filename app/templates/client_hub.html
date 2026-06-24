@@ -5311,13 +5311,14 @@
         { key: 'yesterday', label: 'Billed Yesterday' },
         { key: 'this_week', label: 'This Week (7d)' },
         { key: 'this_month', label: 'This Month' },
+        { key: 'all_time', label: 'All-Time Billed' },
       ];
       const baCard = document.getElementById('dashBilledActivityCard');
       const baEl = document.getElementById('dashBilledActivity');
       const baHasData = baCards.some(c => (ba[c.key] && (ba[c.key].count || ba[c.key].charged)));
       if (baCard) baCard.style.display = baHasData ? '' : 'none';
       if (baEl && baHasData) {
-        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
           baCards.map(c => {
             const v = ba[c.key] || { count: 0, charged: 0 };
             return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
@@ -6925,10 +6926,11 @@
         { key: 'yesterday', label: 'Billed Yesterday' },
         { key: 'this_week', label: 'This Week (7d)' },
         { key: 'this_month', label: 'This Month' },
+        { key: 'all_time', label: 'All-Time Billed' },
       ];
       const baEl = document.getElementById('rptClaimsBilledActivity');
       if (baEl) {
-        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
           baCards.map(c => {
             const v = ba[c.key] || { count: 0, charged: 0 };
             return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">

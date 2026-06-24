@@ -2818,6 +2818,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "yesterday": {"count": 0, "charged": 0.0},
             "this_week": {"count": 0, "charged": 0.0},
             "this_month": {"count": 0, "charged": 0.0},
+            "all_time": {"count": 0, "charged": 0.0},
         }
         _ba_today = today
         _ba_yesterday = today.fromordinal(today.toordinal() - 1)
@@ -2832,6 +2833,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             except (ValueError, TypeError):
                 continue
             _amt = float(_amt_raw or 0)
+            # All-time billed since inception — every claim line with a Bill Date.
+            billing_activity["all_time"]["count"] += 1
+            billing_activity["all_time"]["charged"] += _amt
             if _d == _ba_today:
                 billing_activity["today"]["count"] += 1
                 billing_activity["today"]["charged"] += _amt
