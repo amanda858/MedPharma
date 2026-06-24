@@ -8353,6 +8353,11 @@
       fd.append('category', category);
       fd.append('description', description);
       fd.append('client_id', activeClientId);
+      // Carry the user's active sub-profile so imported claims land in the same
+      // profile they're viewing and show up immediately in the Claims Queue.
+      if (typeof activeSubProfile !== 'undefined' && activeSubProfile) {
+        fd.append('sub_profile', activeSubProfile);
+      }
 
       const isDataImport = isExcel && ['Claims', 'Credentialing', 'Enrollment', 'EDI'].includes(category);
       toast(isDataImport ? `Importing ${file.name} into ${category}…` : `Uploading ${file.name}…`, 'info');
@@ -8991,6 +8996,12 @@
           fd.append('file', attFile);
           fd.append('category', uploadCategory);
           fd.append('client_id', activeClientId);
+          // Carry the active sub-profile so an attached claims worklist imports
+          // into the same profile the team is viewing — otherwise the rows land
+          // with an empty sub-profile and stay hidden in a filtered Claims Queue.
+          if (typeof activeSubProfile !== 'undefined' && activeSubProfile) {
+            fd.append('sub_profile', activeSubProfile);
+          }
           toast(`Uploading ${attFile.name}…`, 'info');
           const ur = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
           const ud = await ur.json();
