@@ -2074,6 +2074,20 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
     users_all = report.get("users", []) or []
     excluded = _eod_excluded_users()
 
+    def _money(v):
+        try:
+            return f"${float(v or 0):,.0f}"
+        except (TypeError, ValueError):
+            return "$0"
+
+    # "Since last Friday" window label for the billed banner.
+    week_start_iso = report.get("week_start", "") or ""
+    try:
+        from datetime import datetime as _dtw
+        week_start_long = _dtw.strptime(week_start_iso, "%Y-%m-%d").strftime("%a %b %d")
+    except Exception:
+        week_start_long = week_start_iso
+
     # Filter out admins/observers (default: Lexi + Eric + admin@).
     users = [
         u for u in users_all
@@ -2086,6 +2100,9 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f"MedPharma End-of-Day Team Report — {date_long}",
         "",
         f"Active operators today: {len(users)}",
+        f"Billed since {week_start_long}: {_money(headlines.get('billed_wtd_amount', 0))} "
+        f"({headlines.get('billed_wtd_count', 0)} claims) · today: {_money(headlines.get('billed_today_amount', 0))} "
+        f"({headlines.get('billed_today_count', 0)} claims)",
         f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
         f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
         f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
@@ -2095,10 +2112,18 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         "Per-operator breakdown:",
     ]
     for u in users:
+        _bw = (u.get("billed", {}) or {}).get("wtd", {}) or {}
+        _bt = (u.get("billed", {}) or {}).get("today", {}) or {}
+        _billed_txt = ""
+        if (_bw.get("amount") or 0) or (_bt.get("amount") or 0):
+            _billed_txt = (
+                f" — billed {_money(_bw.get('amount'))} since {week_start_long}"
+                f" ({_bw.get('count', 0)} claims) / {_money(_bt.get('amount'))} today"
+            )
         text_lines.append(
             f"\n* {u.get('contact_name') or u.get('username')} "
             f"<{u.get('email','')}> — {u.get('active_hours',0)}h active / "
-            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions"
+            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions{_billed_txt}"
         )
         for cname, cb in (u.get("clients") or {}).items():
             chunks = [f"{k}={v}" for k, v in cb.get("totals", {}).items() if v]
@@ -2143,6 +2168,30 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f'<tr>{ribbon_row1}</tr>'
         '<tr><td colspan="5" style="border-top:1px solid #e2e8f0;padding:0;line-height:0">&nbsp;</td></tr>'
         f'<tr>{ribbon_row2}</tr>'
+        '</table>'
+    )
+
+    # ── Billed banner — the headline number Eric/Amanda want at a glance:
+    #    how much was billed since last Friday, plus today's slice. ──
+    billed_wtd_amount = headlines.get("billed_wtd_amount", 0)
+    billed_wtd_count  = headlines.get("billed_wtd_count", 0)
+    billed_today_amount = headlines.get("billed_today_amount", 0)
+    billed_today_count  = headlines.get("billed_today_count", 0)
+    billed_banner_html = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;margin:0 0 18px">'
+        '<tr>'
+        '<td align="center" valign="middle" width="60%" style="padding:16px 12px;border-right:1px solid #a7f3d0">'
+        f'<div style="font-size:10px;color:#047857;text-transform:uppercase;letter-spacing:.8px;font-weight:700">Billed since {_esc_html(week_start_long)}</div>'
+        f'<div style="font-size:30px;color:#047857;font-weight:800;margin-top:4px;line-height:1.1">{_money(billed_wtd_amount)}</div>'
+        f'<div style="font-size:11px;color:#059669;margin-top:2px">{billed_wtd_count} claims billed</div>'
+        '</td>'
+        '<td align="center" valign="middle" width="40%" style="padding:16px 12px">'
+        '<div style="font-size:10px;color:#047857;text-transform:uppercase;letter-spacing:.8px;font-weight:700">Billed today</div>'
+        f'<div style="font-size:22px;color:#059669;font-weight:800;margin-top:4px;line-height:1.1">{_money(billed_today_amount)}</div>'
+        f'<div style="font-size:11px;color:#059669;margin-top:2px">{billed_today_count} claims</div>'
+        '</td>'
+        '</tr>'
         '</table>'
     )
 
@@ -2236,6 +2285,19 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             tab_badges = _badges_for(u.get("totals", {})) or (
                 '<span style="color:#94a3b8;font-size:12px;font-style:italic">Logged in but no tracked work</span>'
             )
+            # Per-operator billed strip (week-to-date since Friday + today).
+            _bw = (u.get("billed", {}) or {}).get("wtd", {}) or {}
+            _bt = (u.get("billed", {}) or {}).get("today", {}) or {}
+            billed_strip_html = ""
+            if (_bw.get("amount") or 0) or (_bt.get("amount") or 0):
+                billed_strip_html = (
+                    '<div style="margin-top:10px;padding:8px 12px;background:#ecfdf5;'
+                    'border-left:3px solid #10b981;border-radius:6px;font-size:12px;color:#065f46">'
+                    f'<b>💵 Billed {_money(_bw.get("amount"))}</b> since {_esc_html(week_start_long)} '
+                    f'({_bw.get("count", 0)} claims) · '
+                    f'<b>{_money(_bt.get("amount"))}</b> today ({_bt.get("count", 0)} claims)'
+                    '</div>'
+                )
             highlights = u.get("highlights") or []
             highlights_html = ""
             if highlights:
@@ -2274,12 +2336,14 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 </tr>
               </table>
               <div style="margin-top:12px">{tab_badges}</div>
+              {billed_strip_html}
               {highlights_html}
               {client_blocks}
             </div>
             """
 
     inner = (
+        billed_banner_html +
         ribbon_html +
         '<h2 style="margin:6px 0 4px;font-size:15px;color:#0f172a;font-weight:800;letter-spacing:.2px">Operator Breakdown</h2>'
         '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Workers only — admins suppressed (configure with <code>EOD_REPORT_EXCLUDE_USERS</code>).</div>' +
@@ -2485,6 +2549,7 @@ def _build_demo_eod_report() -> dict:
             "last_seen": f"{today}T17:18:44",
             "totals": _tabs(Claims=18, Notes=7, Production=3, Pageviews=92, Audit=4),
             "total_actions": 124,
+            "billed": {"today": {"count": 6, "amount": 18420.0}, "wtd": {"count": 23, "amount": 61240.0}},
             "highlights": [
                 "claim_status_update claims_master — moved CLM-44218 from A/R Follow-Up → Paid",
                 "note_added notes_log — Aetna confirmed reprocess; eta 14 days",
@@ -2522,6 +2587,7 @@ def _build_demo_eod_report() -> dict:
             "last_seen": f"{today}T16:44:18",
             "totals": _tabs(Credentialing=9, Enrollment=4, Documents=2, Notes=5, Pageviews=61, Audit=3),
             "total_actions": 84,
+            "billed": {"today": {"count": 3, "amount": 7910.0}, "wtd": {"count": 11, "amount": 26010.0}},
             "highlights": [
                 "credentialing_submit credentialing — Dr Chen / BCBS-SC initial app submitted",
                 "file_upload client_files — uploaded CAQH attestation PDF",
@@ -2649,9 +2715,17 @@ def _build_demo_eod_report() -> dict:
     ]
 
     team_totals = {k: 0 for k in tab_keys}
+    team_billed = {"today": {"count": 0, "amount": 0.0}, "wtd": {"count": 0, "amount": 0.0}}
     for u in users:
         for k, v in u["totals"].items():
             team_totals[k] = team_totals.get(k, 0) + v
+        b = u.get("billed") or {}
+        for _scope in ("today", "wtd"):
+            sb = b.get(_scope) or {}
+            team_billed[_scope]["count"] += int(sb.get("count", 0) or 0)
+            team_billed[_scope]["amount"] += float(sb.get("amount", 0) or 0)
+    for _scope in ("today", "wtd"):
+        team_billed[_scope]["amount"] = round(team_billed[_scope]["amount"], 2)
 
     headlines = {
         "claims_new": 18,
@@ -2666,14 +2740,27 @@ def _build_demo_eod_report() -> dict:
         "chat_messages": 15,
         "audit_events": 17,
         "active_users": len(users),
+        "billed_today_amount": team_billed["today"]["amount"],
+        "billed_today_count":  team_billed["today"]["count"],
+        "billed_wtd_amount":   team_billed["wtd"]["amount"],
+        "billed_wtd_count":    team_billed["wtd"]["count"],
     }
+
+    # Demo "since last Friday" anchor.
+    try:
+        _rd = _dt.strptime(today, "%Y-%m-%d").date()
+        _week_start = _rd.fromordinal(_rd.toordinal() - ((_rd.weekday() - 4) % 7)).isoformat()
+    except Exception:
+        _week_start = today
 
     return {
         "report_date": today,
+        "week_start": _week_start,
         "generated_at": _dt.now().isoformat(timespec="seconds"),
         "tab_keys": tab_keys,
         "users": users,
         "team_totals": team_totals,
+        "team_billed": team_billed,
         "headlines": headlines,
         "client_count": 3,
     }

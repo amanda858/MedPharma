@@ -4288,6 +4288,10 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "first_seen": "",
             "last_seen": "",
             "totals": _new_tab_bucket(),
+            "billed": {
+                "today": {"count": 0, "amount": 0.0},
+                "wtd":   {"count": 0, "amount": 0.0},
+            },
             "highlights": [],
             "clients": defaultdict(lambda: {
                 "client_id": 0,
@@ -4401,6 +4405,37 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 "title": f"{row['ClaimKey']} ({row['PayerType'] or 'Payment'}){amt_str}",
                 "ts": row["created_at"] or "",
             })
+
+        # ── 3c) Billed $ attributed to the claim Owner, week-to-date ──
+        # Eric/Amanda want the daily report to surface how much was *billed*
+        # (sum of ChargeAmount on claims that carry a BillDate) attributed to
+        # whoever owns the claim — not just today, but cumulatively "since last
+        # Friday". Compute the most recent Friday on/before report_date as the
+        # window start so the figure resets each Friday alongside the work week.
+        try:
+            _rd = datetime.strptime(report_date, "%Y-%m-%d").date()
+            _days_since_fri = (_rd.weekday() - 4) % 7   # Mon=0 … Fri=4 … Sun=6
+            week_start = _rd.fromordinal(_rd.toordinal() - _days_since_fri).isoformat()
+        except Exception:
+            week_start = report_date
+        for row in cur.execute(
+            "SELECT Owner, ChargeAmount, BillDate FROM claims_master "
+            "WHERE COALESCE(BillDate,'') != '' AND BillDate >= ? AND BillDate <= ?",
+            (week_start, report_date),
+        ).fetchall():
+            owner = (row["Owner"] or "").strip().lower()
+            if not owner:
+                continue
+            try:
+                charge = float(row["ChargeAmount"] or 0)
+            except (TypeError, ValueError):
+                charge = 0.0
+            slot = _u(owner)
+            slot["billed"]["wtd"]["count"] += 1
+            slot["billed"]["wtd"]["amount"] += charge
+            if row["BillDate"] == report_date:
+                slot["billed"]["today"]["count"] += 1
+                slot["billed"]["today"]["amount"] += charge
 
         # ── 4) Credentialing / Enrollment / EDI created/updated today ──
         for table, tab, status_col in (
@@ -4561,10 +4596,15 @@ def get_eod_team_report(report_date: str = None) -> dict:
         ordered = []
         for key in sorted(users.keys()):
             u = users[key]
-            # Drop completely empty rows (no activity AND no presence).
+            # Drop completely empty rows (no activity AND no presence AND no
+            # billed work in the week-to-date window).
             total_actions = sum(u["totals"].values())
-            if total_actions == 0 and u["active_hours"] == 0 and u["actions"] == 0:
+            billed_wtd_count = u["billed"]["wtd"]["count"]
+            if (total_actions == 0 and u["active_hours"] == 0
+                    and u["actions"] == 0 and billed_wtd_count == 0):
                 continue
+            for _scope in ("today", "wtd"):
+                u["billed"][_scope]["amount"] = round(u["billed"][_scope]["amount"], 2)
             u["clients"] = {
                 cname: {
                     "client_id":       cb.get("client_id", 0),
@@ -4579,9 +4619,18 @@ def get_eod_team_report(report_date: str = None) -> dict:
 
         # ── Team-wide rollup ──
         team_totals = _new_tab_bucket()
+        team_billed = {
+            "today": {"count": 0, "amount": 0.0},
+            "wtd":   {"count": 0, "amount": 0.0},
+        }
         for u in ordered:
             for k, v in u["totals"].items():
                 team_totals[k] = team_totals.get(k, 0) + v
+            for _scope in ("today", "wtd"):
+                team_billed[_scope]["count"] += u["billed"][_scope]["count"]
+                team_billed[_scope]["amount"] += u["billed"][_scope]["amount"]
+        for _scope in ("today", "wtd"):
+            team_billed[_scope]["amount"] = round(team_billed[_scope]["amount"], 2)
 
         # New rows added across the org today (handy headline numbers).
         def _scalar(sql, params=()):
@@ -4607,14 +4656,20 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "chat_messages":    _scalar("SELECT COUNT(*) FROM chat_messages WHERE date(created_at)=?", (report_date,)),
             "audit_events":     _scalar("SELECT COUNT(*) FROM audit_log    WHERE date(created_at)=?", (report_date,)),
             "active_users":     len(ordered),
+            "billed_today_amount": team_billed["today"]["amount"],
+            "billed_today_count":  team_billed["today"]["count"],
+            "billed_wtd_amount":   team_billed["wtd"]["amount"],
+            "billed_wtd_count":    team_billed["wtd"]["count"],
         }
 
         return {
             "report_date": report_date,
+            "week_start": week_start,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "tab_keys": list(TAB_KEYS),
             "users": ordered,
             "team_totals": team_totals,
+            "team_billed": team_billed,
             "headlines": headlines,
             "client_count": len(client_lookup),
         }
