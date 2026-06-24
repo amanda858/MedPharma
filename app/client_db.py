@@ -2130,6 +2130,51 @@ def normalize_claim_statuses():
     return updates
 
 
+# Statuses that precede billing — a claim in any of these has not gone out the
+# door yet, so it legitimately carries no Bill Date. Anything else has been
+# billed/submitted and MUST carry a Bill Date for the dated billed/production
+# reports to see it.
+_PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
+
+
+def backfill_missing_bill_dates():
+    """One-time (idempotent) migration: stamp a Bill Date on already-imported
+    billed claims that were saved with a blank BillDate.
+
+    Older imports stored billed/submitted claims with an empty BillDate whenever
+    the source file shipped no bill-date column. Every dated billed/production
+    view (Billed Activity, All-Time Billed, the Team Production "$ Billed"
+    column, AR aging) keys off BillDate, so those claims read $0 even though
+    their status said they had been billed. This fills the blanks using the
+    service date (DOS) when present — mirroring the AR-aging fallback — else the
+    row's creation date. Runs on every startup but only touches rows that still
+    need it, so it's a no-op once the data is clean.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in _PRE_BILL_STATUSES)
+        cur.execute(
+            f"""
+            UPDATE claims_master
+               SET BillDate = substr(
+                       COALESCE(NULLIF(TRIM(DOS), ''), date(created_at), date('now')), 1, 10
+                   ),
+                   updated_at = CURRENT_TIMESTAMP
+             WHERE TRIM(COALESCE(BillDate, '')) = ''
+               AND TRIM(COALESCE(ClaimStatus, '')) NOT IN ({placeholders})
+            """,
+            _PRE_BILL_STATUSES,
+        )
+        updates = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if updates and updates > 0:
+        print(f"[migration] Backfilled Bill Date on {updates} billed claim(s)")
+    return updates
+
+
 def get_claims(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     try:

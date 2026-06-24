@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session
+from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session, backfill_missing_bill_dates
 from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler, get_notification_status
 from app.config import DATABASE_PATH
@@ -100,6 +100,15 @@ async def startup():
         log.info("✅ Claim statuses normalized")
     except Exception as e:
         log.error(f"Startup error: normalize_claim_statuses failed: {e}")
+
+    try:
+        fixed = backfill_missing_bill_dates()
+        if fixed:
+            log.info(f"✅ Backfilled Bill Date on {fixed} billed claim(s)")
+        else:
+            log.info("✅ Bill Dates already complete (nothing to backfill)")
+    except Exception as e:
+        log.error(f"Startup error: backfill_missing_bill_dates failed: {e}")
 
     try:
         start_daily_scheduler()
