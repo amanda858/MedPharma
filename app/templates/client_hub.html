@@ -3331,6 +3331,7 @@
                   <button class="btn btn-secondary btn-sm" onclick="setProdDatePreset('mtd')">MTD</button>
                 </div>
                 <button class="btn btn-secondary btn-sm" style="margin-left:auto;background:#eff6ff;border-color:#93c5fd;color:#1d4ed8" onclick="eodReport()">🌙 EOD PDF</button>
+                <button class="btn btn-secondary btn-sm" style="background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9" onclick="openTrends()">📈 Team Trends</button>
                 <button class="btn btn-secondary btn-sm" onclick="downloadProductionReport()">📄 Weekly PDF</button>
               </div>
             </div>
@@ -3762,6 +3763,34 @@
       </div>
       <div style="font-size:12px;color:#64748b;margin-bottom:12px">The user will receive an email with a secure link to set their own password.</div>
       <button class="btn btn-primary" style="margin-top:6px" onclick="sendUserInvite()">Send Invite</button>
+    </div>
+  </div>
+
+  <!-- Team Activity Trends Modal (per day / per week / per month) -->
+  <div class="modal-overlay" id="trendsModal">
+    <div class="modal" style="max-width:920px">
+      <div class="modal-header">
+        <h2>📈 Team Activity Trends</h2>
+        <button class="modal-close" onclick="closeModal('trendsModal')">&times;</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <span style="font-weight:600;font-size:13px">View:</span>
+        <div id="trendsBucketBar" style="display:flex;gap:4px">
+          <button class="btn btn-sm btn-primary"   data-bucket="day"   onclick="setTrendsBucket('day')">Daily</button>
+          <button class="btn btn-sm btn-secondary" data-bucket="week"  onclick="setTrendsBucket('week')">Weekly</button>
+          <button class="btn btn-sm btn-secondary" data-bucket="month" onclick="setTrendsBucket('month')">Monthly</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;margin-left:auto;font-size:13px">
+          <input type="checkbox" id="trendsThisClientOnly" onchange="loadTrends()">
+          This account only
+        </label>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:8px">
+        Team-wide rollup of everyone's daily work — the same activity summarized in the nightly EOD report, bucketed over time.
+      </div>
+      <div id="trendsContent" style="overflow:auto;max-height:60vh">
+        <p style="color:var(--gray-400);font-size:14px;padding:20px;text-align:center">Loading…</p>
+      </div>
     </div>
   </div>
 
@@ -6812,6 +6841,11 @@
       fd.append('category', category);
       fd.append('description', `${category} import — ${file.name}`);
       fd.append('client_id', activeClientId);
+      // Carry the user's active sub-profile so imported claims land in the same
+      // profile they're viewing and show up immediately in the Claims Queue.
+      if (typeof activeSubProfile !== 'undefined' && activeSubProfile) {
+        fd.append('sub_profile', activeSubProfile);
+      }
       toast(`Importing ${file.name} into ${category}…`, 'info');
       try {
         // Use /files/upload which both saves the file AND auto-imports data
@@ -9073,6 +9107,74 @@
       document.getElementById('prodRptStart').value = fmt(start);
       document.getElementById('prodRptEnd').value   = fmt(end);
       loadProductionReport();
+    }
+
+    // ── Team Activity Trends (per day / per week / per month) ──────────────
+    let trendsBucket = 'day';
+    function openTrends() {
+      document.getElementById('trendsModal').classList.add('open');
+      setTrendsBucket('day');
+    }
+    function setTrendsBucket(b) {
+      trendsBucket = (['day', 'week', 'month'].includes(b)) ? b : 'day';
+      document.querySelectorAll('#trendsBucketBar button').forEach(btn => {
+        const on = btn.getAttribute('data-bucket') === trendsBucket;
+        btn.classList.toggle('btn-primary', on);
+        btn.classList.toggle('btn-secondary', !on);
+      });
+      loadTrends();
+    }
+    async function loadTrends() {
+      const el = document.getElementById('trendsContent');
+      el.innerHTML = '<p style="color:var(--gray-400);font-size:14px;padding:20px;text-align:center">Loading…</p>';
+      let url = `/hub/api/reports/eod/rollup?bucket=${trendsBucket}`;
+      const thisOnly = document.getElementById('trendsThisClientOnly');
+      if (thisOnly && thisOnly.checked && activeClientId) url += `&client_id=${activeClientId}`;
+      try {
+        const r = await fetch(url, { cache: 'no-store' });
+        if (!r.ok) { el.innerHTML = '<p style="color:#b91c1c;padding:20px;text-align:center">Failed to load trends.</p>'; return; }
+        const d = await r.json();
+        el.innerHTML = renderTrends(d);
+      } catch (e) {
+        el.innerHTML = '<p style="color:#b91c1c;padding:20px;text-align:center">Failed to load trends.</p>';
+      }
+    }
+    function renderTrends(d) {
+      const buckets = (d.buckets || []).slice().reverse(); // newest first for reading
+      if (!buckets.length) return '<p style="color:var(--gray-400);padding:20px;text-align:center">No activity yet.</p>';
+      const money = v => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      const cols = [
+        ['Period', r => esc(r.label)],
+        ['Active', r => r.active_users],
+        ['Claims New', r => r.claims_new],
+        ['Claims Touched', r => r.claims_touched],
+        ['Billed', r => money(r.billed_amount) + ` <span style="color:#94a3b8">(${r.billed_count})</span>`],
+        ['Payments', r => money(r.payments_amount) + ` <span style="color:#94a3b8">(${r.payments_posted})</span>`],
+        ['Cred', r => r.cred_new],
+        ['Enroll', r => r.enroll_new],
+        ['EDI', r => r.edi_new],
+        ['Prod hrs', r => Number(r.production_hours || 0).toFixed(1)],
+        ['Notes', r => r.notes_new],
+        ['Files', r => r.files_uploaded],
+      ];
+      const t = d.totals || {};
+      const head = cols.map(c => `<th style="padding:6px 10px;text-align:left;border-bottom:2px solid #e2e8f0;white-space:nowrap">${c[0]}</th>`).join('');
+      const body = buckets.map(r =>
+        '<tr>' + cols.map((c, i) =>
+          `<td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;${i === 0 ? 'font-weight:600;white-space:nowrap' : ''}">${c[1](r)}</td>`
+        ).join('') + '</tr>'
+      ).join('');
+      const totalRow = '<tr style="background:#f8fafc;font-weight:700">' + [
+        'Total', t.active_users, t.claims_new, t.claims_touched,
+        money(t.billed_amount) + ` <span style="color:#94a3b8">(${t.billed_count || 0})</span>`,
+        money(t.payments_amount) + ` <span style="color:#94a3b8">(${t.payments_posted || 0})</span>`,
+        t.cred_new, t.enroll_new, t.edi_new,
+        Number(t.production_hours || 0).toFixed(1), t.notes_new, t.files_uploaded,
+      ].map((v, i) => `<td style="padding:6px 10px;border-top:2px solid #e2e8f0;${i === 0 ? 'white-space:nowrap' : ''}">${v == null ? 0 : v}</td>`).join('') + '</tr>';
+      return `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${body}${totalRow}</tbody>
+      </table>`;
     }
 
     function eodReport() {

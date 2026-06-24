@@ -8,7 +8,7 @@ import hashlib
 import secrets
 import logging
 from datetime import datetime, date, timedelta
-from app.config import DATABASE_PATH, business_today, business_today_iso
+from app.config import DATABASE_PATH, business_today, business_today_iso, business_now
 
 log = logging.getLogger(__name__)
 
@@ -3425,6 +3425,240 @@ def get_eod_report(report_id: int) -> dict | None:
         except Exception:
             d["summary"] = {}
         return d
+    finally:
+        conn.close()
+
+
+# ─── Team activity rollup (per day / per week / per month) ──────────────────
+#
+# A time-series view of the SAME work the end-of-day report summarizes, but
+# bucketed across many days so admins can see trends per day, per week and per
+# month instead of a single day at a time. Metrics mirror the EOD headlines so
+# the numbers reconcile with the nightly report.
+
+_ROLLUP_METRIC_KEYS = (
+    "claims_new", "claims_touched", "payments_posted", "payments_amount",
+    "billed_count", "billed_amount", "cred_new", "enroll_new", "edi_new",
+    "production_rows", "production_hours", "notes_new", "files_uploaded",
+    "active_users",
+)
+
+
+def _rollup_buckets(bucket: str, count: int):
+    """Return a list of (label, start_date, end_date) tuples — the most recent
+    `count` buckets ending today, oldest first. Dates are business-timezone
+    `date` objects. The current (partial) bucket is capped at today."""
+    today = business_today()
+    out: list[tuple[str, date, date]] = []
+    if bucket == "week":
+        # ISO weeks, Monday→Sunday. Current week ends today.
+        this_monday = today - timedelta(days=today.weekday())
+        for i in range(count - 1, -1, -1):
+            wk_start = this_monday - timedelta(weeks=i)
+            wk_end = min(wk_start + timedelta(days=6), today)
+            label = f"Week of {wk_start.isoformat()}"
+            out.append((label, wk_start, wk_end))
+    elif bucket == "month":
+        # Calendar months. Walk back `count` months from the 1st of this month.
+        y, m = today.year, today.month
+        starts: list[date] = []
+        for _ in range(count):
+            starts.append(date(y, m, 1))
+            m -= 1
+            if m == 0:
+                m = 12
+                y -= 1
+        starts.reverse()
+        for mstart in starts:
+            if mstart.month == 12:
+                nxt = date(mstart.year + 1, 1, 1)
+            else:
+                nxt = date(mstart.year, mstart.month + 1, 1)
+            mend = min(nxt - timedelta(days=1), today)
+            label = mstart.strftime("%b %Y")
+            out.append((label, mstart, mend))
+    else:  # day
+        for i in range(count - 1, -1, -1):
+            d = today - timedelta(days=i)
+            out.append((d.isoformat(), d, d))
+    return out
+
+
+def get_team_activity_rollup(bucket: str = "day", count: int = 14,
+                             client_id: int = None) -> dict:
+    """Aggregate team-wide work into per-day / per-week / per-month buckets.
+
+    `bucket` is one of 'day', 'week', 'month'. `count` is the number of most
+    recent buckets to return (oldest first). When `client_id` is given the
+    rollup is scoped to that account; otherwise it spans every client (the same
+    team-wide scope as the nightly EOD report).
+
+    Each bucket carries the EOD-style headline metrics summed over its date
+    range so the figures reconcile with the end-of-day report.
+    """
+    bucket = (bucket or "day").lower().strip()
+    if bucket not in ("day", "week", "month"):
+        bucket = "day"
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 14
+    count = max(1, min(count, 366))
+
+    buckets = _rollup_buckets(bucket, count)
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+
+        def _scalar(sql: str, params: tuple):
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            return (row[0] if row and row[0] is not None else 0)
+
+        # client_id filter fragment shared by the per-table queries.
+        cfilt = " AND client_id=?" if client_id is not None else ""
+        cargs: tuple = (int(client_id),) if client_id is not None else ()
+
+        # created_at/updated_at are stored as UTC timestamps (SQLite
+        # CURRENT_TIMESTAMP). Shift them into the business timezone before
+        # taking the date so a payment posted at 11pm Eastern counts toward the
+        # correct business day (not the next UTC day). The offset is an integer
+        # we compute here, so inlining it into the SQL is injection-safe.
+        _off = business_now().utcoffset() or timedelta(0)
+        _tz_mod = f"{int(_off.total_seconds())} seconds"
+        cc = f"date(created_at, '{_tz_mod}')"   # created_at, business-local date
+        uc = f"date(updated_at, '{_tz_mod}')"   # updated_at, business-local date
+
+        rows_out: list[dict] = []
+        for label, d_start, d_end in buckets:
+            s, e = d_start.isoformat(), d_end.isoformat()
+
+            claims_new = _scalar(
+                f"SELECT COUNT(*) FROM claims_master "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            claims_touched = _scalar(
+                f"SELECT COUNT(*) FROM claims_master "
+                f"WHERE {uc} BETWEEN ? AND ? "
+                f"AND {cc} NOT BETWEEN ? AND ?{cfilt}",
+                (s, e, s, e, *cargs))
+            payments_posted = _scalar(
+                f"SELECT COUNT(*) FROM payments "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            payments_amount = _scalar(
+                f"SELECT ROUND(COALESCE(SUM(PaymentAmount),0),2) FROM payments "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            cred_new = _scalar(
+                f"SELECT COUNT(*) FROM credentialing "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            enroll_new = _scalar(
+                f"SELECT COUNT(*) FROM enrollment "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            edi_new = _scalar(
+                f"SELECT COUNT(*) FROM edi_setup "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            production_rows = _scalar(
+                f"SELECT COUNT(*) FROM team_production "
+                f"WHERE (work_date BETWEEN ? AND ? "
+                f"OR {cc} BETWEEN ? AND ?){cfilt}",
+                (s, e, s, e, *cargs))
+            production_hours = _scalar(
+                f"SELECT ROUND(COALESCE(SUM(time_spent),0),2) FROM team_production "
+                f"WHERE (work_date BETWEEN ? AND ? "
+                f"OR {cc} BETWEEN ? AND ?){cfilt}",
+                (s, e, s, e, *cargs))
+            notes_new = _scalar(
+                f"SELECT COUNT(*) FROM notes_log "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+            files_uploaded = _scalar(
+                f"SELECT COUNT(*) FROM client_files "
+                f"WHERE {cc} BETWEEN ? AND ?{cfilt}",
+                (s, e, *cargs))
+
+            # Billed = claim lines whose Bill Date falls in the window. Bill Date
+            # is free-text, so normalize to the first 10 chars (ISO date prefix),
+            # matching the dashboard's billing-activity computation.
+            cur.execute(
+                f"SELECT substr(COALESCE(BillDate,''),1,10), ChargeAmount "
+                f"FROM claims_master "
+                f"WHERE COALESCE(BillDate,'')!=''{cfilt}",
+                cargs)
+            billed_count = 0
+            billed_amount = 0.0
+            for _bd_raw, _amt_raw in cur.fetchall():
+                try:
+                    _bd = date.fromisoformat(str(_bd_raw or "").strip())
+                except (ValueError, TypeError):
+                    continue
+                if d_start <= _bd <= d_end:
+                    billed_count += 1
+                    billed_amount += float(_amt_raw or 0)
+            billed_amount = round(billed_amount, 2)
+
+            # Distinct contributors who logged any work in the window.
+            active_users = _scalar(
+                "SELECT COUNT(*) FROM ("
+                f"  SELECT PostedBy AS u FROM payments "
+                f"   WHERE {cc} BETWEEN ? AND ? AND COALESCE(PostedBy,'')!=''{cfilt} "
+                "  UNION "
+                f"  SELECT username AS u FROM team_production "
+                f"   WHERE (work_date BETWEEN ? AND ? OR {cc} BETWEEN ? AND ?) "
+                f"     AND COALESCE(username,'')!=''{cfilt} "
+                "  UNION "
+                f"  SELECT uploaded_by AS u FROM client_files "
+                f"   WHERE {cc} BETWEEN ? AND ? AND COALESCE(uploaded_by,'')!=''{cfilt} "
+                "  UNION "
+                f"  SELECT Author AS u FROM notes_log "
+                f"   WHERE {cc} BETWEEN ? AND ? AND COALESCE(Author,'')!=''{cfilt} "
+                ")",
+                (s, e, *cargs,
+                 s, e, s, e, *cargs,
+                 s, e, *cargs,
+                 s, e, *cargs))
+
+            rows_out.append({
+                "label": label,
+                "start": s,
+                "end": e,
+                "claims_new": int(claims_new),
+                "claims_touched": int(claims_touched),
+                "payments_posted": int(payments_posted),
+                "payments_amount": float(payments_amount),
+                "billed_count": int(billed_count),
+                "billed_amount": billed_amount,
+                "cred_new": int(cred_new),
+                "enroll_new": int(enroll_new),
+                "edi_new": int(edi_new),
+                "production_rows": int(production_rows),
+                "production_hours": float(production_hours),
+                "notes_new": int(notes_new),
+                "files_uploaded": int(files_uploaded),
+                "active_users": int(active_users),
+            })
+
+        # Column totals across all returned buckets.
+        totals = {k: 0 for k in _ROLLUP_METRIC_KEYS}
+        for r in rows_out:
+            for k in _ROLLUP_METRIC_KEYS:
+                totals[k] += r.get(k, 0)
+        for k in ("payments_amount", "billed_amount", "production_hours"):
+            totals[k] = round(totals[k], 2)
+
+        return {
+            "bucket": bucket,
+            "count": len(rows_out),
+            "client_id": int(client_id) if client_id is not None else None,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "metric_keys": list(_ROLLUP_METRIC_KEYS),
+            "buckets": rows_out,
+            "totals": totals,
+        }
     finally:
         conn.close()
 
