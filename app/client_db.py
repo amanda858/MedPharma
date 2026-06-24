@@ -1,6 +1,8 @@
 """Database — MedPharma Client Hub: claims_master, payments, notes_log,
 credentialing, enrollment, edi_setup, providers, clients, sessions."""
 
+from __future__ import annotations
+
 import sqlite3
 import os
 import json
@@ -2125,6 +2127,51 @@ def normalize_claim_statuses():
         conn.close()
     if updates:
         print(f"[migration] Normalized {updates} claim status values")
+    return updates
+
+
+# Statuses that precede billing — a claim in any of these has not gone out the
+# door yet, so it legitimately carries no Bill Date. Anything else has been
+# billed/submitted and MUST carry a Bill Date for the dated billed/production
+# reports to see it.
+_PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
+
+
+def backfill_missing_bill_dates():
+    """One-time (idempotent) migration: stamp a Bill Date on already-imported
+    billed claims that were saved with a blank BillDate.
+
+    Older imports stored billed/submitted claims with an empty BillDate whenever
+    the source file shipped no bill-date column. Every dated billed/production
+    view (Billed Activity, All-Time Billed, the Team Production "$ Billed"
+    column, AR aging) keys off BillDate, so those claims read $0 even though
+    their status said they had been billed. This fills the blanks using the
+    service date (DOS) when present — mirroring the AR-aging fallback — else the
+    row's creation date. Runs on every startup but only touches rows that still
+    need it, so it's a no-op once the data is clean.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in _PRE_BILL_STATUSES)
+        cur.execute(
+            f"""
+            UPDATE claims_master
+               SET BillDate = substr(
+                       COALESCE(NULLIF(TRIM(DOS), ''), date(created_at), date('now')), 1, 10
+                   ),
+                   updated_at = CURRENT_TIMESTAMP
+             WHERE TRIM(COALESCE(BillDate, '')) = ''
+               AND TRIM(COALESCE(ClaimStatus, '')) NOT IN ({placeholders})
+            """,
+            _PRE_BILL_STATUSES,
+        )
+        updates = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if updates and updates > 0:
+        print(f"[migration] Backfilled Bill Date on {updates} billed claim(s)")
     return updates
 
 
@@ -6077,6 +6124,95 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             urow["payments_posted"] = int(stats.get("payments_posted", 0))
             urow["payments_amount"] = float(stats.get("payments_amount", 0))
 
+        # ── Claims billed, credited to the biller (Owner) ─────────────────
+        # The production a biller cares about most = the claims they put OUT
+        # the door and the charged value of those claims, credited to whoever
+        # billed them (the claim's free-text ``Owner``), by Bill Date. This is
+        # deliberately separate from claims_uploaded (credited to the uploader)
+        # and from the A/R balance shown on the Claims Queue — re-uploading a
+        # file overwrites the deduped claim row, but the billed credit here is
+        # what each biller produced in the window. Bill Date is free text, so
+        # normalize to the ISO date prefix and compare within the window,
+        # matching get_team_activity_rollup's billed computation.
+        try:
+            d_lo = date.fromisoformat(start_date) if start_date else date.min
+        except (ValueError, TypeError):
+            d_lo = date.min
+        try:
+            d_hi = date.fromisoformat(end_date) if end_date else date.max
+        except (ValueError, TypeError):
+            d_hi = date.max
+
+        # Build an Owner -> canonical roster username alias map so billed claims
+        # credited to a display name ("Susan Smith") line up with the same
+        # user's logged production rows (keyed by username, e.g. "susan"). This
+        # spans every active user (billers live under their own company, not the
+        # selected client's), since the claim Owner can be any of them.
+        alias_to_user = {}
+        roster_rows = []
+        cur.execute("SELECT username, contact_name FROM clients WHERE is_active=1")
+        for r in cur.fetchall():
+            uname = str(r["username"] or "").strip()
+            if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            roster_rows.append((uname, str(r["contact_name"] or "").strip()))
+        # Exact usernames win first, so a plain "susan" Owner resolves to the
+        # "susan" account rather than another user who merely shares a first name.
+        for uname, _cname in roster_rows:
+            alias_to_user.setdefault(uname.strip().lower(), uname)
+        # Then weaker aliases (full contact name, then first name) fill the gaps.
+        for uname, cname in roster_rows:
+            cfirst = cname.split()[0] if cname else ""
+            for alias in (cname, cfirst):
+                a = alias.strip().lower()
+                if a:
+                    alias_to_user.setdefault(a, uname)
+
+        billed_by_user = {}
+        bill_conditions = ["COALESCE(BillDate,'')!=''", "TRIM(COALESCE(Owner,''))!=''"]
+        bill_p = []
+        if client_id:
+            bill_conditions.append("client_id=?")
+            bill_p.append(client_id)
+        bill_cond = "WHERE " + " AND ".join(bill_conditions)
+        cur.execute(
+            f"SELECT TRIM(Owner) AS owner, substr(COALESCE(BillDate,''),1,10) AS bd, "
+            f"       COALESCE(ChargeAmount,0) AS amt "
+            f"FROM claims_master {bill_cond}", bill_p)
+        for r in cur.fetchall():
+            owner_raw = str(r["owner"] or "").strip()
+            if not owner_raw or owner_raw.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            try:
+                bd = date.fromisoformat(str(r["bd"] or "").strip())
+            except (ValueError, TypeError):
+                continue
+            if not (d_lo <= bd <= d_hi):
+                continue
+            owner = alias_to_user.get(owner_raw.lower(), owner_raw)
+            slot = billed_by_user.setdefault(
+                owner, {"claims_billed": 0, "claims_billed_amount": 0.0})
+            slot["claims_billed"] += 1
+            slot["claims_billed_amount"] += float(r["amt"] or 0)
+
+        # Make sure a biller with no logged production work still appears, then
+        # zero-fill billed stats on every row.
+        for owner in billed_by_user:
+            if owner not in by_user_map:
+                by_user_map[owner] = {
+                    "username": owner,
+                    "total_entries": 0,
+                    "total_quantity": 0,
+                    "total_hours": 0,
+                    "days_worked": 0,
+                    "payments_posted": 0,
+                    "payments_amount": 0,
+                }
+        for uname, urow in by_user_map.items():
+            slot = billed_by_user.get(uname, {})
+            urow["claims_billed"] = int(slot.get("claims_billed", 0))
+            urow["claims_billed_amount"] = round(float(slot.get("claims_billed_amount", 0)), 2)
+
         # ── Imported data attributed to each uploader ─────────────────────
         # When a user uploads a claims / credentialing / enrollment / EDI
         # spreadsheet, each imported row is stamped with their hub username in
@@ -6182,6 +6318,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             u["payments_amount"] = float(u.get("payments_amount") or 0)
             u["claims_uploaded"] = int(u.get("claims_uploaded") or 0)
             u["claims_uploaded_amount"] = float(u.get("claims_uploaded_amount") or 0)
+            u["claims_billed"] = int(u.get("claims_billed") or 0)
+            u["claims_billed_amount"] = float(u.get("claims_billed_amount") or 0)
             u["credentialing_uploaded"] = int(u.get("credentialing_uploaded") or 0)
             u["enrollment_uploaded"] = int(u.get("enrollment_uploaded") or 0)
             u["edi_uploaded"] = int(u.get("edi_uploaded") or 0)
@@ -6206,6 +6344,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "payments_total_amount": round(sum(float(u.get("payments_amount") or 0) for u in by_user), 2),
         "uploads_total_count": sum(int(u.get("total_uploaded") or 0) for u in by_user),
         "uploads_total_amount": round(sum(float(u.get("claims_uploaded_amount") or 0) for u in by_user), 2),
+        "billed_total_count": sum(int(u.get("claims_billed") or 0) for u in by_user),
+        "billed_total_amount": round(sum(float(u.get("claims_billed_amount") or 0) for u in by_user), 2),
         "time_management_flags": flags,
     }
 

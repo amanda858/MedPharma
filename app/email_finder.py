@@ -8,6 +8,8 @@ Hunter.io endpoints used:
   /v2/combined/find   — full lead enrichment from an email address
 """
 
+from __future__ import annotations
+
 import re
 import asyncio
 import httpx

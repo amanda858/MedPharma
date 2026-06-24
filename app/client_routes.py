@@ -1,5 +1,7 @@
 """Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
 
+from __future__ import annotations
+
 import os
 import json as _json
 import re
@@ -485,6 +487,29 @@ def _client_scope(user: dict) -> Optional[int]:
     if user.get("role") in ("admin", "staff"):
         return None
     return user["id"]
+
+
+def _owner_identities(user: dict) -> set:
+    """Lowercase tokens a claim's free-text ``Owner`` may use to refer to this
+    user: their username, email, the local-part of either, and their display
+    name plus its first token (e.g. 'Susan Smith' -> {'susan smith', 'susan'}).
+
+    Used to scope the Claims Queue so a biller only sees the claims they
+    personally billed/own."""
+    idents = set()
+    for field in (user.get("username"), user.get("email"), user.get("contact_name")):
+        if not field:
+            continue
+        s = str(field).strip().lower()
+        if not s:
+            continue
+        idents.add(s)
+        if "@" in s:
+            idents.add(s.split("@", 1)[0])
+        parts = s.split()
+        if parts:
+            idents.add(parts[0])
+    return {i for i in idents if i}
 
 
 def _assert_client_can_view(user: dict, client_id: int) -> None:
@@ -1870,8 +1895,31 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
                    sub_profile: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    return {"claims": get_claims(scope, status, sub_profile=sub_profile)}
+    role = (user.get("role") or "").lower()
+
+    if role in ("admin", "staff"):
+        # Internal users may scope to a specific account (None => all accounts).
+        claims = get_claims(client_id, status, sub_profile=sub_profile)
+        if role == "staff":
+            # Billers see the claims they personally own/billed, plus any
+            # unassigned claims (no Owner yet) so they can pick up new work.
+            # Full admins keep the cross-account view used by the admin report.
+            idents = _owner_identities(user)
+            claims = [c for c in claims
+                      if (c.get("Owner") or "").strip().lower() in idents
+                      or not (c.get("Owner") or "").strip()]
+    else:
+        # Account (client) login: locked to the account(s) they belong to so a
+        # forged client_id can't expose another lab's claims. They see every
+        # claim on their own account regardless of which biller owns it.
+        allowed = set(_doc_account_ids(user))
+        try:
+            requested = int(client_id) if client_id is not None else None
+        except (TypeError, ValueError):
+            requested = None
+        scope = requested if (requested in allowed) else user["id"]
+        claims = get_claims(scope, status, sub_profile=sub_profile)
+    return {"claims": claims}
 
 
 @router.get("/claims/statuses")
@@ -2748,13 +2796,15 @@ def download_production_report(
     # ── Team summary rows ──────────────────────────────────────────────
     def _user_rows():
         if not by_user:
-            return "<tr><td colspan='8' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+            return "<tr><td colspan='10' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
         return "".join(
             f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
             f"<td>{u.get('days_worked',0)}</td>"
             f"<td>{u.get('total_entries',0)}</td>"
             f"<td>{u.get('total_quantity',0)}</td>"
             f"<td>{u.get('total_hours',0)}h</td>"
+            f"<td>{u.get('claims_billed',0)}</td>"
+            f"<td>${u.get('claims_billed_amount',0):,.2f}</td>"
             f"<td>{u.get('payments_posted',0)}</td>"
             f"<td>${u.get('payments_amount',0):,.2f}</td>"
             f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
@@ -2861,6 +2911,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
     <span><b>Users:</b> {len(by_user)}</span>
+    <span><b>Claims Billed:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
     <span><b>Payments Posted:</b> {data.get('payments_total_count', 0)} (${data.get('payments_total_amount', 0):,.2f})</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
@@ -2870,7 +2921,7 @@ def download_production_report(
   <section class="section">
     <h2>👥 Work Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
   </section>
@@ -4441,6 +4492,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
         "voided": "Closed", "zero balance": "Closed", "closed - adjusted": "Closed",
     }
 
+    # Statuses that precede billing — a claim in any of these has NOT gone out
+    # the door yet, so it legitimately carries no Bill Date.
+    _PRE_BILL_STATUSES = {"Intake", "Verification", "Coding"}
+
     def _normalize_status(raw):
         if not raw:
             return "Intake"
@@ -4680,6 +4735,21 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                                - _parse_float(mapped.get("PaidAmount", 0)))
                     mapped["BalanceRemaining"] = max(derived, 0.0)
 
+            # A claim that has reached (or moved past) "Billed/Submitted" MUST
+            # carry a Bill Date — every dated billed/production view (Billed
+            # Activity, All-Time Billed, the Team Production "$ Billed" column,
+            # AR aging) keys off BillDate. Many source files set the status to a
+            # billed value but ship no bill-date column, so those claims imported
+            # with BillDate='' and were invisible to all of those reports (e.g.
+            # 671 Billed/Submitted claims showing $0 all-time billed). When a
+            # billed claim has no parseable Bill Date, stamp one: prefer the
+            # service date (DOS) so historical claims keep a realistic timeline,
+            # and fall back to the import date only when DOS is missing too.
+            _bill_date = _parse_date(mapped.get("BillDate", ""))
+            if not _bill_date and mapped["ClaimStatus"] not in _PRE_BILL_STATUSES:
+                _bill_date = _parse_date(mapped.get("DOS", "")) or today_str
+            mapped["BillDate"] = _bill_date
+
             try:
                 cur.execute("""
                     INSERT INTO claims_master
@@ -4696,7 +4766,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                         ChargeAmount=excluded.ChargeAmount, AllowedAmount=excluded.AllowedAmount,
                         AdjustmentAmount=excluded.AdjustmentAmount, PaidAmount=excluded.PaidAmount,
                         BalanceRemaining=excluded.BalanceRemaining, ClaimStatus=excluded.ClaimStatus,
-                        BillDate=excluded.BillDate, DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
+                        BillDate=CASE WHEN TRIM(COALESCE(claims_master.BillDate,''))<>''
+                                     THEN claims_master.BillDate ELSE excluded.BillDate END,
+                        DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
                         DenialCategory=excluded.DenialCategory, DenialReason=excluded.DenialReason,
                         Owner=excluded.Owner, LastTouchedDate=excluded.LastTouchedDate,
                         sub_profile=excluded.sub_profile, uploaded_by=excluded.uploaded_by,
