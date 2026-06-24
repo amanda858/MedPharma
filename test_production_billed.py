@@ -181,3 +181,60 @@ def test_per_biller_self_view_billed_posted_paid_across_accounts(cdb):
     assert everyone["billed_total_amount"] == 1100.0 + 999.0
     assert everyone["payments_total_amount"] == 550.0 + 500.0
     assert _user(everyone, "melissa")["payments_amount"] == 500.0
+
+
+def test_denied_and_rolling_ar(cdb):
+    """The report surfaces Denied claims (by Denied Date, credited to the Owner)
+    and a Rolling AR figure — the still-open balance on claims dated BEFORE the
+    production window start (or with no service date). Current-window DOS balance
+    is NOT part of Rolling AR, and Rolling AR ignores the report date range."""
+    cid = cdb.create_client({
+        "company": "SV Diagnostics", "contact_name": "SV Diagnostics",
+        "email": "sv@example.com", "phone": "555-0", "role": "client",
+        "username": "svdiag", "password": "svpass123456",
+    })
+    cdb.create_client({
+        "username": "susan", "password": "susanpass12345", "company": "MedPharma SC",
+        "contact_name": "Susan Smith", "email": "susan@medprosc.com",
+        "phone": "555-2", "role": "staff",
+    })
+
+    # A submitted (not denied) claim and a denied claim, both in-window.
+    cdb.create_claim({"client_id": cid, "ClaimKey": "S-1", "ChargeAmount": 500,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "susan",
+                      "DOS": "2026-06-19", "BillDate": "2026-06-19",
+                      "BalanceRemaining": 0})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "D-1", "ChargeAmount": 400,
+                      "ClaimStatus": "Denied", "Owner": "Susan Smith",
+                      "DOS": "2026-06-20", "BillDate": "2026-06-20",
+                      "DeniedDate": "2026-06-22", "BalanceRemaining": 0})
+
+    # Rolling AR backlog: a legacy DOS (before cutoff) and a blank-DOS claim both
+    # carry open balance; a current-window DOS balance must be excluded.
+    cdb.create_claim({"client_id": cid, "ClaimKey": "AR-OLD", "ChargeAmount": 1234,
+                      "ClaimStatus": "A/R Follow-Up", "Owner": "susan",
+                      "DOS": "2026-05-01", "BalanceRemaining": 1234})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "AR-BLANK", "ChargeAmount": 50,
+                      "ClaimStatus": "A/R Follow-Up", "Owner": "susan",
+                      "DOS": "", "BalanceRemaining": 50})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "AR-NEW", "ChargeAmount": 999,
+                      "ClaimStatus": "A/R Follow-Up", "Owner": "susan",
+                      "DOS": "2026-06-20", "BalanceRemaining": 999})
+
+    rep = cdb.get_production_report(cid, "2026-06-18", "2026-06-30")
+    # Submitted = both claims that went out the door in the window.
+    assert rep["billed_total_count"] == 2
+    assert rep["billed_total_amount"] == 900.0
+    # Denied = just the denied claim, by its Denied Date.
+    assert rep["denied_total_count"] == 1
+    assert rep["denied_total_amount"] == 400.0
+    susan = _user(rep, "susan")
+    assert susan["claims_denied"] == 1
+    assert susan["claims_denied_amount"] == 400.0
+    # Rolling AR = legacy + blank DOS balance; current-window DOS excluded.
+    assert rep["rolling_ar"] == 1284.0
+    assert rep["rolling_ar_cutoff"] == "2026-06-18"
+
+    # Rolling AR is a backlog snapshot — independent of the report date range.
+    wide = cdb.get_production_report(cid, "2026-01-01", "2026-12-31")
+    assert wide["rolling_ar"] == 1284.0

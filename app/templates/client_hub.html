@@ -9288,11 +9288,19 @@
         ? data.payments_total_count
         : byUser.reduce((s, u) => s + (u.payments_posted || 0), 0);
       const money2 = v => '$' + (Number(v) || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      const deniedTotalCount = data.denied_total_count != null
+        ? data.denied_total_count
+        : byUser.reduce((s, u) => s + (u.claims_denied || 0), 0);
+      const deniedTotalAmount = data.denied_total_amount != null
+        ? data.denied_total_amount
+        : byUser.reduce((s, u) => s + (u.claims_denied_amount || 0), 0);
+      const rollingAr = Number(data.rolling_ar || 0);
+      const arCutoff = data.rolling_ar_cutoff || '2026-06-18';
 
-      // Headline KPIs — the three numbers the business runs on: what was Billed
-      // (charges out the door), what was Posted (payments entered), and what was
-      // Paid (dollars collected). In a biller's self-view these are just their
-      // own work; for admin/Eric they are the combined team roll-up.
+      // Four numbers the business runs on — Claims Submitted, Paid, Denied,
+      // Posted — plus a Rolling AR figure for legacy backlog (claims dated
+      // before the production window). In a biller's self-view these are just
+      // their own work; for admin/Eric they are the combined team roll-up.
       const selfView = !!data.is_self_view;
       const scopeName = data.scope_username || '';
       const kpiTitle = selfView
@@ -9301,57 +9309,63 @@
       html += `<div class="card" style="margin-bottom:18px">
         <div class="card-header"><div class="card-title">${kpiTitle}</div></div>
         <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px">
-          <div style="flex:1;min-width:160px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px">
-            <div style="font-size:11px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.04em">Billed</div>
-            <div style="font-size:24px;font-weight:800;color:#1e3a8a">${money2(billedTotalAmount)}</div>
-            <div style="font-size:12px;color:#64748b">${billedTotalCount} claim(s) out the door</div>
+          <div style="flex:1;min-width:150px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px">
+            <div style="font-size:11px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.04em">Claims Submitted</div>
+            <div style="font-size:26px;font-weight:800;color:#1e3a8a">${billedTotalCount}</div>
+            <div style="font-size:12px;color:#64748b">${money2(billedTotalAmount)} submitted</div>
           </div>
-          <div style="flex:1;min-width:160px;background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px">
+          <div style="flex:1;min-width:150px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:14px 16px">
+            <div style="font-size:11px;font-weight:700;color:#047857;text-transform:uppercase;letter-spacing:.04em">Paid</div>
+            <div style="font-size:26px;font-weight:800;color:#065f46">${money2(paymentsTotalAmount)}</div>
+            <div style="font-size:12px;color:#64748b">dollars collected</div>
+          </div>
+          <div style="flex:1;min-width:150px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px">
+            <div style="font-size:11px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em">Denied</div>
+            <div style="font-size:26px;font-weight:800;color:#991b1b">${deniedTotalCount}</div>
+            <div style="font-size:12px;color:#64748b">${money2(deniedTotalAmount)} denied</div>
+          </div>
+          <div style="flex:1;min-width:150px;background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px">
             <div style="font-size:11px;font-weight:700;color:#a16207;text-transform:uppercase;letter-spacing:.04em">Posted</div>
-            <div style="font-size:24px;font-weight:800;color:#854d0e">${paymentsTotalCount}</div>
+            <div style="font-size:26px;font-weight:800;color:#854d0e">${paymentsTotalCount}</div>
             <div style="font-size:12px;color:#64748b">payment(s) posted</div>
           </div>
-          <div style="flex:1;min-width:160px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:14px 16px">
-            <div style="font-size:11px;font-weight:700;color:#047857;text-transform:uppercase;letter-spacing:.04em">Paid</div>
-            <div style="font-size:24px;font-weight:800;color:#065f46">${money2(paymentsTotalAmount)}</div>
-            <div style="font-size:12px;color:#64748b">dollars collected</div>
+          <div style="flex:1;min-width:150px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:14px 16px">
+            <div style="font-size:11px;font-weight:700;color:#6d28d9;text-transform:uppercase;letter-spacing:.04em">Rolling AR</div>
+            <div style="font-size:26px;font-weight:800;color:#5b21b6">${money2(rollingAr)}</div>
+            <div style="font-size:12px;color:#64748b">open balance dated before ${esc(arCutoff)}</div>
           </div>
         </div>
         <div style="margin-top:10px;font-size:12px;color:var(--gray-500)">
           ${selfView
             ? 'This is <strong>your own</strong> production across every account you work. Use the date presets above to pull by day, week, or all-time.'
             : 'Combined totals for the whole team. Pull by day, week, or a custom range with the presets above; the per-user breakdown is below.'}
+          <strong>Rolling AR</strong> is carried-forward backlog — still-open balance on claims dated before ${esc(arCutoff)} (or with no service date), kept separate from current-period production.
         </div>
       </div>`;
 
       html += `<div class="card" style="margin-bottom:18px">
-        <div class="card-header"><div class="card-title">👥 Work Production by User (${esc(start)} to ${esc(end)})</div></div>
+        <div class="card-header"><div class="card-title">👥 Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
-          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Uploaded Rows</th><th>Payments Posted</th><th>$ Paid</th><th>Avg Hrs/Day</th></tr></thead>
+          <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Denied</th><th>Posted</th><th>$ Paid</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
             <td style="font-weight:600">${esc(u.username)}</td>
-            <td style="text-align:center">${u.days_worked}</td>
-            <td style="text-align:center">${u.total_entries}</td>
-            <td style="text-align:center;font-weight:600">${u.total_quantity || 0}</td>
-            <td style="text-align:center;font-weight:600">${u.total_hours || 0}h</td>
             <td style="text-align:center;font-weight:600">${u.claims_billed || 0}</td>
             <td style="text-align:right;font-weight:600">${money2(u.claims_billed_amount)}</td>
-            <td style="text-align:center;font-weight:600" title="Claims ${u.claims_uploaded||0} · Cred ${u.credentialing_uploaded||0} · Enroll ${u.enrollment_uploaded||0} · EDI ${u.edi_uploaded||0}">${u.total_uploaded || 0}</td>
+            <td style="text-align:center;font-weight:600">${u.claims_denied || 0}</td>
             <td style="text-align:center;font-weight:600">${u.payments_posted || 0}</td>
             <td style="text-align:right;font-weight:600">${money2(u.payments_amount)}</td>
-            <td style="text-align:center"><span class="badge ${(u.avg_hours_per_day || 0) < 6 ? 'badge-red' : 'badge-green'}">${u.avg_hours_per_day || 0}h</span></td>
-          </tr>`).join('') || '<tr><td colspan="11" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+          </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
           ${byUser.length ? `<tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e2e8f0">
-            <td>Team Total</td><td></td><td></td><td></td><td></td>
+            <td>Team Total</td>
             <td style="text-align:center">${billedTotalCount}</td>
             <td style="text-align:right">${money2(billedTotalAmount)}</td>
-            <td></td><td></td>
+            <td style="text-align:center">${deniedTotalCount}</td>
+            <td style="text-align:center">${paymentsTotalCount}</td>
             <td style="text-align:right">${money2(paymentsTotalAmount)}</td>
-            <td></td>
           </tr></tfoot>` : ''}
         </table></div>
         <div style="margin-top:8px;font-size:12px;color:var(--gray-500)">
-          <strong>Claims Billed / $ Billed</strong> credits each biller (claim Owner) for claims put out the door in this window, by Bill Date — this is cumulative production, separate from the Claims Queue A/R balance. Leave the date range wide (or use a since-first-upload start date) to see comprehensive totals.
+          <strong>Submitted</strong> = claims put out the door (by Bill Date). <strong>Denied</strong> = claims denied in this window. <strong>Posted</strong> = payments entered. <strong>$ Paid</strong> = dollars collected. Leave the date range wide (or use a since-first-upload start date) to see comprehensive totals.
         </div>
       </div>`;
 
