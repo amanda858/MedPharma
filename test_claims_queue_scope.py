@@ -96,3 +96,65 @@ def test_forged_client_id_cannot_cross_accounts(env):
     assert own == ["A-1"]
     # Forging Lab B's id must still only return Lab A's own claims.
     assert forged == ["A-1"]
+
+
+def test_data_health_diag_flags_unimported_spreadsheets(env):
+    """The admin data-health diagnostic must reveal daily work that never
+    reached claims: spreadsheets uploaded under a non-data category are saved
+    as documents and never imported, leaving the dashboard totals frozen."""
+    cdb, client = env
+    with client:
+        cid = cdb.create_client({
+            "company": "SV Diagnostics", "contact_name": "SV", "email": "sv@x.com",
+            "phone": "1", "role": "client", "username": "svdiag", "password": "svpass12345",
+        })
+        cdb.create_claim({"client_id": cid, "ClaimKey": "SV-1", "ChargeAmount": 1000,
+                          "BalanceRemaining": 800, "PaidAmount": 200,
+                          "ClaimStatus": "Billed/Submitted", "Owner": "susan",
+                          "BillDate": "2026-06-20"})
+
+        conn = cdb.get_db()
+        cur = conn.cursor()
+        # A spreadsheet of daily work saved as a plain document (NOT imported).
+        cur.execute(
+            "INSERT INTO client_files (client_id, filename, original_name, file_type, "
+            "category, row_count, uploaded_by) VALUES (?,?,?,?,?,?,?)",
+            (cid, "stored1.xlsx", "daily_billing_0624.xlsx", "excel", "General", 47, "susan"),
+        )
+        # A spreadsheet correctly filed under Claims (would import).
+        cur.execute(
+            "INSERT INTO client_files (client_id, filename, original_name, file_type, "
+            "category, row_count, uploaded_by) VALUES (?,?,?,?,?,?,?)",
+            (cid, "stored2.xlsx", "claims_load.xlsx", "excel", "Claims", 12, "susan"),
+        )
+        # A PDF (never auto-imports).
+        cur.execute(
+            "INSERT INTO client_files (client_id, filename, original_name, file_type, "
+            "category, row_count, uploaded_by) VALUES (?,?,?,?,?,?,?)",
+            (cid, "stored3.pdf", "remittance.pdf", "pdf", "General", 0, "melissa"),
+        )
+        conn.commit()
+        conn.close()
+
+        client.post("/hub/api/login", json={"username": "admin", "password": "admin123"})
+        r = client.get("/hub/api/admin/diag/data-health")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        client.post("/hub/api/logout")
+
+    # The un-imported daily spreadsheet must be surfaced with its row count.
+    ni = d["uploaded_but_not_imported"]
+    assert ni["count"] == 1, d
+    assert ni["total_rows"] == 47, d
+    assert ni["files"][0]["file"] == "daily_billing_0624.xlsx"
+    # The PDF must be counted but kept separate.
+    assert d["pdf_uploads"] == 1, d
+    # Account claim health rolls up the real AR/charged/paid figures.
+    acct = [a for a in d["accounts"] if a["account"] == "SV Diagnostics"][0]
+    assert acct["claims"] == 1
+    assert acct["outstanding"] == 800
+    assert acct["charged"] == 1000
+    assert acct["paid"] == 200
+    # A human-readable diagnosis must call out the inert daily work.
+    assert any("never imported" in line.lower() or "not imported" in line.lower()
+               or "saved as documents" in line.lower() for line in d["diagnosis"]), d
