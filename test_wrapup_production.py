@@ -98,7 +98,10 @@ def test_admin_routes_exist_for_snapshot_and_notifications(hub_env, monkeypatch)
         assert daily.json().get("ok") is True
 
 
-def test_admin_production_is_all_accounts(hub_env):
+def test_admin_production_is_scoped_to_selected_client(hub_env):
+    """Admin filtering the production log by a client sees ONLY that client's
+    rows — never an all-clients dump that would make the per-client view look
+    identical to the comprehensive report."""
     client_db, hub_app = hub_env
     with TestClient(hub_app.app) as client:
         owner_id = client_db.create_client({
@@ -145,12 +148,83 @@ def test_admin_production_is_all_accounts(hub_env):
         response = client.get(f"/hub/api/production?client_id={owner_id}")
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload.get("fallback_all_clients") is True
+        assert payload.get("fallback_all_clients") is False
         usernames = {row.get("username") for row in payload.get("logs", [])}
-        assert {"scope_owner", "scope_other"}.issubset(usernames)
+        assert usernames == {"scope_owner"}
 
         client_db.delete_client(owner_id)
         client_db.delete_client(other_id)
+
+
+def test_production_report_does_not_fallback_to_all_clients(hub_env):
+    """A per-client production report (and its printable download) must compile
+    only the selected client. A client with no production rows reports empty
+    instead of silently substituting every client's data."""
+    client_db, hub_app = hub_env
+    with TestClient(hub_app.app) as client:
+        empty_id = client_db.create_client({
+            "username": "rep_empty",
+            "password": "repempty123",
+            "company": "Report Empty",
+            "contact_name": "Report Empty",
+            "email": "rep_empty@example.com",
+            "phone": "555-1110",
+            "role": "client",
+        })
+        busy_id = client_db.create_client({
+            "username": "rep_busy",
+            "password": "repbusy123",
+            "company": "Report Busy",
+            "contact_name": "Report Busy",
+            "email": "rep_busy@example.com",
+            "phone": "555-1111",
+            "role": "client",
+        })
+
+        client_db.add_production_log({
+            "client_id": busy_id,
+            "work_date": "2026-06-12",
+            "username": "rep_busy",
+            "category": "Claims",
+            "task_description": "Busy task",
+            "quantity": 1,
+            "time_spent": 1.0,
+            "notes": "",
+        })
+
+        _login(client, "admin", "admin123")
+
+        # Report for the EMPTY client must not borrow the busy client's rows.
+        report = client.get(
+            f"/hub/api/production/report?client_id={empty_id}"
+            "&start_date=2026-06-01&end_date=2026-06-30"
+        )
+        assert report.status_code == 200, report.text
+        body = report.json()
+        assert body.get("fallback_all_clients") is False
+        assert body.get("details") == []
+        report_users = {u.get("username") for u in body.get("by_user", [])}
+        assert "rep_busy" not in report_users
+
+        # Report for the busy client compiles its own rows.
+        busy_report = client.get(
+            f"/hub/api/production/report?client_id={busy_id}"
+            "&start_date=2026-06-01&end_date=2026-06-30"
+        )
+        assert busy_report.status_code == 200, busy_report.text
+        busy_body = busy_report.json()
+        assert {u.get("username") for u in busy_body.get("by_user", [])} == {"rep_busy"}
+
+        # Printable download must not 500 and must stay scoped to the empty client.
+        dl = client.get(
+            f"/hub/api/production/report/download?client_id={empty_id}"
+            "&start_date=2026-06-01&end_date=2026-06-30"
+        )
+        assert dl.status_code == 200, dl.text
+        assert "Busy task" not in dl.text
+
+        client_db.delete_client(empty_id)
+        client_db.delete_client(busy_id)
 
 
 def test_staff_accounts_keep_unscoped_clients_visible(hub_env):

@@ -2447,8 +2447,6 @@ def _start_production_report_job(job_id: str, user: dict):
                 scope = user.get("id")
 
             report = get_production_report(scope, start_date, end_date)
-            if role in ("admin", "staff") and requested_client_id is not None and not (report.get("details") or []):
-                report = get_production_report(None, start_date, end_date)
 
             update_job_progress(job_id, 90)
             result = {
@@ -2712,12 +2710,11 @@ def production_report(client_id: Optional[int] = None,
                       hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    # Compile strictly for the selected client. We deliberately do NOT fall back
+    # to all-client data when the selected client has no rows — doing so made the
+    # per-client report identical to the comprehensive report and hid whether a
+    # client actually had production logged. An empty client now reports empty.
     report = get_production_report(scope, start_date, end_date)
-    if user.get("role") in ("admin", "staff") and client_id is not None and not (report.get("details") or []):
-        report = get_production_report(None, start_date, end_date)
-        report["fallback_all_clients"] = True
-        report["selected_client_id"] = client_id
-        return report
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
@@ -2733,9 +2730,10 @@ def download_production_report(
     """Return a branded, printable HTML production report with MedPharma logo."""
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    # Strictly scoped to the selected client — no all-client fallback (see
+    # production_report above), so the printable report matches what the
+    # on-screen per-client report shows.
     data = get_production_report(scope, start_date, end_date)
-    if user.get("role") in ("admin", "staff") and client_id is not None and not (data.get("details") or []):
-        data = get_production_report(None, start_date, end_date)
 
     from html import escape as _esc
 
