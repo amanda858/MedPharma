@@ -489,6 +489,29 @@ def _client_scope(user: dict) -> Optional[int]:
     return user["id"]
 
 
+def _owner_identities(user: dict) -> set:
+    """Lowercase tokens a claim's free-text ``Owner`` may use to refer to this
+    user: their username, email, the local-part of either, and their display
+    name plus its first token (e.g. 'Susan Smith' -> {'susan smith', 'susan'}).
+
+    Used to scope the Claims Queue so a biller only sees the claims they
+    personally billed/own."""
+    idents = set()
+    for field in (user.get("username"), user.get("email"), user.get("contact_name")):
+        if not field:
+            continue
+        s = str(field).strip().lower()
+        if not s:
+            continue
+        idents.add(s)
+        if "@" in s:
+            idents.add(s.split("@", 1)[0])
+        parts = s.split()
+        if parts:
+            idents.add(parts[0])
+    return {i for i in idents if i}
+
+
 def _assert_client_can_view(user: dict, client_id: int) -> None:
     """Reject if the user is not allowed to view this client's data.
 
@@ -1872,8 +1895,29 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
                    sub_profile: Optional[str] = None,
                    hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    return {"claims": get_claims(scope, status, sub_profile=sub_profile)}
+    role = (user.get("role") or "").lower()
+
+    if role in ("admin", "staff"):
+        # Internal users may scope to a specific account (None => all accounts).
+        claims = get_claims(client_id, status, sub_profile=sub_profile)
+        if role == "staff":
+            # Billers only see the claims they personally own/billed. Full
+            # admins keep the cross-account view used by the admin report.
+            idents = _owner_identities(user)
+            claims = [c for c in claims
+                      if (c.get("Owner") or "").strip().lower() in idents]
+    else:
+        # Account (client) login: locked to the account(s) they belong to so a
+        # forged client_id can't expose another lab's claims. They see every
+        # claim on their own account regardless of which biller owns it.
+        allowed = set(_doc_account_ids(user))
+        try:
+            requested = int(client_id) if client_id is not None else None
+        except (TypeError, ValueError):
+            requested = None
+        scope = requested if (requested in allowed) else user["id"]
+        claims = get_claims(scope, status, sub_profile=sub_profile)
+    return {"claims": claims}
 
 
 @router.get("/claims/statuses")
