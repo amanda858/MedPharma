@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 
 from app.bulk_prospector import prospect_multi_state, _enrich_dm_only
 

@@ -3628,11 +3628,13 @@
       </div>
       <div class="form-grid">
         <div class="form-group"><label>Charge $</label><input class="form-control" type="number" step="0.01"
-            id="fCharge" value="0"></div>
+            id="fCharge" value="0" oninput="recalcClaimBalance()"></div>
         <div class="form-group"><label>Allowed $</label><input class="form-control" type="number" step="0.01"
             id="fAllowed" value="0"></div>
+        <div class="form-group"><label>Adjustment $</label><input class="form-control" type="number" step="0.01"
+            id="fAdjust" value="0" oninput="recalcClaimBalance()"></div>
         <div class="form-group"><label>Paid $</label><input class="form-control" type="number" step="0.01" id="fPaid"
-            value="0"></div>
+            value="0" oninput="recalcClaimBalance()"></div>
         <div class="form-group"><label>Balance $</label><input class="form-control" type="number" step="0.01"
             id="fBalance" value="0"></div>
       </div>
@@ -5725,6 +5727,7 @@
       document.getElementById('fDOS').value = claim?.DOS || '';
       document.getElementById('fCharge').value = claim?.ChargeAmount || 0;
       document.getElementById('fAllowed').value = claim?.AllowedAmount || 0;
+      document.getElementById('fAdjust').value = claim?.AdjustmentAmount || 0;
       document.getElementById('fPaid').value = claim?.PaidAmount || 0;
       document.getElementById('fBalance').value = claim?.BalanceRemaining || 0;
       document.getElementById('fClaimStatus').value = claim?.ClaimStatus || 'Intake';
@@ -5758,6 +5761,17 @@
       if (c) openClaimModal(c);
     }
 
+    // Keep the Balance field in lock-step with Charge/Adjustment/Paid as the
+    // user edits, so a corrected charge or posted payment immediately moves the
+    // outstanding AR instead of silently saving a stale balance.
+    function recalcClaimBalance() {
+      const charge = parseFloat(document.getElementById('fCharge').value) || 0;
+      const adjust = parseFloat(document.getElementById('fAdjust').value) || 0;
+      const paid = parseFloat(document.getElementById('fPaid').value) || 0;
+      const bal = Math.max(charge - adjust - paid, 0);
+      document.getElementById('fBalance').value = (Math.round(bal * 100) / 100);
+    }
+
     async function saveClaim() {
       const editId = document.getElementById('claimEditId').value;
       const data = {
@@ -5771,6 +5785,7 @@
         DOS: document.getElementById('fDOS').value,
         ChargeAmount: parseFloat(document.getElementById('fCharge').value) || 0,
         AllowedAmount: parseFloat(document.getElementById('fAllowed').value) || 0,
+        AdjustmentAmount: parseFloat(document.getElementById('fAdjust').value) || 0,
         PaidAmount: parseFloat(document.getElementById('fPaid').value) || 0,
         BalanceRemaining: parseFloat(document.getElementById('fBalance').value) || 0,
         ClaimStatus: document.getElementById('fClaimStatus').value,
@@ -8353,6 +8368,11 @@
       fd.append('category', category);
       fd.append('description', description);
       fd.append('client_id', activeClientId);
+      // Carry the user's active sub-profile so imported claims land in the same
+      // profile they're viewing and show up immediately in the Claims Queue.
+      if (typeof activeSubProfile !== 'undefined' && activeSubProfile) {
+        fd.append('sub_profile', activeSubProfile);
+      }
 
       const isDataImport = isExcel && ['Claims', 'Credentialing', 'Enrollment', 'EDI'].includes(category);
       toast(isDataImport ? `Importing ${file.name} into ${category}…` : `Uploading ${file.name}…`, 'info');
@@ -8991,6 +9011,12 @@
           fd.append('file', attFile);
           fd.append('category', uploadCategory);
           fd.append('client_id', activeClientId);
+          // Carry the active sub-profile so an attached claims worklist imports
+          // into the same profile the team is viewing — otherwise the rows land
+          // with an empty sub-profile and stay hidden in a filtered Claims Queue.
+          if (typeof activeSubProfile !== 'undefined' && activeSubProfile) {
+            fd.append('sub_profile', activeSubProfile);
+          }
           toast(`Uploading ${attFile.name}…`, 'info');
           const ur = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
           const ud = await ur.json();

@@ -5,435 +5,435 @@
             "label": "push-landing-fix",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_landing_fix.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/push_landing_fix.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "cleanup-dead-files",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/cleanup_dead_files.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/cleanup_dead_files.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "bug-scan",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/bug_scan.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/bug_scan.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "diag-render",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_render.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/diag_render.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "audit-chat-ui",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/audit_chat_ui.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/audit_chat_ui.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "smoke-chat-modules",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/smoke_chat_modules.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/smoke_chat_modules.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "verify-chat-markers",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/verify_chat_markers.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/verify_chat_markers.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-chat-modules-access",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/client_db.py app/client_routes.py app/templates/client_hub.html .vscode/tasks.json .vscode/smoke_chat_modules.py && git diff --cached --stat && git commit -m 'feat(hub): team chat panel + per-client module opt-out + user-account access control' && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && set -e && git add app/client_db.py app/client_routes.py app/templates/client_hub.html .vscode/tasks.json scripts/smoke_chat_modules.py && git diff --cached --stat && git commit -m 'feat(hub): team chat panel + per-client module opt-out + user-account access control'",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "fix-logins-now",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/fix_logins_now.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/fix_logins_now.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "cleanup-diff-snapshot",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/cleanup_diff_snapshot.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/cleanup_diff_snapshot.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "restore-landing-inspect",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/restore_landing_inspect.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/restore_landing_inspect.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-susan-fix",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/push_susan_fix.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/push_susan_fix.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-login-live",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/probe_login_live.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/probe_login_live.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "dump-live-clients",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/dump_live_clients.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/dump_live_clients.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "force-fix-logins",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/force_fix_logins.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/force_fix_logins.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "full-admin-smoke",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/full_admin_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/MedPharma/scripts/full_admin_smoke.py"],
+            "options": {"cwd": "/workspaces/MedPharma"}
         },
         {
             "label": "state-check",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/state_check.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/MedPharma/scripts/state_check.py"],
+            "options": {"cwd": "/workspaces/MedPharma"}
         },
         {
             "label": "trigger-import",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/trigger_import.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/MedPharma/scripts/trigger_import.py"],
+            "options": {"cwd": "/workspaces/MedPharma"}
         },
         {
             "label": "auth-smoke",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"}
+            "args": ["/workspaces/MedPharma/scripts/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/MedPharma"}
         },
         {
             "label": "inspect-seed",
             "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/inspect_seed.sh",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "bash /workspaces/MedPharma/scripts/inspect_seed.sh",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "git-log-short-cat",
             "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/git_log_short.sh",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "bash /workspaces/MedPharma/scripts/git_log_short.sh",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "copy-seed-into-app",
             "type": "shell",
-            "command": "bash /workspaces/CVOPro/.vscode/copy_seed.sh",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "bash /workspaces/MedPharma/scripts/copy_seed.sh",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "wait-for-deploy-v2",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_deploy_v2.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/wait_for_deploy_v2.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "poll-csv-progress",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/poll_csv_progress.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/poll_csv_progress.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "local-hunt-FL-quality",
             "type": "shell",
-            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=50 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=50 python3 /workspaces/MedPharma/scripts/local_hunt.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "local-hunt-FL-quality-25",
             "type": "shell",
-            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 VERIFY_DELIVERABILITY=0 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "QUALITY_FIRST=1 HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 VERIFY_DELIVERABILITY=0 python3 /workspaces/MedPharma/scripts/local_hunt.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-sos-site",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && python3 -c 'import asyncio; from app.sos_lookup import find_sunbiz_emails; from app.site_search import find_emails_via_site_search; print(\"sunbiz:\", asyncio.run(find_sunbiz_emails(\"ACCESS MEDICAL LABORATORIES INC\", \"FL\"))[:2]); print(\"site:\", asyncio.run(find_emails_via_site_search(\"accessmedlab.com\", \"ACCESS MEDICAL\"))[:2])'",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && python3 -c 'import asyncio; from app.sos_lookup import find_sunbiz_emails; from app.site_search import find_emails_via_site_search; print(\"sunbiz:\", asyncio.run(find_sunbiz_emails(\"ACCESS MEDICAL LABORATORIES INC\", \"FL\"))[:2]); print(\"site:\", asyncio.run(find_emails_via_site_search(\"accessmedlab.com\", \"ACCESS MEDICAL\"))[:2])'",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-acc-enhancements",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/site_search.py app/sos_lookup.py app/bulk_prospector.py && git commit -m 'feat: site-restricted bing crawl + FL Sunbiz officer/email lookup' -- app/site_search.py app/sos_lookup.py app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && set -e && git add app/site_search.py app/sos_lookup.py app/bulk_prospector.py && git commit -m 'feat: site-restricted bing crawl + FL Sunbiz officer/email lookup' -- app/site_search.py app/sos_lookup.py app/bulk_prospector.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "smoke-imports",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && pip install -q dnspython >/dev/null 2>&1; python3 -c 'from app import bulk_prospector, sos_lookup, last_resort, email_deliverability, site_search, directory_emails; print(\"imports OK\")'",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && pip install -q dnspython >/dev/null 2>&1; python3 -c 'from app import bulk_prospector, sos_lookup, last_resort, email_deliverability, site_search, directory_emails; print(\"imports OK\")'",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-mega-accuracy",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git commit -m 'feat: multi-state SoS + wayback + person-site + verified LI + SMTP deliverability' -- app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && set -e && git add app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt && git commit -m 'feat: multi-state SoS + wayback + person-site + verified LI + SMTP deliverability' -- app/sos_lookup.py app/last_resort.py app/email_deliverability.py app/bulk_prospector.py requirements.txt",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-os-fix",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/bulk_prospector.py && git commit -m 'fix: use _os alias for VERIFY_DELIVERABILITY env read' -- app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && set -e && git add app/bulk_prospector.py && git commit -m 'fix: use _os alias for VERIFY_DELIVERABILITY env read' -- app/bulk_prospector.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-quality-first",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/email_finder.py app/directory_emails.py app/bulk_prospector.py .vscode/local_hunt.py && git commit -m 'feat: directory fallback + improved extraction + QUALITY_FIRST mode' -- app/email_finder.py app/directory_emails.py app/bulk_prospector.py .vscode/local_hunt.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && set -e && git add app/email_finder.py app/directory_emails.py app/bulk_prospector.py scripts/local_hunt.py && git commit -m 'feat: directory fallback + improved extraction + QUALITY_FIRST mode' -- app/email_finder.py app/directory_emails.py app/bulk_prospector.py scripts/local_hunt.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-whois",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_whois.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_whois.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-clia",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_clia.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_clia.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-clia2",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_clia2.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_clia2.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-pubmed",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_pubmed.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_pubmed.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-accounts",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_accounts.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_accounts.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-leads",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_leads.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_leads.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-hub-html",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_hub_html.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_hub_html.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-search-engines",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_search_engines.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_search_engines.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-brave",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/probe_brave.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/probe_brave.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "test-backup-people",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/test_backup_people.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/test_backup_people.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "wait-for-deploy",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/wait_for_deploy.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/wait_for_deploy.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "local-hunt-FL-clinical",
             "type": "shell",
-            "command": "HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "HUNT_STATE=FL HUNT_SPECIALTY=clinical HUNT_LIMIT=25 python3 /workspaces/MedPharma/scripts/local_hunt.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "local-hunt-FL-pathology",
             "type": "shell",
-            "command": "HUNT_STATE=FL HUNT_SPECIALTY=pathology HUNT_LIMIT=25 python3 /workspaces/CVOPro/.vscode/local_hunt.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "HUNT_STATE=FL HUNT_SPECIALTY=pathology HUNT_LIMIT=25 python3 /workspaces/MedPharma/scripts/local_hunt.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "git-log-recent",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git log --oneline -10 && echo --- && git ls-remote origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git log --oneline -10 && echo --- && git ls-remote origin main",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "test-resolver",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/test_resolver.py",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/test_resolver.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-resolver-chain",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: Brave+DDG chain for profile resolver, retry negatives, fresh cache' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: Brave+DDG chain for profile resolver, retry negatives, fresh cache' -- app/linkedin_resolver.py app/bulk_prospector.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-employee-fallback",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: company-page + employee LinkedIn fallback when DM has no profile' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: company-page + employee LinkedIn fallback when DM has no profile' -- app/linkedin_resolver.py app/bulk_prospector.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-real-profile-resolver",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: only emit social URLs for verified real profiles (Brave-resolved)' -- app/linkedin_resolver.py app/bulk_prospector.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/linkedin_resolver.py app/bulk_prospector.py && git commit -m 'feat: only emit social URLs for verified real profiles (Brave-resolved)' -- app/linkedin_resolver.py app/bulk_prospector.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-bing-social-fix",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/social_finder.py app/linkedin_finder.py && git commit -m 'fix: switch social URLs to Bing site-search (no consent wall, broader matches)' -- app/social_finder.py app/linkedin_finder.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/social_finder.py app/linkedin_finder.py && git commit -m 'fix: switch social URLs to Bing site-search (no consent wall, broader matches)' -- app/social_finder.py app/linkedin_finder.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-empty-accounts-fix",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/templates/client_hub.html && git commit -m 'fix: lazy-load leads iframe + always reload on Lead Source click' -- app/templates/client_hub.html && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/templates/client_hub.html && git commit -m 'fix: lazy-load leads iframe + always reload on Lead Source click' -- app/templates/client_hub.html",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-keepalive",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add -f .github/workflows/keep-alive.yml app/templates/client_hub.html && git status --short && git commit -m 'fix: keep service warm via GH Actions cron + 60s login retry' --allow-empty && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add -f .github/workflows/keep-alive.yml app/templates/client_hub.html && git status --short && git commit -m 'fix: keep service warm via GH Actions cron + 60s login retry' --allow-empty",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "wake-server-now",
             "type": "shell",
             "command": "echo 'Waking medpharma-hub...' && for i in 1 2 3 4 5 6 7 8 9 10 11 12; do CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://medpharma-hub.onrender.com/healthz || echo 000); echo \"Attempt $i: HTTP $CODE\"; if [ \"$CODE\" = \"200\" ]; then echo 'Server is awake'; exit 0; fi; sleep 6; done; echo 'Still warming...'",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "trigger-keepalive-workflow",
             "type": "shell",
             "command": "gh workflow run keep-alive.yml --repo amanda858/MedPharma 2>&1 || echo 'gh CLI not authed - workflow will run on 10-min schedule'",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "wait-90",
             "type": "shell",
             "command": "sleep 90 && echo done",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "git-push-hub-fix",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git add app/hub_app.py && git diff --cached --stat && git commit -m 'feat(hunt): allow /api/prospect/* without auth (read-only public NPPES)' -- app/hub_app.py && git push origin main",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "cd /workspaces/MedPharma && git add app/hub_app.py && git diff --cached --stat && git commit -m 'feat(hunt): allow /api/prospect/* without auth (read-only public NPPES)' -- app/hub_app.py",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "diag-hunt-e2e",
             "type": "shell",
-            "command": "python3 /workspaces/CVOPro/.vscode/diag_hunt_e2e.py 2>&1 | tee /tmp/hunt_e2e.log",
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "command": "python3 /workspaces/MedPharma/scripts/diag_hunt_e2e.py 2>&1 | tee /tmp/hunt_e2e.log",
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "probe-urls",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/probe_urls.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/probe_urls.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "diag-linkedin",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_linkedin.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_linkedin.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -441,9 +441,9 @@
             "label": "diag-linkedin-raw",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_linkedin_raw.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_linkedin_raw.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -451,9 +451,9 @@
             "label": "diag-prospector",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_prospector.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_prospector.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -461,9 +461,9 @@
             "label": "diag-playbook",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_playbook.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_playbook.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -471,9 +471,9 @@
             "label": "diag-full-local",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_full_local.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_full_local.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -481,9 +481,9 @@
             "label": "diag-domain-filter",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_domain_filter.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_domain_filter.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -491,9 +491,9 @@
             "label": "diag-npi-local",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_npi_local.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_npi_local.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -501,27 +501,27 @@
             "label": "diag-verify-local",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/diag_verify_local.py"],
+            "args": ["/workspaces/MedPharma/scripts/diag_verify_local.py"],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
         {
             "label": "deploy-trigger-empty-commit",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git commit --allow-empty -m \"chore: trigger render deploy\" && git push origin main",
+            "command": "cd /workspaces/MedPharma && git commit --allow-empty -m \"chore: trigger render deploy\"",
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
         {
             "label": "git-status-short",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && git status --short --branch",
+            "command": "cd /workspaces/MedPharma && git status --short --branch",
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -530,10 +530,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/.vscode/poll_readiness.py"
+                "/workspaces/MedPharma/scripts/poll_readiness.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -542,10 +542,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/.vscode/count_final.py"
+                "/workspaces/MedPharma/scripts/count_final.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -554,10 +554,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/rescore_now.py"
+                "/workspaces/MedPharma/rescore_now.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -566,10 +566,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/import_to_hub.py"
+                "/workspaces/MedPharma/import_to_hub.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -577,32 +577,32 @@
             "label": "check-csv-size",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/check_csv_size.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/check_csv_size.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "git-check",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/git_check.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/git_check.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "auth-smoke",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "auth-smoke",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/auth_smoke.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
+            "args": ["/workspaces/MedPharma/scripts/auth_smoke.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
@@ -610,10 +610,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/.vscode/verify_samples.py"
+                "/workspaces/MedPharma/scripts/verify_samples.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -621,38 +621,34 @@
             "label": "probe-urls",
             "type": "shell",
             "command": "python3",
-            "args": ["/workspaces/CVOPro/.vscode/probe_urls.py"],
-            "options": {"cwd": "/workspaces/CVOPro"},
-            "problemMatcher": []
-        },
-                "cwd": "/workspaces/CVOPro"
-            },
+            "args": ["/workspaces/MedPharma/scripts/probe_urls.py"],
+            "options": {"cwd": "/workspaces/MedPharma"},
             "problemMatcher": []
         },
         {
             "label": "push-excel-upload-deploy-fix",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add app/client_routes.py .vscode/tasks.json && git commit -m \"fix: auto-detect excel import category and stabilize deploy task\" -- app/client_routes.py .vscode/tasks.json && git push origin main",
+            "command": "cd /workspaces/MedPharma && set -e && git add app/client_routes.py .vscode/tasks.json && git commit -m \"fix: auto-detect excel import category and stabilize deploy task\" -- app/client_routes.py .vscode/tasks.json",
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
         {
             "label": "push-rule-intercept-module",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add rule_intercept.py && git commit -m \"feat: add deterministic rule intercept engine for routing\" -- rule_intercept.py && git push origin main",
+            "command": "cd /workspaces/MedPharma && set -e && git add rule_intercept.py && git commit -m \"feat: add deterministic rule intercept engine for routing\" -- rule_intercept.py",
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
         {
             "label": "push-daily-ops-solution",
             "type": "shell",
-            "command": "cd /workspaces/CVOPro && set -e && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" -- run_daily_ops_now.py .vscode/tasks.json README.md && git push origin main",
+            "command": "cd /workspaces/MedPharma && set -e && git add run_daily_ops_now.py .vscode/tasks.json README.md && git commit -m \"feat: add robust daily ops readiness runner\" -- run_daily_ops_now.py .vscode/tasks.json README.md",
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -661,10 +657,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/test_all_lab_leads_excel.py"
+                "/workspaces/MedPharma/test_all_lab_leads_excel.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         },
@@ -673,10 +669,10 @@
             "type": "shell",
             "command": "python3",
             "args": [
-                "/workspaces/CVOPro/.vscode/check_landing2.py"
+                "/workspaces/MedPharma/scripts/check_landing2.py"
             ],
             "options": {
-                "cwd": "/workspaces/CVOPro"
+                "cwd": "/workspaces/MedPharma"
             },
             "problemMatcher": []
         }

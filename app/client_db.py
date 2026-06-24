@@ -2373,6 +2373,36 @@ def update_claim(claim_id: int, data: dict):
             if f in data:
                 parts.append(f"{f}=?")
                 params.append(data[f])
+        # Keep BalanceRemaining in sync when a money field is edited but the
+        # caller didn't explicitly set a balance. Without this, changing a
+        # claim's Charge/Adjustment/Paid leaves the old AR balance behind, so
+        # the dashboard, AR worklist and productivity reports keep showing a
+        # stale outstanding amount. Mirror the import formula:
+        # Balance = Charge - Adjustment - Paid (never negative; zero once
+        # Paid/Closed).
+        # A status change matters too: flipping a claim to Paid/Closed must zero
+        # its AR, and re-opening it must restore the balance. Without this, a
+        # biller who only changes the status (no money field) leaves the old
+        # outstanding amount behind, so Outstanding AR never comes down.
+        money_edited = any(k in data for k in ("ChargeAmount", "AdjustmentAmount", "PaidAmount"))
+        status_changed = "ClaimStatus" in data
+        if (money_edited or status_changed) and "BalanceRemaining" not in data:
+            cur.execute("SELECT ChargeAmount, AdjustmentAmount, PaidAmount, ClaimStatus "
+                        "FROM claims_master WHERE id=?", (claim_id,))
+            cur_row = cur.fetchone()
+            if cur_row:
+                def _num(v):
+                    try:
+                        return float(v or 0)
+                    except (TypeError, ValueError):
+                        return 0.0
+                charge = _num(data.get("ChargeAmount", cur_row["ChargeAmount"]))
+                adjust = _num(data.get("AdjustmentAmount", cur_row["AdjustmentAmount"]))
+                paid = _num(data.get("PaidAmount", cur_row["PaidAmount"]))
+                status = data.get("ClaimStatus", cur_row["ClaimStatus"])
+                new_balance = 0.0 if status in ("Paid", "Closed") else max(charge - adjust - paid, 0.0)
+                parts.append("BalanceRemaining=?")
+                params.append(round(new_balance, 2))
         # Stamp BillDate the day a claim is first marked Billed/Submitted so the
         # report can reflect *when* billing happened. Only fill it if empty and the
         # caller didn't explicitly provide a BillDate.
@@ -2421,14 +2451,27 @@ def create_payment(data: dict) -> int:
              data.get("PayerType", "Primary"), data.get("CheckNumber", ""),
              data.get("ERA", ""), data.get("Notes", ""), data.get("PostedBy", ""),
              data.get("sub_profile", "")))
-        # Recalculate PaidAmount on claim
-        cur.execute("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE client_id=? AND ClaimKey=?",
+        # Recalculate PaidAmount + AR on the claim. Posted contractual
+        # adjustments must reduce the balance too, otherwise a fully resolved
+        # claim (payer pays part, writes off the rest) keeps showing phantom AR
+        # and the outstanding totals never come down. Canonical formula matches
+        # the import path: Balance = Charge - Adjustment - Paid (never negative),
+        # where Adjustment combines the claim-level adjustment and every posted
+        # payment adjustment.
+        cur.execute("""SELECT COALESCE(SUM(PaymentAmount),0), COALESCE(SUM(AdjustmentAmount),0)
+                       FROM payments WHERE client_id=? AND ClaimKey=?""",
                     (data["client_id"], data["ClaimKey"]))
-        total_paid = cur.fetchone()[0]
+        total_paid, posted_adj = cur.fetchone()
+        cur.execute("SELECT COALESCE(ChargeAmount,0), COALESCE(AdjustmentAmount,0) "
+                    "FROM claims_master WHERE client_id=? AND ClaimKey=?",
+                    (data["client_id"], data["ClaimKey"]))
+        crow = cur.fetchone()
+        charge, claim_adj = (crow[0], crow[1]) if crow else (0.0, 0.0)
+        new_balance = max(charge - claim_adj - posted_adj - total_paid, 0.0)
         cur.execute("""UPDATE claims_master SET PaidAmount=?,
-                       BalanceRemaining=MAX(0, ChargeAmount - ?),
+                       BalanceRemaining=?,
                        updated_at=? WHERE client_id=? AND ClaimKey=?""",
-                    (total_paid, total_paid, datetime.now().isoformat(),
+                    (total_paid, round(new_balance, 2), datetime.now().isoformat(),
                      data["client_id"], data["ClaimKey"]))
         conn.commit()
         pid = cur.lastrowid
@@ -2446,13 +2489,21 @@ def delete_payment(payment_id: int):
         conn.execute("DELETE FROM payments WHERE id=?", (payment_id,))
         if row:
             client_id, claim_key = row
-            cur.execute("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE client_id=? AND ClaimKey=?",
+            cur.execute("""SELECT COALESCE(SUM(PaymentAmount),0), COALESCE(SUM(AdjustmentAmount),0)
+                           FROM payments WHERE client_id=? AND ClaimKey=?""",
                         (client_id, claim_key))
-            total_paid = cur.fetchone()[0]
+            total_paid, posted_adj = cur.fetchone()
+            cur.execute("SELECT COALESCE(ChargeAmount,0), COALESCE(AdjustmentAmount,0) "
+                        "FROM claims_master WHERE client_id=? AND ClaimKey=?",
+                        (client_id, claim_key))
+            crow = cur.fetchone()
+            charge, claim_adj = (crow[0], crow[1]) if crow else (0.0, 0.0)
+            new_balance = max(charge - claim_adj - posted_adj - total_paid, 0.0)
             cur.execute("""UPDATE claims_master SET PaidAmount=?,
-                           BalanceRemaining=MAX(0, ChargeAmount - ?),
+                           BalanceRemaining=?,
                            updated_at=? WHERE client_id=? AND ClaimKey=?""",
-                        (total_paid, total_paid, datetime.now().isoformat(), client_id, claim_key))
+                        (total_paid, round(new_balance, 2), datetime.now().isoformat(),
+                         client_id, claim_key))
         conn.commit()
     finally:
         conn.close()
