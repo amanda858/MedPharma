@@ -2802,18 +2802,14 @@ def download_production_report(
     # ── Team summary rows ──────────────────────────────────────────────
     def _user_rows():
         if not by_user:
-            return "<tr><td colspan='10' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+            return "<tr><td colspan='6' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
         return "".join(
             f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
-            f"<td>{u.get('days_worked',0)}</td>"
-            f"<td>{u.get('total_entries',0)}</td>"
-            f"<td>{u.get('total_quantity',0)}</td>"
-            f"<td>{u.get('total_hours',0)}h</td>"
             f"<td>{u.get('claims_billed',0)}</td>"
             f"<td>${u.get('claims_billed_amount',0):,.2f}</td>"
+            f"<td>{u.get('claims_denied',0)}</td>"
             f"<td>{u.get('payments_posted',0)}</td>"
-            f"<td>${u.get('payments_amount',0):,.2f}</td>"
-            f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
+            f"<td>${u.get('payments_amount',0):,.2f}</td></tr>"
             for u in by_user
         )
 
@@ -2915,20 +2911,20 @@ def download_production_report(
 
   <div class="meta-bar">
     <span><b>Period:</b> {_esc(period_label)}</span>
-    <span><b>Total Entries:</b> {len(details)}</span>
-    <span><b>Users:</b> {len(by_user)}</span>
-    <span><b>Billed:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
-    <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
+    <span><b>Claims Submitted:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
     <span><b>Paid:</b> ${data.get('payments_total_amount', 0):,.2f}</span>
+    <span><b>Denied:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f})</span>
+    <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
+    <span><b>Rolling AR (pre-{_esc(str(data.get('rolling_ar_cutoff','')))}):</b> ${data.get('rolling_ar', 0):,.2f}</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
 
   {_flag_section()}
 
   <section class="section">
-    <h2>👥 Work Production by User</h2>
+    <h2>👥 Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Payments Posted</th><th>$ Paid</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Denied</th><th>Posted</th><th>$ Paid</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
   </section>

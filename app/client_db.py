@@ -2136,6 +2136,20 @@ def normalize_claim_statuses():
 # reports to see it.
 _PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
 
+# Production reporting window start. Claims with a DOS on/after this date are
+# "current production" (their Submitted / Paid / Denied / Posted activity shows
+# in the dated report). Anything dated before this — or carrying no usable DOS —
+# is legacy backlog whose still-open balance rolls up into a single "Rolling AR"
+# figure instead of muddying the current-period production numbers.
+_ROLLING_AR_DOS_CUTOFF = "2026-06-18"
+
+
+def _rolling_ar_cutoff_date():
+    try:
+        return date.fromisoformat(_ROLLING_AR_DOS_CUTOFF)
+    except (ValueError, TypeError):
+        return date(2026, 6, 18)
+
 
 def backfill_missing_bill_dates():
     """One-time (idempotent) migration: stamp a valid Bill Date on already-imported
@@ -6220,16 +6234,23 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                     alias_to_user.setdefault(a, uname)
 
         billed_by_user = {}
-        bill_conditions = ["COALESCE(BillDate,'')!=''", "TRIM(COALESCE(Owner,''))!=''"]
-        bill_p = []
+        denied_by_user = {}
+        # One pass over every Owner-attributed claim feeds both Submitted (claims
+        # with a Bill Date in the window) and Denied (claims denied in the window
+        # by Denied Date, falling back to Bill Date). Owner credits the biller.
+        attr_conditions = ["TRIM(COALESCE(Owner,''))!=''"]
+        attr_p = []
         if client_id and not self_scope:
-            bill_conditions.append("client_id=?")
-            bill_p.append(client_id)
-        bill_cond = "WHERE " + " AND ".join(bill_conditions)
+            attr_conditions.append("client_id=?")
+            attr_p.append(client_id)
+        attr_cond = "WHERE " + " AND ".join(attr_conditions)
         cur.execute(
-            f"SELECT TRIM(Owner) AS owner, substr(COALESCE(BillDate,''),1,10) AS bd, "
+            f"SELECT TRIM(Owner) AS owner, "
+            f"       substr(COALESCE(BillDate,''),1,10) AS bd, "
+            f"       substr(COALESCE(DeniedDate,''),1,10) AS dd, "
+            f"       COALESCE(ClaimStatus,'') AS st, "
             f"       COALESCE(ChargeAmount,0) AS amt "
-            f"FROM claims_master {bill_cond}", bill_p)
+            f"FROM claims_master {attr_cond}", attr_p)
         for r in cur.fetchall():
             owner_raw = str(r["owner"] or "").strip()
             if not owner_raw or owner_raw.lower() in _HIDDEN_ROSTER_USERS:
@@ -6242,21 +6263,41 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 resolved_l = alias_to_user.get(owner_l, owner_raw).lower()
                 if owner_l not in self_identities and resolved_l != self_user.lower():
                     continue
+            owner = alias_to_user.get(owner_raw.lower(), owner_raw)
+            amt = float(r["amt"] or 0)
+
+            # Submitted — counted by Bill Date inside the window.
             try:
                 bd = date.fromisoformat(str(r["bd"] or "").strip())
             except (ValueError, TypeError):
-                continue
-            if not (d_lo <= bd <= d_hi):
-                continue
-            owner = alias_to_user.get(owner_raw.lower(), owner_raw)
-            slot = billed_by_user.setdefault(
-                owner, {"claims_billed": 0, "claims_billed_amount": 0.0})
-            slot["claims_billed"] += 1
-            slot["claims_billed_amount"] += float(r["amt"] or 0)
+                bd = None
+            if bd is not None and d_lo <= bd <= d_hi:
+                slot = billed_by_user.setdefault(
+                    owner, {"claims_billed": 0, "claims_billed_amount": 0.0})
+                slot["claims_billed"] += 1
+                slot["claims_billed_amount"] += amt
+
+            # Denied — claims in a denied/appeals status (or carrying a Denied
+            # Date), counted by Denied Date when present, else Bill Date.
+            st = str(r["st"] or "").strip().lower()
+            dd_raw = str(r["dd"] or "").strip()
+            if st in ("denied", "appeals") or dd_raw:
+                dkey = None
+                for cand in (dd_raw, str(r["bd"] or "").strip()):
+                    try:
+                        dkey = date.fromisoformat(cand)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+                if dkey is not None and d_lo <= dkey <= d_hi:
+                    dslot = denied_by_user.setdefault(
+                        owner, {"claims_denied": 0, "claims_denied_amount": 0.0})
+                    dslot["claims_denied"] += 1
+                    dslot["claims_denied_amount"] += amt
 
         # Make sure a biller with no logged production work still appears, then
-        # zero-fill billed stats on every row.
-        for owner in billed_by_user:
+        # zero-fill billed/denied stats on every row.
+        for owner in set(billed_by_user) | set(denied_by_user):
             if owner not in by_user_map:
                 by_user_map[owner] = {
                     "username": owner,
@@ -6271,6 +6312,44 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             slot = billed_by_user.get(uname, {})
             urow["claims_billed"] = int(slot.get("claims_billed", 0))
             urow["claims_billed_amount"] = round(float(slot.get("claims_billed_amount", 0)), 2)
+            dslot = denied_by_user.get(uname, {})
+            urow["claims_denied"] = int(dslot.get("claims_denied", 0))
+            urow["claims_denied_amount"] = round(float(dslot.get("claims_denied_amount", 0)), 2)
+
+        # ── Rolling AR (legacy backlog) ───────────────────────────────────
+        # Still-open balance on claims dated BEFORE the production window start
+        # (or with no usable DOS). This is the carried-forward A/R that isn't
+        # part of current-period production — surfaced as one rolling figure.
+        rolling_ar = 0.0
+        ar_cutoff = _rolling_ar_cutoff_date()
+        ar_conditions = ["COALESCE(BalanceRemaining,0) > 0"]
+        ar_p = []
+        if client_id and not self_scope:
+            ar_conditions.append("client_id=?")
+            ar_p.append(client_id)
+        ar_cond = "WHERE " + " AND ".join(ar_conditions)
+        cur.execute(
+            f"SELECT TRIM(COALESCE(Owner,'')) AS owner, "
+            f"       substr(COALESCE(DOS,''),1,10) AS dos, "
+            f"       COALESCE(BalanceRemaining,0) AS bal "
+            f"FROM claims_master {ar_cond}", ar_p)
+        for r in cur.fetchall():
+            dos_raw = str(r["dos"] or "").strip()
+            try:
+                dosd = date.fromisoformat(dos_raw)
+                if dosd >= ar_cutoff:
+                    continue  # current-window DOS — not rolling backlog
+            except (ValueError, TypeError):
+                pass  # blank / unparseable DOS counts as legacy backlog
+            if self_scope:
+                owner_l = str(r["owner"] or "").strip().lower()
+                if not owner_l:
+                    continue
+                resolved_l = alias_to_user.get(owner_l, owner_l).lower()
+                if owner_l not in self_identities and resolved_l != self_user.lower():
+                    continue
+            rolling_ar += float(r["bal"] or 0)
+        rolling_ar = round(rolling_ar, 2)
 
         # ── Imported data attributed to each uploader ─────────────────────
         # When a user uploads a claims / credentialing / enrollment / EDI
@@ -6382,6 +6461,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             u["claims_uploaded_amount"] = float(u.get("claims_uploaded_amount") or 0)
             u["claims_billed"] = int(u.get("claims_billed") or 0)
             u["claims_billed_amount"] = float(u.get("claims_billed_amount") or 0)
+            u["claims_denied"] = int(u.get("claims_denied") or 0)
+            u["claims_denied_amount"] = float(u.get("claims_denied_amount") or 0)
             u["credentialing_uploaded"] = int(u.get("credentialing_uploaded") or 0)
             u["enrollment_uploaded"] = int(u.get("enrollment_uploaded") or 0)
             u["edi_uploaded"] = int(u.get("edi_uploaded") or 0)
@@ -6408,6 +6489,10 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "uploads_total_amount": round(sum(float(u.get("claims_uploaded_amount") or 0) for u in by_user), 2),
         "billed_total_count": sum(int(u.get("claims_billed") or 0) for u in by_user),
         "billed_total_amount": round(sum(float(u.get("claims_billed_amount") or 0) for u in by_user), 2),
+        "denied_total_count": sum(int(u.get("claims_denied") or 0) for u in by_user),
+        "denied_total_amount": round(sum(float(u.get("claims_denied_amount") or 0) for u in by_user), 2),
+        "rolling_ar": rolling_ar,
+        "rolling_ar_cutoff": _ROLLING_AR_DOS_CUTOFF,
         "scope_username": self_user or None,
         "is_self_view": self_scope,
         "time_management_flags": flags,
