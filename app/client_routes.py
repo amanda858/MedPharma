@@ -59,6 +59,7 @@ from app.client_db import (
     count_unread_notifications, mark_notification_read,
     mark_all_notifications_read, delete_notification, delete_notifications,
     save_eod_report, list_eod_reports, get_eod_report,
+    get_team_activity_rollup,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
     list_leads, create_lead, update_lead,
@@ -3109,6 +3110,7 @@ async def upload_file(
     category: str = Form("General"),
     description: str = Form(""),
     client_id: Optional[int] = Form(None),
+    sub_profile: Optional[str] = Form(None),
     hub_session: Optional[str] = Cookie(None),
 ):
     user = _require_user(hub_session)
@@ -3200,9 +3202,12 @@ async def upload_file(
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
         import_category = effective_category
         _uploader = user.get("username") or ""
+        _sub_profile = (sub_profile or "").strip()
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
+                imported, import_errors = _import_claims_from_excel(
+                    content, ext, scope, uploaded_by=_uploader,
+                    default_sub_profile=_sub_profile)
             elif effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
@@ -3320,6 +3325,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         "yesterday": {"count": 0, "charged": 0.0},
         "this_week": {"count": 0, "charged": 0.0},
         "this_month": {"count": 0, "charged": 0.0},
+        "all_time": {"count": 0, "charged": 0.0},
     }
     ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
               f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
@@ -3330,6 +3336,9 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         except Exception:
             continue
         amt = float(r["ChargeAmount"] or 0)
+        # All-time billed since inception — every claim line with a Bill Date.
+        billing_activity["all_time"]["count"] += 1
+        billing_activity["all_time"]["charged"] += amt
         if d == _today:
             billing_activity["today"]["count"] += 1
             billing_activity["today"]["charged"] += amt
@@ -3449,6 +3458,7 @@ async def import_excel(
     file: UploadFile = FastAPIFile(...),
     category: str = Form("Claims"),
     client_id: Optional[int] = Form(None),
+    sub_profile: Optional[str] = Form(None),
     hub_session: Optional[str] = Cookie(None),
 ):
     """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI).
@@ -3493,7 +3503,9 @@ async def import_excel(
 
     try:
         if category == "Claims":
-            imported, errors = _import_claims_from_excel(content, ext, scope, uploaded_by=user["username"])
+            imported, errors = _import_claims_from_excel(
+                content, ext, scope, uploaded_by=user["username"],
+                default_sub_profile=(sub_profile or "").strip())
         elif category == "Credentialing":
             imported, errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "Enrollment":
@@ -4368,7 +4380,8 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int, uploaded_by
     return imported, errors
 
 
-def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
+def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = "",
+                              default_sub_profile: str = ""):
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.
@@ -4645,6 +4658,13 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
             # Normalize claim status to standard values
             raw_status = mapped.get("ClaimStatus", "Intake")
             mapped["ClaimStatus"] = _normalize_status(raw_status)
+
+            # Inherit the uploader's active sub-profile when the file itself
+            # doesn't carry a sub_profile column. Without this, imported claims
+            # default to '' and stay hidden whenever the user is viewing a
+            # specific sub-profile in the Claims Queue ("ghost" claims).
+            if not str(mapped.get("sub_profile", "")).strip() and str(default_sub_profile or "").strip():
+                mapped["sub_profile"] = str(default_sub_profile).strip()
 
             # Derive the outstanding balance when the source file has no balance
             # column. Without this a claims report that lists charges/payments but
@@ -5470,6 +5490,26 @@ def eod_archive_view(report_id: int,
     if not rec:
         raise HTTPException(404, "EOD report not found")
     return rec
+
+
+@router.get("/reports/eod/rollup")
+def eod_rollup(bucket: str = "day", count: int = 0,
+               client_id: Optional[int] = None,
+               hub_session: Optional[str] = Cookie(None)):
+    """Team activity rolled up per day / per week / per month.
+
+    Aggregates the same work the nightly EOD report summarizes, bucketed across
+    time so admins can spot trends. Admin/staff only. `bucket` is one of
+    day|week|month. `count` defaults to a sensible number per bucket when 0.
+    """
+    _require_admin(hub_session)
+    b = (bucket or "day").lower().strip()
+    if b not in ("day", "week", "month"):
+        b = "day"
+    if not count or int(count) <= 0:
+        count = {"day": 14, "week": 8, "month": 6}[b]
+    count = max(1, min(int(count), 366))
+    return get_team_activity_rollup(bucket=b, count=count, client_id=client_id)
 
 
 # ─── Audit Log ────────────────────────────────────────────────────────────────
