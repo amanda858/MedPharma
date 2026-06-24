@@ -194,7 +194,53 @@ def test_existing_bill_date_is_preserved_on_reimport(hub_env):
     ]
     client_routes._import_claims_from_excel(_csv_bytes(second), ".csv", cid)
     assert _bill_dates(client_db, cid)["CLM5004"] == "2026-02-15"
+
+
+def test_backfill_coerces_non_iso_and_repairs_malformed_dates(hub_env):
+    """The startup backfill must always produce ISO Bill Dates the dated reports
+    can parse: a non-ISO DOS falls through to the creation date, and an existing
+    malformed Bill Date on a billed claim is repaired — while pre-bill claims and
+    valid dates are left untouched. Must also be idempotent."""
+    from datetime import date
+    client_db, _ = hub_env
+    cid = _make_client(client_db)
+
+    conn = client_db.get_db()
+    conn.executemany(
+        "INSERT INTO claims_master (client_id,ClaimKey,DOS,ClaimStatus,BillDate,created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        [
+            (cid, "BK_A", "2026-06-18", "Billed/Submitted", "", "2026-06-01 10:00:00"),
+            (cid, "BK_B", "", "Billed/Submitted", "", "2026-06-02 10:00:00"),
+            (cid, "BK_C", "2026-06-19", "Intake", "", "2026-06-03 10:00:00"),
+            (cid, "BK_D", "2026-06-20", "Paid", "2026-06-21", "2026-06-04 10:00:00"),
+            (cid, "BK_E", "06/22/2026", "Rejected", "", "2026-06-05 10:00:00"),
+            (cid, "BK_F", "2026-06-23", "Billed/Submitted", "06/15/2026", "2026-06-06 10:00:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    first = client_db.backfill_missing_bill_dates()
+    assert first == 4, "blank x2 + non-ISO blank + malformed = 4 billed rows repaired"
+    assert client_db.backfill_missing_bill_dates() == 0, "must be idempotent"
+
+    conn = client_db.get_db()
+    got = {
+        r["ClaimKey"]: (r["BillDate"] or "")
+        for r in conn.execute(
+            "SELECT ClaimKey, BillDate FROM claims_master WHERE client_id=?", (cid,)
+        )
+    }
+    conn.close()
+
+    assert got["BK_A"] == "2026-06-18"          # ISO DOS preserved
+    assert got["BK_B"] == "2026-06-02"          # no DOS -> creation date
+    assert got["BK_C"] == ""                    # pre-bill stays blank
+    assert got["BK_D"] == "2026-06-21"          # valid date untouched
+    assert got["BK_E"] == "2026-06-05"          # non-ISO DOS -> creation date (ISO)
+    assert got["BK_F"] == "2026-06-23"          # malformed -> repaired from DOS
+
     for key, bd in got.items():
         if bd:
             date.fromisoformat(bd)  # raises if any stamped value is not ISO
-

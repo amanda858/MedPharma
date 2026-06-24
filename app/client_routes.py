@@ -2490,12 +2490,13 @@ def _start_production_report_job(job_id: str, user: dict):
             append_job_event(job_id, "start", "Starting production report build")
 
             role = (payload.get("requested_by_role") or user.get("role") or "").lower()
-            if role in ("admin", "staff"):
-                scope = requested_client_id
+            # Admins/Eric → comprehensive roll-up for the (optional) selected
+            # client. Everyone else → their own self-view across all accounts.
+            if role == "admin" or _is_eric(user):
+                report = get_production_report(requested_client_id, start_date, end_date)
             else:
-                scope = user.get("id")
-
-            report = get_production_report(scope, start_date, end_date)
+                report = get_production_report(None, start_date, end_date,
+                                               username=user.get("username"))
 
             update_job_progress(job_id, 90)
             result = {
@@ -2758,12 +2759,15 @@ def production_report(client_id: Optional[int] = None,
                       end_date: Optional[str] = None,
                       hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    # Compile strictly for the selected client. We deliberately do NOT fall back
-    # to all-client data when the selected client has no rows — doing so made the
-    # per-client report identical to the comprehensive report and hid whether a
-    # client actually had production logged. An empty client now reports empty.
-    report = get_production_report(scope, start_date, end_date)
+    # Admins and Eric get the comprehensive roll-up (every biller, combined,
+    # optionally narrowed to one client). Every other user (Susan / Melissa /
+    # Jessica) gets a self-view: only what THEY billed, posted, and were paid,
+    # across whichever accounts they work.
+    if user.get("role") == "admin" or _is_eric(user):
+        report = get_production_report(client_id, start_date, end_date)
+    else:
+        report = get_production_report(None, start_date, end_date,
+                                       username=user.get("username"))
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
@@ -2778,11 +2782,13 @@ def download_production_report(
 ):
     """Return a branded, printable HTML production report with MedPharma logo."""
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
-    # Strictly scoped to the selected client — no all-client fallback (see
-    # production_report above), so the printable report matches what the
-    # on-screen per-client report shows.
-    data = get_production_report(scope, start_date, end_date)
+    # Same scoping as the on-screen report: admins/Eric get the combined
+    # roll-up; a biller gets only their own production.
+    if user.get("role") == "admin" or _is_eric(user):
+        data = get_production_report(client_id, start_date, end_date)
+    else:
+        data = get_production_report(None, start_date, end_date,
+                                     username=user.get("username"))
 
     from html import escape as _esc
 
@@ -2911,8 +2917,9 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
     <span><b>Users:</b> {len(by_user)}</span>
-    <span><b>Claims Billed:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
-    <span><b>Payments Posted:</b> {data.get('payments_total_count', 0)} (${data.get('payments_total_amount', 0):,.2f})</span>
+    <span><b>Billed:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
+    <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
+    <span><b>Paid:</b> ${data.get('payments_total_amount', 0):,.2f}</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
 
@@ -2921,7 +2928,7 @@ def download_production_report(
   <section class="section">
     <h2>👥 Work Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Payments Posted</th><th>$ Paid</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
   </section>
