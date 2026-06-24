@@ -76,6 +76,7 @@ from app.notifications import (
     send_daily_account_summary,
 )
 from rule_intercept import intercept_excel_upload
+from app.config import business_today, business_today_iso, business_now
 
 router = APIRouter(prefix="/hub/api")
 
@@ -1960,7 +1961,11 @@ def add_payment(claim_key: str, body: PaymentIn, hub_session: Optional[str] = Co
     data = body.model_dump()
     data["client_id"] = cid
     data["ClaimKey"] = claim_key
+    # Attribute the posting to the logged-in user so payment posting shows up in
+    # the production report / EOD tally (this is part of how the team is paid).
+    data["PostedBy"] = user.get("username") or ""
     pid = create_payment(data)
+    notify_activity(user["username"], "posted payment", "Payments", f"{claim_key}")
     return {"id": pid, "ok": True}
 
 
@@ -2442,8 +2447,6 @@ def _start_production_report_job(job_id: str, user: dict):
                 scope = user.get("id")
 
             report = get_production_report(scope, start_date, end_date)
-            if role in ("admin", "staff") and requested_client_id is not None and not (report.get("details") or []):
-                report = get_production_report(None, start_date, end_date)
 
             update_job_progress(job_id, 90)
             result = {
@@ -2707,12 +2710,11 @@ def production_report(client_id: Optional[int] = None,
                       hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    # Compile strictly for the selected client. We deliberately do NOT fall back
+    # to all-client data when the selected client has no rows — doing so made the
+    # per-client report identical to the comprehensive report and hid whether a
+    # client actually had production logged. An empty client now reports empty.
     report = get_production_report(scope, start_date, end_date)
-    if user.get("role") in ("admin", "staff") and client_id is not None and not (report.get("details") or []):
-        report = get_production_report(None, start_date, end_date)
-        report["fallback_all_clients"] = True
-        report["selected_client_id"] = client_id
-        return report
     report["fallback_all_clients"] = False
     report["selected_client_id"] = client_id
     return report
@@ -2728,9 +2730,10 @@ def download_production_report(
     """Return a branded, printable HTML production report with MedPharma logo."""
     user = _require_user(hub_session)
     scope = client_id or _client_scope(user)
+    # Strictly scoped to the selected client — no all-client fallback (see
+    # production_report above), so the printable report matches what the
+    # on-screen per-client report shows.
     data = get_production_report(scope, start_date, end_date)
-    if user.get("role") in ("admin", "staff") and client_id is not None and not (data.get("details") or []):
-        data = get_production_report(None, start_date, end_date)
 
     from html import escape as _esc
 
@@ -2738,18 +2741,21 @@ def download_production_report(
     by_user  = data.get("by_user", [])
     by_cat   = data.get("by_category", [])
     details  = data.get("details", [])
+    pay_details = data.get("payment_details", [])
     flags    = data.get("time_management_flags", [])
 
     # ── Team summary rows ──────────────────────────────────────────────
     def _user_rows():
         if not by_user:
-            return "<tr><td colspan='6' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+            return "<tr><td colspan='8' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
         return "".join(
             f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
             f"<td>{u.get('days_worked',0)}</td>"
             f"<td>{u.get('total_entries',0)}</td>"
             f"<td>{u.get('total_quantity',0)}</td>"
             f"<td>{u.get('total_hours',0)}h</td>"
+            f"<td>{u.get('payments_posted',0)}</td>"
+            f"<td>${u.get('payments_amount',0):,.2f}</td>"
             f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
             for u in by_user
         )
@@ -2779,6 +2785,18 @@ def download_production_report(
             for d in details
         )
 
+    def _payment_rows():
+        if not pay_details:
+            return "<tr><td colspan='5' style='text-align:center;color:#9ca3af'>No payments posted in this period</td></tr>"
+        return "".join(
+            f"<tr><td>{_esc(str(pd.get('post_date','')))}</td>"
+            f"<td>{_esc(str(pd.get('username','')))}</td>"
+            f"<td>{_esc(str(pd.get('ClaimKey','')))}</td>"
+            f"<td>{_esc(str(pd.get('PayerType','') or ''))}</td>"
+            f"<td style='text-align:right'>${float(pd.get('PaymentAmount') or 0):,.2f}</td></tr>"
+            for pd in pay_details
+        )
+
     def _flag_section():
         if not flags:
             return ""
@@ -2797,7 +2815,7 @@ def download_production_report(
         </section>"""
 
     from datetime import date as _date
-    generated = _date.today().strftime("%B %d, %Y")
+    generated = business_today().strftime("%B %d, %Y")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2842,6 +2860,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
     <span><b>Users:</b> {len(by_user)}</span>
+    <span><b>Payments Posted:</b> {data.get('payments_total_count', 0)} (${data.get('payments_total_amount', 0):,.2f})</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
 
@@ -2850,8 +2869,16 @@ def download_production_report(
   <section class="section">
     <h2>👥 Work Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>💵 Payments Posted by User</h2>
+    <table>
+      <thead><tr><th>Post Date</th><th>Posted By</th><th>Claim</th><th>Payer</th><th>Amount</th></tr></thead>
+      <tbody>{_payment_rows()}</tbody>
     </table>
   </section>
 
@@ -3172,17 +3199,18 @@ async def upload_file(
     import_category = None
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
         import_category = effective_category
+        _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Credentialing":
-                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
             elif effective_category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "EDI":
-                imported, import_errors = _import_edi_from_excel(content, ext, scope)
+                imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
 
@@ -3283,7 +3311,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
     # much was billed recently (today / yesterday / last 7 days / this month),
     # respecting the sub_profile scope.
     from datetime import date as _ba_date
-    _today = _ba_date.today()
+    _today = business_today()
     _yesterday = _today.fromordinal(_today.toordinal() - 1)
     _week_start = _today.fromordinal(_today.toordinal() - 6)  # inclusive last 7 days
     _month_start = _today.replace(day=1)
@@ -3402,7 +3430,7 @@ def get_report(client_id: int, period: str = "all", sub_profile: Optional[str] =
         conn.close()
 
     result = {
-        "generated_at": date.today().isoformat(),
+        "generated_at": business_today_iso(),
         "period": period,
         "client": client_info,
         "practice_type": practice_type,
@@ -3465,13 +3493,13 @@ async def import_excel(
 
     try:
         if category == "Claims":
-            imported, errors = _import_claims_from_excel(content, ext, scope)
+            imported, errors = _import_claims_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "Credentialing":
-            imported, errors = _import_credentialing_from_excel(content, ext, scope)
+            imported, errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "Enrollment":
-            imported, errors = _import_enrollment_from_excel(content, ext, scope)
+            imported, errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "EDI":
-            imported, errors = _import_edi_from_excel(content, ext, scope)
+            imported, errors = _import_edi_from_excel(content, ext, scope, uploaded_by=user["username"])
         else:
             raise HTTPException(400, f"Unknown category: {category}")
     except HTTPException:
@@ -3896,7 +3924,7 @@ def _clean_val(val):
     return s
 
 
-def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
+def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4035,17 +4063,21 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE credentialing SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO credentialing
-                        (client_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("CredType","Initial"), mapped.get("Status","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
                          mapped.get("ApprovedDate",""), mapped.get("ExpirationDate",""),
-                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
+                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile",""),
+                         str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4059,7 +4091,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
+def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4177,17 +4209,21 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO enrollment
-                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("EnrollType","Enrollment"), mapped.get("Status","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
                          mapped.get("ApprovedDate",""), mapped.get("EffectiveDate",""),
-                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
+                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile",""),
+                         str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4200,7 +4236,7 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
+def _import_edi_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4305,18 +4341,21 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE edi_setup SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO edi_setup
-                        (client_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("EDIStatus","Not Started"), mapped.get("ERAStatus","Not Started"),
                          mapped.get("EFTStatus","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("GoLiveDate",""),
                          mapped.get("PayerID",""), mapped.get("Owner",""), mapped.get("Notes",""),
-                         mapped.get("sub_profile","")))
+                         mapped.get("sub_profile",""), str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4329,7 +4368,7 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
+def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.
@@ -4531,7 +4570,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
 
     conn = get_db()
     cur = conn.cursor()
-    today_str = _date.today().isoformat()
+    today_str = business_today_iso()
     imported = 0
     errors = []
     counter = 1
@@ -4627,8 +4666,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                     (client_id, ClaimKey, PatientID, PatientName, Payor, ProviderName, NPI,
                      DOS, CPTCode, Description, ChargeAmount, AllowedAmount, AdjustmentAmount,
                      PaidAmount, BalanceRemaining, ClaimStatus, BillDate, DeniedDate, PaidDate,
-                     DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate, sub_profile)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate, sub_profile,
+                     uploaded_by)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(client_id, ClaimKey) DO UPDATE SET
                         PatientID=excluded.PatientID, PatientName=excluded.PatientName,
                         Payor=excluded.Payor, ProviderName=excluded.ProviderName, NPI=excluded.NPI,
@@ -4639,7 +4679,8 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                         BillDate=excluded.BillDate, DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
                         DenialCategory=excluded.DenialCategory, DenialReason=excluded.DenialReason,
                         Owner=excluded.Owner, LastTouchedDate=excluded.LastTouchedDate,
-                        sub_profile=excluded.sub_profile, updated_at=CURRENT_TIMESTAMP
+                        sub_profile=excluded.sub_profile, uploaded_by=excluded.uploaded_by,
+                        updated_at=CURRENT_TIMESTAMP
                 """, (
                     client_id,
                     str(mapped.get("ClaimKey", "")),
@@ -4666,6 +4707,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                     today_str,
                     today_str,
                     str(mapped.get("sub_profile", "")),
+                    str(uploaded_by or ""),
                 ))
                 imported += 1
             except Exception as e:
@@ -4800,15 +4842,16 @@ async def replace_file(
     imported = 0
     import_errors = []
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
+        _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Credentialing":
-                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "EDI":
-                imported, import_errors = _import_edi_from_excel(content, ext, scope)
+                imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
 
@@ -4869,7 +4912,7 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
     finally:
         conn.close()
 
-    production_snapshot = get_user_production_snapshot(date.today().isoformat())
+    production_snapshot = get_user_production_snapshot()
     prod_users = production_snapshot.get("user_stats", [])
     prod_total_entries = production_snapshot.get("total_entries", 0)
     prod_total_hours = production_snapshot.get("total_hours", 0)
@@ -4959,7 +5002,7 @@ async def generate_ai_narrative(client_id: int, hub_session: Optional[str] = Coo
 PRACTICE: {client_info.get('company', 'Unknown')}
 SPECIALTY: {client_info.get('specialty', 'N/A')}
 PRACTICE TYPE: {practice_type or 'Standard'}
-REPORT DATE: {date.today().isoformat()}
+REPORT DATE: {business_today_iso()}
 
 CLAIMS OVERVIEW:
 - Total Claims: {cl.get('total', 0)}
@@ -5125,7 +5168,7 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
     story.append(Paragraph(f"MedPharma SC", styles['ReportTitle']))
     story.append(Paragraph(f"Revenue Cycle Management & Credentialing Report", styles['ReportSubtitle']))
     story.append(HRFlowable(width="100%", thickness=2, color=blue, spaceAfter=12))
-    story.append(Paragraph(f"<b>{company}</b> — {period_label} Report  |  Generated: {date.today().strftime('%B %d, %Y')}", styles['BodyText2']))
+    story.append(Paragraph(f"<b>{company}</b> — {period_label} Report  |  Generated: {business_today().strftime('%B %d, %Y')}", styles['BodyText2']))
     if practice_type:
         story.append(Paragraph(f"Practice Type: {practice_type}  |  Specialty: {client_info.get('specialty', 'N/A')}", styles['SmallGray']))
     story.append(Spacer(1, 12))
@@ -5284,12 +5327,12 @@ async def download_report_pdf(client_id: int, period: str = "all", sub_profile: 
     story.append(HRFlowable(width="100%", thickness=1, color=gray, spaceAfter=8))
     story.append(Paragraph(f"<i>This report was generated by MedPharma SC — Revenue Cycle Management & Credentialing Solutions</i>",
                            styles['SmallGray']))
-    story.append(Paragraph(f"<i>Confidential — For internal use only  |  {date.today().strftime('%B %d, %Y')}</i>", styles['SmallGray']))
+    story.append(Paragraph(f"<i>Confidential — For internal use only  |  {business_today().strftime('%B %d, %Y')}</i>", styles['SmallGray']))
 
     doc.build(story)
     buf.seek(0)
     safe_name = company.replace(" ", "_").replace("/", "-")
-    filename = f"{safe_name}_Report_{date.today().isoformat()}.pdf"
+    filename = f"{safe_name}_Report_{business_today_iso()}.pdf"
     return StreamingResponse(buf, media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename={filename}"})
 
@@ -5519,7 +5562,7 @@ def _rows_to_pdf_bytes(rows: list[dict], headers: list[str], title: str) -> byte
     story = [
         Paragraph(title or "Export", styles["ExportTitle"]),
         Paragraph(
-            f"Generated {datetime.now().strftime('%B %d, %Y %I:%M %p')} — "
+            f"Generated {business_now().strftime('%B %d, %Y %I:%M %p')} — "
             f"{len(rows)} row(s)",
             styles["ExportSub"],
         ),
@@ -5623,7 +5666,7 @@ def export_section(section: str, client_id: Optional[int] = None,
         else _SECTION_FALLBACK_HEADERS.get(section, ["id"])
     )
     label = _SECTION_LABELS.get(section, section.title())
-    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    stamp = business_now().strftime("%Y%m%d_%H%M")
     base_name = f"{section}_{stamp}"
 
     log_audit(scope, user.get("username", ""), "export",
@@ -6179,7 +6222,7 @@ def track_productivity(
     if user.get("role") not in ("admin", "staff"):
         username = user["username"]
     if not start_date:
-        start_date = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+        start_date = (business_now() - timedelta(days=14)).strftime("%Y-%m-%d")
     if not end_date:
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        end_date = business_today_iso()
     return get_productivity_report(start_date=start_date, end_date=end_date, username=username)

@@ -32,6 +32,8 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+from app.config import business_now, business_today_iso
+
 log = logging.getLogger("notifications")
 
 
@@ -1089,7 +1091,7 @@ def send_test_notification(triggered_by: str = "system") -> dict:
     Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE).
     Runs SYNCHRONOUSLY — no threading — to ensure errors are captured clearly."""
     cfg = _live_config()
-    now = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+    now = business_now().strftime("%Y-%m-%d %I:%M %p")
     subject = f"MedPharma Hub Test Notification — {now}"
     emails = cfg["NOTIFY_EMAILS"]
     phone = cfg["NOTIFY_PHONE"]
@@ -1347,7 +1349,7 @@ def send_daily_account_summary():
         log.error(f"Failed to fetch daily account summary data: {e}")
         return
 
-    now = datetime.now()
+    now = business_now()
     date_str = now.strftime("%m/%d/%Y")
     date_str_long = now.strftime("%B %d, %Y")
     day_of_week = now.strftime("%A")
@@ -1632,7 +1634,7 @@ def send_production_reminders():
     at 5:30 PM EST if they have NOT uploaded any production data today.
     """
     from datetime import date
-    today = date.today().isoformat()
+    today = business_today_iso()
 
     for username, email in USER_EMAILS.items():
         try:
@@ -1641,7 +1643,7 @@ def send_production_reminders():
                 log.info(f"Production reminder skipped for {username} — data already uploaded for {today}")
                 continue
 
-            subject = f"⏰ Reminder: Upload Your Daily Production — {datetime.now().strftime('%B %d, %Y')}"
+            subject = f"⏰ Reminder: Upload Your Daily Production — {business_now().strftime('%B %d, %Y')}"
             html_body = f"""
             <html>
             <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
@@ -1649,7 +1651,7 @@ def send_production_reminders():
                     <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 24px 28px;">
                         <h1 style="color: white; margin: 0; font-size: 20px; font-weight: 800;">⏰ Daily Production Reminder</h1>
                         <p style="color: rgba(255,255,255,0.9); margin: 6px 0 0; font-size: 14px;">
-                            {datetime.now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
+                            {business_now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
                         </p>
                     </div>
                     <div style="padding: 24px 28px;">
@@ -1663,14 +1665,14 @@ def send_production_reminders():
                             </p>
                         </div>
                         <p style="font-size: 13px; color: #64748b; line-height: 1.6; margin: 0 0 20px;">
-                            Log in to <a href="https://medpharmasc.com" style="color: #2563eb; text-decoration: none; font-weight: 600;">MedPharma Hub</a>
+                            Log in to <a href="{_hub_link('/hub')}" style="color: #2563eb; text-decoration: none; font-weight: 600;">MedPharma Hub</a>
                             and go to <strong>User Production</strong> to submit your work for today. You can either
                             log individual tasks or upload an Excel/PDF report.
                         </p>
                         <div style="text-align: center; margin: 24px 0;">
-                            <a href="https://medpharmasc.com" style="display:inline-block;background:#2563eb;color:white;padding:12px 32px;
+                            <a href="{_hub_link('/hub?panel=production')}" style="display:inline-block;background:#2563eb;color:white;padding:12px 32px;
                                 border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
-                                Log In & Upload Production
+                                Log In &amp; Upload Production
                             </a>
                         </div>
                         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
@@ -1851,7 +1853,38 @@ _EOD_EXCLUDE_USERS_DEFAULT = {
 # looks like a real product, not a debug dump.
 _MEDPHARMA_LOGO_URL = "https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
 _MEDPHARMA_SITE_URL = "https://medpharmasc.com"
-_MEDPHARMA_HUB_URL  = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
+try:
+    from app.config import HUB_BASE_URL as _HUB_BASE_URL
+except Exception:  # pragma: no cover - config should always import
+    _HUB_BASE_URL = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
+
+
+def _hub_origin() -> str:
+    """Return the Client Hub origin (scheme + host) with any trailing "/hub"
+    path and trailing slashes stripped, so deep links can be appended cleanly."""
+    base = (_HUB_BASE_URL or "").strip().rstrip("/")
+    if base.lower().endswith("/hub"):
+        base = base[:-4]
+    return base
+
+
+def _hub_link(path: str = "/hub") -> str:
+    """Build an ABSOLUTE Client Hub URL for use in email buttons.
+
+    Accepts paths such as "/hub", "/hub?chat=5" or "hub?panel=chat". The
+    configured HUB_BASE_URL may include or omit a trailing "/hub" — either
+    form yields a correct, non-duplicated link. Email clients cannot follow
+    relative URLs, so all email CTAs must go through this helper.
+    """
+    origin = _hub_origin()
+    p = path or "/hub"
+    if not p.startswith("/"):
+        p = "/" + p
+    return f"{origin}{p}"
+
+
+# Canonical absolute hub URL used in email footers/buttons.
+_MEDPHARMA_HUB_URL = _hub_link("/hub")
 
 
 def _eod_recipients() -> list[str]:
@@ -1891,6 +1924,7 @@ def _esc_html(s) -> str:
 # Friendly per-tab icons (matches the sidebar in client_hub.html).
 _EOD_TAB_ICONS = {
     "Claims":        "💼",
+    "Payments":      "💵",
     "Credentialing": "🎓",
     "Enrollment":    "📝",
     "EDI":           "🔌",
@@ -1907,6 +1941,7 @@ _EOD_TAB_ICONS = {
 # When a client doesn't have the module enabled, we suppress the column.
 _TAB_TO_MODULE = {
     "Claims":        "claims",
+    "Payments":      "claims",   # payment posting rides with claims/billing
     "Credentialing": "credentialing",
     "Enrollment":    "enrollment",
     "EDI":           "edi",
@@ -2039,6 +2074,20 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
     users_all = report.get("users", []) or []
     excluded = _eod_excluded_users()
 
+    def _money(v):
+        try:
+            return f"${float(v or 0):,.0f}"
+        except (TypeError, ValueError):
+            return "$0"
+
+    # "Since last Friday" window label for the billed banner.
+    week_start_iso = report.get("week_start", "") or ""
+    try:
+        from datetime import datetime as _dtw
+        week_start_long = _dtw.strptime(week_start_iso, "%Y-%m-%d").strftime("%a %b %d")
+    except Exception:
+        week_start_long = week_start_iso
+
     # Filter out admins/observers (default: Lexi + Eric + admin@).
     users = [
         u for u in users_all
@@ -2051,6 +2100,9 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f"MedPharma End-of-Day Team Report — {date_long}",
         "",
         f"Active operators today: {len(users)}",
+        f"Billed since {week_start_long}: {_money(headlines.get('billed_wtd_amount', 0))} "
+        f"({headlines.get('billed_wtd_count', 0)} claims) · today: {_money(headlines.get('billed_today_amount', 0))} "
+        f"({headlines.get('billed_today_count', 0)} claims)",
         f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
         f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
         f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
@@ -2060,10 +2112,18 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         "Per-operator breakdown:",
     ]
     for u in users:
+        _bw = (u.get("billed", {}) or {}).get("wtd", {}) or {}
+        _bt = (u.get("billed", {}) or {}).get("today", {}) or {}
+        _billed_txt = ""
+        if (_bw.get("amount") or 0) or (_bt.get("amount") or 0):
+            _billed_txt = (
+                f" — billed {_money(_bw.get('amount'))} since {week_start_long}"
+                f" ({_bw.get('count', 0)} claims) / {_money(_bt.get('amount'))} today"
+            )
         text_lines.append(
             f"\n* {u.get('contact_name') or u.get('username')} "
             f"<{u.get('email','')}> — {u.get('active_hours',0)}h active / "
-            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions"
+            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions{_billed_txt}"
         )
         for cname, cb in (u.get("clients") or {}).items():
             chunks = [f"{k}={v}" for k, v in cb.get("totals", {}).items() if v]
@@ -2108,6 +2168,30 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f'<tr>{ribbon_row1}</tr>'
         '<tr><td colspan="5" style="border-top:1px solid #e2e8f0;padding:0;line-height:0">&nbsp;</td></tr>'
         f'<tr>{ribbon_row2}</tr>'
+        '</table>'
+    )
+
+    # ── Billed banner — the headline number Eric/Amanda want at a glance:
+    #    how much was billed since last Friday, plus today's slice. ──
+    billed_wtd_amount = headlines.get("billed_wtd_amount", 0)
+    billed_wtd_count  = headlines.get("billed_wtd_count", 0)
+    billed_today_amount = headlines.get("billed_today_amount", 0)
+    billed_today_count  = headlines.get("billed_today_count", 0)
+    billed_banner_html = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;margin:0 0 18px">'
+        '<tr>'
+        '<td align="center" valign="middle" width="60%" style="padding:16px 12px;border-right:1px solid #a7f3d0">'
+        f'<div style="font-size:10px;color:#047857;text-transform:uppercase;letter-spacing:.8px;font-weight:700">Billed since {_esc_html(week_start_long)}</div>'
+        f'<div style="font-size:30px;color:#047857;font-weight:800;margin-top:4px;line-height:1.1">{_money(billed_wtd_amount)}</div>'
+        f'<div style="font-size:11px;color:#059669;margin-top:2px">{billed_wtd_count} claims billed</div>'
+        '</td>'
+        '<td align="center" valign="middle" width="40%" style="padding:16px 12px">'
+        '<div style="font-size:10px;color:#047857;text-transform:uppercase;letter-spacing:.8px;font-weight:700">Billed today</div>'
+        f'<div style="font-size:22px;color:#059669;font-weight:800;margin-top:4px;line-height:1.1">{_money(billed_today_amount)}</div>'
+        f'<div style="font-size:11px;color:#059669;margin-top:2px">{billed_today_count} claims</div>'
+        '</td>'
+        '</tr>'
         '</table>'
     )
 
@@ -2201,6 +2285,19 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             tab_badges = _badges_for(u.get("totals", {})) or (
                 '<span style="color:#94a3b8;font-size:12px;font-style:italic">Logged in but no tracked work</span>'
             )
+            # Per-operator billed strip (week-to-date since Friday + today).
+            _bw = (u.get("billed", {}) or {}).get("wtd", {}) or {}
+            _bt = (u.get("billed", {}) or {}).get("today", {}) or {}
+            billed_strip_html = ""
+            if (_bw.get("amount") or 0) or (_bt.get("amount") or 0):
+                billed_strip_html = (
+                    '<div style="margin-top:10px;padding:8px 12px;background:#ecfdf5;'
+                    'border-left:3px solid #10b981;border-radius:6px;font-size:12px;color:#065f46">'
+                    f'<b>💵 Billed {_money(_bw.get("amount"))}</b> since {_esc_html(week_start_long)} '
+                    f'({_bw.get("count", 0)} claims) · '
+                    f'<b>{_money(_bt.get("amount"))}</b> today ({_bt.get("count", 0)} claims)'
+                    '</div>'
+                )
             highlights = u.get("highlights") or []
             highlights_html = ""
             if highlights:
@@ -2239,12 +2336,14 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 </tr>
               </table>
               <div style="margin-top:12px">{tab_badges}</div>
+              {billed_strip_html}
               {highlights_html}
               {client_blocks}
             </div>
             """
 
     inner = (
+        billed_banner_html +
         ribbon_html +
         '<h2 style="margin:6px 0 4px;font-size:15px;color:#0f172a;font-weight:800;letter-spacing:.2px">Operator Breakdown</h2>'
         '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Workers only — admins suppressed (configure with <code>EOD_REPORT_EXCLUDE_USERS</code>).</div>' +
@@ -2280,7 +2379,7 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
         return {"ok": False, "error": str(e)}
 
     if not report_date:
-        report_date = _dt.now().strftime("%Y-%m-%d")
+        report_date = business_today_iso()
 
     try:
         report = get_eod_team_report(report_date)
@@ -2428,8 +2527,8 @@ def _build_demo_eod_report() -> dict:
     shape as get_eod_team_report() — fed directly to the renderer.
     """
     from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
-    tab_keys = ["Claims", "Credentialing", "Enrollment", "EDI", "Production",
+    today = business_today_iso()
+    tab_keys = ["Claims", "Payments", "Credentialing", "Enrollment", "EDI", "Production",
                 "Documents", "Notes", "Chat", "Audit", "Pageviews"]
 
     def _tabs(**vals):
@@ -2450,6 +2549,7 @@ def _build_demo_eod_report() -> dict:
             "last_seen": f"{today}T17:18:44",
             "totals": _tabs(Claims=18, Notes=7, Production=3, Pageviews=92, Audit=4),
             "total_actions": 124,
+            "billed": {"today": {"count": 6, "amount": 18420.0}, "wtd": {"count": 23, "amount": 61240.0}},
             "highlights": [
                 "claim_status_update claims_master — moved CLM-44218 from A/R Follow-Up → Paid",
                 "note_added notes_log — Aetna confirmed reprocess; eta 14 days",
@@ -2487,6 +2587,7 @@ def _build_demo_eod_report() -> dict:
             "last_seen": f"{today}T16:44:18",
             "totals": _tabs(Credentialing=9, Enrollment=4, Documents=2, Notes=5, Pageviews=61, Audit=3),
             "total_actions": 84,
+            "billed": {"today": {"count": 3, "amount": 7910.0}, "wtd": {"count": 11, "amount": 26010.0}},
             "highlights": [
                 "credentialing_submit credentialing — Dr Chen / BCBS-SC initial app submitted",
                 "file_upload client_files — uploaded CAQH attestation PDF",
@@ -2614,9 +2715,17 @@ def _build_demo_eod_report() -> dict:
     ]
 
     team_totals = {k: 0 for k in tab_keys}
+    team_billed = {"today": {"count": 0, "amount": 0.0}, "wtd": {"count": 0, "amount": 0.0}}
     for u in users:
         for k, v in u["totals"].items():
             team_totals[k] = team_totals.get(k, 0) + v
+        b = u.get("billed") or {}
+        for _scope in ("today", "wtd"):
+            sb = b.get(_scope) or {}
+            team_billed[_scope]["count"] += int(sb.get("count", 0) or 0)
+            team_billed[_scope]["amount"] += float(sb.get("amount", 0) or 0)
+    for _scope in ("today", "wtd"):
+        team_billed[_scope]["amount"] = round(team_billed[_scope]["amount"], 2)
 
     headlines = {
         "claims_new": 18,
@@ -2631,14 +2740,27 @@ def _build_demo_eod_report() -> dict:
         "chat_messages": 15,
         "audit_events": 17,
         "active_users": len(users),
+        "billed_today_amount": team_billed["today"]["amount"],
+        "billed_today_count":  team_billed["today"]["count"],
+        "billed_wtd_amount":   team_billed["wtd"]["amount"],
+        "billed_wtd_count":    team_billed["wtd"]["count"],
     }
+
+    # Demo "since last Friday" anchor.
+    try:
+        _rd = _dt.strptime(today, "%Y-%m-%d").date()
+        _week_start = _rd.fromordinal(_rd.toordinal() - ((_rd.weekday() - 4) % 7)).isoformat()
+    except Exception:
+        _week_start = today
 
     return {
         "report_date": today,
+        "week_start": _week_start,
         "generated_at": _dt.now().isoformat(timespec="seconds"),
         "tab_keys": tab_keys,
         "users": users,
         "team_totals": team_totals,
+        "team_billed": team_billed,
         "headlines": headlines,
         "client_count": 3,
     }
@@ -3102,7 +3224,7 @@ def send_client_daily_report(client_id: int, report_date: str = None,
             log.error(f"client_db.get_client_daily_report import failed: {e}")
             return {"ok": False, "error": str(e), "client_id": client_id}
         if not report_date:
-            report_date = _dt.now().strftime("%Y-%m-%d")
+            report_date = business_today_iso()
         report = get_client_daily_report(client_id, report_date)
         if not report or not report.get("ok"):
             return {"ok": False, "error": (report or {}).get("error", "no report"),
@@ -3233,7 +3355,7 @@ def _build_demo_client_daily_report() -> dict:
     layout when the live DB has no activity for the target client.
     """
     from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
+    today = business_today_iso()
     ts = lambda hh, mm: f"{today} {hh:02d}:{mm:02d}:00"
     return {
         "ok": True,
@@ -3488,30 +3610,21 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-
     sent = 0
     for item in pending:
         addr = (item.get("email") or "").strip()
         if not addr or "@" not in addr:
             continue
         room_name = item.get("room_name") or "a chat room"
-        room_id = item.get("room_id")
         sender = item.get("sender_name") or "a teammate"
         who = (item.get("contact_name") or item.get("username") or "there").split()[0]
-        deep_link = (f"{hub_base}/hub?chat={room_id}" if hub_base
-                     else f"/hub?chat={room_id}")
         subject = f"💬 You were mentioned in '{room_name}' — still unread"
         text_body = (
             f"Hi {who},\n\n"
             f"{sender} mentioned you in the chat room '{room_name}' over two "
             f"hours ago and it's still unread.\n\n"
-            f"Open the room to read and reply (the message itself isn't "
-            f"included here for HIPAA compliance):\n{deep_link}\n"
+            f"Log in to MedPharma Hub and open the room to read and reply (the "
+            f"message itself isn't included here for HIPAA compliance).\n"
         )
         html_body = (
             f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
@@ -3520,11 +3633,7 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
             f"<b>{room_name}</b> over two hours ago and it's still unread.</p>"
             f"<p style='color:#475569;font-size:13px'>The message body isn't "
             f"included in this email (HIPAA-protected content stays inside the "
-            f"hub). Open the room to read and reply.</p>"
-            f"<p style='margin:18px 0'>"
-            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
-            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
-            f"font-weight:600'>Open the chat room →</a></p>"
+            f"hub). Log in to MedPharma Hub and open the room to read and reply.</p>"
             f"</div>"
         )
         try:
@@ -3566,13 +3675,6 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-    deep_link = f"{hub_base}/hub?panel=chat" if hub_base else "/hub?panel=chat"
-
     sent = 0
     for item in pending:
         addr = (item.get("email") or "").strip()
@@ -3587,9 +3689,9 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
             f"Hi {who},\n\n"
             f"You have {count_phrase} in MedPharma Hub Team Chat that have been "
             f"sitting unread for more than {int(min_age_minutes)} minutes.\n\n"
-            f"Please make sure you're up to date on team communication — open "
-            f"the chat to read and reply (message content isn't included here "
-            f"for HIPAA compliance):\n{deep_link}\n"
+            f"Please make sure you're up to date on team communication — log in "
+            f"to MedPharma Hub and open the chat to read and reply (message "
+            f"content isn't included here for HIPAA compliance).\n"
         )
         html_body = (
             f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
@@ -3600,11 +3702,7 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
             f"<p>Please make sure you're up to date on team communication.</p>"
             f"<p style='color:#475569;font-size:13px'>The message content isn't "
             f"included in this email (HIPAA-protected content stays inside the "
-            f"hub). Open the chat to read and reply.</p>"
-            f"<p style='margin:18px 0'>"
-            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
-            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
-            f"font-weight:600'>Open Team Chat →</a></p>"
+            f"hub). Log in to MedPharma Hub and open the chat to read and reply.</p>"
             f"</div>"
         )
         try:
