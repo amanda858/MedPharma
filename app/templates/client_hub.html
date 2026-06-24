@@ -9142,19 +9142,40 @@
       html += `<div class="card" style="margin-bottom:18px">
         <div class="card-header"><div class="card-title">👥 Work Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
-          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Avg Hrs/Day</th></tr></thead>
+          <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Total Items</th><th>Total Hours</th><th>Uploaded Rows</th><th>Payments Posted</th><th>$ Posted</th><th>Avg Hrs/Day</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
             <td style="font-weight:600">${esc(u.username)}</td>
             <td style="text-align:center">${u.days_worked}</td>
             <td style="text-align:center">${u.total_entries}</td>
             <td style="text-align:center;font-weight:600">${u.total_quantity || 0}</td>
             <td style="text-align:center;font-weight:600">${u.total_hours || 0}h</td>
+            <td style="text-align:center;font-weight:600" title="Claims ${u.claims_uploaded||0} · Cred ${u.credentialing_uploaded||0} · Enroll ${u.enrollment_uploaded||0} · EDI ${u.edi_uploaded||0}">${u.total_uploaded || 0}</td>
             <td style="text-align:center;font-weight:600">${u.payments_posted || 0}</td>
             <td style="text-align:right;font-weight:600">$${(u.payments_amount || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
             <td style="text-align:center"><span class="badge ${(u.avg_hours_per_day || 0) < 6 ? 'badge-red' : 'badge-green'}">${u.avg_hours_per_day || 0}h</span></td>
-          </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
+          </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
         </table></div>
       </div>`;
+
+      // Uploaded data attributed to each user (individual uploads compiled per user)
+      const hasUploads = byUser.some(u => (u.total_uploaded || 0) > 0);
+      if (hasUploads) {
+        html += `<div class="card" style="margin-bottom:18px">
+          <div class="card-header"><div class="card-title">📤 Uploaded Data by User</div></div>
+          <div class="table-wrap" style="margin-top:8px"><table>
+            <thead><tr><th>Team Member</th><th>Claims</th><th>$ Charged</th><th>Credentialing</th><th>Enrollment</th><th>EDI</th><th>Total Rows</th></tr></thead>
+            <tbody>${byUser.filter(u => (u.total_uploaded || 0) > 0).map(u => `<tr>
+              <td style="font-weight:600">${esc(u.username)}</td>
+              <td style="text-align:center">${u.claims_uploaded || 0}</td>
+              <td style="text-align:right;font-weight:600">$${(u.claims_uploaded_amount || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+              <td style="text-align:center">${u.credentialing_uploaded || 0}</td>
+              <td style="text-align:center">${u.enrollment_uploaded || 0}</td>
+              <td style="text-align:center">${u.edi_uploaded || 0}</td>
+              <td style="text-align:center;font-weight:600">${u.total_uploaded || 0}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </div>`;
+      }
 
       // Payments posted (part of how the team is paid)
       html += `<div class="card" style="margin-bottom:18px">

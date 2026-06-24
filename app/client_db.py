@@ -654,6 +654,8 @@ def init_client_hub_db():
             AppealStatus        TEXT DEFAULT '',
             -- sub-profile (e.g. MHP or OMT for Luminary)
             sub_profile         TEXT DEFAULT '',
+            -- who uploaded/imported this row (hub username)
+            uploaded_by         TEXT DEFAULT '',
             -- meta
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -727,6 +729,7 @@ def init_client_hub_db():
             Owner               TEXT DEFAULT '',
             Notes               TEXT DEFAULT '',
             sub_profile         TEXT DEFAULT '',
+            uploaded_by         TEXT DEFAULT '',
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -749,6 +752,7 @@ def init_client_hub_db():
             Owner               TEXT DEFAULT '',
             Notes               TEXT DEFAULT '',
             sub_profile         TEXT DEFAULT '',
+            uploaded_by         TEXT DEFAULT '',
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -771,6 +775,7 @@ def init_client_hub_db():
             Owner           TEXT DEFAULT '',
             Notes           TEXT DEFAULT '',
             sub_profile     TEXT DEFAULT '',
+            uploaded_by     TEXT DEFAULT '',
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id),
@@ -1187,6 +1192,17 @@ def init_client_hub_db():
         cols = {row[1] for row in cur.fetchall()}
         if "sub_profile" not in cols:
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN sub_profile TEXT DEFAULT ''")
+    conn.commit()
+
+    # ── Migrate existing DBs: per-user upload attribution on data tables ──
+    # Records which hub user uploaded each imported row so the compiled Team
+    # Production report can break work down per user (not just per account).
+    uploaded_by_tables = ["claims_master", "credentialing", "enrollment", "edi_setup"]
+    for tbl in uploaded_by_tables:
+        cur.execute(f"PRAGMA table_info({tbl})")
+        cols = {row[1] for row in cur.fetchall()}
+        if "uploaded_by" not in cols:
+            cur.execute(f"ALTER TABLE {tbl} ADD COLUMN uploaded_by TEXT DEFAULT ''")
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
@@ -5717,6 +5733,77 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             urow["payments_posted"] = int(stats.get("payments_posted", 0))
             urow["payments_amount"] = float(stats.get("payments_amount", 0))
 
+        # ── Imported data attributed to each uploader ─────────────────────
+        # When a user uploads a claims / credentialing / enrollment / EDI
+        # spreadsheet, each imported row is stamped with their hub username in
+        # the uploaded_by column. Roll those counts up per user so the compiled
+        # Team Production report reflects upload-based work (not just manually
+        # logged production and posted payments). Rows are scoped to the same
+        # date window using the row's created_at (upload) date.
+        uploads_by_user = {}
+        upload_specs = [
+            ("claims_master", "claims_uploaded", "ChargeAmount"),
+            ("credentialing", "credentialing_uploaded", None),
+            ("enrollment",    "enrollment_uploaded",    None),
+            ("edi_setup",     "edi_uploaded",           None),
+        ]
+        for table, field, amount_col in upload_specs:
+            up_conditions = ["TRIM(COALESCE(uploaded_by,'')) != ''"]
+            up_p = []
+            if client_id:
+                up_conditions.append("client_id=?")
+                up_p.append(client_id)
+            if start_date:
+                up_conditions.append("date(created_at) >= ?")
+                up_p.append(start_date)
+            if end_date:
+                up_conditions.append("date(created_at) <= ?")
+                up_p.append(end_date)
+            up_cond = "WHERE " + " AND ".join(up_conditions)
+            amount_select = (f", ROUND(COALESCE(SUM({amount_col}),0),2) AS amount"
+                             if amount_col else ", 0 AS amount")
+            try:
+                cur.execute(f"""
+                    SELECT TRIM(uploaded_by) AS username,
+                           COUNT(*) AS cnt{amount_select}
+                    FROM {table} {up_cond}
+                    GROUP BY TRIM(uploaded_by)
+                """, up_p)
+            except Exception:
+                # Older databases that predate the uploaded_by migration.
+                continue
+            for r in cur.fetchall():
+                uname = str(r["username"] or "").strip()
+                if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
+                    continue
+                bucket = uploads_by_user.setdefault(uname, {})
+                bucket[field] = int(r["cnt"] or 0)
+                if amount_col:
+                    bucket["claims_uploaded_amount"] = float(r["amount"] or 0)
+
+        # Make sure an uploader who logged no production/payment work still
+        # appears in the report, then zero-fill upload stats on every row.
+        for uname in uploads_by_user:
+            if uname not in by_user_map:
+                by_user_map[uname] = {
+                    "username": uname,
+                    "total_entries": 0,
+                    "total_quantity": 0,
+                    "total_hours": 0,
+                    "days_worked": 0,
+                    "payments_posted": 0,
+                    "payments_amount": 0,
+                }
+        for uname, urow in by_user_map.items():
+            stats = uploads_by_user.get(uname, {})
+            urow["claims_uploaded"]         = int(stats.get("claims_uploaded", 0))
+            urow["claims_uploaded_amount"]  = float(stats.get("claims_uploaded_amount", 0))
+            urow["credentialing_uploaded"]  = int(stats.get("credentialing_uploaded", 0))
+            urow["enrollment_uploaded"]     = int(stats.get("enrollment_uploaded", 0))
+            urow["edi_uploaded"]            = int(stats.get("edi_uploaded", 0))
+            urow["total_uploaded"] = (urow["claims_uploaded"] + urow["credentialing_uploaded"]
+                                      + urow["enrollment_uploaded"] + urow["edi_uploaded"])
+
         by_user = [by_user_map[k] for k in sorted(by_user_map.keys(), key=lambda x: x.lower())]
 
         # Summary by category
@@ -5749,6 +5836,12 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             u["days_worked"] = int(u.get("days_worked") or 0)
             u["payments_posted"] = int(u.get("payments_posted") or 0)
             u["payments_amount"] = float(u.get("payments_amount") or 0)
+            u["claims_uploaded"] = int(u.get("claims_uploaded") or 0)
+            u["claims_uploaded_amount"] = float(u.get("claims_uploaded_amount") or 0)
+            u["credentialing_uploaded"] = int(u.get("credentialing_uploaded") or 0)
+            u["enrollment_uploaded"] = int(u.get("enrollment_uploaded") or 0)
+            u["edi_uploaded"] = int(u.get("edi_uploaded") or 0)
+            u["total_uploaded"] = int(u.get("total_uploaded") or 0)
             if u["days_worked"] > 0:
                 avg_hrs = round(u["total_hours"] / u["days_worked"], 1)
             else:
@@ -5767,6 +5860,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "payment_details": payment_details,
         "payments_total_count": sum(int(u.get("payments_posted") or 0) for u in by_user),
         "payments_total_amount": round(sum(float(u.get("payments_amount") or 0) for u in by_user), 2),
+        "uploads_total_count": sum(int(u.get("total_uploaded") or 0) for u in by_user),
+        "uploads_total_amount": round(sum(float(u.get("claims_uploaded_amount") or 0) for u in by_user), 2),
         "time_management_flags": flags,
     }
 

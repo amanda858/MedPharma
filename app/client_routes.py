@@ -3199,17 +3199,18 @@ async def upload_file(
     import_category = None
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
         import_category = effective_category
+        _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Credentialing":
-                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
             elif effective_category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "EDI":
-                imported, import_errors = _import_edi_from_excel(content, ext, scope)
+                imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
 
@@ -3492,13 +3493,13 @@ async def import_excel(
 
     try:
         if category == "Claims":
-            imported, errors = _import_claims_from_excel(content, ext, scope)
+            imported, errors = _import_claims_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "Credentialing":
-            imported, errors = _import_credentialing_from_excel(content, ext, scope)
+            imported, errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "Enrollment":
-            imported, errors = _import_enrollment_from_excel(content, ext, scope)
+            imported, errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=user["username"])
         elif category == "EDI":
-            imported, errors = _import_edi_from_excel(content, ext, scope)
+            imported, errors = _import_edi_from_excel(content, ext, scope, uploaded_by=user["username"])
         else:
             raise HTTPException(400, f"Unknown category: {category}")
     except HTTPException:
@@ -3923,7 +3924,7 @@ def _clean_val(val):
     return s
 
 
-def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
+def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4062,17 +4063,21 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE credentialing SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO credentialing
-                        (client_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,CredType,Status,SubmittedDate,FollowUpDate,ApprovedDate,ExpirationDate,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("CredType","Initial"), mapped.get("Status","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
                          mapped.get("ApprovedDate",""), mapped.get("ExpirationDate",""),
-                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
+                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile",""),
+                         str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4086,7 +4091,7 @@ def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
+def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4204,17 +4209,21 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE enrollment SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO enrollment
-                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,EnrollType,Status,SubmittedDate,FollowUpDate,ApprovedDate,EffectiveDate,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("EnrollType","Enrollment"), mapped.get("Status","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("FollowUpDate",""),
                          mapped.get("ApprovedDate",""), mapped.get("EffectiveDate",""),
-                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile","")))
+                         mapped.get("Owner",""), mapped.get("Notes",""), mapped.get("sub_profile",""),
+                         str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4227,7 +4236,7 @@ def _import_enrollment_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
+def _import_edi_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
 
@@ -4332,18 +4341,21 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
                         if f in mapped:
                             parts.append(f"{f}=?")
                             params.append(mapped[f])
+                    if uploaded_by:
+                        parts.append("uploaded_by=?")
+                        params.append(uploaded_by)
                     params.append(existing["id"])
                     conn.execute(f"UPDATE edi_setup SET {','.join(parts)} WHERE id=?", params)
                 else:
                     conn.execute("""INSERT INTO edi_setup
-                        (client_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes,sub_profile)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (client_id,ProviderName,Payor,EDIStatus,ERAStatus,EFTStatus,SubmittedDate,GoLiveDate,PayerID,Owner,Notes,sub_profile,uploaded_by)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (client_id, mapped.get("ProviderName",""), mapped.get("Payor",""),
                          mapped.get("EDIStatus","Not Started"), mapped.get("ERAStatus","Not Started"),
                          mapped.get("EFTStatus","Not Started"),
                          mapped.get("SubmittedDate",""), mapped.get("GoLiveDate",""),
                          mapped.get("PayerID",""), mapped.get("Owner",""), mapped.get("Notes",""),
-                         mapped.get("sub_profile","")))
+                         mapped.get("sub_profile",""), str(uploaded_by or "")))
                 imported += 1
             except Exception as e:
                 errors.append(f"Row {i+2}: {e}")
@@ -4356,7 +4368,7 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int):
     return imported, errors
 
 
-def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
+def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.
@@ -4654,8 +4666,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                     (client_id, ClaimKey, PatientID, PatientName, Payor, ProviderName, NPI,
                      DOS, CPTCode, Description, ChargeAmount, AllowedAmount, AdjustmentAmount,
                      PaidAmount, BalanceRemaining, ClaimStatus, BillDate, DeniedDate, PaidDate,
-                     DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate, sub_profile)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     DenialCategory, DenialReason, Owner, StatusStartDate, LastTouchedDate, sub_profile,
+                     uploaded_by)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(client_id, ClaimKey) DO UPDATE SET
                         PatientID=excluded.PatientID, PatientName=excluded.PatientName,
                         Payor=excluded.Payor, ProviderName=excluded.ProviderName, NPI=excluded.NPI,
@@ -4666,7 +4679,8 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                         BillDate=excluded.BillDate, DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
                         DenialCategory=excluded.DenialCategory, DenialReason=excluded.DenialReason,
                         Owner=excluded.Owner, LastTouchedDate=excluded.LastTouchedDate,
-                        sub_profile=excluded.sub_profile, updated_at=CURRENT_TIMESTAMP
+                        sub_profile=excluded.sub_profile, uploaded_by=excluded.uploaded_by,
+                        updated_at=CURRENT_TIMESTAMP
                 """, (
                     client_id,
                     str(mapped.get("ClaimKey", "")),
@@ -4693,6 +4707,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int):
                     today_str,
                     today_str,
                     str(mapped.get("sub_profile", "")),
+                    str(uploaded_by or ""),
                 ))
                 imported += 1
             except Exception as e:
@@ -4827,15 +4842,16 @@ async def replace_file(
     imported = 0
     import_errors = []
     if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
+        _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope)
+                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Credentialing":
-                imported, import_errors = _import_credentialing_from_excel(content, ext, scope)
+                imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "Enrollment":
-                imported, import_errors = _import_enrollment_from_excel(content, ext, scope)
+                imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif effective_category == "EDI":
-                imported, import_errors = _import_edi_from_excel(content, ext, scope)
+                imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
 

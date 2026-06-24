@@ -18,5 +18,15 @@
     "role": "staff",
     "service_type": "",
     "notes": ""
+  },
+  {
+    "username": "acme",
+    "company": "Acme",
+    "contact_name": "A",
+    "email": "acme@x.com",
+    "phone": "",
+    "role": "client",
+    "service_type": "",
+    "notes": ""
   }
 ]
