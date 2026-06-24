@@ -9281,13 +9281,18 @@
       const billedTotalAmount = data.billed_total_amount != null
         ? data.billed_total_amount
         : byUser.reduce((s, u) => s + (u.claims_billed_amount || 0), 0);
-      const paymentsTotalAmount = data.payments_total_amount != null
-        ? data.payments_total_amount
-        : byUser.reduce((s, u) => s + (u.payments_amount || 0), 0);
       const paymentsTotalCount = data.payments_total_count != null
         ? data.payments_total_count
         : byUser.reduce((s, u) => s + (u.payments_posted || 0), 0);
       const money2 = v => '$' + (Number(v) || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      // Paid = real dollars paid ON the claims (PaidAmount), not the manual
+      // payments table. Falls back to the payments table only if the claim-paid
+      // total isn't present (older API responses).
+      const paidTotalAmount = data.paid_total_amount != null
+        ? data.paid_total_amount
+        : (data.payments_total_amount != null
+            ? data.payments_total_amount
+            : byUser.reduce((s, u) => s + (u.claims_paid_amount || u.payments_amount || 0), 0));
       const deniedTotalCount = data.denied_total_count != null
         ? data.denied_total_count
         : byUser.reduce((s, u) => s + (u.claims_denied || 0), 0);
@@ -9316,7 +9321,7 @@
           </div>
           <div style="flex:1;min-width:150px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:14px 16px">
             <div style="font-size:11px;font-weight:700;color:#047857;text-transform:uppercase;letter-spacing:.04em">Paid</div>
-            <div style="font-size:26px;font-weight:800;color:#065f46">${money2(paymentsTotalAmount)}</div>
+            <div style="font-size:26px;font-weight:800;color:#065f46">${money2(paidTotalAmount)}</div>
             <div style="font-size:12px;color:#64748b">dollars collected</div>
           </div>
           <div style="flex:1;min-width:150px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px">
@@ -9353,7 +9358,7 @@
             <td style="text-align:right;font-weight:600">${money2(u.claims_billed_amount)}</td>
             <td style="text-align:center;font-weight:600">${u.claims_denied || 0}</td>
             <td style="text-align:center;font-weight:600">${u.payments_posted || 0}</td>
-            <td style="text-align:right;font-weight:600">${money2(u.payments_amount)}</td>
+            <td style="text-align:right;font-weight:600">${money2(u.claims_paid_amount != null ? u.claims_paid_amount : u.payments_amount)}</td>
           </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--gray-400)">No data</td></tr>'}</tbody>
           ${byUser.length ? `<tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e2e8f0">
             <td>Team Total</td>
@@ -9361,7 +9366,7 @@
             <td style="text-align:right">${money2(billedTotalAmount)}</td>
             <td style="text-align:center">${deniedTotalCount}</td>
             <td style="text-align:center">${paymentsTotalCount}</td>
-            <td style="text-align:right">${money2(paymentsTotalAmount)}</td>
+            <td style="text-align:right">${money2(paidTotalAmount)}</td>
           </tr></tfoot>` : ''}
         </table></div>
         <div style="margin-top:8px;font-size:12px;color:var(--gray-500)">
