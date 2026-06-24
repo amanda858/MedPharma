@@ -6007,15 +6007,49 @@ def get_user_production_snapshot(work_date: str = None):
         conn.close()
 
 
-def get_production_report(client_id: int = None, start_date: str = None, end_date: str = None):
-    """Weekly production report — aggregated by user and category."""
+def get_production_report(client_id: int = None, start_date: str = None, end_date: str = None,
+                          username: str = None):
+    """Production report aggregated by user and category.
+
+    Two modes:
+    - Comprehensive (username=None): every biller's Billed / Posted / Paid for
+      the window, optionally narrowed to one client account. This is the
+      combined roll-up the admin and Eric pull by day / week / custom range.
+    - Single-biller self view (username set): exactly one biller's own
+      production across EVERY account they work, so Susan / Melissa / Jessica
+      each see only what they personally billed, posted, and were paid. The
+      client_id account filter is ignored in this mode because a biller's work
+      spans whichever accounts they touch, credited to them by the claim Owner
+      (billed), PostedBy (payments), and uploaded_by (uploads) fields.
+    """
+    self_user = (username or "").strip()
+    self_scope = bool(self_user)
     conn = get_db()
     try:
         cur = conn.cursor()
+
+        # In single-biller mode, resolve the identity tokens a free-text claim
+        # ``Owner`` might use for this biller (username, display name, first
+        # name) so billed claims credited to "Susan Smith" line up with the
+        # "susan" login. PostedBy / uploaded_by store the hub username directly.
+        self_identities = set()
+        if self_scope:
+            self_identities.add(self_user.lower())
+            cur.execute("SELECT contact_name FROM clients WHERE LOWER(username)=LOWER(?)",
+                        (self_user,))
+            _r = cur.fetchone()
+            cname = str((_r["contact_name"] if _r else "") or "").strip()
+            if cname:
+                self_identities.add(cname.lower())
+                self_identities.add(cname.split()[0].lower())
+
         conditions, p = [], []
-        if client_id:
+        if client_id and not self_scope:
             conditions.append("client_id=?")
             p.append(client_id)
+        if self_scope:
+            conditions.append("LOWER(username)=LOWER(?)")
+            p.append(self_user)
         if start_date:
             conditions.append("work_date>=?")
             p.append(start_date)
@@ -6041,7 +6075,9 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                    if str(u.get("username") or "").strip().lower() not in _HIDDEN_ROSTER_USERS]
 
         # Include all active users in scope, even if they have zero rows in this period.
-        if client_id:
+        if self_scope:
+            scoped_usernames = [self_user]
+        elif client_id:
             cur.execute("SELECT company FROM clients WHERE id=?", (client_id,))
             scope_row = cur.fetchone()
             if scope_row and (scope_row["company"] or "").strip():
@@ -6051,17 +6087,20 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 )
             else:
                 cur.execute("SELECT username FROM clients WHERE is_active=1 AND id=?", (client_id,))
+            scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall()
+                                if (r["username"] or "").strip()
+                                and str(r["username"]).strip().lower() not in _HIDDEN_ROSTER_USERS]
         else:
             cur.execute("SELECT username FROM clients WHERE is_active=1 ORDER BY username")
-        scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall()
-                            if (r["username"] or "").strip()
-                            and str(r["username"]).strip().lower() not in _HIDDEN_ROSTER_USERS]
+            scoped_usernames = [str(r["username"]).strip() for r in cur.fetchall()
+                                if (r["username"] or "").strip()
+                                and str(r["username"]).strip().lower() not in _HIDDEN_ROSTER_USERS]
 
         by_user_map = {str(u.get("username") or "").strip(): u for u in by_user if str(u.get("username") or "").strip()}
-        for username in scoped_usernames:
-            if username not in by_user_map:
-                by_user_map[username] = {
-                    "username": username,
+        for _uname in scoped_usernames:
+            if _uname not in by_user_map:
+                by_user_map[_uname] = {
+                    "username": _uname,
                     "total_entries": 0,
                     "total_quantity": 0,
                     "total_hours": 0,
@@ -6074,9 +6113,12 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         # effective posting date is PostDate when present, else the row's
         # created_at date.
         pay_conditions, pay_p = [], []
-        if client_id:
+        if client_id and not self_scope:
             pay_conditions.append("client_id=?")
             pay_p.append(client_id)
+        if self_scope:
+            pay_conditions.append("LOWER(TRIM(PostedBy))=LOWER(?)")
+            pay_p.append(self_user)
         if start_date:
             pay_conditions.append("COALESCE(NULLIF(PostDate,''), date(created_at)) >= ?")
             pay_p.append(start_date)
@@ -6180,7 +6222,7 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         billed_by_user = {}
         bill_conditions = ["COALESCE(BillDate,'')!=''", "TRIM(COALESCE(Owner,''))!=''"]
         bill_p = []
-        if client_id:
+        if client_id and not self_scope:
             bill_conditions.append("client_id=?")
             bill_p.append(client_id)
         bill_cond = "WHERE " + " AND ".join(bill_conditions)
@@ -6192,6 +6234,14 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             owner_raw = str(r["owner"] or "").strip()
             if not owner_raw or owner_raw.lower() in _HIDDEN_ROSTER_USERS:
                 continue
+            # In self-view, keep only claims this biller is credited for —
+            # match the free-text Owner against the biller's identity tokens
+            # before falling back to the alias map.
+            if self_scope:
+                owner_l = owner_raw.lower()
+                resolved_l = alias_to_user.get(owner_l, owner_raw).lower()
+                if owner_l not in self_identities and resolved_l != self_user.lower():
+                    continue
             try:
                 bd = date.fromisoformat(str(r["bd"] or "").strip())
             except (ValueError, TypeError):
@@ -6239,9 +6289,12 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         for table, field, amount_col in upload_specs:
             up_conditions = ["TRIM(COALESCE(uploaded_by,'')) != ''"]
             up_p = []
-            if client_id:
+            if client_id and not self_scope:
                 up_conditions.append("client_id=?")
                 up_p.append(client_id)
+            if self_scope:
+                up_conditions.append("LOWER(TRIM(uploaded_by))=LOWER(?)")
+                up_p.append(self_user)
             if start_date:
                 up_conditions.append("date(created_at) >= ?")
                 up_p.append(start_date)
@@ -6355,6 +6408,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "uploads_total_amount": round(sum(float(u.get("claims_uploaded_amount") or 0) for u in by_user), 2),
         "billed_total_count": sum(int(u.get("claims_billed") or 0) for u in by_user),
         "billed_total_amount": round(sum(float(u.get("claims_billed_amount") or 0) for u in by_user), 2),
+        "scope_username": self_user or None,
+        "is_self_view": self_scope,
         "time_management_flags": flags,
     }
 

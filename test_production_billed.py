@@ -118,3 +118,66 @@ def test_billed_scoped_per_account(cdb):
     everyone = cdb.get_production_report()
     assert _user(everyone, "susan")["claims_billed"] == 2
     assert everyone["billed_total_amount"] == 1100.0
+
+
+def test_per_biller_self_view_billed_posted_paid_across_accounts(cdb):
+    """A biller's self-view (username scope) shows only THEIR own Billed (charges
+    out, by Owner), Posted (# payments they posted), and Paid ($ collected), and
+    it spans every account they work — not just one client. Other billers'
+    numbers must never leak in."""
+    a = cdb.create_client({"company": "Lab A", "contact_name": "A", "email": "a@x.com",
+                           "phone": "1", "role": "client", "username": "laba",
+                           "password": "labapass12345"})
+    b = cdb.create_client({"company": "Lab B", "contact_name": "B", "email": "b@x.com",
+                           "phone": "2", "role": "client", "username": "labb",
+                           "password": "labbpass12345"})
+    cdb.create_client({"username": "susan", "password": "susanpass12345",
+                       "company": "MedPharma SC", "contact_name": "Susan Smith",
+                       "email": "susan@medprosc.com", "phone": "5", "role": "staff"})
+    cdb.create_client({"username": "melissa", "password": "melissapass12345",
+                       "company": "MedPharma SC", "contact_name": "Melissa",
+                       "email": "melissa@medprosc.com", "phone": "6", "role": "staff"})
+
+    # Susan bills across BOTH accounts; Melissa bills on Lab A.
+    cdb.create_claim({"client_id": a, "ClaimKey": "A-1", "ChargeAmount": 400,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "Susan Smith",
+                      "BillDate": "2026-06-05"})
+    cdb.create_claim({"client_id": b, "ClaimKey": "B-1", "ChargeAmount": 700,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "susan",
+                      "BillDate": "2026-06-06"})
+    cdb.create_claim({"client_id": a, "ClaimKey": "A-2", "ChargeAmount": 999,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "melissa",
+                      "BillDate": "2026-06-06"})
+
+    # Susan posts two payments (one per account); Melissa posts one.
+    cdb.create_payment({"client_id": a, "ClaimKey": "A-1", "PostDate": "2026-06-07",
+                        "PaymentAmount": 250, "PostedBy": "susan"})
+    cdb.create_payment({"client_id": b, "ClaimKey": "B-1", "PostDate": "2026-06-08",
+                        "PaymentAmount": 300, "PostedBy": "susan"})
+    cdb.create_payment({"client_id": a, "ClaimKey": "A-2", "PostDate": "2026-06-08",
+                        "PaymentAmount": 500, "PostedBy": "melissa"})
+
+    # Susan's self-view: only her work, across both Lab A and Lab B.
+    susan_view = cdb.get_production_report(None, "2026-06-01", "2026-06-30",
+                                           username="susan")
+    assert susan_view["is_self_view"] is True
+    assert susan_view["scope_username"] == "susan"
+    # Exactly one row — herself.
+    assert [u["username"] for u in susan_view["by_user"]] == ["susan"]
+    s = _user(susan_view, "susan")
+    # Billed: both accounts, both Owner spellings -> 2 claims / $1100.
+    assert s["claims_billed"] == 2
+    assert s["claims_billed_amount"] == 1100.0
+    # Posted: 2 payments she posted. Paid: $550 collected.
+    assert s["payments_posted"] == 2
+    assert s["payments_amount"] == 550.0
+    # Melissa's $999 billed / $500 paid must NOT appear in Susan's totals.
+    assert susan_view["billed_total_amount"] == 1100.0
+    assert susan_view["payments_total_amount"] == 550.0
+
+    # Admin combined roll-up still sees everyone.
+    everyone = cdb.get_production_report(None, "2026-06-01", "2026-06-30")
+    assert everyone["is_self_view"] is False
+    assert everyone["billed_total_amount"] == 1100.0 + 999.0
+    assert everyone["payments_total_amount"] == 550.0 + 500.0
+    assert _user(everyone, "melissa")["payments_amount"] == 500.0
