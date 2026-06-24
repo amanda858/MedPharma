@@ -3,7 +3,8 @@
 The Claims Queue (GET /hub/api/claims) must enforce who can see which claims:
 
   * admin  — full cross-account view (the admin report sees everything).
-  * staff  — billers only see the claims they personally own/billed (Owner).
+  * staff  — billers see the claims they personally own/billed (Owner), plus
+             any unassigned claims (no Owner) they can pick up.
   * client — a lab/practice login sees every claim on its own account
              (regardless of which biller owns it), and a forged client_id
              must NOT expose another lab's claims.
@@ -61,13 +62,16 @@ def test_queue_visibility_by_role(env):
                           "BalanceRemaining": 300, "ClaimStatus": "Denied", "Owner": "susan"})
         cdb.create_claim({"client_id": cid, "ClaimKey": "CLM-M1", "ChargeAmount": 900,
                           "BalanceRemaining": 900, "ClaimStatus": "A/R Follow-Up", "Owner": "melissa"})
+        # An unassigned claim (no Owner yet) any biller may pick up.
+        cdb.create_claim({"client_id": cid, "ClaimKey": "CLM-NEW", "ChargeAmount": 150,
+                          "BalanceRemaining": 150, "ClaimStatus": "Intake", "Owner": ""})
 
-        # admin sees everything; each biller sees only what they billed.
-        assert _keys(client, "admin", "admin123") == ["CLM-M1", "CLM-S1", "CLM-S2"]
-        assert _keys(client, "susan", "susanpass12345") == ["CLM-S1", "CLM-S2"]
-        assert _keys(client, "melissa", "melissapass12345") == ["CLM-M1"]
+        # admin sees everything; each biller sees their own work PLUS unassigned.
+        assert _keys(client, "admin", "admin123") == ["CLM-M1", "CLM-NEW", "CLM-S1", "CLM-S2"]
+        assert _keys(client, "susan", "susanpass12345") == ["CLM-NEW", "CLM-S1", "CLM-S2"]
+        assert _keys(client, "melissa", "melissapass12345") == ["CLM-M1", "CLM-NEW"]
         # The lab account sees all of its own claims regardless of owner.
-        assert _keys(client, "labx", "labpass12345") == ["CLM-M1", "CLM-S1", "CLM-S2"]
+        assert _keys(client, "labx", "labpass12345") == ["CLM-M1", "CLM-NEW", "CLM-S1", "CLM-S2"]
         client.post("/hub/api/logout")
 
 

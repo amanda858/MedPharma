@@ -1901,11 +1901,13 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
         # Internal users may scope to a specific account (None => all accounts).
         claims = get_claims(client_id, status, sub_profile=sub_profile)
         if role == "staff":
-            # Billers only see the claims they personally own/billed. Full
-            # admins keep the cross-account view used by the admin report.
+            # Billers see the claims they personally own/billed, plus any
+            # unassigned claims (no Owner yet) so they can pick up new work.
+            # Full admins keep the cross-account view used by the admin report.
             idents = _owner_identities(user)
             claims = [c for c in claims
-                      if (c.get("Owner") or "").strip().lower() in idents]
+                      if (c.get("Owner") or "").strip().lower() in idents
+                      or not (c.get("Owner") or "").strip()]
     else:
         # Account (client) login: locked to the account(s) they belong to so a
         # forged client_id can't expose another lab's claims. They see every
