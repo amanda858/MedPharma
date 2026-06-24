@@ -2380,8 +2380,13 @@ def update_claim(claim_id: int, data: dict):
         # stale outstanding amount. Mirror the import formula:
         # Balance = Charge - Adjustment - Paid (never negative; zero once
         # Paid/Closed).
+        # A status change matters too: flipping a claim to Paid/Closed must zero
+        # its AR, and re-opening it must restore the balance. Without this, a
+        # biller who only changes the status (no money field) leaves the old
+        # outstanding amount behind, so Outstanding AR never comes down.
         money_edited = any(k in data for k in ("ChargeAmount", "AdjustmentAmount", "PaidAmount"))
-        if money_edited and "BalanceRemaining" not in data:
+        status_changed = "ClaimStatus" in data
+        if (money_edited or status_changed) and "BalanceRemaining" not in data:
             cur.execute("SELECT ChargeAmount, AdjustmentAmount, PaidAmount, ClaimStatus "
                         "FROM claims_master WHERE id=?", (claim_id,))
             cur_row = cur.fetchone()

@@ -72,6 +72,35 @@ def test_paid_status_zeros_balance(client_db):
     assert refreshed["BalanceRemaining"] == 0
 
 
+def test_status_only_paid_zeros_balance(client_db):
+    cid = _client(client_db, "lab4b")
+    claim = _claim(client_db, cid, ChargeAmount=500, BalanceRemaining=500)
+    # Biller only flips the status to Paid (no money field touched). The AR
+    # must still drop to zero so Outstanding AR reflects the resolved claim.
+    client_db.update_claim(claim["id"], {"ClaimStatus": "Paid"})
+    refreshed = client_db.get_claim(claim["id"])
+    assert refreshed["BalanceRemaining"] == 0
+
+
+def test_status_only_closed_zeros_balance(client_db):
+    cid = _client(client_db, "lab4c")
+    claim = _claim(client_db, cid, ChargeAmount=500, BalanceRemaining=500)
+    client_db.update_claim(claim["id"], {"ClaimStatus": "Closed"})
+    refreshed = client_db.get_claim(claim["id"])
+    assert refreshed["BalanceRemaining"] == 0
+
+
+def test_reopening_claim_restores_balance(client_db):
+    cid = _client(client_db, "lab4d")
+    claim = _claim(client_db, cid, ChargeAmount=500, BalanceRemaining=500)
+    client_db.update_claim(claim["id"], {"ClaimStatus": "Paid"})
+    assert client_db.get_claim(claim["id"])["BalanceRemaining"] == 0
+    # Re-opening the claim (e.g. payment reversed) restores the outstanding AR.
+    client_db.update_claim(claim["id"], {"ClaimStatus": "A/R Follow-Up"})
+    refreshed = client_db.get_claim(claim["id"])
+    assert refreshed["BalanceRemaining"] == 500
+
+
 def test_payment_adjustment_reduces_balance(client_db):
     cid = _client(client_db, "lab5")
     _claim(client_db, cid, ChargeAmount=500, BalanceRemaining=500)
