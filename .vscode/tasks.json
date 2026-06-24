@@ -625,10 +625,6 @@
             "options": {"cwd": "/workspaces/CVOPro"},
             "problemMatcher": []
         },
-                "cwd": "/workspaces/CVOPro"
-            },
-            "problemMatcher": []
-        },
         {
             "label": "push-excel-upload-deploy-fix",
             "type": "shell",
