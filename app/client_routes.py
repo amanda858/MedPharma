@@ -2809,7 +2809,7 @@ def download_production_report(
             f"<td>${u.get('claims_billed_amount',0):,.2f}</td>"
             f"<td>{u.get('claims_denied',0)}</td>"
             f"<td>{u.get('payments_posted',0)}</td>"
-            f"<td>${u.get('payments_amount',0):,.2f}</td></tr>"
+            f"<td>${u.get('claims_paid_amount', u.get('payments_amount',0)):,.2f}</td></tr>"
             for u in by_user
         )
 
@@ -2912,7 +2912,7 @@ def download_production_report(
   <div class="meta-bar">
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Claims Submitted:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
-    <span><b>Paid:</b> ${data.get('payments_total_amount', 0):,.2f}</span>
+    <span><b>Paid:</b> ${data.get('paid_total_amount', data.get('payments_total_amount', 0)):,.2f}</span>
     <span><b>Denied:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f})</span>
     <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
     <span><b>Rolling AR (pre-{_esc(str(data.get('rolling_ar_cutoff','')))}):</b> ${data.get('rolling_ar', 0):,.2f}</span>

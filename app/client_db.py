@@ -6235,9 +6235,13 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
 
         billed_by_user = {}
         denied_by_user = {}
-        # One pass over every Owner-attributed claim feeds both Submitted (claims
-        # with a Bill Date in the window) and Denied (claims denied in the window
-        # by Denied Date, falling back to Bill Date). Owner credits the biller.
+        paid_by_user = {}
+        # One pass over every Owner-attributed claim feeds Submitted (claims with
+        # a Bill Date in the window), Denied (claims denied in the window by
+        # Denied Date, falling back to Bill Date) and Paid (actual dollars paid
+        # ON the claims, from PaidAmount — this is the money that came in,
+        # sourced from the uploaded claim data, NOT the manual payments table).
+        # Owner credits the biller.
         attr_conditions = ["TRIM(COALESCE(Owner,''))!=''"]
         attr_p = []
         if client_id and not self_scope:
@@ -6248,8 +6252,11 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             f"SELECT TRIM(Owner) AS owner, "
             f"       substr(COALESCE(BillDate,''),1,10) AS bd, "
             f"       substr(COALESCE(DeniedDate,''),1,10) AS dd, "
+            f"       substr(COALESCE(PaidDate,''),1,10) AS pd, "
+            f"       substr(COALESCE(DOS,''),1,10) AS dos, "
             f"       COALESCE(ClaimStatus,'') AS st, "
-            f"       COALESCE(ChargeAmount,0) AS amt "
+            f"       COALESCE(ChargeAmount,0) AS amt, "
+            f"       COALESCE(PaidAmount,0) AS paid "
             f"FROM claims_master {attr_cond}", attr_p)
         for r in cur.fetchall():
             owner_raw = str(r["owner"] or "").strip()
@@ -6295,9 +6302,32 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                     dslot["claims_denied"] += 1
                     dslot["claims_denied_amount"] += amt
 
+            # Paid — real dollars paid on the claim (PaidAmount), attributed by
+            # Paid Date, then Bill Date, then DOS. This reflects collections that
+            # arrive in the uploaded claim data even when no payment was manually
+            # posted in the system.
+            paid_amt = float(r["paid"] or 0)
+            if paid_amt:
+                pkey = None
+                for cand in (str(r["pd"] or "").strip(),
+                             str(r["bd"] or "").strip(),
+                             str(r["dos"] or "").strip()):
+                    try:
+                        pkey = date.fromisoformat(cand)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+                # When no usable date exists at all, still count it so paid money
+                # is never silently dropped from an open/all-time window.
+                if pkey is None or (d_lo <= pkey <= d_hi):
+                    pslot = paid_by_user.setdefault(
+                        owner, {"claims_paid": 0, "claims_paid_amount": 0.0})
+                    pslot["claims_paid"] += 1
+                    pslot["claims_paid_amount"] += paid_amt
+
         # Make sure a biller with no logged production work still appears, then
-        # zero-fill billed/denied stats on every row.
-        for owner in set(billed_by_user) | set(denied_by_user):
+        # zero-fill billed/denied/paid stats on every row.
+        for owner in set(billed_by_user) | set(denied_by_user) | set(paid_by_user):
             if owner not in by_user_map:
                 by_user_map[owner] = {
                     "username": owner,
@@ -6315,6 +6345,9 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             dslot = denied_by_user.get(uname, {})
             urow["claims_denied"] = int(dslot.get("claims_denied", 0))
             urow["claims_denied_amount"] = round(float(dslot.get("claims_denied_amount", 0)), 2)
+            pslot = paid_by_user.get(uname, {})
+            urow["claims_paid"] = int(pslot.get("claims_paid", 0))
+            urow["claims_paid_amount"] = round(float(pslot.get("claims_paid_amount", 0)), 2)
 
         # ── Rolling AR (legacy backlog) ───────────────────────────────────
         # Still-open balance on claims dated BEFORE the production window start
@@ -6463,6 +6496,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             u["claims_billed_amount"] = float(u.get("claims_billed_amount") or 0)
             u["claims_denied"] = int(u.get("claims_denied") or 0)
             u["claims_denied_amount"] = float(u.get("claims_denied_amount") or 0)
+            u["claims_paid"] = int(u.get("claims_paid") or 0)
+            u["claims_paid_amount"] = float(u.get("claims_paid_amount") or 0)
             u["credentialing_uploaded"] = int(u.get("credentialing_uploaded") or 0)
             u["enrollment_uploaded"] = int(u.get("enrollment_uploaded") or 0)
             u["edi_uploaded"] = int(u.get("edi_uploaded") or 0)
@@ -6491,6 +6526,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "billed_total_amount": round(sum(float(u.get("claims_billed_amount") or 0) for u in by_user), 2),
         "denied_total_count": sum(int(u.get("claims_denied") or 0) for u in by_user),
         "denied_total_amount": round(sum(float(u.get("claims_denied_amount") or 0) for u in by_user), 2),
+        "paid_total_count": sum(int(u.get("claims_paid") or 0) for u in by_user),
+        "paid_total_amount": round(sum(float(u.get("claims_paid_amount") or 0) for u in by_user), 2),
         "rolling_ar": rolling_ar,
         "rolling_ar_cutoff": _ROLLING_AR_DOS_CUTOFF,
         "scope_username": self_user or None,

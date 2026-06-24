@@ -238,3 +238,49 @@ def test_denied_and_rolling_ar(cdb):
     # Rolling AR is a backlog snapshot — independent of the report date range.
     wide = cdb.get_production_report(cid, "2026-01-01", "2026-12-31")
     assert wide["rolling_ar"] == 1284.0
+
+
+def test_paid_comes_from_claim_paid_amount_not_just_payments_table(cdb):
+    """Paid $ must reflect the real money paid ON the claims (PaidAmount from the
+    uploaded data), credited to the biller (Owner) and attributed by Paid Date.
+    This is what lets collections show up even when no payment was manually
+    'posted' in the system. Posted (payments table) stays a separate number."""
+    cid = cdb.create_client({
+        "company": "SV Diagnostics", "contact_name": "SV Diagnostics",
+        "email": "sv@example.com", "phone": "555-0", "role": "client",
+        "username": "svdiag", "password": "svpass123456",
+    })
+    cdb.create_client({
+        "username": "susan", "password": "susanpass12345", "company": "MedPharma SC",
+        "contact_name": "Susan Smith", "email": "susan@medprosc.com",
+        "phone": "555-2", "role": "staff",
+    })
+
+    # Two paid claims (paid in-window) and one with no payment yet. NO rows are
+    # added to the payments table, mirroring uploads that carry a Paid column.
+    cdb.create_claim({"client_id": cid, "ClaimKey": "P-1", "ChargeAmount": 500,
+                      "ClaimStatus": "Paid", "Owner": "susan",
+                      "BillDate": "2026-06-19", "PaidDate": "2026-06-21",
+                      "PaidAmount": 120, "BalanceRemaining": 380})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "P-2", "ChargeAmount": 300,
+                      "ClaimStatus": "Paid", "Owner": "Susan Smith",
+                      "BillDate": "2026-06-20", "PaidDate": "2026-06-22",
+                      "PaidAmount": 80, "BalanceRemaining": 220})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "P-3", "ChargeAmount": 200,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "susan",
+                      "BillDate": "2026-06-20", "PaidAmount": 0,
+                      "BalanceRemaining": 200})
+
+    rep = cdb.get_production_report(cid, "2026-06-18", "2026-06-30")
+    # Paid = 120 + 80 collected from the claim data, even with an empty
+    # payments table (Posted count therefore stays 0).
+    assert rep["paid_total_amount"] == 200.0
+    assert rep["paid_total_count"] == 2
+    assert rep["payments_total_count"] == 0
+    susan = _user(rep, "susan")
+    assert susan["claims_paid_amount"] == 200.0
+    assert susan["claims_paid"] == 2
+
+    # A payment older than the window (by Paid Date) drops out.
+    narrow = cdb.get_production_report(cid, "2026-06-22", "2026-06-30")
+    assert narrow["paid_total_amount"] == 80.0
