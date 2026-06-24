@@ -4492,6 +4492,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
         "voided": "Closed", "zero balance": "Closed", "closed - adjusted": "Closed",
     }
 
+    # Statuses that precede billing — a claim in any of these has NOT gone out
+    # the door yet, so it legitimately carries no Bill Date.
+    _PRE_BILL_STATUSES = {"Intake", "Verification", "Coding"}
+
     def _normalize_status(raw):
         if not raw:
             return "Intake"
@@ -4731,6 +4735,21 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                                - _parse_float(mapped.get("PaidAmount", 0)))
                     mapped["BalanceRemaining"] = max(derived, 0.0)
 
+            # A claim that has reached (or moved past) "Billed/Submitted" MUST
+            # carry a Bill Date — every dated billed/production view (Billed
+            # Activity, All-Time Billed, the Team Production "$ Billed" column,
+            # AR aging) keys off BillDate. Many source files set the status to a
+            # billed value but ship no bill-date column, so those claims imported
+            # with BillDate='' and were invisible to all of those reports (e.g.
+            # 671 Billed/Submitted claims showing $0 all-time billed). When a
+            # billed claim has no parseable Bill Date, stamp one: prefer the
+            # service date (DOS) so historical claims keep a realistic timeline,
+            # and fall back to the import date only when DOS is missing too.
+            _bill_date = _parse_date(mapped.get("BillDate", ""))
+            if not _bill_date and mapped["ClaimStatus"] not in _PRE_BILL_STATUSES:
+                _bill_date = _parse_date(mapped.get("DOS", "")) or today_str
+            mapped["BillDate"] = _bill_date
+
             try:
                 cur.execute("""
                     INSERT INTO claims_master
@@ -4747,7 +4766,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                         ChargeAmount=excluded.ChargeAmount, AllowedAmount=excluded.AllowedAmount,
                         AdjustmentAmount=excluded.AdjustmentAmount, PaidAmount=excluded.PaidAmount,
                         BalanceRemaining=excluded.BalanceRemaining, ClaimStatus=excluded.ClaimStatus,
-                        BillDate=excluded.BillDate, DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
+                        BillDate=CASE WHEN TRIM(COALESCE(claims_master.BillDate,''))<>''
+                                     THEN claims_master.BillDate ELSE excluded.BillDate END,
+                        DeniedDate=excluded.DeniedDate, PaidDate=excluded.PaidDate,
                         DenialCategory=excluded.DenialCategory, DenialReason=excluded.DenialReason,
                         Owner=excluded.Owner, LastTouchedDate=excluded.LastTouchedDate,
                         sub_profile=excluded.sub_profile, uploaded_by=excluded.uploaded_by,

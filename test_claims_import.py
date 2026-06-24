@@ -116,3 +116,81 @@ def test_single_line_claim_keeps_bare_claim_number(hub_env):
         "SELECT ClaimKey FROM claims_master WHERE client_id=?", (cid,)
     )]
     assert keys == ["CLM3003"]
+
+def _bill_dates(client_db, cid):
+    conn = client_db.get_db()
+    return {
+        r[0]: r[1]
+        for r in conn.execute(
+            "SELECT ClaimKey, BillDate FROM claims_master WHERE client_id=?", (cid,)
+        )
+    }
+
+
+def test_billed_claim_without_bill_date_is_stamped_from_dos(hub_env):
+    """A claim whose status says it was billed but whose file carries no bill-date
+    column must still get a Bill Date (DOS preferred) so it appears in every dated
+    billed/production report instead of silently reading $0."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status"],
+        ["CLM5001", "2026-02-10", "99213", "150.00", "Billed"],
+    ]
+    client_routes._import_claims_from_excel(_csv_bytes(rows), ".csv", cid)
+
+    assert _bill_dates(client_db, cid)["CLM5001"] == "2026-02-10"
+
+
+def test_billed_claim_without_dos_falls_back_to_today(hub_env):
+    """When a billed claim has neither a bill date nor a DOS, stamp the import date
+    so it is never invisible to billed reports."""
+    client_db, client_routes = hub_env
+    from app.client_routes import business_today_iso
+
+    cid = _make_client(client_db)
+    rows = [
+        ["Claim Number", "CPT", "Charge", "Status"],
+        ["CLM5002", "99214", "220.00", "Billed/Submitted"],
+    ]
+    client_routes._import_claims_from_excel(_csv_bytes(rows), ".csv", cid)
+
+    assert _bill_dates(client_db, cid)["CLM5002"] == business_today_iso()
+
+
+def test_pre_bill_claim_keeps_blank_bill_date(hub_env):
+    """A claim still in a pre-bill status (Intake/Verification/Coding) legitimately
+    has no Bill Date and must NOT be stamped."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status"],
+        ["CLM5003", "2026-02-11", "99215", "300.00", "Intake"],
+    ]
+    client_routes._import_claims_from_excel(_csv_bytes(rows), ".csv", cid)
+
+    assert _bill_dates(client_db, cid)["CLM5003"] == ""
+
+
+def test_existing_bill_date_is_preserved_on_reimport(hub_env):
+    """Re-uploading a file must not churn a Bill Date that is already set — the
+    first real (or stamped) date stands so production history stays stable."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    first = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status", "Bill Date"],
+        ["CLM5004", "2026-02-12", "99213", "150.00", "Billed", "2026-02-15"],
+    ]
+    client_routes._import_claims_from_excel(_csv_bytes(first), ".csv", cid)
+    assert _bill_dates(client_db, cid)["CLM5004"] == "2026-02-15"
+
+    # Re-upload the same claim with NO bill-date column — the existing date stands.
+    second = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status"],
+        ["CLM5004", "2026-02-12", "99213", "150.00", "Billed"],
+    ]
+    client_routes._import_claims_from_excel(_csv_bytes(second), ".csv", cid)
+    assert _bill_dates(client_db, cid)["CLM5004"] == "2026-02-15"
