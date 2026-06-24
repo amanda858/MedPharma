@@ -6833,6 +6833,9 @@
         // Also refresh dashboard summary + documents
         loadDashboard();
         loadDocuments();
+        // Keep the Reporting tab in sync so its totals (e.g. total billed/charged)
+        // reflect the just-imported data instead of a stale cached figure.
+        if (canViewReporting()) loadReport();
       } catch (e) {
         console.error(e);
         toast('Import failed: ' + e.message, 'error');
@@ -8341,6 +8344,8 @@
         else if (d.import_category === 'EDI') loadEdi();
         loadDashboard();
         loadDocuments();
+        // Keep Reporting totals in sync with the freshly imported data.
+        if (d.import_category && canViewReporting()) loadReport();
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -8419,6 +8424,8 @@
           loadDashboard();
           // Refresh relevant section
           loadClaims(); loadCred(); loadEnroll(); loadEdi();
+          // Refresh Reporting so totals reflect the replaced/re-imported data.
+          if (canViewReporting()) loadReport();
         } catch (e) { toast(e.message, 'error'); }
         input.remove();
       };
