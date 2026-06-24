@@ -2138,24 +2138,17 @@ _PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
 
 
 def backfill_missing_bill_dates():
-    """One-time (idempotent) migration: stamp a valid Bill Date on already-imported
-    billed claims that were saved with a blank — or unparseable — BillDate.
+    """One-time (idempotent) migration: stamp a Bill Date on already-imported
+    billed claims that were saved with a blank BillDate.
 
     Older imports stored billed/submitted claims with an empty BillDate whenever
     the source file shipped no bill-date column. Every dated billed/production
     view (Billed Activity, All-Time Billed, the Team Production "$ Billed"
     column, AR aging) keys off BillDate, so those claims read $0 even though
-    their status said they had been billed.
-
-    This fills the gap using the service date (DOS) when it is a valid ISO date —
-    mirroring the AR-aging fallback — else the row's creation date, else today.
-    The dated reports parse BillDate as strict ISO (date.fromisoformat), so the
-    stamped value is always coerced to ISO (YYYY-MM-DD); a non-ISO DOS like
-    "06/18/2026" falls through to the creation date rather than producing a value
-    that the reports would silently skip. The WHERE clause therefore targets any
-    billed row whose BillDate is blank OR not a parseable ISO date, so it also
-    repairs legacy malformed dates. Runs on every startup but only touches rows
-    that still need it, so it's a no-op once the data is clean.
+    their status said they had been billed. This fills the blanks using the
+    service date (DOS) when present — mirroring the AR-aging fallback — else the
+    row's creation date. Runs on every startup but only touches rows that still
+    need it, so it's a no-op once the data is clean.
     """
     conn = get_db()
     try:
@@ -2164,13 +2157,11 @@ def backfill_missing_bill_dates():
         cur.execute(
             f"""
             UPDATE claims_master
-               SET BillDate = COALESCE(
-                       date(NULLIF(TRIM(DOS), '')),
-                       date(created_at),
-                       date('now')
+               SET BillDate = substr(
+                       COALESCE(NULLIF(TRIM(DOS), ''), date(created_at), date('now')), 1, 10
                    ),
                    updated_at = CURRENT_TIMESTAMP
-             WHERE date(NULLIF(TRIM(BillDate), '')) IS NULL
+             WHERE TRIM(COALESCE(BillDate, '')) = ''
                AND TRIM(COALESCE(ClaimStatus, '')) NOT IN ({placeholders})
             """,
             _PRE_BILL_STATUSES,
