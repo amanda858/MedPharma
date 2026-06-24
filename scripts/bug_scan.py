@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path("/workspaces/CVOPro")
+ROOT = Path("/workspaces/MedPharma")
 
 # Live code paths only — the modules that ship to Render.
 LIVE_FILES = [

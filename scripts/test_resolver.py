@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke-test the resolver chain locally."""
 import sys, os
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 # Wipe cache for a clean test
 import os
 for p in ("/tmp/linkedin_resolver_cache.db",):

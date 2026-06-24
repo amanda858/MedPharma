@@ -3,7 +3,7 @@ it into git. If it did, we can recover it.
 """
 import subprocess
 
-ROOT = "/workspaces/CVOPro"
+ROOT = "/workspaces/MedPharma"
 
 
 def run(cmd, max_chars=3000):

@@ -8,7 +8,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-REPO = "/workspaces/CVOPro"
+REPO = "/workspaces/MedPharma"
 FILES = [
     "app/client_db.py",
     "app/client_routes.py",

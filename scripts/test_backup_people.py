@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test the NPPES backup-person fallback locally."""
 import asyncio, sys, os
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.backup_people import find_backup_people
 
 CASES = [

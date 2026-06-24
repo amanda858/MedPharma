@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path("/workspaces/CVOPro")
+ROOT = Path("/workspaces/MedPharma")
 
 
 def run(cmd, check=True):

@@ -1,6 +1,6 @@
 """Quick standalone test of LinkedIn finder against real names."""
 import asyncio, sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.linkedin_finder import find_linkedin_profile, _ddg_html, _bing_html
 import httpx
 

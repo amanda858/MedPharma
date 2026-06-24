@@ -1,6 +1,6 @@
 """Inspect raw HTML response from search engines."""
 import asyncio, sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 import httpx
 
 H = {

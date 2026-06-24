@@ -1,6 +1,6 @@
 """Test the bulk prospector end-to-end — pulls real NPPES data."""
 import asyncio, sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.bulk_prospector import prospect_state, prospect_and_scrub, SPECIALTY_KEYWORDS
 
 

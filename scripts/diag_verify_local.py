@@ -1,5 +1,5 @@
 import asyncio, sys, os
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.email_verifier import verify_email
 
 async def main():

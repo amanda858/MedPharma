@@ -3,7 +3,7 @@ real work vs garbage. Prints sizes so we don't blow up the terminal.
 """
 import subprocess
 
-ROOT = "/workspaces/CVOPro"
+ROOT = "/workspaces/MedPharma"
 
 
 def run(cmd, max_chars=4000):
@@ -34,8 +34,8 @@ for path in [
     "render.yaml",
     "README.md",
     "test_imports.py",
-    ".vscode/auth_smoke.py",
-    ".vscode/full_admin_smoke.py",
+    "scripts/auth_smoke.py",
+    "scripts/full_admin_smoke.py",
 ]:
     print(f"\n========= {path} =========")
     run(["git", "diff", "HEAD", "--", path], max_chars=2500)

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /workspaces/CVOPro
+cd /workspaces/MedPharma
 echo "=== seed CSV ==="
 wc -l data/seed_national_pull.csv
 echo "--- headers ---"

@@ -5,7 +5,7 @@ runs the in-house verifier against every candidate, prints what would
 ship to the user.
 """
 import asyncio, sys, csv, io
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 
 # Force-reimport in case a stale module is loaded
 if "app.scrubber" in sys.modules:

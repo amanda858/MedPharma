@@ -1,5 +1,5 @@
 import subprocess, os
-os.chdir("/workspaces/CVOPro")
+os.chdir("/workspaces/MedPharma")
 print("=== git status ===")
 print(subprocess.run(["git","status","--short"], capture_output=True, text=True).stdout)
 print("=== git check-ignore ===")

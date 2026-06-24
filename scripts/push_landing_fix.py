@@ -9,7 +9,7 @@ intentionally NOT included.
 import subprocess
 import sys
 
-ROOT = "/workspaces/CVOPro"
+ROOT = "/workspaces/MedPharma"
 
 
 def run(cmd, check=True):

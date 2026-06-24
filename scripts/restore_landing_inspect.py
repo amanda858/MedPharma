@@ -1,14 +1,14 @@
 """Backup current client_hub.html, then restore it to the version BEFORE
 the 2ecc17e 'ui(login): clean centered card...' commit.
 
-Run with: python3 .vscode/restore_landing_inspect.py
+Run with: python3 scripts/restore_landing_inspect.py
 """
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
-ROOT = Path("/workspaces/CVOPro")
+ROOT = Path("/workspaces/MedPharma")
 TARGET = ROOT / "app" / "templates" / "client_hub.html"
 BAD_COMMIT = "2ecc17e"   # the commit that introduced the new login UI
 RESTORE_REF = f"{BAD_COMMIT}^"  # the parent = state just before the bad UI

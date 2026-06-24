@@ -49,7 +49,7 @@ def _patch_email_sinks():
 
 
 def main() -> int:
-    sys.path.insert(0, "/workspaces/CVOPro")
+    sys.path.insert(0, "/workspaces/MedPharma")
 
     # Import in the right order so init runs against the temp DB.
     import app.client_db as cdb

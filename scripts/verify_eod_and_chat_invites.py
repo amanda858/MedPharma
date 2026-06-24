@@ -11,7 +11,7 @@ Checks:
      lexi@medprosc.com and eric@medprosc.com in 'sent'.
   6. /chat/rooms create + add-member returns invite delivery reports.
 
-Run: python3 .vscode/verify_eod_and_chat_invites.py
+Run: python3 scripts/verify_eod_and_chat_invites.py
 """
 from __future__ import annotations
 

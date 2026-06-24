@@ -4,8 +4,8 @@
     {
       "label": "verify-live-e2e",
       "type": "shell",
-      "command": "sleep 60 && python3 /workspaces/CVOPro/.vscode/verify_live_e2e.py",
-      "options": {"cwd": "/workspaces/CVOPro"}
+      "command": "sleep 60 && python3 /workspaces/MedPharma/.vscode/verify_live_e2e.py",
+      "options": {"cwd": "/workspaces/MedPharma"}
     }
   ]
 }

@@ -1,7 +1,7 @@
 """Local proof: with the fix, candidate domains for these orgs prefer the
 multi-token base AND we MX-filter so wrong domains get dropped."""
 import asyncio, sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.scrubber import _candidate_domains
 from app.email_verifier import lookup_mx
 

@@ -3,7 +3,7 @@
 Use this when Render is slow — same code path, output goes to /tmp.
 """
 import asyncio, csv, sys, os, time
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 
 from app.bulk_prospector import prospect_state, _enrich_dm_only
 

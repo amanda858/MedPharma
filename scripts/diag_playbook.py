@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 import traceback
 
 try:

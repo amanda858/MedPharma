@@ -1,5 +1,5 @@
 import asyncio, sys
-sys.path.insert(0, "/workspaces/CVOPro")
+sys.path.insert(0, "/workspaces/MedPharma")
 from app.npi_client import find_org_official, person_email_patterns
 
 async def main():

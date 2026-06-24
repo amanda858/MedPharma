@@ -2,7 +2,7 @@
 """Wait until live deploy reflects expected commit, then run probe."""
 import urllib.request, json, time, subprocess, sys
 
-EXPECTED = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd="/workspaces/CVOPro").decode().strip()
+EXPECTED = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd="/workspaces/MedPharma").decode().strip()
 print(f"expected commit: {EXPECTED[:8]}")
 
 BASE = "https://medpharma-hub.onrender.com"

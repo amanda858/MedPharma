@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /workspaces/CVOPro
+cd /workspaces/MedPharma
 mkdir -p app/seed
 cp data/seed_national_pull.csv app/seed/seed_national_pull.csv
 ls -la app/seed/

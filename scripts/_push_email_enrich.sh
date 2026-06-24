@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
-cd /workspaces/CVOPro
-git add app/bulk_prospector.py .vscode/local_hunt.py
+cd /workspaces/MedPharma
+git add app/bulk_prospector.py scripts/local_hunt.py
 git commit -m "feat: add Hunter.io + pattern email enrichment to lead pipeline
 
 - Wire find_emails_for_lab() into _enrich_dm_only() for every prospect
@@ -13,5 +13,5 @@ git commit -m "feat: add Hunter.io + pattern email enrichment to lead pipeline
 - ENABLE_EMAIL_ENRICHMENT=1 by default (set to 0 to disable)
 
 Tested locally on FL clinical: 25/25 rows with email,
-4 verified (Hunter conf >=70), 11 with live domains, in 179s." -- app/bulk_prospector.py .vscode/local_hunt.py
+4 verified (Hunter conf >=70), 11 with live domains, in 179s." -- app/bulk_prospector.py scripts/local_hunt.py
 git push origin main

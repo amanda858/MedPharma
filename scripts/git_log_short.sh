@@ -1,5 +1,5 @@
 #!/bin/bash
-cd /workspaces/CVOPro
+cd /workspaces/MedPharma
 git log --oneline -8 | cat
 echo "=== git status short ==="
 git status --short | cat
