@@ -1665,14 +1665,14 @@ def send_production_reminders():
                             </p>
                         </div>
                         <p style="font-size: 13px; color: #64748b; line-height: 1.6; margin: 0 0 20px;">
-                            Log in to <a href="https://medpharmasc.com" style="color: #2563eb; text-decoration: none; font-weight: 600;">MedPharma Hub</a>
+                            Log in to <a href="{_hub_link('/hub')}" style="color: #2563eb; text-decoration: none; font-weight: 600;">MedPharma Hub</a>
                             and go to <strong>User Production</strong> to submit your work for today. You can either
                             log individual tasks or upload an Excel/PDF report.
                         </p>
                         <div style="text-align: center; margin: 24px 0;">
-                            <a href="https://medpharmasc.com" style="display:inline-block;background:#2563eb;color:white;padding:12px 32px;
+                            <a href="{_hub_link('/hub?panel=production')}" style="display:inline-block;background:#2563eb;color:white;padding:12px 32px;
                                 border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
-                                Log In & Upload Production
+                                Log In &amp; Upload Production
                             </a>
                         </div>
                         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
@@ -1853,7 +1853,38 @@ _EOD_EXCLUDE_USERS_DEFAULT = {
 # looks like a real product, not a debug dump.
 _MEDPHARMA_LOGO_URL = "https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
 _MEDPHARMA_SITE_URL = "https://medpharmasc.com"
-_MEDPHARMA_HUB_URL  = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
+try:
+    from app.config import HUB_BASE_URL as _HUB_BASE_URL
+except Exception:  # pragma: no cover - config should always import
+    _HUB_BASE_URL = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
+
+
+def _hub_origin() -> str:
+    """Return the Client Hub origin (scheme + host) with any trailing "/hub"
+    path and trailing slashes stripped, so deep links can be appended cleanly."""
+    base = (_HUB_BASE_URL or "").strip().rstrip("/")
+    if base.lower().endswith("/hub"):
+        base = base[:-4]
+    return base
+
+
+def _hub_link(path: str = "/hub") -> str:
+    """Build an ABSOLUTE Client Hub URL for use in email buttons.
+
+    Accepts paths such as "/hub", "/hub?chat=5" or "hub?panel=chat". The
+    configured HUB_BASE_URL may include or omit a trailing "/hub" — either
+    form yields a correct, non-duplicated link. Email clients cannot follow
+    relative URLs, so all email CTAs must go through this helper.
+    """
+    origin = _hub_origin()
+    p = path or "/hub"
+    if not p.startswith("/"):
+        p = "/" + p
+    return f"{origin}{p}"
+
+
+# Canonical absolute hub URL used in email footers/buttons.
+_MEDPHARMA_HUB_URL = _hub_link("/hub")
 
 
 def _eod_recipients() -> list[str]:
@@ -3492,12 +3523,6 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-
     sent = 0
     for item in pending:
         addr = (item.get("email") or "").strip()
@@ -3507,8 +3532,7 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
         room_id = item.get("room_id")
         sender = item.get("sender_name") or "a teammate"
         who = (item.get("contact_name") or item.get("username") or "there").split()[0]
-        deep_link = (f"{hub_base}/hub?chat={room_id}" if hub_base
-                     else f"/hub?chat={room_id}")
+        deep_link = _hub_link(f"/hub?chat={room_id}")
         subject = f"💬 You were mentioned in '{room_name}' — still unread"
         text_body = (
             f"Hi {who},\n\n"
@@ -3570,12 +3594,7 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    try:
-        from app.config import HUB_BASE_URL as _hub_base  # type: ignore
-        hub_base = (_hub_base or "").strip().rstrip("/")
-    except Exception:
-        hub_base = ""
-    deep_link = f"{hub_base}/hub?panel=chat" if hub_base else "/hub?panel=chat"
+    deep_link = _hub_link("/hub?panel=chat")
 
     sent = 0
     for item in pending:

@@ -56,6 +56,13 @@ APP_PORT = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
 LAB_PORT = int(os.getenv("LAB_PORT", "8000"))    # Lab Lead Generator
 HUB_PORT = int(os.getenv("HUB_PORT", "5240"))    # Client Hub
 
+# Public base URL of the Client Hub, used to build ABSOLUTE links in emails
+# (report "Open Hub" buttons, chat-mention deep links, etc.). Relative links
+# like "/hub?chat=5" do not work once an email leaves the app, so every email
+# CTA must resolve through this value. May be supplied with or without a
+# trailing "/hub" path — link builders normalize either form.
+HUB_BASE_URL = os.getenv("HUB_BASE_URL", "https://medpharma-hub.onrender.com/hub")
+
 # Prefer mounted persistent disk when available (Render: /data).
 _DEFAULT_DB_PATH = "/data/leads.db" if os.path.isdir("/data") else "data/leads.db"
 DATABASE_PATH = os.getenv("DB_PATH", _DEFAULT_DB_PATH)
