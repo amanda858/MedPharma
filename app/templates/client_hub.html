@@ -2592,6 +2592,7 @@
             <div class="page-title">💬 Team Chat</div>
             <div class="page-actions" id="chatPageActions" style="display:flex;gap:8px">
               <button class="btn btn-secondary btn-sm" id="chatSoundToggle" onclick="toggleChatSound()" title="Toggle the new-message chime">🔊 Sound On</button>
+              <button class="btn btn-secondary btn-sm" onclick="findLastChat()" title="Jump to your most recently active chat room">↩ Latest</button>
               <button class="btn btn-secondary btn-sm" onclick="loadChatRooms()">↻ Refresh</button>
               <button class="btn btn-secondary btn-sm" id="chatNewDmBtn" onclick="openDmPicker()" title="Start a private 1:1 message">✉️ New DM</button>
               <button class="btn btn-primary btn-sm" id="chatNewRoomBtn" style="display:none" onclick="openChatRoomModal()">+ New Room</button>
@@ -10112,6 +10113,14 @@
         // If the previously-selected room is still in the list, re-select it.
         if (CHAT.activeRoomId && CHAT.rooms.some(r => r.id === CHAT.activeRoomId)) {
           selectChatRoom(CHAT.activeRoomId, { silent: true });
+        } else if (!CHAT.activeRoomId && CHAT.rooms.length) {
+          // No room selected yet — jump straight to the user's most recently
+          // active chat (prefer rooms with unread messages, fall back to the
+          // room with the latest message overall). This is the "find my last
+          // chat" behaviour: opening the chat panel always lands you where you
+          // left off rather than showing a blank conversation list.
+          const firstUnread = CHAT.rooms.find(r => parseInt(r.unread || 0, 10) > 0);
+          selectChatRoom((firstUnread || CHAT.rooms[0]).id);
         }
       } catch (e) {
         const list = document.getElementById('chatRoomsList');
@@ -10144,6 +10153,15 @@
           ${sub ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${sub}</div>` : ''}
         </div>`;
       }).join('');
+    }
+
+    // Jump to the most recently active room — prefer rooms with unread messages;
+    // fall back to the room with the most recent message overall.  This is used
+    // by the "↩ Latest" button and is called automatically on first load.
+    function findLastChat() {
+      if (!CHAT.rooms.length) { toast('No chat rooms yet.', 'info'); return; }
+      const firstUnread = CHAT.rooms.find(r => parseInt(r.unread || 0, 10) > 0);
+      selectChatRoom((firstUnread || CHAT.rooms[0]).id);
     }
 
     async function selectChatRoom(roomId, opts = {}) {
