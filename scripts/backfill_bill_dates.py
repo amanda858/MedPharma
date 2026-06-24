@@ -26,22 +26,26 @@ import sys
 
 PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
 
-# Stamp DOS when it parses to a real date, else the row's creation date,
-# truncated to YYYY-MM-DD. Only touches billed rows with a blank BillDate.
+# Stamp DOS when it is a valid ISO date, else the row's creation date, else
+# today. The dated billed/production reports parse BillDate as strict ISO, so
+# the value is always coerced to YYYY-MM-DD. Targets billed rows whose BillDate
+# is blank OR not parseable as ISO, so it also repairs legacy malformed dates.
 _UPDATE_SQL = """
 UPDATE claims_master
-   SET BillDate = substr(
-           COALESCE(NULLIF(TRIM(DOS), ''), date(created_at), date('now')), 1, 10
+   SET BillDate = COALESCE(
+           date(NULLIF(TRIM(DOS), '')),
+           date(created_at),
+           date('now')
        ),
        updated_at = CURRENT_TIMESTAMP
- WHERE TRIM(COALESCE(BillDate, '')) = ''
+ WHERE date(NULLIF(TRIM(BillDate), '')) IS NULL
    AND TRIM(COALESCE(ClaimStatus, '')) NOT IN ({placeholders})
 """.format(placeholders=",".join("?" for _ in PRE_BILL_STATUSES))
 
 _COUNT_SQL = """
 SELECT COUNT(*)
   FROM claims_master
- WHERE TRIM(COALESCE(BillDate, '')) = ''
+ WHERE date(NULLIF(TRIM(BillDate), '')) IS NULL
    AND TRIM(COALESCE(ClaimStatus, '')) NOT IN ({placeholders})
 """.format(placeholders=",".join("?" for _ in PRE_BILL_STATUSES))
 
