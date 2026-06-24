@@ -3529,17 +3529,15 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
         if not addr or "@" not in addr:
             continue
         room_name = item.get("room_name") or "a chat room"
-        room_id = item.get("room_id")
         sender = item.get("sender_name") or "a teammate"
         who = (item.get("contact_name") or item.get("username") or "there").split()[0]
-        deep_link = _hub_link(f"/hub?chat={room_id}")
         subject = f"💬 You were mentioned in '{room_name}' — still unread"
         text_body = (
             f"Hi {who},\n\n"
             f"{sender} mentioned you in the chat room '{room_name}' over two "
             f"hours ago and it's still unread.\n\n"
-            f"Open the room to read and reply (the message itself isn't "
-            f"included here for HIPAA compliance):\n{deep_link}\n"
+            f"Log in to MedPharma Hub and open the room to read and reply (the "
+            f"message itself isn't included here for HIPAA compliance).\n"
         )
         html_body = (
             f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
@@ -3548,11 +3546,7 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
             f"<b>{room_name}</b> over two hours ago and it's still unread.</p>"
             f"<p style='color:#475569;font-size:13px'>The message body isn't "
             f"included in this email (HIPAA-protected content stays inside the "
-            f"hub). Open the room to read and reply.</p>"
-            f"<p style='margin:18px 0'>"
-            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
-            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
-            f"font-weight:600'>Open the chat room →</a></p>"
+            f"hub). Log in to MedPharma Hub and open the room to read and reply.</p>"
             f"</div>"
         )
         try:
@@ -3594,8 +3588,6 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     if not pending:
         return {"ok": True, "sent": 0}
 
-    deep_link = _hub_link("/hub?panel=chat")
-
     sent = 0
     for item in pending:
         addr = (item.get("email") or "").strip()
@@ -3610,9 +3602,9 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
             f"Hi {who},\n\n"
             f"You have {count_phrase} in MedPharma Hub Team Chat that have been "
             f"sitting unread for more than {int(min_age_minutes)} minutes.\n\n"
-            f"Please make sure you're up to date on team communication — open "
-            f"the chat to read and reply (message content isn't included here "
-            f"for HIPAA compliance):\n{deep_link}\n"
+            f"Please make sure you're up to date on team communication — log in "
+            f"to MedPharma Hub and open the chat to read and reply (message "
+            f"content isn't included here for HIPAA compliance).\n"
         )
         html_body = (
             f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#0f172a'>"
@@ -3623,11 +3615,7 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
             f"<p>Please make sure you're up to date on team communication.</p>"
             f"<p style='color:#475569;font-size:13px'>The message content isn't "
             f"included in this email (HIPAA-protected content stays inside the "
-            f"hub). Open the chat to read and reply.</p>"
-            f"<p style='margin:18px 0'>"
-            f"<a href='{deep_link}' style='display:inline-block;padding:10px 22px;"
-            f"background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;"
-            f"font-weight:600'>Open Team Chat →</a></p>"
+            f"hub). Log in to MedPharma Hub and open the chat to read and reply.</p>"
             f"</div>"
         )
         try:
