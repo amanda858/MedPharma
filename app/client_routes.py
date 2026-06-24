@@ -1,5 +1,7 @@
 """Client Hub API — auth, claims queue, payments, notes, credentialing, enrollment, EDI, providers, dashboard."""
 
+from __future__ import annotations
+
 import os
 import json as _json
 import re

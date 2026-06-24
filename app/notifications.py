@@ -18,6 +18,8 @@ Configuration via environment variables:
   OPENAI_API_KEY — For AI productivity narrative (optional; falls back to rule-based)
 """
 
+from __future__ import annotations
+
 import os
 import logging
 import threading

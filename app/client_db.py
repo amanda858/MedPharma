@@ -1,6 +1,8 @@
 """Database — MedPharma Client Hub: claims_master, payments, notes_log,
 credentialing, enrollment, edi_setup, providers, clients, sessions."""
 
+from __future__ import annotations
+
 import sqlite3
 import os
 import json
