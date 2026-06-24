@@ -112,6 +112,26 @@ async def startup():
     log.info("🚀 Hub service startup complete")
 
 
+@app.middleware("http")
+async def _no_store_api_responses(request: Request, call_next):
+    """Prevent browsers/CDNs from caching dynamic API responses.
+
+    Data endpoints under /hub/api (report totals, dashboard, production report,
+    profiles, etc.) must always reflect the latest database state. Without an
+    explicit no-store header an intermediary cache or the browser can serve a
+    stale copy, so users' updates made today don't show up in "refreshed"
+    totals. Mark every dynamic API response as non-cacheable.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/hub/api") or path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["CDN-Cache-Control"] = "no-store"
+    return response
+
+
 app.include_router(client_hub_router)
 
 

@@ -7293,7 +7293,7 @@
       const period = document.getElementById('reportPeriod')?.value || 'all';
       const sp = activeSubProfile ? `&sub_profile=${encodeURIComponent(activeSubProfile)}` : '';
       try {
-        const r = await fetch(`/hub/api/report/${activeClientId}?period=${period}${sp}`);
+        const r = await fetch(`/hub/api/report/${activeClientId}?period=${period}${sp}`, { cache: 'no-store' });
         const d = await r.json();
         lastReportData = d;
         renderReport(d);
