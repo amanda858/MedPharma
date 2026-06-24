@@ -1189,6 +1189,193 @@ def admin_diag_users(hub_session: Optional[str] = Cookie(None)):
     return {"users": users, "user_count": len(users), "migrations": migrations}
 
 
+@router.get("/admin/diag/data-health")
+def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: explain WHY a dashboard total looks frozen/wrong.
+
+    Surfaces three things, per account and overall:
+      1. Claims health — how many claims exist, the Outstanding (AR) balance,
+         charged / paid totals, and the most recent claim update. If the
+         "last claim activity" timestamp is days old while people upload daily,
+         their uploads are NOT reaching claims_master.
+      2. The smoking gun — spreadsheets uploaded to Documents that were NEVER
+         imported as data (Excel/CSV files whose category isn't a data section).
+         Each of these is daily work sitting inert: it never moved the numbers.
+      3. Recent uploads — the latest files with their category + row counts, so
+         we can see what's coming in and whether it imported.
+    """
+    admin = _require_full_admin(hub_session)
+    from .client_db import get_db
+    import traceback
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        id_to_name = {}
+        try:
+            for r in cur.execute(
+                "SELECT id, COALESCE(NULLIF(TRIM(company),''), username) AS name "
+                "FROM clients"
+            ).fetchall():
+                id_to_name[r["id"]] = r["name"]
+        except Exception:
+            id_to_name = {}
+
+        # 1. Per-account claims health.
+        accounts = []
+        try:
+            rows = cur.execute(
+                """SELECT client_id,
+                          COUNT(*) AS claims,
+                          ROUND(COALESCE(SUM(BalanceRemaining),0),2) AS outstanding,
+                          ROUND(COALESCE(SUM(ChargeAmount),0),2)     AS charged,
+                          ROUND(COALESCE(SUM(PaidAmount),0),2)       AS paid,
+                          SUM(CASE WHEN TRIM(COALESCE(BillDate,''))<>'' THEN 1 ELSE 0 END) AS with_bill_date,
+                          SUM(CASE WHEN TRIM(COALESCE(BillDate,''))='' THEN 1 ELSE 0 END)  AS missing_bill_date,
+                          MAX(updated_at) AS last_update,
+                          MAX(created_at) AS last_created
+                   FROM claims_master
+                   GROUP BY client_id
+                   ORDER BY outstanding DESC"""
+            ).fetchall()
+            for r in rows:
+                accounts.append({
+                    "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+                    "client_id": r["client_id"],
+                    "claims": r["claims"],
+                    "outstanding": r["outstanding"],
+                    "charged": r["charged"],
+                    "paid": r["paid"],
+                    "with_bill_date": r["with_bill_date"],
+                    "missing_bill_date": r["missing_bill_date"],
+                    "last_claim_update": r["last_update"],
+                    "last_claim_created": r["last_created"],
+                })
+        except Exception as e:
+            accounts = [{"error": f"{type(e).__name__}: {e}"}]
+
+        # 2. Spreadsheets uploaded but never imported (saved as plain documents).
+        not_imported = []
+        not_imported_count = 0
+        not_imported_rows = 0
+        try:
+            cats = ",".join("?" * len(DATA_IMPORT_CATEGORIES))
+            rows = cur.execute(
+                f"""SELECT id, client_id, original_name, category, row_count,
+                           uploaded_by, created_at
+                    FROM client_files
+                    WHERE file_type='excel' AND category NOT IN ({cats})
+                    ORDER BY created_at DESC""",
+                tuple(DATA_IMPORT_CATEGORIES),
+            ).fetchall()
+            for r in rows:
+                not_imported_count += 1
+                not_imported_rows += int(r["row_count"] or 0)
+                if len(not_imported) < 25:
+                    not_imported.append({
+                        "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+                        "file": r["original_name"],
+                        "saved_as_category": r["category"],
+                        "rows_in_file": r["row_count"],
+                        "uploaded_by": r["uploaded_by"],
+                        "uploaded_at": r["created_at"],
+                    })
+        except Exception as e:
+            not_imported = [{"error": f"{type(e).__name__}: {e}"}]
+
+        # Count PDF uploads — these can never auto-import into claims.
+        pdf_uploads = 0
+        try:
+            pdf_uploads = cur.execute(
+                "SELECT COUNT(*) FROM client_files WHERE file_type='pdf'"
+            ).fetchone()[0]
+        except Exception:
+            pdf_uploads = None
+
+        # 3. Recent uploads (any type) so we can see what's actually arriving.
+        recent_uploads = []
+        try:
+            rows = cur.execute(
+                """SELECT client_id, original_name, file_type, category,
+                          row_count, uploaded_by, created_at
+                   FROM client_files
+                   ORDER BY created_at DESC
+                   LIMIT 15"""
+            ).fetchall()
+            for r in rows:
+                imported_flag = (r["file_type"] == "excel"
+                                 and r["category"] in DATA_IMPORT_CATEGORIES)
+                recent_uploads.append({
+                    "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+                    "file": r["original_name"],
+                    "type": r["file_type"],
+                    "category": r["category"],
+                    "rows": r["row_count"],
+                    "would_import_as_data": imported_flag,
+                    "uploaded_by": r["uploaded_by"],
+                    "uploaded_at": r["created_at"],
+                })
+        except Exception as e:
+            recent_uploads = [{"error": f"{type(e).__name__}: {e}"}]
+
+        totals = {}
+        try:
+            t = cur.execute(
+                """SELECT COUNT(*) AS claims,
+                          ROUND(COALESCE(SUM(BalanceRemaining),0),2) AS outstanding,
+                          ROUND(COALESCE(SUM(ChargeAmount),0),2) AS charged,
+                          ROUND(COALESCE(SUM(PaidAmount),0),2) AS paid
+                   FROM claims_master"""
+            ).fetchone()
+            totals = {"claims": t["claims"], "outstanding": t["outstanding"],
+                      "charged": t["charged"], "paid": t["paid"]}
+        except Exception as e:
+            totals = {"error": f"{type(e).__name__}: {e}"}
+    except Exception as e:
+        conn.close()
+        return {"error": "data_health", "detail": f"{type(e).__name__}: {e}",
+                "trace": traceback.format_exc()}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    diagnosis = []
+    if not_imported_count:
+        diagnosis.append(
+            f"{not_imported_count} uploaded spreadsheet(s) totalling ~{not_imported_rows} "
+            f"row(s) were saved as documents and NEVER imported into claims — this is "
+            f"daily work that did not move any number. Re-upload them under the "
+            f"\"Claims\" category (or use Claims Queue → Import Excel) to ingest them."
+        )
+    if pdf_uploads:
+        diagnosis.append(
+            f"{pdf_uploads} PDF upload(s) exist; PDFs are never auto-imported into "
+            f"claims, so any production reported only as PDF is invisible to the totals."
+        )
+    if not diagnosis:
+        diagnosis.append(
+            "No un-imported spreadsheets detected. If a total still looks frozen, "
+            "compare each account's last_claim_update against when people last "
+            "uploaded — a stale timestamp means new uploads aren't reaching that account."
+        )
+
+    return {
+        "ok": True,
+        "viewed_by": admin.get("username"),
+        "overall_totals": totals,
+        "accounts": accounts,
+        "uploaded_but_not_imported": {
+            "count": not_imported_count,
+            "total_rows": not_imported_rows,
+            "files": not_imported,
+        },
+        "pdf_uploads": pdf_uploads,
+        "recent_uploads": recent_uploads,
+        "diagnosis": diagnosis,
+    }
+
+
 @router.post("/admin/diag/ensure-team")
 def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     """Admin-only: re-run _ensure_medpharma_team_accounts immediately on the
