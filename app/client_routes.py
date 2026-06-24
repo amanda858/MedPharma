@@ -2796,13 +2796,15 @@ def download_production_report(
     # ── Team summary rows ──────────────────────────────────────────────
     def _user_rows():
         if not by_user:
-            return "<tr><td colspan='8' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
+            return "<tr><td colspan='10' style='text-align:center;color:#9ca3af'>No team data for this period</td></tr>"
         return "".join(
             f"<tr><td><strong>{_esc(str(u.get('username','')))}</strong></td>"
             f"<td>{u.get('days_worked',0)}</td>"
             f"<td>{u.get('total_entries',0)}</td>"
             f"<td>{u.get('total_quantity',0)}</td>"
             f"<td>{u.get('total_hours',0)}h</td>"
+            f"<td>{u.get('claims_billed',0)}</td>"
+            f"<td>${u.get('claims_billed_amount',0):,.2f}</td>"
             f"<td>{u.get('payments_posted',0)}</td>"
             f"<td>${u.get('payments_amount',0):,.2f}</td>"
             f"<td>{'⚠️ Low' if (u.get('avg_hours_per_day') or 0) < 6 else '✅ OK'} ({u.get('avg_hours_per_day',0)}h/day)</td></tr>"
@@ -2909,6 +2911,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Total Entries:</b> {len(details)}</span>
     <span><b>Users:</b> {len(by_user)}</span>
+    <span><b>Claims Billed:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
     <span><b>Payments Posted:</b> {data.get('payments_total_count', 0)} (${data.get('payments_total_amount', 0):,.2f})</span>
     <span><b>Generated:</b> {generated}</span>
   </div>
@@ -2918,7 +2921,7 @@ def download_production_report(
   <section class="section">
     <h2>👥 Work Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Days Worked</th><th>Total Entries</th><th>Items Completed</th><th>Total Hours</th><th>Claims Billed</th><th>$ Billed</th><th>Payments Posted</th><th>$ Posted</th><th>Pace</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
   </section>
