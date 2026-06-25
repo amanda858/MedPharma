@@ -670,3 +670,61 @@ def test_admin_can_read_posting_notes_on_account_claim(hub_env):
     notes = r.json()
     # Admin resolves to the claim's owning account and sees the dated posting note.
     assert any("2026-06-20" in n.get("Note", "") for n in notes), notes
+
+
+def test_client_login_scopes_to_assigned_account(hub_env):
+    """A client login whose own row id differs from the account holding the
+    claims (a dedicated user assigned to one lab account) must see that
+    account's claims and dashboard buckets — not an empty self-scoped view.
+    Locks the fix so newly-added client logins always resolve to their single
+    assigned account."""
+    client_db, client_routes = hub_env
+    from fastapi.testclient import TestClient
+    hub = importlib.import_module("app.hub_app")
+    hub = importlib.reload(hub)
+    tc = TestClient(hub.app)
+
+    # Lab account owns the billed claims.
+    lab_cid = _make_client(client_db)
+    if isinstance(lab_cid, dict):
+        lab_cid = lab_cid["id"]
+    rows = [
+        ["Patient", "Claim ID", "Charge Amount", "Bill Date", "Status"],
+        ["Jane Doe", "CLM-1", "500.00", "2026-06-20", "Submitted"],
+        ["John Roe", "CLM-2", "300.00", "2026-06-21", "Submitted"],
+    ]
+    client_routes._import_claims_from_excel(
+        _xlsx_bytes(rows), ".xlsx", lab_cid, uploaded_by="susan"
+    )
+
+    # A SEPARATE client login (different id) assigned to that one account.
+    member_id = client_db.create_client({
+        "username": "tivany",
+        "password": "billout26!x",
+        "company": "SV Diagnostics",
+        "contact_name": "Tivany",
+        "email": "tivany@svd.example.com",
+        "phone": "",
+        "role": "client",
+    })
+    if isinstance(member_id, dict):
+        member_id = member_id["id"]
+    assert int(member_id) != int(lab_cid)
+    client_db.set_client_access(lab_cid, [member_id], granted_by="admin")
+
+    with tc:
+        r = tc.post("/hub/api/login",
+                    json={"username": "tivany", "password": "billout26!x"})
+        assert r.status_code == 200, r.text
+        dash = tc.get("/hub/api/dashboard")
+        claims = tc.get("/hub/api/claims")
+        tc.post("/hub/api/logout")
+
+    assert dash.status_code == 200, dash.text
+    buckets = dash.json().get("claim_buckets", {})
+    assert buckets.get("billed", {}).get("count", 0) == 2, buckets
+    assert buckets.get("billed", {}).get("amount", 0) == 800.0, buckets
+
+    assert claims.status_code == 200, claims.text
+    visible = claims.json().get("claims", [])
+    assert len(visible) == 2, visible
