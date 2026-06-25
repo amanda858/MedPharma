@@ -3073,6 +3073,9 @@
             </div>
           </div>
 
+          <!-- Pending-import warning: claim spreadsheets uploaded but never imported -->
+          <div id="pendingImportBanner" style="display:none;margin-top:16px;padding:14px 18px;border-radius:10px;background:#fffbeb;border:1px solid #fcd34d;color:#92400e;font-size:13px;line-height:1.5"></div>
+
           <!-- File list -->
           <div class="card" style="padding:0;margin-top:16px">
             <div class="card-header"
@@ -8143,7 +8146,30 @@
       const countEl = document.getElementById('docFilesCount');
       if (titleEl) titleEl.textContent = title;
       if (countEl) countEl.textContent = filtered.length + ' file' + (filtered.length !== 1 ? 's' : '');
+      renderPendingImportBanner();
       renderFiles(filtered);
+    }
+
+    // A spreadsheet is "pending import" when it's an Excel/CSV that was filed
+    // under a non-data category — so it was saved as a document and never
+    // imported into claims. This is how daily billed work silently disappears.
+    const DATA_IMPORT_CATEGORIES = ['Claims', 'Credentialing', 'Enrollment', 'EDI'];
+    function isPendingImport(f) {
+      return (f.file_type === 'excel') && !DATA_IMPORT_CATEGORIES.includes(f.category);
+    }
+
+    function renderPendingImportBanner() {
+      const el = document.getElementById('pendingImportBanner');
+      if (!el) return;
+      const pending = allDocFiles.filter(isPendingImport);
+      if (!pending.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      const names = pending.slice(0, 4).map(f => esc(f.original_name)).join(', ');
+      const more = pending.length > 4 ? ` +${pending.length - 4} more` : '';
+      el.style.display = '';
+      el.innerHTML = `⚠️ <strong>${pending.length} spreadsheet${pending.length !== 1 ? 's' : ''} uploaded but not imported into claims.</strong>
+        These were filed as documents (e.g. ${names}${more}) so they aren't counted in your billed/submitted totals.
+        <button class="btn btn-sm" style="margin-left:8px;color:#fff;background:#d97706;border:none;font-weight:600"
+          onclick="importAllPending()">⬆ Import all to Claims</button>`;
     }
 
     function renderFiles(files) {
@@ -8167,6 +8193,7 @@
           <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
           <td style="white-space:nowrap;display:flex;gap:4px;align-items:center">
             <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Download">⬇ Download</a>
+            ${isPendingImport(f) ? `<button class="btn btn-sm" style="color:#fff;background:#d97706;border:none;font-size:12px;font-weight:600" onclick="importFileToClaims(${f.id})" title="Import this spreadsheet into claims">⬆ Import to Claims</button>` : ''}
             <button class="btn btn-sm" style="color:#7c3aed;background:#f5f3ff;border:none;font-size:12px" onclick="replaceFile(${f.id})" title="Replace with new version">🔄 Replace</button>
             <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteFile(${f.id})" title="Delete">🗑 Delete</button>
           </td>
@@ -8489,6 +8516,48 @@
       };
       document.body.appendChild(input);
       input.click();
+    }
+
+    // Import a spreadsheet that's already uploaded (but was filed as a document
+    // and never imported) into claims. Recovers daily billed work without a
+    // re-upload.
+    async function importFileToClaims(fileId) {
+      if (!confirm('Import this spreadsheet into claims now?\n\nIts rows will be added/updated as claims so they count toward your billed/submitted totals.')) return;
+      toast('Importing to claims…', 'info');
+      try {
+        const r = await fetch(`/hub/api/files/${fileId}/import-claims`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Import failed');
+        toast(`✅ Imported ${d.imported} claim row(s) from "${d.original_name || 'file'}"`, 'success');
+        if (d.import_errors && d.import_errors.length) {
+          toast(`⚠️ ${d.import_errors.length} import warning(s)`, 'warning');
+        }
+        loadDocuments();
+        loadDashboard();
+        loadClaims();
+        if (canViewReporting()) loadReport();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // Import every pending (un-imported) spreadsheet in one click.
+    async function importAllPending() {
+      const pending = allDocFiles.filter(isPendingImport);
+      if (!pending.length) return;
+      if (!confirm(`Import ${pending.length} spreadsheet(s) into claims now?\n\nEach will be added/updated as claims so daily work counts toward your billed/submitted totals.`)) return;
+      let ok = 0, rows = 0, failed = 0;
+      for (const f of pending) {
+        try {
+          const r = await fetch(`/hub/api/files/${f.id}/import-claims`, { method: 'POST' });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || 'failed');
+          ok += 1; rows += (d.imported || 0);
+        } catch (e) { failed += 1; }
+      }
+      toast(`✅ Imported ${rows} claim row(s) from ${ok} file(s)` + (failed ? ` · ${failed} failed` : ''), failed ? 'warning' : 'success');
+      loadDocuments();
+      loadDashboard();
+      loadClaims();
+      if (canViewReporting()) loadReport();
     }
 
     // ═══════════════════════════════════════

@@ -244,3 +244,95 @@ def test_backfill_coerces_non_iso_and_repairs_malformed_dates(hub_env):
     for key, bd in got.items():
         if bd:
             date.fromisoformat(bd)  # raises if any stamped value is not ISO
+
+
+def test_structural_match_routes_misfiled_claims_to_claims(hub_env):
+    """A claim spreadsheet uploaded under a non-data category (e.g. "General")
+    must still be detected as Claims by its column structure, so daily billed
+    work isn't silently saved as an inert document."""
+    _client_db, client_routes = hub_env
+
+    # Susan's daily worklist: a claim-id column + several claim fields, but the
+    # filename/category give no strong keyword signal.
+    claims_headers = ["Claim ID", "Patient", "DOS", "CPT", "Charge", "Status"]
+    m = client_routes._claims_structural_match(claims_headers)
+    assert m["is_claims"] is True, m
+
+    inferred, _debug = client_routes._infer_excel_category(
+        _csv_bytes([claims_headers, ["C1", "Jane", "2026-06-20", "99213", "150", "Billed"]]),
+        ".csv", filename="LIMS Daily Worklist.xlsx", description="")
+    assert inferred == "Claims", "mis-filed claim sheet must auto-route to Claims"
+
+    # A credentialing-style sheet must NOT be mistaken for claims.
+    cred_headers = ["Provider", "Payor", "Type", "Status", "Submitted",
+                    "Follow Up", "Approved", "Expiration", "Owner", "Notes"]
+    assert client_routes._claims_structural_match(cred_headers)["is_claims"] is False
+
+
+def test_import_stored_file_endpoint_recovers_unimported_spreadsheet(hub_env):
+    """The one-click import endpoint must ingest an already-uploaded spreadsheet
+    that was saved as a document, and re-file it under Claims."""
+    client_db, client_routes = hub_env
+    import os as _os
+    from fastapi.testclient import TestClient
+    hub = importlib.import_module("app.hub_app")
+    hub = importlib.reload(hub)
+    tc = TestClient(hub.app)
+
+    cid = _make_client(client_db)
+    # Simulate a file uploaded as "General" (never imported): write bytes to the
+    # upload dir and register the client_files row exactly like a real upload.
+    content = _csv_bytes([
+        ["Claim ID", "Patient", "DOS", "CPT", "Charge", "Status"],
+        ["CLM-D1", "Pat A", "2026-06-20", "99213", "150.00", "Billed"],
+        ["CLM-D2", "Pat B", "2026-06-21", "99214", "220.00", "Billed"],
+    ])
+    fname = "stored_general.csv"
+    _os.makedirs(client_routes.UPLOAD_DIR, exist_ok=True)
+    with open(_os.path.join(client_routes.UPLOAD_DIR, fname), "wb") as f:
+        f.write(content)
+    file_id = client_db.add_file(
+        client_id=cid, filename=fname, original_name="LIMS Daily Claims Worklist.csv",
+        file_type="excel", file_size=len(content), category="General",
+        description="", row_count=2, uploaded_by="susan")
+
+    with tc:
+        tc.post("/hub/api/login", json={"username": "admin", "password": "admin123"})
+        r = tc.post(f"/hub/api/files/{file_id}/import-claims")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        tc.post("/hub/api/logout")
+
+    assert d["imported"] == 2, d
+    count, total = _totals(client_db, cid)
+    assert count == 2
+    assert total == pytest.approx(370.0)
+    # File is re-filed under Claims so it's no longer flagged as pending.
+    rec = client_db.get_file_record(file_id, cid)
+    assert rec["category"] == "Claims"
+
+
+def test_import_stored_file_rejects_pdf(hub_env):
+    """PDFs cannot be imported into claims — the endpoint must say so clearly."""
+    client_db, client_routes = hub_env
+    import os as _os
+    from fastapi.testclient import TestClient
+    hub = importlib.import_module("app.hub_app")
+    hub = importlib.reload(hub)
+    tc = TestClient(hub.app)
+
+    cid = _make_client(client_db)
+    _os.makedirs(client_routes.UPLOAD_DIR, exist_ok=True)
+    with open(_os.path.join(client_routes.UPLOAD_DIR, "x.pdf"), "wb") as f:
+        f.write(b"%PDF-1.4 fake")
+    file_id = client_db.add_file(
+        client_id=cid, filename="x.pdf", original_name="ERA.pdf",
+        file_type="pdf", file_size=12, category="General",
+        description="", row_count=0, uploaded_by="melissa")
+
+    with tc:
+        tc.post("/hub/api/login", json={"username": "admin", "password": "admin123"})
+        r = tc.post(f"/hub/api/files/{file_id}/import-claims")
+        tc.post("/hub/api/logout")
+    assert r.status_code == 400
+    assert "spreadsheet" in r.json()["detail"].lower()
