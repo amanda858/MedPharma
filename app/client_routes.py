@@ -384,6 +384,140 @@ _CLAIMS_SIGNAL_HEADERS = {
 }
 
 
+# Single source of truth for claim column mapping — the "established mapping
+# parameters" the importer uses to recognize each spreadsheet's columns and route
+# their values into the right claim fields. Promoted to module level so the import
+# diagnostic can show EXACTLY what the system recognizes per file (the same glasses
+# the importer wears). Keys are normalized headers (see _norm_key); values are the
+# claims_master DB column the header feeds. Matching is exact-first, then substring
+# (_fuzzy_match_column), so multi-word keys are preferred to avoid false hits.
+CLAIMS_COLUMN_MAP = {
+    # ── ClaimKey ──
+    "claimkey": "ClaimKey", "claim key": "ClaimKey", "claim": "ClaimKey",
+    "claim id": "ClaimKey", "claimid": "ClaimKey", "claim number": "ClaimKey",
+    "claim no": "ClaimKey", "claimno": "ClaimKey", "claim num": "ClaimKey",
+    "claim #": "ClaimKey", "clm": "ClaimKey", "clm id": "ClaimKey",
+    "clm no": "ClaimKey", "clm number": "ClaimKey",
+    "account": "ClaimKey", "account number": "ClaimKey", "account no": "ClaimKey",
+    "acct": "ClaimKey", "acct no": "ClaimKey", "acct number": "ClaimKey",
+    "ticket": "ClaimKey", "ticket no": "ClaimKey", "ticket number": "ClaimKey",
+    "reference": "ClaimKey", "ref": "ClaimKey", "ref no": "ClaimKey",
+    "icn": "ClaimKey", "tcn": "ClaimKey", "dcn": "ClaimKey",
+    "control number": "ClaimKey", "claim control number": "ClaimKey",
+    "patient control number": "ClaimKey", "patient account": "ClaimKey",
+    "patient account number": "ClaimKey", "encounter": "ClaimKey",
+    "encounter id": "ClaimKey", "encounter number": "ClaimKey",
+    "invoice": "ClaimKey", "invoice number": "ClaimKey", "visit": "ClaimKey",
+    "visit number": "ClaimKey", "visit id": "ClaimKey",
+    # ── Patient ──
+    "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
+    "patient full name": "PatientName", "pt name": "PatientName", "ptname": "PatientName",
+    "patientid": "PatientID", "patient id": "PatientID", "member id": "PatientID",
+    "memberid": "PatientID", "member": "PatientName", "subscriber": "PatientName",
+    "subscriber name": "PatientName", "insured name": "PatientName",
+    "subscriber id": "PatientID", "member number": "PatientID", "mrn": "PatientID",
+    "patient last name": "PatientName", "last name": "PatientName", "name": "PatientName",
+    "first name": "PatientName", "patient last": "PatientName", "patient first": "PatientName",
+    # ── Provider ──
+    "providername": "ProviderName", "provider name": "ProviderName", "provider": "ProviderName",
+    "rendering provider": "ProviderName", "rendering": "ProviderName",
+    "rendering provider name": "ProviderName", "rendering prov": "ProviderName",
+    "servicing provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
+    "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
+    "attending": "ProviderName", "attending provider": "ProviderName",
+    "billing provider": "ProviderName", "billing prov": "ProviderName",
+    "referring provider": "ProviderName", "servicing prov": "ProviderName",
+    "npi": "NPI", "provider npi": "NPI", "rendering npi": "NPI",
+    # ── Payor / Insurance ──
+    "payor": "Payor", "payer": "Payor", "insurance": "Payor",
+    "insurance name": "Payor", "insurance company": "Payor", "ins": "Payor",
+    "plan": "Payor", "plan name": "Payor", "payer name": "Payor", "payor name": "Payor",
+    "carrier": "Payor", "insurance plan": "Payor", "health plan": "Payor",
+    "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
+    "primary payer name": "Payor", "primary insurance name": "Payor",
+    "insurance 1": "Payor", "payer 1": "Payor", "ins 1": "Payor", "insurance1": "Payor",
+    "ins name": "Payor", "ins company": "Payor", "financial class": "Payor",
+    "fc": "Payor", "fin class": "Payor", "payer type": "Payor", "payor type": "Payor",
+    "responsible party": "Payor", "guarantor": "Payor",
+    # ── DOS / CPT ──
+    "dos": "DOS", "date of service": "DOS", "service date": "DOS",
+    "svc date": "DOS", "from date": "DOS", "from": "DOS", "date from": "DOS",
+    "service from": "DOS", "from dos": "DOS", "dos from": "DOS", "svc dt": "DOS",
+    "service dt": "DOS", "date of service from": "DOS", "from service date": "DOS",
+    "begin date of service": "DOS", "service start": "DOS", "start date": "DOS",
+    "cptcode": "CPTCode", "cpt code": "CPTCode", "cpt": "CPTCode",
+    "procedure": "CPTCode", "procedure code": "CPTCode", "proc code": "CPTCode",
+    "proc": "CPTCode", "service code": "CPTCode", "hcpcs": "CPTCode",
+    "cpt/hcpcs": "CPTCode", "cpt hcpcs": "CPTCode", "procedure/cpt": "CPTCode",
+    "proc/cpt": "CPTCode", "cpt4": "CPTCode", "service": "CPTCode",
+    "description": "Description", "desc": "Description", "service description": "Description",
+    "procedure description": "Description", "proc desc": "Description",
+    "modifiers": "Description", "modifier": "Description", "mod": "Description",
+    "scrub notes": "DenialReason", "scrub note": "DenialReason",
+    "timely filing status": "ClaimStatus", "timely filing": "ClaimStatus",
+    # ── Financials ──
+    "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount",
+    "billed": "ChargeAmount", "billed amount": "ChargeAmount", "total charge": "ChargeAmount",
+    "total charges": "ChargeAmount", "charges": "ChargeAmount", "amount billed": "ChargeAmount",
+    "gross charge": "ChargeAmount", "original amount": "ChargeAmount", "fee": "ChargeAmount",
+    "charge amt": "ChargeAmount", "chg": "ChargeAmount", "chg amt": "ChargeAmount",
+    "bill amt": "ChargeAmount", "billed amt": "ChargeAmount", "billed charges": "ChargeAmount",
+    "line charge": "ChargeAmount", "service charge": "ChargeAmount", "claim charge": "ChargeAmount",
+    "total billed": "ChargeAmount", "submitted charge": "ChargeAmount", "submitted amount": "ChargeAmount",
+    "allowedamount": "AllowedAmount", "allowed amount": "AllowedAmount", "allowed": "AllowedAmount",
+    "approved amount": "AllowedAmount", "contracted amount": "AllowedAmount",
+    "allowed amt": "AllowedAmount", "contract amount": "AllowedAmount", "expected": "AllowedAmount",
+    "expected amount": "AllowedAmount", "expected reimbursement": "AllowedAmount",
+    "adjustmentamount": "AdjustmentAmount", "adjustment": "AdjustmentAmount", "adj": "AdjustmentAmount",
+    "adjustment amount": "AdjustmentAmount", "adj amount": "AdjustmentAmount", "adj amt": "AdjustmentAmount",
+    "write off": "AdjustmentAmount", "writeoff": "AdjustmentAmount", "contractual": "AdjustmentAmount",
+    "contractual adjustment": "AdjustmentAmount", "write-off": "AdjustmentAmount",
+    "paidamount": "PaidAmount", "paid amount": "PaidAmount", "paid": "PaidAmount",
+    "payment": "PaidAmount", "payment amount": "PaidAmount", "payments": "PaidAmount",
+    "total paid": "PaidAmount", "total payments": "PaidAmount", "amount paid": "PaidAmount",
+    "ins paid": "PaidAmount", "insurance paid": "PaidAmount", "reimbursement": "PaidAmount",
+    "paid amt": "PaidAmount", "pmt": "PaidAmount", "pmt amt": "PaidAmount",
+    "insurance payment": "PaidAmount", "ins payment": "PaidAmount", "plan paid": "PaidAmount",
+    "payer paid": "PaidAmount", "net paid": "PaidAmount",
+    "balanceremaining": "BalanceRemaining", "balance": "BalanceRemaining",
+    "balance remaining": "BalanceRemaining", "bal": "BalanceRemaining",
+    "ar balance": "BalanceRemaining", "outstanding": "BalanceRemaining",
+    "amount due": "BalanceRemaining", "total balance": "BalanceRemaining",
+    "patient balance": "BalanceRemaining", "ins balance": "BalanceRemaining",
+    "remaining": "BalanceRemaining", "net balance": "BalanceRemaining",
+    "open balance": "BalanceRemaining", "current balance": "BalanceRemaining",
+    "balance due": "BalanceRemaining", "amt due": "BalanceRemaining", "bal due": "BalanceRemaining",
+    # ── Status / dates ──
+    "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
+    "current status": "ClaimStatus", "ar status": "ClaimStatus", "clm status": "ClaimStatus",
+    "claim state": "ClaimStatus", "claim status description": "ClaimStatus",
+    "status description": "ClaimStatus", "claim stage": "ClaimStatus",
+    "billdate": "BillDate", "bill date": "BillDate", "billed date": "BillDate",
+    "date billed": "BillDate", "submission date": "BillDate", "submitted date": "BillDate",
+    "date submitted": "BillDate", "date sent": "BillDate", "sent date": "BillDate",
+    "claim sent date": "BillDate", "date claim sent": "BillDate", "transmit date": "BillDate",
+    "transmission date": "BillDate", "date transmitted": "BillDate", "filed date": "BillDate",
+    "date filed": "BillDate", "service line bill date": "BillDate",
+    "denieddate": "DeniedDate", "denied date": "DeniedDate", "date denied": "DeniedDate",
+    "denial date": "DeniedDate", "date of denial": "DeniedDate",
+    "paiddate": "PaidDate", "paid date": "PaidDate", "date paid": "PaidDate",
+    "payment date": "PaidDate", "check date": "PaidDate", "remit date": "PaidDate",
+    "eob date": "PaidDate", "era date": "PaidDate", "posted date": "PaidDate",
+    "denialreason": "DenialReason", "denial reason": "DenialReason",
+    "denial": "DenialReason", "reason": "DenialReason", "remark": "DenialReason",
+    "remark code": "DenialReason", "carc": "DenialReason", "rarc": "DenialReason",
+    "denial code": "DenialReason", "reason code": "DenialReason", "rejection reason": "DenialReason",
+    "denial remark": "DenialReason", "adjustment reason": "DenialReason",
+    "denialcategory": "DenialCategory", "denial category": "DenialCategory",
+    "denial type": "DenialCategory",
+    "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "worked by": "Owner",
+    "biller": "Owner", "rep": "Owner", "handled by": "Owner",
+    # ── Sub-profile ──
+    "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
+    "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
+}
+
+
 def _claims_structural_match(headers: list[str]) -> dict:
     """Decide whether a spreadsheet's headers describe claims data.
 
@@ -1430,6 +1564,163 @@ def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
         "pdf_uploads": pdf_uploads,
         "recent_uploads": recent_uploads,
         "diagnosis": diagnosis,
+    }
+
+
+@router.get("/admin/diag/claim-mapping")
+def admin_diag_claim_mapping(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: show EXACTLY what the system's mapping 'glasses' recognize in
+    every uploaded spreadsheet — the headers it found, which DB column each header
+    maps to, which headers it could NOT map, whether the file is recognized as
+    claims, and how many rows would actually import. This is the tool to see why a
+    file isn't moving the totals: a frozen number almost always means either the
+    file's columns aren't mapping (unmapped headers below) or every row collides
+    with an existing claim (re-imports of the same claims update in place)."""
+    admin = _require_full_admin(hub_session)
+    from .client_db import get_db
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        id_to_name = {}
+        try:
+            for r in cur.execute(
+                "SELECT id, COALESCE(NULLIF(TRIM(company),''), username) AS name FROM clients"
+            ).fetchall():
+                id_to_name[r["id"]] = r["name"]
+        except Exception:
+            id_to_name = {}
+        rows = cur.execute(
+            """SELECT id, client_id, filename, original_name, category,
+                      row_count, uploaded_by, created_at
+               FROM client_files
+               WHERE file_type='excel'
+               ORDER BY created_at DESC
+               LIMIT 40"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    files = []
+    for r in rows:
+        info = {
+            "file_id": r["id"],
+            "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+            "file": r["original_name"],
+            "saved_as_category": r["category"],
+            "rows_in_file_record": r["row_count"],
+            "uploaded_by": r["uploaded_by"],
+            "uploaded_at": r["created_at"],
+        }
+        path = os.path.join(UPLOAD_DIR, r["filename"])
+        if not os.path.isfile(path):
+            info["status"] = "missing_on_disk"
+            files.append(info)
+            continue
+        ext = os.path.splitext(r["original_name"] or "")[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+            ext = os.path.splitext(r["filename"])[1].lower()
+        try:
+            with open(path, "rb") as fh:
+                content = fh.read()
+            parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+            headers = list(parsed[0].keys()) if parsed else []
+            mapped = {}
+            unmapped = []
+            for h in headers:
+                col = _fuzzy_match_column(h, CLAIMS_COLUMN_MAP)
+                if col:
+                    mapped[str(h)] = col
+                else:
+                    unmapped.append(str(h))
+            match = _claims_structural_match(headers)
+            mapped_targets = set(mapped.values())
+            info.update({
+                "status": "ok",
+                "rows_parsed": len(parsed),
+                "headers_detected": [str(h) for h in headers],
+                "mapped_columns": mapped,
+                "unmapped_headers": unmapped,
+                "recognized_as_claims": match["is_claims"],
+                "has_money_column": bool(mapped_targets & {"ChargeAmount", "PaidAmount", "BalanceRemaining"}),
+                "has_claim_key_column": "ClaimKey" in mapped_targets,
+            })
+        except Exception as e:
+            info["status"] = f"parse_error: {type(e).__name__}: {e}"
+        files.append(info)
+
+    return {
+        "ok": True,
+        "viewed_by": admin.get("username"),
+        "how_to_read": (
+            "For each file: 'mapped_columns' is what the glasses recognized; "
+            "'unmapped_headers' are columns the system ignored. If a money column "
+            "(charge/paid/balance) is unmapped, that file's dollars won't compute. "
+            "'recognized_as_claims=false' means the file was never treated as claims. "
+            "If a file looks fully mapped but still didn't move totals, its rows are "
+            "re-imports of existing claims (same claim numbers) and updated in place."
+        ),
+        "mapping_targets": sorted(set(CLAIMS_COLUMN_MAP.values())),
+        "files": files,
+    }
+
+
+@router.post("/admin/diag/reimport-all-claims")
+def admin_diag_reimport_all_claims(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: force a fresh import pass over EVERY stored claim spreadsheet
+    (any category), not just the ones still filed as documents. Idempotent — the
+    importer upserts by (client_id, ClaimKey), so re-running never double-counts.
+    Use this to recompute totals after a mapping change without re-uploading."""
+    admin = _require_full_admin(hub_session)
+    from .client_db import get_db
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """SELECT id, client_id, filename, original_name, category, uploaded_by
+               FROM client_files WHERE file_type='excel'"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    results = []
+    total_imported = 0
+    for r in rows:
+        path = os.path.join(UPLOAD_DIR, r["filename"])
+        if not os.path.isfile(path):
+            results.append({"file": r["original_name"], "imported": 0, "note": "missing_on_disk"})
+            continue
+        ext = os.path.splitext(r["original_name"] or "")[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+            ext = os.path.splitext(r["filename"])[1].lower()
+        try:
+            with open(path, "rb") as fh:
+                content = fh.read()
+            parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+            headers = list(parsed[0].keys()) if parsed else []
+            if not _claims_structural_match(headers)["is_claims"]:
+                results.append({"file": r["original_name"], "imported": 0,
+                                "note": "not recognized as claims"})
+                continue
+            imported, errors = _import_claims_from_excel(
+                content, ext, int(r["client_id"]), uploaded_by=str(r["uploaded_by"] or ""))
+            total_imported += int(imported or 0)
+            try:
+                update_file_record(int(r["id"]), {"category": "Claims", "status": "Imported"},
+                                   int(r["client_id"]))
+            except Exception:
+                pass
+            results.append({"file": r["original_name"], "imported": imported,
+                            "errors": (errors or [])[:3]})
+        except Exception as e:
+            results.append({"file": r["original_name"], "imported": 0,
+                            "note": f"{type(e).__name__}: {e}"})
+
+    return {
+        "ok": True,
+        "viewed_by": admin.get("username"),
+        "files_processed": len(results),
+        "total_rows_imported": total_imported,
+        "results": results,
     }
 
 
@@ -4819,94 +5110,9 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
         # Default: return as-is but log it
         return s
 
-    COLUMN_MAP = {
-        # ── ClaimKey ──
-        "claimkey": "ClaimKey", "claim key": "ClaimKey", "claim": "ClaimKey",
-        "claim id": "ClaimKey", "claimid": "ClaimKey", "claim number": "ClaimKey",
-        "claim no": "ClaimKey", "claimno": "ClaimKey", "claim num": "ClaimKey",
-        "account": "ClaimKey", "account number": "ClaimKey", "account no": "ClaimKey",
-        "acct": "ClaimKey", "acct no": "ClaimKey", "acct number": "ClaimKey",
-        "ticket": "ClaimKey", "ticket no": "ClaimKey", "ticket number": "ClaimKey",
-        "reference": "ClaimKey", "ref": "ClaimKey", "ref no": "ClaimKey",
-        "icn": "ClaimKey", "tcn": "ClaimKey", "dcn": "ClaimKey",
-        # ── Patient ──
-        "patientname": "PatientName", "patient name": "PatientName", "patient": "PatientName",
-        "patientid": "PatientID", "patient id": "PatientID", "member id": "PatientID",
-        "memberid": "PatientID", "member": "PatientName", "subscriber": "PatientName",
-        "subscriber name": "PatientName", "insured name": "PatientName",
-        "patient last name": "PatientName", "last name": "PatientName", "name": "PatientName",
-        "first name": "PatientName",
-        # ── Provider ──
-        "providername": "ProviderName", "provider name": "ProviderName", "provider": "ProviderName",
-        "rendering provider": "ProviderName", "rendering": "ProviderName",
-        "servicing provider": "ProviderName", "doctor": "ProviderName", "physician": "ProviderName",
-        "doctor name": "ProviderName", "physician name": "ProviderName", "practitioner": "ProviderName",
-        "attending": "ProviderName", "attending provider": "ProviderName",
-        "billing provider": "ProviderName", "referring provider": "ProviderName",
-        "npi": "NPI", "provider npi": "NPI", "rendering npi": "NPI",
-        # ── Payor / Insurance ──
-        "payor": "Payor", "payer": "Payor", "insurance": "Payor",
-        "insurance name": "Payor", "insurance company": "Payor", "ins": "Payor",
-        "plan": "Payor", "plan name": "Payor", "payer name": "Payor",
-        "carrier": "Payor", "insurance plan": "Payor", "health plan": "Payor",
-        "primary insurance": "Payor", "primary payor": "Payor", "primary payer": "Payor",
-        "primary payer name": "Payor", "primary insurance name": "Payor",
-        "ins name": "Payor", "ins company": "Payor", "financial class": "Payor",
-        "fc": "Payor", "fin class": "Payor", "payer type": "Payor",
-        # ── DOS / CPT ──
-        "dos": "DOS", "date of service": "DOS", "service date": "DOS",
-        "svc date": "DOS", "from date": "DOS", "from": "DOS", "date from": "DOS",
-        "service from": "DOS", "from dos": "DOS",
-        "cptcode": "CPTCode", "cpt code": "CPTCode", "cpt": "CPTCode",
-        "procedure": "CPTCode", "procedure code": "CPTCode", "proc code": "CPTCode",
-        "proc": "CPTCode", "service code": "CPTCode", "hcpcs": "CPTCode",
-        "description": "Description", "desc": "Description", "service description": "Description",
-        "procedure description": "Description", "proc desc": "Description",
-        "modifiers": "Description", "modifier": "Description", "mod": "Description",
-        "scrub notes": "DenialReason", "scrub note": "DenialReason",
-        "timely filing status": "ClaimStatus", "timely filing": "ClaimStatus",
-        # ── Financials ──
-        "chargeamount": "ChargeAmount", "charge amount": "ChargeAmount", "charge": "ChargeAmount",
-        "billed": "ChargeAmount", "billed amount": "ChargeAmount", "total charge": "ChargeAmount",
-        "total charges": "ChargeAmount", "charges": "ChargeAmount", "amount billed": "ChargeAmount",
-        "gross charge": "ChargeAmount", "original amount": "ChargeAmount", "fee": "ChargeAmount",
-        "allowedamount": "AllowedAmount", "allowed amount": "AllowedAmount", "allowed": "AllowedAmount",
-        "approved amount": "AllowedAmount", "contracted amount": "AllowedAmount",
-        "adjustmentamount": "AdjustmentAmount", "adjustment": "AdjustmentAmount", "adj": "AdjustmentAmount",
-        "adjustment amount": "AdjustmentAmount", "adj amount": "AdjustmentAmount",
-        "write off": "AdjustmentAmount", "writeoff": "AdjustmentAmount", "contractual": "AdjustmentAmount",
-        "paidamount": "PaidAmount", "paid amount": "PaidAmount", "paid": "PaidAmount",
-        "payment": "PaidAmount", "payment amount": "PaidAmount", "payments": "PaidAmount",
-        "total paid": "PaidAmount", "total payments": "PaidAmount", "amount paid": "PaidAmount",
-        "ins paid": "PaidAmount", "insurance paid": "PaidAmount", "reimbursement": "PaidAmount",
-        "balanceremaining": "BalanceRemaining", "balance": "BalanceRemaining",
-        "balance remaining": "BalanceRemaining", "bal": "BalanceRemaining",
-        "ar balance": "BalanceRemaining", "outstanding": "BalanceRemaining",
-        "amount due": "BalanceRemaining", "total balance": "BalanceRemaining",
-        "patient balance": "BalanceRemaining", "ins balance": "BalanceRemaining",
-        "remaining": "BalanceRemaining", "net balance": "BalanceRemaining",
-        # ── Status / dates ──
-        "claimstatus": "ClaimStatus", "claim status": "ClaimStatus", "status": "ClaimStatus",
-        "current status": "ClaimStatus", "ar status": "ClaimStatus",
-        "billdate": "BillDate", "bill date": "BillDate", "billed date": "BillDate",
-        "date billed": "BillDate", "submission date": "BillDate", "submitted date": "BillDate",
-        "date submitted": "BillDate",
-        "denieddate": "DeniedDate", "denied date": "DeniedDate", "date denied": "DeniedDate",
-        "denial date": "DeniedDate",
-        "paiddate": "PaidDate", "paid date": "PaidDate", "date paid": "PaidDate",
-        "payment date": "PaidDate", "check date": "PaidDate", "remit date": "PaidDate",
-        "eob date": "PaidDate",
-        "denialreason": "DenialReason", "denial reason": "DenialReason",
-        "denial": "DenialReason", "reason": "DenialReason", "remark": "DenialReason",
-        "remark code": "DenialReason", "carc": "DenialReason", "rarc": "DenialReason",
-        "denial code": "DenialReason",
-        "denialcategory": "DenialCategory", "denial category": "DenialCategory",
-        "denial type": "DenialCategory",
-        "owner": "Owner", "assigned to": "Owner", "assigned": "Owner", "worked by": "Owner",
-        # ── Sub-profile ──
-        "sub_profile": "sub_profile", "subprofile": "sub_profile", "sub profile": "sub_profile",
-        "profile": "sub_profile", "practice profile": "sub_profile", "practice": "sub_profile",
-    }
+    # Use the module-level mapping parameters (single source of truth) so the
+    # importer and the admin mapping diagnostic recognize columns identically.
+    COLUMN_MAP = CLAIMS_COLUMN_MAP
 
     def _parse_float(v):
         try:
