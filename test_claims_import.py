@@ -336,3 +336,69 @@ def test_import_stored_file_rejects_pdf(hub_env):
         tc.post("/hub/api/logout")
     assert r.status_code == 400
     assert "spreadsheet" in r.json()["detail"].lower()
+
+
+def test_csv_with_title_rows_above_header_still_imports(hub_env):
+    """Real exports often have a title/blank row above the header. The parser
+    must find the real header row instead of treating the title as columns."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    raw = (
+        "SV Diagnostics — Daily Claims Worklist\n"        # title row
+        "Generated 2026-06-24\n"                          # subtitle row
+        "\n"                                               # blank row
+        "Claim ID,Patient,DOS,CPT,Charge,Status\n"
+        "CLM-T1,Pat A,2026-06-20,99213,150.00,Billed\n"
+        "CLM-T2,Pat B,2026-06-21,99214,220.00,Billed\n"
+    ).encode("utf-8")
+
+    imported, errors = client_routes._import_claims_from_excel(raw, ".csv", cid)
+    assert errors == [], errors
+    assert imported == 2
+    count, total = _totals(client_db, cid)
+    assert count == 2
+    assert total == pytest.approx(370.0)
+
+
+def test_csv_semicolon_delimited_and_bom_imports(hub_env):
+    """A BOM-prefixed, semicolon-delimited CSV (common from Excel in some
+    locales) must still parse and import."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    raw = "\ufeffClaim ID;Patient;DOS;CPT;Charge;Status\n" \
+          "CLM-S1;Pat A;2026-06-20;99213;150.00;Billed\n" \
+          "CLM-S2;Pat B;2026-06-21;99214;220.00;Billed\n"
+    imported, errors = client_routes._import_claims_from_excel(
+        raw.encode("utf-8"), ".csv", cid)
+    assert errors == [], errors
+    assert imported == 2
+    count, total = _totals(client_db, cid)
+    assert count == 2
+    assert total == pytest.approx(370.0)
+
+
+def test_structural_match_recognizes_minimal_claims_and_skips_other_data(hub_env):
+    """A minimal claims sheet (no claim-id column) must be recognized, while
+    credentialing/enrollment sheets must NOT be misrouted to claims."""
+    _client_db, client_routes = hub_env
+
+    # Minimal claims: just DOS + CPT + Charge — no explicit claim id.
+    assert client_routes._claims_structural_match(
+        ["DOS", "CPT", "Charge"])["is_claims"] is True
+    # Patient-centric claims sheet.
+    assert client_routes._claims_structural_match(
+        ["Patient Name", "Charge Amount", "Balance", "Claim Status"])["is_claims"] is True
+
+    # Other data types must stay out of claims.
+    assert client_routes._claims_structural_match(
+        ["Provider", "Payor", "Type", "Status", "Submitted", "Approved",
+         "Expiration", "Owner", "Notes"])["is_claims"] is False
+    assert client_routes._claims_structural_match(
+        ["Provider", "Payer", "Effective Date", "Participation", "Network",
+         "Status"])["is_claims"] is False
+    # A team-production timesheet must not look like claims either.
+    assert client_routes._claims_structural_match(
+        ["Work Date", "Username", "Category", "Task Description", "Quantity"]
+    )["is_claims"] is False
