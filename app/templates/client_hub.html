@@ -2218,7 +2218,7 @@
           <div class="card" id="dashClaimBucketsCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--primary);display:none">
             <div class="card-header">
               <div class="card-title">📤 Claims Out</div>
-              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Denied · Paid · Posted</div>
+              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Submitted · Paid · Posted</div>
             </div>
             <div id="dashClaimBuckets" style="padding:16px"></div>
           </div>
@@ -5466,7 +5466,7 @@
       const cb = d.claim_buckets || {};
       const cbCards = [
         { key: 'billed', label: 'Billed',  color: 'var(--primary)', hint: 'Claims out the door' },
-        { key: 'denied', label: 'Denied',  color: '#dc2626',        hint: 'Included in Billed' },
+        { key: 'denied', label: 'Submitted', color: '#dc2626',        hint: 'Reworked & resubmitted · in Billed' },
         { key: 'paid',   label: 'Paid',    color: 'var(--success)', hint: 'Money paid' },
         { key: 'posted', label: 'Posted',  color: '#0891b2',        hint: 'Same as Paid · date in claim notes' },
       ];
@@ -7616,7 +7616,7 @@
         }
         if (denied.count > 0) {
           const denialRate = billed.count > 0 ? Math.round((denied.count / billed.count) * 100) : 0;
-          narrative.push(`⚠️ <strong>${denied.count} of those billed claims (${denialRate}%)</strong> are currently in a denied/appeals state totaling <strong>$${fmt(denied.amount)}</strong> — these stay counted inside Billed; the denial only reflects their state before rework, so they're worked for appeal/resubmission.`);
+          narrative.push(`🔄 <strong>${denied.count} of those billed claims (${denialRate}%)</strong> totaling <strong>$${fmt(denied.amount)}</strong> were reworked and resubmitted — they are submitted, billed claims (counted inside Billed); the prior denial only reflects their state before rework.`);
         }
         // Top denials
         if (cl.top_denials && cl.top_denials.length > 0) {
@@ -7970,7 +7970,7 @@
       const ebPaid = eb.paid || { count: 0, amount: 0 };
       const ebPosted = eb.posted || { count: 0, amount: 0 };
       const ebRollAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : 0;
-      lines.push(`Claims Out (Billed): ${ebBilled.count} | Billed $${ebBilled.amount} | Denied (incl. in Billed) ${ebDenied.count}/$${ebDenied.amount} | Paid $${ebPaid.amount} | Posted $${ebPosted.amount}`);
+      lines.push(`Claims Out (Billed): ${ebBilled.count} | Billed $${ebBilled.amount} | Submitted/reworked (incl. in Billed) ${ebDenied.count}/$${ebDenied.amount} | Paid $${ebPaid.amount} | Posted $${ebPosted.amount}`);
       lines.push(`Rolling A/R (unpaid balance of billed claims${d.rolling_ar_start ? ' since ' + d.rolling_ar_start : ''}): $${ebRollAR} | Total A/R incl. legacy: $${cl.total_balance || 0}`);
       lines.push('');
 
@@ -8070,7 +8070,7 @@
       html += `<div class="sg">
         <div class="sb"><div class="v">${pBilled.count}</div><div class="l">Claims Out (Billed)</div></div>
         <div class="sb"><div class="v">$${fmt(pBilled.amount)}</div><div class="l">Billed Charges</div></div>
-        <div class="sb"><div class="v">${pDenied.count} · $${fmt(pDenied.amount)}</div><div class="l">Denied (incl. in Billed)</div></div>
+        <div class="sb"><div class="v">${pDenied.count} · $${fmt(pDenied.amount)}</div><div class="l">Submitted / reworked (incl. in Billed)</div></div>
         <div class="sb"><div class="v">$${fmt(pRollAR)}</div><div class="l">Rolling A/R${d.rolling_ar_start ? ' · since ' + fmtShortDate(d.rolling_ar_start) : ''}</div></div>
       </div>`;
       html += `<div class="sg">
@@ -9573,9 +9573,9 @@
             <div style="font-size:12px;color:#64748b">dollars collected</div>
           </div>
           <div style="flex:1;min-width:150px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px">
-            <div style="font-size:11px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em">Denied</div>
+            <div style="font-size:11px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em">Reworked</div>
             <div style="font-size:26px;font-weight:800;color:#991b1b">${deniedTotalCount}</div>
-            <div style="font-size:12px;color:#64748b">${money2(deniedTotalAmount)} denied</div>
+            <div style="font-size:12px;color:#64748b">${money2(deniedTotalAmount)} reworked & resubmitted</div>
           </div>
           <div style="flex:1;min-width:150px;background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px">
             <div style="font-size:11px;font-weight:700;color:#a16207;text-transform:uppercase;letter-spacing:.04em">Posted</div>
@@ -9599,7 +9599,7 @@
       html += `<div class="card" style="margin-bottom:18px">
         <div class="card-header"><div class="card-title">👥 Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>
-          <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Denied</th><th>Posted</th><th>$ Paid</th></tr></thead>
+          <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Reworked</th><th>Posted</th><th>$ Paid</th></tr></thead>
           <tbody>${byUser.map(u => `<tr>
             <td style="font-weight:600">${esc(u.username)}</td>
             <td style="text-align:center;font-weight:600">${u.claims_billed || 0}</td>
@@ -9618,7 +9618,7 @@
           </tr></tfoot>` : ''}
         </table></div>
         <div style="margin-top:8px;font-size:12px;color:var(--gray-500)">
-          <strong>Submitted</strong> = claims put out the door (by Bill Date). <strong>Denied</strong> = claims denied in this window. <strong>Posted</strong> = payments entered. <strong>$ Paid</strong> = dollars collected. Leave the date range wide (or use a since-first-upload start date) to see comprehensive totals.
+          <strong>Submitted</strong> = claims put out the door (by Bill Date). <strong>Reworked</strong> = submitted claims that had been denied and were reworked/resubmitted (still counted in Submitted). <strong>Posted</strong> = payments entered. <strong>$ Paid</strong> = dollars collected. Leave the date range wide (or use a since-first-upload start date) to see comprehensive totals.
         </div>
       </div>`;
 
