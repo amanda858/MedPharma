@@ -356,6 +356,41 @@ def _norm_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
+# Header tokens that unambiguously identify a *claims* spreadsheet, grouped so a
+# mis-filed upload (e.g. a "Daily Claims Worklist" saved under "General") is still
+# routed into the Claims importer instead of being silently saved as a document.
+_CLAIMS_KEY_HEADERS = {
+    "claim", "claimkey", "claim key", "claim id", "claimid", "claim number",
+    "claim no", "claimno", "claim num", "icn", "tcn", "dcn",
+}
+_CLAIMS_SIGNAL_HEADERS = {
+    # financials
+    "charge", "charge amount", "chargeamount", "charges", "total charge",
+    "total charges", "billed", "billed amount", "amount billed",
+    "balance", "balance remaining", "ar balance", "amount due",
+    "paid", "paid amount", "payment", "amount paid", "allowed", "allowed amount",
+    # clinical / claim identity
+    "dos", "date of service", "service date", "cpt", "cpt code", "cptcode",
+    "procedure", "hcpcs", "payor", "payer", "insurance",
+    # status / denial
+    "claim status", "denial", "denied", "denial reason", "denial code",
+}
+
+
+def _claims_structural_match(headers: list[str]) -> dict:
+    """Decide whether a spreadsheet's headers describe claims data.
+
+    A file qualifies if it has an explicit claim-id column plus a couple of
+    claim fields, or enough claim fields on its own to be unambiguous. This is
+    precise enough to avoid false-positives on credentialing/enrollment sheets
+    (which lack charge/DOS/CPT columns)."""
+    norm = {_norm_text(h) for h in headers if str(h or "").strip()}
+    has_key = bool(norm & _CLAIMS_KEY_HEADERS)
+    signals = sorted(norm & _CLAIMS_SIGNAL_HEADERS)
+    is_claims = (has_key and len(signals) >= 2) or (len(signals) >= 4)
+    return {"has_claim_key": has_key, "signals": signals, "is_claims": is_claims}
+
+
 def _infer_excel_category(content: bytes, ext: str, filename: str = "", description: str = "") -> tuple[Optional[str], dict]:
     """Infer the best import category from Excel headers + filename/description text."""
     scores = {"Claims": 0, "Credentialing": 0, "Enrollment": 0, "EDI": 0}
@@ -397,6 +432,21 @@ def _infer_excel_category(content: bytes, ext: str, filename: str = "", descript
         }
         return intercepted_category, debug
 
+    # Structural detection: if the columns clearly describe claims data, route to
+    # Claims even when the keyword score is weak. This stops daily billed
+    # spreadsheets (mis-filed under "General") from being saved as inert documents.
+    structural = _claims_structural_match(headers)
+    if structural["is_claims"]:
+        debug = {
+            "scores": scores,
+            "headers_sample": headers[:20],
+            "best_score": None,
+            "second_score": None,
+            "intercept": intercept,
+            "structural": structural,
+        }
+        return "Claims", debug
+
     # Heuristic fallback.
     for category, words in keywords.items():
         for word in words:
@@ -414,6 +464,7 @@ def _infer_excel_category(content: bytes, ext: str, filename: str = "", descript
         "best_score": best_score,
         "second_score": second_score,
         "intercept": intercept,
+        "structural": structural,
     }
     return inferred, debug
 
@@ -5147,6 +5198,77 @@ async def replace_file(
         "effective_category": effective_category,
         "category_source": category_source,
         "category_inference": infer_debug,
+        "imported": imported,
+        "import_errors": import_errors[:5],
+    }
+
+
+@router.post("/files/{file_id}/import-claims")
+def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Import an already-uploaded spreadsheet into claims_master.
+
+    Recovers daily work that was saved under a non-data category (e.g. "General")
+    and therefore never auto-imported. Reads the stored file from disk, runs it
+    through the Claims importer, and re-files it under "Claims" so it's no longer
+    flagged as a pending import."""
+    user = _require_user(hub_session)
+    if user.get("role") in ("admin", "staff"):
+        rec = get_file_record(file_id, _client_scope(user))
+    else:
+        rec = get_file_record(file_id, None)
+        if rec and int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            rec = None
+    if not rec:
+        raise HTTPException(404, "File not found")
+
+    if (rec.get("file_type") or "") != "excel":
+        raise HTTPException(
+            400,
+            "Only spreadsheet files (Excel/CSV) can be imported into claims. "
+            "PDFs and Word documents can't be imported — the data needs to be in "
+            "a spreadsheet with claim columns.",
+        )
+
+    path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if not os.path.isfile(path):
+        raise HTTPException(
+            410,
+            "The stored copy of this file is missing — please re-upload it.",
+        )
+
+    ext = os.path.splitext(rec.get("original_name") or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+        ext = os.path.splitext(rec["filename"])[1].lower()
+    with open(path, "rb") as f:
+        content = f.read()
+
+    client_id = int(rec["client_id"])
+    uploader = user.get("username") or ""
+    try:
+        imported, import_errors = _import_claims_from_excel(
+            content, ext, client_id, uploaded_by=uploader)
+    except Exception as e:
+        raise HTTPException(400, f"Import failed: {e}")
+
+    # Re-file under Claims so it reads as imported going forward.
+    try:
+        update_file_record(file_id, {"category": "Claims", "status": "Imported"}, client_id)
+    except Exception:
+        pass
+
+    try:
+        notify_activity(uploader, "imported claims", "Documents",
+                        f'{rec.get("original_name")} → {imported} claim row(s)')
+        if imported:
+            notify_bulk_activity(uploader, "imported", "Claims", imported,
+                                 f'from stored file "{rec.get("original_name")}"')
+    except Exception as _e:
+        log.warning("import-claims notify failed: %s", _e)
+
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "original_name": rec.get("original_name"),
         "imported": imported,
         "import_errors": import_errors[:5],
     }
