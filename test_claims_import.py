@@ -493,3 +493,44 @@ def test_claims_column_map_is_shared_single_source(hub_env):
     assert client_routes._fuzzy_match_column("Patient Control Number", cm) == "ClaimKey"
     assert client_routes._fuzzy_match_column("Billed Charges", cm) == "ChargeAmount"
     assert client_routes._fuzzy_match_column("Insurance Payment", cm) == "PaidAmount"
+
+
+def test_dashboard_claim_buckets(hub_env):
+    """The dashboard exposes the four lifecycle buckets the team monitors —
+    Billed (superset), Denied, Paid, Posted — with counts and dollar values."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status", "Bill Date",
+         "Denial Reason", "Paid Amount"],
+        # Billed only
+        ["B1", "2026-06-19", "99213", "150.00", "Billed", "2026-06-19", "", "0"],
+        ["B2", "2026-06-20", "99214", "200.00", "Billed", "2026-06-20", "", "0"],
+        # Denied (still billed)
+        ["D1", "2026-06-21", "99215", "300.00", "Denied", "2026-06-21", "CO-16", "0"],
+        # Paid (still billed)
+        ["P1", "2026-06-22", "85025", "100.00", "Paid", "2026-06-22", "", "90.00"],
+    ]
+    imported, errors = client_routes._import_claims_from_excel(
+        _csv_bytes(rows), ".csv", cid
+    )
+    assert errors == []
+    assert imported == 4
+
+    d = client_db.get_dashboard(cid)
+    cb = d["claim_buckets"]
+
+    # Billed is the SUPERSET — every claim with a Bill Date (all 4).
+    assert cb["billed"]["count"] == 4
+    assert cb["billed"]["amount"] == pytest.approx(750.0)
+    # Denied — status Denied or a denial reason present.
+    assert cb["denied"]["count"] == 1
+    assert cb["denied"]["amount"] == pytest.approx(300.0)
+    # Paid — claim lines with money paid.
+    assert cb["paid"]["count"] == 1
+    assert cb["paid"]["amount"] == pytest.approx(90.0)
+
+    # Rolling A/R is reported with the team start date.
+    assert d["rolling_ar_start"] == "2026-06-18"
+    assert "rolling_ar" in d
