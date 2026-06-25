@@ -2156,6 +2156,25 @@
               </div>
             </div>
           </div>
+          <!-- My Numbers — biller self-view (own billed/paid totals). Hidden for
+               admin/Eric, who use the comprehensive Reporting + Team Production. -->
+          <div class="card" id="myNumbersCard" style="display:none;margin-bottom:18px;border-left:4px solid #1e88e5">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div class="card-title" id="myNumbersTitle">🧾 My Numbers</div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <select class="form-control btn-sm" id="myNumbersPeriod" style="width:auto" onchange="loadMyNumbers()">
+                  <option value="today">Today</option>
+                  <option value="thisweek">This Week</option>
+                  <option value="mtd" selected>Month to Date</option>
+                  <option value="alltime">All-Time</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="navTo('production');toggleProductionView('report')">📊 Full Report</button>
+              </div>
+            </div>
+            <div id="myNumbersBody" style="margin-top:10px;font-size:13px;color:var(--gray-400);text-align:center;padding:12px 0">
+              Loading…
+            </div>
+          </div>
           <!-- Today's Activity Card -->
           <div class="card" id="dashTodayCard" style="margin-bottom:18px">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
@@ -5264,6 +5283,85 @@
       } catch (e) { console.error(e); }
     }
 
+    // Compute [start,end] ISO dates for a My Numbers period preset.
+    function myNumbersRange(preset) {
+      const today = new Date();
+      let start, end = today;
+      if (preset === 'today') {
+        start = today;
+      } else if (preset === 'thisweek') {
+        const day = today.getDay();
+        start = new Date(today); start.setDate(today.getDate() - ((day + 6) % 7));
+      } else if (preset === 'alltime') {
+        start = new Date(2000, 0, 1);
+      } else { // mtd
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+      }
+      return [localDateStr(start), localDateStr(end)];
+    }
+
+    // Biller self-view: each team member's own Submitted / Paid / Denied / Posted
+    // / Rolling AR. The /production/report endpoint already scopes to the caller
+    // when they aren't admin/Eric, so this shows only their own work.
+    async function loadMyNumbers() {
+      const card = document.getElementById('myNumbersCard');
+      if (!card) return;
+      const body = document.getElementById('myNumbersBody');
+      const preset = (document.getElementById('myNumbersPeriod') || {}).value || 'mtd';
+      const [start, end] = myNumbersRange(preset);
+      let url = `/hub/api/production/report?start_date=${start}&end_date=${end}`;
+      if (activeClientId) url += `&client_id=${activeClientId}`;
+      try {
+        const r = await fetch(url, { cache: 'no-store' });
+        const d = await r.json();
+        renderMyNumbers(d);
+      } catch (e) {
+        if (body) body.innerHTML = '<div style="color:#b91c1c;padding:8px">Could not load your numbers.</div>';
+      }
+    }
+
+    function renderMyNumbers(d) {
+      const body = document.getElementById('myNumbersBody');
+      const titleEl = document.getElementById('myNumbersTitle');
+      if (!body) return;
+      const byUser = d.by_user || [];
+      const billedCount = d.billed_total_count != null ? d.billed_total_count
+        : byUser.reduce((s, u) => s + (u.claims_billed || 0), 0);
+      const billedAmount = d.billed_total_amount != null ? d.billed_total_amount
+        : byUser.reduce((s, u) => s + (u.claims_billed_amount || 0), 0);
+      const paidAmount = d.paid_total_amount != null ? d.paid_total_amount
+        : (d.payments_total_amount != null ? d.payments_total_amount
+            : byUser.reduce((s, u) => s + (u.claims_paid_amount || u.payments_amount || 0), 0));
+      const deniedCount = d.denied_total_count != null ? d.denied_total_count
+        : byUser.reduce((s, u) => s + (u.claims_denied || 0), 0);
+      const postedCount = d.payments_total_count != null ? d.payments_total_count
+        : byUser.reduce((s, u) => s + (u.payments_posted || 0), 0);
+      const rollingAr = Number(d.rolling_ar || 0);
+      const arCutoff = d.rolling_ar_cutoff || '2026-06-18';
+      const scopeName = d.scope_username || (currentUser && (currentUser.contact_name || currentUser.username)) || '';
+      if (titleEl) titleEl.textContent = `🧾 My Numbers${scopeName ? ' — ' + scopeName : ''}`;
+      const money2 = v => '$' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const tile = (label, big, sub, bg, bd, lc, vc) => `
+        <div style="flex:1;min-width:140px;background:${bg};border:1px solid ${bd};border-radius:10px;padding:12px 14px">
+          <div style="font-size:11px;font-weight:700;color:${lc};text-transform:uppercase;letter-spacing:.04em">${label}</div>
+          <div style="font-size:24px;font-weight:800;color:${vc}">${big}</div>
+          <div style="font-size:12px;color:#64748b">${sub}</div>
+        </div>`;
+      body.style.color = '';
+      body.style.textAlign = 'left';
+      body.innerHTML = `
+        <div style="display:flex;flex-wrap:wrap;gap:12px">
+          ${tile('Claims Submitted', billedCount, money2(billedAmount) + ' submitted', '#eff6ff', '#bfdbfe', '#1d4ed8', '#1e3a8a')}
+          ${tile('Paid', money2(paidAmount), 'dollars collected', '#ecfdf5', '#a7f3d0', '#047857', '#065f46')}
+          ${tile('Denied', deniedCount, 'claim(s) denied', '#fef2f2', '#fecaca', '#b91c1c', '#991b1b')}
+          ${tile('Posted', postedCount, 'payment(s) posted', '#fefce8', '#fde68a', '#a16207', '#854d0e')}
+          ${tile('Rolling AR', money2(rollingAr), 'open before ' + esc(arCutoff), '#f5f3ff', '#ddd6fe', '#6d28d9', '#5b21b6')}
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--gray-500)">
+          This is <strong>your own</strong> production across every account you work — it updates automatically as your uploads import. Use 📊 Full Report to pull by day, week, or all-time.
+        </div>`;
+    }
+
     function renderDashboard(d) {
       const adminView = isStaffOrAdmin();
       let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
@@ -5285,6 +5383,15 @@
 
       // Load today's activity card
       loadTodayActivity();
+
+      // My Numbers — biller self-view. Show only for team billers (staff who are
+      // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
+      const myNumbersCard = document.getElementById('myNumbersCard');
+      if (myNumbersCard) {
+        const isBiller = currentUser && currentUser.role === 'staff' && !canViewReporting();
+        myNumbersCard.style.display = isBiller ? '' : 'none';
+        if (isBiller) loadMyNumbers();
+      }
 
       // ── Profile card ──────────────────────────────────────
       const prof = d.profile || {};

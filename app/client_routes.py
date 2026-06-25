@@ -2518,7 +2518,13 @@ def remove_edi(rid: int, hub_session: Optional[str] = Cookie(None)):
 @router.get("/dashboard")
 def dashboard(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    data = get_dashboard(_client_scope(user))
+    scope = _client_scope(user)
+    try:
+        if isinstance(scope, int):
+            auto_import_pending_claim_files(scope)
+    except Exception as _e:
+        log.warning("auto-import on dashboard failed: %s", _e)
+    data = get_dashboard(scope)
     data["user"] = user
     return data
 
@@ -2528,6 +2534,10 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
                         hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     _assert_client_can_view(user, client_id)
+    try:
+        auto_import_pending_claim_files(client_id)
+    except Exception as _e:
+        log.warning("auto-import on client dashboard failed: %s", _e)
     data = get_dashboard(client_id, sub_profile=sub_profile)
     data["user"] = user
     return data
@@ -3398,6 +3408,13 @@ def relink_kindercare_production(body: ProductionRelinkIn, hub_session: Optional
 def get_files(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else _doc_scope(user)
+    # Seamless ingestion: before listing, auto-import any claim-shaped spreadsheets
+    # that were saved as plain documents, so the team never has to click "import".
+    try:
+        if isinstance(scope, int):
+            auto_import_pending_claim_files(scope)
+    except Exception as _e:
+        log.warning("auto-import on file list failed: %s", _e)
     files = list_files(scope)
     return {"files": files}
 
@@ -5247,6 +5264,76 @@ async def replace_file(
         "imported": imported,
         "import_errors": import_errors[:5],
     }
+
+
+def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
+    """Seamlessly import any uploaded spreadsheets that look like claims but were
+    saved under a non-data category (e.g. "General") and never imported.
+
+    This is what makes ingestion zero-touch: the team can upload whatever they
+    have under any category, and this sweep picks up anything claim-shaped,
+    imports it into claims_master, and re-files it under "Claims" so it counts
+    toward billed/submitted totals — with no manual click. The claims importer
+    upserts by (client_id, ClaimKey), so re-running this is idempotent and never
+    double-counts. Runs on startup (whole DB) and per-account when Documents or
+    the Dashboard load.
+
+    Returns {"files": n_files_imported, "rows": n_rows_imported}."""
+    from .client_db import get_db as _get_db
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cats = ",".join("?" * len(DATA_IMPORT_CATEGORIES))
+        params = list(DATA_IMPORT_CATEGORIES)
+        where = f"file_type='excel' AND category NOT IN ({cats})"
+        if client_id is not None:
+            where += " AND client_id=?"
+            params.append(int(client_id))
+        rows = cur.execute(
+            f"SELECT id, client_id, filename, original_name, uploaded_by "
+            f"FROM client_files WHERE {where}",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    files_done = 0
+    rows_done = 0
+    for r in rows:
+        path = os.path.join(UPLOAD_DIR, r["filename"])
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(r["original_name"] or "")[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+            ext = os.path.splitext(r["filename"])[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+            continue
+        try:
+            with open(path, "rb") as fh:
+                content = fh.read()
+            parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+            headers = list(parsed[0].keys()) if parsed else []
+            if not _claims_structural_match(headers)["is_claims"]:
+                continue
+            imported, _errors = _import_claims_from_excel(
+                content, ext, int(r["client_id"]),
+                uploaded_by=str(r["uploaded_by"] or ""))
+        except Exception as e:
+            log.warning("auto-import sweep: file %s failed: %s", r["id"], e)
+            continue
+        if imported:
+            files_done += 1
+            rows_done += imported
+            try:
+                update_file_record(int(r["id"]),
+                                   {"category": "Claims", "status": "Imported"},
+                                   int(r["client_id"]))
+            except Exception:
+                pass
+    if files_done:
+        log.info("Auto-import sweep ingested %s row(s) from %s file(s)",
+                 rows_done, files_done)
+    return {"files": files_done, "rows": rows_done}
 
 
 @router.post("/files/{file_id}/import-claims")
