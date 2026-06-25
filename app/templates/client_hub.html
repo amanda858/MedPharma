@@ -7594,23 +7594,29 @@
       narrative.push(`<span style="font-size:12px;color:var(--gray-400)">Period: ${period} | Generated: ${d.generated_at}</span>`);
       narrative.push('');
 
-      // Overall Summary
+      // Overall Summary — built on the LOCKED claim buckets (Billed / Denied /
+      // Paid / Posted) so the report always matches the dashboard. "Claims Out"
+      // == Billed (the superset of every claim line with a Bill Date). Denied is
+      // a sub-view of Billed (a denied claim is still a billed claim), never a
+      // separate pile. Collection rate is measured against BILLED charges (the
+      // correct denominator), not every claim row on file.
       narrative.push(`<strong>Overall Account Summary:</strong>`);
-      if (cl.total) {
-        const collectionRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
-        narrative.push(`The account currently has <strong>${cl.total} claims</strong> with <strong>$${fmt(cl.total_charged)}</strong> in total charges. Collections of <strong>$${fmt(cl.total_paid)}</strong> represent a <strong>${collectionRate}% collection rate</strong>. Outstanding accounts receivable sits at <strong>$${fmt(cl.total_balance)}</strong>.`);
-
-        // Status breakdown insights
-        const byStatus = cl.by_status || [];
-        const denied = byStatus.find(s => (s.status || '').toLowerCase().includes('denied') || (s.status || '').toLowerCase().includes('denial'));
-        const pending = byStatus.find(s => (s.status || '').toLowerCase().includes('pending') || (s.status || '').toLowerCase().includes('submitted'));
-        const paid = byStatus.find(s => (s.status || '').toLowerCase().includes('paid') || (s.status || '').toLowerCase().includes('approved'));
-        if (denied && denied.count > 0) {
-          const denialRate = Math.round((denied.count / cl.total) * 100);
-          narrative.push(`⚠️ <strong>${denied.count} claims (${denialRate}%)</strong> are in denial status totaling <strong>$${fmt(denied.charged)}</strong> in charges — this requires attention for appeals and follow-up.`);
+      const bk = d.claim_buckets || {};
+      const billed = bk.billed || { count: 0, amount: 0 };
+      const denied = bk.denied || { count: 0, amount: 0 };
+      const paid   = bk.paid   || { count: 0, amount: 0 };
+      const posted = bk.posted || { count: 0, amount: 0 };
+      const rollingAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : null;
+      const rollingStart = d.rolling_ar_start ? fmtShortDate(d.rolling_ar_start) : null;
+      if (billed.count > 0) {
+        const collectionRate = billed.amount > 0 ? Math.round((paid.amount / billed.amount) * 100) : 0;
+        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Of that, <strong>$${fmt(paid.amount)}</strong> has been paid (${collectionRate}% of billed) and <strong>$${fmt(posted.amount)}</strong> posted/deposited.`);
+        if (rollingAR !== null) {
+          narrative.push(`💰 <strong>Rolling A/R${rollingStart ? ` since ${rollingStart}` : ''}:</strong> <strong>$${fmt(rollingAR)}</strong> outstanding on claims billed in the current window. Total A/R on file (incl. legacy): <strong>$${fmt(cl.total_balance)}</strong>.`);
         }
-        if (pending && pending.count > 0) {
-          narrative.push(`🔄 <strong>${pending.count} claims</strong> are currently pending/submitted, representing <strong>$${fmt(pending.charged)}</strong> in outstanding charges.`);
+        if (denied.count > 0) {
+          const denialRate = billed.count > 0 ? Math.round((denied.count / billed.count) * 100) : 0;
+          narrative.push(`⚠️ <strong>${denied.count} of those billed claims (${denialRate}%)</strong> are currently in a denied/appeals state totaling <strong>$${fmt(denied.amount)}</strong> — these stay counted inside Billed; the denial only reflects their state before rework, so they're worked for appeal/resubmission.`);
         }
         // Top denials
         if (cl.top_denials && cl.top_denials.length > 0) {
@@ -7618,7 +7624,7 @@
           narrative.push(`📌 Top denial category: <strong>${esc(topDen.category)}</strong> with ${topDen.count} occurrence(s).`);
         }
       } else {
-        narrative.push('No claims data is currently on file for this account.');
+        narrative.push('No billed claims are currently on file for this account.');
       }
       narrative.push('');
 
@@ -7700,14 +7706,12 @@
       narrative.push('');
       narrative.push(`<strong>🎯 Recommended Actions:</strong>`);
       const actions = [];
-      const byStatus = cl.by_status || [];
-      const deniedItems = byStatus.filter(s => (s.status || '').toLowerCase().includes('denied') || (s.status || '').toLowerCase().includes('denial'));
-      if (deniedItems.length) actions.push('Review and appeal denied claims to recover outstanding revenue.');
+      if (denied.count > 0) actions.push(`Review and appeal the ${denied.count} denied/appeals claim(s) ($${fmt(denied.amount)}) to recover revenue — they remain billed claims pending rework.`);
       const credPendingCount = (cred.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
       if (credPendingCount) actions.push(`Follow up on ${credPendingCount} pending credentialing application(s).`);
       const enrPendingCount = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
       if (enrPendingCount) actions.push(`Track ${enrPendingCount} pending enrollment submission(s).`);
-      if (cl.total_balance > 0) actions.push(`Work outstanding AR of $${fmt(cl.total_balance)} through systematic follow-up.`);
+      if (rollingAR && rollingAR > 0) actions.push(`Work the rolling A/R of $${fmt(rollingAR)}${rollingStart ? ` (since ${rollingStart})` : ''} through systematic follow-up.`);
       if (!actions.length) actions.push('Account is in good standing. Continue monitoring KPIs.');
       actions.forEach(a => narrative.push(`• ${a}`));
 

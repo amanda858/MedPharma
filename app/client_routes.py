@@ -4072,10 +4072,50 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
     pay_rows = conn.execute("SELECT COALESCE(SUM(PaymentAmount),0) as total, COUNT(*) as cnt FROM payments WHERE client_id=?", (client_id,)).fetchone()
     payments = {"total": float(pay_rows["total"]) if pay_rows else 0, "count": int(pay_rows["cnt"]) if pay_rows else 0}
 
+    # ── Claim lifecycle buckets (Billed / Denied / Paid / Posted) ──
+    # Computed identically to the dashboard (get_dashboard in client_db) so the
+    # report's headline numbers always MATCH the dashboard the team monitors.
+    # "Claims Out" == Billed (the superset of every claim line with a Bill Date).
+    # Denied / Paid / Posted are overlapping status sub-views of that superset —
+    # a denied claim is still a billed claim, it just shows its current state.
+    # These ignore the DOS period filter (all-time, like the dashboard buckets)
+    # but respect the same client_id + sub_profile scope.
+    ROLLING_AR_START = "2026-06-18"  # first day the team began entering data
+    bk_base = [client_id] + sp_params
+
+    def _bk_one(sql, params):
+        row = conn.execute(sql, params).fetchone()
+        return row[0] if row else 0
+
+    claim_buckets = {
+        "billed": {
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''", bk_base)), 2),
+        },
+        "denied": {
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'')!='')", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'')!='')", bk_base)), 2),
+        },
+        "paid": {
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(PaidAmount,0)>0", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(PaidAmount,0)>0", bk_base)), 2),
+        },
+        "posted": {
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM payments WHERE client_id=?{sp_clause}", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE client_id=?{sp_clause}", bk_base)), 2),
+        },
+    }
+    rolling_ar = round(float(_bk_one(
+        f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master WHERE client_id=?{sp_clause} AND BillDate >= ?",
+        bk_base + [ROLLING_AR_START])), 2)
+
     return {
         "claims": {"total": len(claims), "total_charged": round(total_charged,2), "total_paid": round(total_paid,2),
                     "total_balance": round(total_balance,2), "by_status": by_status, "top_denials": top_denials,
                     "billing_activity": billing_activity},
+        "claim_buckets": claim_buckets,
+        "rolling_ar": rolling_ar,
+        "rolling_ar_start": ROLLING_AR_START,
         "credentialing": {"summary": [{"status":k,"count":v} for k,v in cred_summary.items()], "detail": cred_detail},
         "enrollment": {"summary": [{"status":k,"count":v} for k,v in enr_summary.items()], "detail": enr_detail},
         "edi": {"summary": [{"status":k,"count":v} for k,v in edi_summary.items()], "detail": edi_detail},
