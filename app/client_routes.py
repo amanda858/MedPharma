@@ -691,11 +691,31 @@ def _require_reporting_access(hub_session: Optional[str] = Cookie(None)):
     raise HTTPException(status_code=403, detail="Reporting access required")
 
 
+def _client_account_id(user: dict) -> int:
+    """The account whose data a CLIENT login tracks. Most client users are
+    assigned to exactly ONE account — the lab whose claims/payments are keyed
+    under that account's id — so a dedicated login (e.g. 'Tivany' for SV
+    Diagnostics) resolves to that assigned account and sees its data even though
+    the user's own row id differs from the account id. Account-owner logins with
+    no separate assignment fall back to their own id. Two-or-more assignments
+    fall back to own id as well (the caller can pass an explicit client_id)."""
+    own = int(user.get("id", 0) or 0)
+    try:
+        assigned = [int(c) for c in accounts_assigned_to_user(own) if int(c) != own]
+    except Exception:
+        assigned = []
+    if len(assigned) == 1:
+        return assigned[0]
+    return own
+
+
 def _client_scope(user: dict) -> Optional[int]:
-    """Return client_id filter — None means all (admin/staff sees all data)."""
+    """Return client_id filter — None means all (admin/staff sees all data).
+    A client login is scoped to the account it tracks (its single assigned
+    account, or its own id for account-owner logins)."""
     if user.get("role") in ("admin", "staff"):
         return None
-    return user["id"]
+    return _client_account_id(user)
 
 
 def _owner_identities(user: dict) -> set:
@@ -738,8 +758,11 @@ def _assert_client_can_view(user: dict, client_id: int) -> None:
         if int(client_id or 0) in granted:
             return
         raise HTTPException(status_code=403, detail="You don’t have access to that account.")
-    if int(user.get("id", 0) or 0) != int(client_id or 0):
-        raise HTTPException(status_code=403, detail="You can only view your own account.")
+    # Client login: their own id plus any account explicitly assigned to them.
+    allowed = set(_doc_account_ids(user))
+    if int(client_id or 0) in allowed:
+        return
+    raise HTTPException(status_code=403, detail="You can only view your own account.")
 
 
 def _doc_account_ids(user: dict) -> list[int]:
@@ -2491,7 +2514,7 @@ def get_claims_list(status: Optional[str] = None, client_id: Optional[int] = Non
             requested = int(client_id) if client_id is not None else None
         except (TypeError, ValueError):
             requested = None
-        scope = requested if (requested in allowed) else user["id"]
+        scope = requested if (requested in allowed) else _client_account_id(user)
         claims = get_claims(scope, status, sub_profile=sub_profile)
     return {"claims": claims}
 
@@ -2509,9 +2532,10 @@ def claims_ar_worklist(client_id: Optional[int] = None, owner: Optional[str] = N
     first, with aging-bucket rollups."""
     user = _require_user(hub_session)
     scope = client_id if client_id is not None else _client_scope(user)
-    # Non-staff/admin users are always scoped to their own account.
+    # Non-staff/admin users are always scoped to the account they track, so a
+    # forged client_id can't expose another lab's worklist.
     if user["role"] not in ("admin", "staff"):
-        scope = user["id"]
+        scope = _client_account_id(user)
     return get_ar_worklist(scope, owner=owner, bucket=bucket,
                            sub_profile=sub_profile, limit=limit)
 
