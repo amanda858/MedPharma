@@ -639,3 +639,34 @@ def test_denied_claims_counted_inside_billed(hub_env):
     assert cb["denied"]["count"] == 1
     assert cb["denied"]["count"] <= cb["billed"]["count"]
     assert cb["denied"]["amount"] == pytest.approx(200.0)
+
+
+def test_admin_can_read_posting_notes_on_account_claim(hub_env):
+    """Posting notes live under the claim's owning account (e.g. the lab), not
+    the admin's own login. An admin browsing claims across accounts must still
+    be able to read those per-claim notes — otherwise the posting date the team
+    asked for would be invisible."""
+    client_db, client_routes = hub_env
+    from fastapi.testclient import TestClient
+    hub = importlib.import_module("app.hub_app")
+    hub = importlib.reload(hub)
+    tc = TestClient(hub.app)
+
+    # Claim + posting note land under a NON-admin account (the lab).
+    cid = _make_client(client_db)
+    rows = [
+        ["BATCH #", "DEPOSIT DATE", "PAYER NAME", "AMOUNT", "EFT NUMBER"],
+        ["B1", "2026-06-20", "Aetna", "1000.00", "EFT777"],
+    ]
+    client_routes._import_claims_from_excel(
+        _xlsx_bytes(rows), ".xlsx", cid, uploaded_by="susan"
+    )
+
+    with tc:
+        tc.post("/hub/api/login", json={"username": "admin", "password": "admin123"})
+        r = tc.get("/hub/api/notes", params={"claim_key": "PMT-EFT777"})
+        tc.post("/hub/api/logout")
+    assert r.status_code == 200, r.text
+    notes = r.json()
+    # Admin resolves to the claim's owning account and sees the dated posting note.
+    assert any("2026-06-20" in n.get("Note", "") for n in notes), notes
