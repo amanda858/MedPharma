@@ -3038,10 +3038,15 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "posted": {"count": 0, "amount": 0.0},
         }
         b = claim_buckets
+        # Claims Out (Billed) = every claim worked / out the door. This is the
+        # comprehensive book the team cares about — denied claims are billed
+        # claims, and intake/submitted claims that lack a clean Bill Date column
+        # still count (the daily files don't always carry a Bill Date, so keying
+        # on it alone undercounts). Denied / Paid / Posted remain sub-views.
         b["billed"]["count"] = q1(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(BillDate,'') != ''", p)
+            f"SELECT COUNT(*) FROM claims_master {cond}", p)
         b["billed"]["amount"] = q1(
-            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(BillDate,'') != ''", p)
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond}", p)
         b["denied"]["count"] = q1(
             f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'') != '')", p)
         b["denied"]["amount"] = q1(

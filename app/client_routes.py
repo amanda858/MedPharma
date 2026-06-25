@@ -4113,8 +4113,8 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
 
     claim_buckets = {
         "billed": {
-            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''", bk_base)),
-            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''", bk_base)), 2),
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause}", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause}", bk_base)), 2),
         },
         "denied": {
             "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'')!='')", bk_base)),
