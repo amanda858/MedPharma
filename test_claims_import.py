@@ -616,7 +616,10 @@ def test_posted_payments_write_idempotent_claim_notes(hub_env):
 
 def test_denied_claims_counted_inside_billed(hub_env):
     """A denied claim is still a billed claim — Denied must be a subset of the
-    Billed superset, never excluded from it (hardcoded bucket semantics)."""
+    Billed superset, never excluded from it. Billed (Claims Out) counts every
+    worked claim, including intake/submitted claims that lack a Bill Date (the
+    daily files don't always carry one), so the comprehensive book isn't
+    undercounted (hardcoded bucket semantics)."""
     client_db, client_routes = hub_env
     cid = _make_client(client_db)
 
@@ -624,6 +627,7 @@ def test_denied_claims_counted_inside_billed(hub_env):
         ["Claim Number", "DOS", "CPT", "Charge", "Status", "Bill Date", "Denial Reason"],
         ["B1", "2026-06-19", "99213", "150.00", "Billed", "2026-06-19", ""],
         ["D1", "2026-06-20", "99214", "200.00", "Denied", "2026-06-20", "CO-16"],
+        ["I1", "2026-06-21", "99215", "300.00", "Intake", "", ""],
     ]
     imported, errors = client_routes._import_claims_from_excel(
         _csv_bytes(rows), ".csv", cid
@@ -632,9 +636,10 @@ def test_denied_claims_counted_inside_billed(hub_env):
 
     d = client_db.get_dashboard(cid)
     cb = d["claim_buckets"]
-    # Billed superset includes the denied claim.
-    assert cb["billed"]["count"] == 2
-    assert cb["billed"]["amount"] == pytest.approx(350.0)
+    # Billed superset = every claim worked, incl. the denied one AND the intake
+    # claim that has no Bill Date.
+    assert cb["billed"]["count"] == 3
+    assert cb["billed"]["amount"] == pytest.approx(650.0)
     # Denied is a subset, never larger than Billed.
     assert cb["denied"]["count"] == 1
     assert cb["denied"]["count"] <= cb["billed"]["count"]

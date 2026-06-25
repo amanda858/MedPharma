@@ -2067,6 +2067,7 @@
       <div class="sidebar">
         <!-- CLIENT SIDEBAR: only Daily Production + Documents + Chat -->
         <div id="clientNav">
+          <div class="nav-item" data-panel="dashboard" data-module="dashboard" onclick="navTo('dashboard')">📤 Claims Out</div>
           <div class="nav-item" data-panel="production" data-module="production" onclick="navTo('production')">📋 Team Production</div>
           <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">📁 Documents</div>
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
@@ -4232,7 +4233,7 @@
     }
     // Business Development (leads pipeline) is restricted to full admins and
     // Eric only — same rule as Reporting. No other user sees the leads nav.
-    function canViewLeads() { return canViewReporting(); }
+    function canViewLeads() { return false; }
 
     // ═══════════════════════════════════════
     // GLOBAL FETCH WRAPPER — auth for ALL API calls
@@ -4700,8 +4701,8 @@
       updateSubProfileBar();
       // Apply per-client module opt-out (admins see everything regardless).
       refreshActiveClientModules();
-      // Clients land on Daily Production; admin/staff go to dashboard
-      navTo(isStaffOrAdmin() ? 'dashboard' : 'production');
+      // Clients land on their Claims Out dashboard; admin/staff go to dashboard
+      navTo('dashboard');
       startGlobalJobsMonitor();
       consumeChatDeepLink();
     }
@@ -5392,8 +5393,10 @@
           : `${greetWord}!`;
       }
 
-      // Load today's activity card
-      loadTodayActivity();
+      // Load today's activity card (internal team production — hide for clients)
+      const todayCard = document.getElementById('dashTodayCard');
+      if (todayCard) todayCard.style.display = adminView ? '' : 'none';
+      if (adminView) loadTodayActivity();
 
       // My Numbers — biller self-view. Show only for team billers (staff who are
       // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
@@ -10467,9 +10470,13 @@
         ? new Set(activeClientModules)
         : null; // null = no client in context → show everything
       const ADMIN_ALWAYS = new Set(['dashboard', 'profile']);
+      // Claims Out (dashboard) is the client's home for tracking claims, so it
+      // stays reachable for every role regardless of enabled_modules.
+      const ALWAYS_VISIBLE = new Set(['dashboard']);
       navItems.forEach(n => {
         const key = n.getAttribute('data-module');
         if (!enabled) { n.style.display = ''; return; }
+        if (ALWAYS_VISIBLE.has(key)) { n.style.display = ''; return; }
         if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
         n.style.display = enabled.has(key) ? '' : 'none';
       });
