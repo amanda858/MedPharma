@@ -576,3 +576,66 @@ def test_posted_bucket_reflects_posted_payments(hub_env):
     # Posted = real deposits from the payments table.
     assert cb["posted"]["count"] == 2
     assert cb["posted"]["amount"] == pytest.approx(2500.50)
+
+
+def test_posted_payments_write_idempotent_claim_notes(hub_env):
+    """Each posted payment records a per-claim note (with date) so a claim shows
+    whether/when its payment was posted, while Paid and Posted stay the same
+    dollar figure. Re-importing must not stack duplicate notes."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["BATCH #", "DEPOSIT DATE", "PAYER NAME", "AMOUNT", "EFT NUMBER"],
+        ["B1", "2026-06-20", "Aetna", "1000.00", "EFT001"],
+        ["B1", "2026-06-21", "Cigna", "1500.50", "EFT002"],
+    ]
+    content = _xlsx_bytes(rows)
+
+    for _ in range(2):  # import twice — notes must not duplicate
+        imported, errors = client_routes._import_claims_from_excel(
+            content, ".xlsx", cid, uploaded_by="susan"
+        )
+    assert errors == []
+
+    conn = client_db.get_db()
+    notes = conn.execute(
+        "SELECT ClaimKey, Note FROM notes_log WHERE client_id=? AND Module='Payment' ORDER BY ClaimKey",
+        (cid,),
+    ).fetchall()
+    # Exactly one note per posted payment (idempotent across reimports).
+    assert len(notes) == 2
+    joined = " ".join(n[1] for n in notes)
+    # Notes carry the posting date.
+    assert "2026-06-20" in joined
+    assert "2026-06-21" in joined
+    # Posted dollars equal Paid/Posted bucket dollars (same money).
+    d = client_db.get_dashboard(cid)
+    assert d["claim_buckets"]["posted"]["amount"] == pytest.approx(2500.50)
+
+
+def test_denied_claims_counted_inside_billed(hub_env):
+    """A denied claim is still a billed claim — Denied must be a subset of the
+    Billed superset, never excluded from it (hardcoded bucket semantics)."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status", "Bill Date", "Denial Reason"],
+        ["B1", "2026-06-19", "99213", "150.00", "Billed", "2026-06-19", ""],
+        ["D1", "2026-06-20", "99214", "200.00", "Denied", "2026-06-20", "CO-16"],
+    ]
+    imported, errors = client_routes._import_claims_from_excel(
+        _csv_bytes(rows), ".csv", cid
+    )
+    assert errors == []
+
+    d = client_db.get_dashboard(cid)
+    cb = d["claim_buckets"]
+    # Billed superset includes the denied claim.
+    assert cb["billed"]["count"] == 2
+    assert cb["billed"]["amount"] == pytest.approx(350.0)
+    # Denied is a subset, never larger than Billed.
+    assert cb["denied"]["count"] == 1
+    assert cb["denied"]["count"] <= cb["billed"]["count"]
+    assert cb["denied"]["amount"] == pytest.approx(200.0)
