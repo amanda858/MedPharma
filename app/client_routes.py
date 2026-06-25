@@ -1731,6 +1731,16 @@ def admin_diag_reimport_all_claims(hub_session: Optional[str] = Cookie(None)):
     importer upserts by (client_id, ClaimKey), so re-running never double-counts.
     Use this to recompute totals after a mapping change without re-uploading."""
     admin = _require_full_admin(hub_session)
+    result = reimport_all_claim_files()
+    result["viewed_by"] = admin.get("username")
+    return result
+
+
+def reimport_all_claim_files() -> dict:
+    """Re-import EVERY stored claim spreadsheet (any category). Idempotent — the
+    importer upserts by (client_id, ClaimKey), so re-running never double-counts.
+    Shared by the admin diagnostic endpoint AND the daily scheduler so totals
+    refresh automatically without anyone clicking a button or logging in."""
     from .client_db import get_db
     conn = get_db()
     try:
@@ -1779,7 +1789,6 @@ def admin_diag_reimport_all_claims(hub_session: Optional[str] = Cookie(None)):
 
     return {
         "ok": True,
-        "viewed_by": admin.get("username"),
         "files_processed": len(results),
         "total_rows_imported": total_imported,
         "results": results,

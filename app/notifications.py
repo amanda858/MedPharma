@@ -3721,6 +3721,21 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     return {"ok": True, "sent": sent, "pending": len(pending)}
 
 
+def _scheduled_reimport_all_claims():
+    """Scheduler entrypoint: refresh every account's claim totals from the
+    stored daily files. Lazily imports client_routes to avoid a circular import
+    at module load, and never raises (the scheduler thread must stay alive)."""
+    try:
+        from app.client_routes import reimport_all_claim_files
+        res = reimport_all_claim_files()
+        log.info("Daily claims auto-import: %s file(s), %s row(s)",
+                 res.get("files_processed"), res.get("total_rows_imported"))
+        return res
+    except Exception:
+        log.exception("Daily claims auto-import failed")
+        return {"ok": False}
+
+
 def start_daily_scheduler():
     """
         Start APScheduler to fire:
@@ -3739,6 +3754,25 @@ def start_daily_scheduler():
 
         est = pytz.timezone("US/Eastern")
         scheduler = BackgroundScheduler(daemon=True)
+
+        # 7:00 AM & 8:50 PM EST every day — refresh claim totals automatically so
+        # the dashboard and the evening email reports always reflect the latest
+        # uploaded files WITHOUT anyone logging in or clicking re-import. The
+        # importer upserts by (client_id, ClaimKey), so this is idempotent.
+        scheduler.add_job(
+            _scheduled_reimport_all_claims,
+            CronTrigger(hour=7, minute=0, timezone=est),
+            id="daily_claims_reimport_am",
+            name="7 AM EST Daily Claims Auto-Import",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            _scheduled_reimport_all_claims,
+            CronTrigger(hour=20, minute=50, timezone=est),
+            id="daily_claims_reimport_pm",
+            name="8:50 PM EST Pre-Report Claims Auto-Import",
+            replace_existing=True,
+        )
 
         # 9:00 PM EST — Account summary report (weekdays only, Mon–Fri)
         scheduler.add_job(
