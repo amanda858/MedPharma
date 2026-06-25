@@ -402,3 +402,57 @@ def test_structural_match_recognizes_minimal_claims_and_skips_other_data(hub_env
     assert client_routes._claims_structural_match(
         ["Work Date", "Username", "Category", "Task Description", "Quantity"]
     )["is_claims"] is False
+
+
+def test_auto_import_sweep_ingests_misfiled_claims_without_a_click(hub_env):
+    """The seamless sweep must find claim-shaped spreadsheets saved under a
+    non-data category, import them, and re-file them under Claims — with no
+    manual import call. Non-claim documents must be left untouched."""
+    client_db, client_routes = hub_env
+    import os as _os
+    cid = _make_client(client_db)
+    _os.makedirs(client_routes.UPLOAD_DIR, exist_ok=True)
+
+    # A claim-shaped spreadsheet mis-filed as "General".
+    claims = _csv_bytes([
+        ["Claim ID", "Patient", "DOS", "CPT", "Charge", "Status"],
+        ["SWEEP-1", "Pat A", "2026-06-20", "99213", "150.00", "Billed"],
+        ["SWEEP-2", "Pat B", "2026-06-21", "99214", "220.00", "Billed"],
+    ])
+    with open(_os.path.join(client_routes.UPLOAD_DIR, "daily.csv"), "wb") as f:
+        f.write(claims)
+    claims_id = client_db.add_file(
+        client_id=cid, filename="daily.csv", original_name="LIMS Daily.csv",
+        file_type="excel", file_size=len(claims), category="General",
+        description="", row_count=2, uploaded_by="susan")
+
+    # A non-claim document that must be ignored by the sweep.
+    other = _csv_bytes([
+        ["Provider", "Payer", "Effective Date", "Participation", "Status"],
+        ["Dr X", "BCBS", "2026-01-01", "In Network", "Approved"],
+    ])
+    with open(_os.path.join(client_routes.UPLOAD_DIR, "cred.csv"), "wb") as f:
+        f.write(other)
+    other_id = client_db.add_file(
+        client_id=cid, filename="cred.csv", original_name="Credentialing.csv",
+        file_type="excel", file_size=len(other), category="Credentialing",
+        description="", row_count=1, uploaded_by="admin")
+
+    result = client_routes.auto_import_pending_claim_files(cid)
+    assert result["files"] == 1, result
+    assert result["rows"] == 2, result
+
+    count, total = _totals(client_db, cid)
+    assert count == 2
+    assert total == pytest.approx(370.0)
+
+    # The claim file is re-filed under Claims; the credentialing file is untouched.
+    assert client_db.get_file_record(claims_id, cid)["category"] == "Claims"
+    assert client_db.get_file_record(other_id, cid)["category"] == "Credentialing"
+
+    # Re-running the sweep is idempotent: nothing left to import, no double-count.
+    again = client_routes.auto_import_pending_claim_files(cid)
+    assert again["files"] == 0
+    count2, total2 = _totals(client_db, cid)
+    assert count2 == 2
+    assert total2 == pytest.approx(370.0)

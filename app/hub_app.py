@@ -111,6 +111,17 @@ async def startup():
         log.error(f"Startup error: backfill_missing_bill_dates failed: {e}")
 
     try:
+        from app.client_routes import auto_import_pending_claim_files
+        swept = auto_import_pending_claim_files()
+        if swept.get("files"):
+            log.info("✅ Auto-imported %s claim row(s) from %s pending file(s)",
+                     swept["rows"], swept["files"])
+        else:
+            log.info("✅ No pending claim files to auto-import")
+    except Exception as e:
+        log.error(f"Startup error: auto_import_pending_claim_files failed: {e}")
+
+    try:
         start_daily_scheduler()
         log.info("✅ Daily scheduler started")
         app.state.startup_status["scheduler"] = True
