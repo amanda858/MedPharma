@@ -363,31 +363,37 @@ _CLAIMS_KEY_HEADERS = {
     "claim", "claimkey", "claim key", "claim id", "claimid", "claim number",
     "claim no", "claimno", "claim num", "icn", "tcn", "dcn",
 }
+# Claim-specific signal columns. Deliberately limited to fields that credentialing
+# and enrollment sheets do NOT carry (charges, balances, DOS, CPT, patient,
+# claim dates) so broadening the match never misroutes those other data types.
 _CLAIMS_SIGNAL_HEADERS = {
     # financials
     "charge", "charge amount", "chargeamount", "charges", "total charge",
     "total charges", "billed", "billed amount", "amount billed",
-    "balance", "balance remaining", "ar balance", "amount due",
-    "paid", "paid amount", "payment", "amount paid", "allowed", "allowed amount",
+    "balance", "balance remaining", "ar balance", "amount due", "outstanding",
+    "paid", "paid amount", "amount paid", "allowed", "allowed amount",
+    "adjustment", "adjustment amount", "write off",
     # clinical / claim identity
     "dos", "date of service", "service date", "cpt", "cpt code", "cptcode",
-    "procedure", "hcpcs", "payor", "payer", "insurance",
-    # status / denial
+    "procedure", "procedure code", "hcpcs", "modifier", "modifiers",
+    "patient", "patient name", "patient id", "member id",
+    # status / denial / claim dates
     "claim status", "denial", "denied", "denial reason", "denial code",
+    "denial category", "bill date", "billed date", "date billed",
+    "paid date", "denied date", "remit date", "eob date",
 }
 
 
 def _claims_structural_match(headers: list[str]) -> dict:
     """Decide whether a spreadsheet's headers describe claims data.
 
-    A file qualifies if it has an explicit claim-id column plus a couple of
-    claim fields, or enough claim fields on its own to be unambiguous. This is
-    precise enough to avoid false-positives on credentialing/enrollment sheets
-    (which lack charge/DOS/CPT columns)."""
+    A file qualifies if it has an explicit claim-id column plus any claim field,
+    or several claim fields on its own. Tuned so credentialing/enrollment sheets
+    (which carry none of the charge/DOS/CPT/patient signals) never match."""
     norm = {_norm_text(h) for h in headers if str(h or "").strip()}
     has_key = bool(norm & _CLAIMS_KEY_HEADERS)
     signals = sorted(norm & _CLAIMS_SIGNAL_HEADERS)
-    is_claims = (has_key and len(signals) >= 2) or (len(signals) >= 4)
+    is_claims = (has_key and len(signals) >= 1) or (len(signals) >= 3)
     return {"has_claim_key": has_key, "signals": signals, "is_claims": is_claims}
 
 
@@ -3833,8 +3839,48 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     import csv, io
     rows = []
     if ext == ".csv":
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8", errors="replace")))
-        rows = list(reader)
+        # Decode tolerantly: strip a BOM if present, fall back through encodings
+        # so files exported from Excel/Windows/Mac all parse.
+        text = None
+        for enc in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                text = content.decode(enc)
+                break
+            except Exception:
+                continue
+        if text is None:
+            text = content.decode("utf-8", errors="replace")
+
+        # Detect the delimiter — exports aren't always comma-separated
+        # (semicolon in many locales, tab/pipe from some systems).
+        sample = text[:8192]
+        delim = ","
+        try:
+            delim = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+        except Exception:
+            first_line = next((ln for ln in sample.splitlines() if ln.strip()), "")
+            if first_line:
+                delim = max(",;\t|", key=first_line.count)
+
+        raw_rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+        # Smart header detection: the header is the most "label-like" row within
+        # the first 10 (skips title/blank rows that sit above real headers).
+        header_idx = 0
+        best_score = -1
+        for idx, r in enumerate(raw_rows[:10]):
+            non_empty = sum(1 for c in r if c is not None and str(c).strip())
+            text_cells = sum(1 for c in r if c is not None and str(c).strip()
+                             and not str(c).strip().replace(",", "").replace(".", "")
+                             .replace("$", "").replace("-", "").isdigit())
+            score = text_cells * 2 + non_empty
+            if non_empty >= 2 and score > best_score:
+                best_score = score
+                header_idx = idx
+        if raw_rows:
+            headers = [str(c).strip() for c in raw_rows[header_idx]]
+            for r in raw_rows[header_idx + 1:]:
+                if any(c is not None and str(c).strip() for c in r):
+                    rows.append(dict(zip(headers, r)))
     elif ext == ".xls":
         # Legacy Excel (BIFF) — use xlrd
         import xlrd

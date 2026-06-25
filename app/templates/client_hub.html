@@ -6872,7 +6872,8 @@
         const d = await r.json();
         if (!r.ok) { toast(d.detail || 'Import failed', 'error'); return; }
         if (d.imported > 0) {
-          toast(`✅ Imported ${d.imported} rows into ${category} — file saved as hard copy`, 'success');
+          const how = d.category_source === 'auto' ? ` (auto-recognized as ${d.import_category || d.effective_category})` : '';
+          toast(`✅ Imported ${d.imported} rows into ${d.import_category || category}${how} — file saved as hard copy`, 'success');
         } else {
           toast(`⚠️ File saved but no rows imported — check column headers`, 'warning');
         }
@@ -8411,7 +8412,8 @@
         if (!r.ok) throw new Error(d.detail || 'Upload failed');
 
         if (d.imported > 0) {
-          toast(`✅ Imported ${d.imported} rows into ${d.import_category} — file saved as hard copy`, 'success');
+          const how = d.category_source === 'auto' ? ` (auto-recognized as ${d.import_category})` : '';
+          toast(`✅ Imported ${d.imported} rows into ${d.import_category}${how} — file saved as hard copy`, 'success');
           if (d.import_errors && d.import_errors.length) toast(`⚠️ ${d.import_errors.length} row(s) had errors`, 'warning');
         } else if (d.import_category) {
           toast(`⚠️ File saved but no rows imported — check column headers match expected format`, 'warning');
