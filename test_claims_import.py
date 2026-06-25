@@ -456,3 +456,40 @@ def test_auto_import_sweep_ingests_misfiled_claims_without_a_click(hub_env):
     count2, total2 = _totals(client_db, cid)
     assert count2 == 2
     assert total2 == pytest.approx(370.0)
+
+
+def test_claim_alerts_are_removed(hub_env):
+    """Compliance-style claim alerts (SLA breaches, high/elevated denial rate,
+    90+ day AR) must NOT be generated. Only credentialing/enrollment lifecycle
+    alerts may remain."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    # Import claims that would historically trip every claim alert: old, denied,
+    # unpaid, with open balances well past 90 days.
+    rows = [["Claim ID", "Patient", "DOS", "CPT", "Charge", "Balance", "Status",
+             "Bill Date", "Denied Date"]]
+    for i in range(20):
+        rows.append([f"OLD-{i}", f"Pt {i}", "2025-01-01", "99213", "500.00",
+                     "500.00", "Denied", "2025-01-02", "2025-01-15"])
+    client_routes._import_claims_from_excel(_csv_bytes(rows), ".csv", cid)
+
+    alerts = client_db.get_alerts(cid)
+    titles = " ".join(a.get("title", "").lower() for a in alerts)
+    assert "sla breach" not in titles, alerts
+    assert "denial rate" not in titles, alerts
+    assert "90+ day ar" not in titles, alerts
+
+
+def test_claims_column_map_is_shared_single_source(hub_env):
+    """The importer and the mapping diagnostic must use the same mapping
+    parameters, so what the diagnostic shows is exactly what the importer does."""
+    _client_db, client_routes = hub_env
+    # The importer's COLUMN_MAP is the module-level CLAIMS_COLUMN_MAP.
+    assert "charge amount" in client_routes.CLAIMS_COLUMN_MAP
+    # Real-world clearinghouse/PM aliases now resolve to the right DB columns.
+    cm = client_routes.CLAIMS_COLUMN_MAP
+    assert client_routes._fuzzy_match_column("Claim Sent Date", cm) == "BillDate"
+    assert client_routes._fuzzy_match_column("Patient Control Number", cm) == "ClaimKey"
+    assert client_routes._fuzzy_match_column("Billed Charges", cm) == "ChargeAmount"
+    assert client_routes._fuzzy_match_column("Insurance Payment", cm) == "PaidAmount"

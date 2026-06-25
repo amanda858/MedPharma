@@ -5409,15 +5409,12 @@ def get_alerts(client_id: int = None):
         cond = "WHERE client_id=?" if client_id else ""
         p = [client_id] if client_id else []
 
-        # 1. SLA Breaches
-        sla_count = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1 AND ClaimStatus NOT IN ('Paid','Closed')", p
-        ).fetchone()[0]
-        if sla_count:
-            alerts.append({"type": "danger", "icon": "🚨", "title": f"{sla_count} SLA Breach(es)",
-                            "detail": "Claims exceeded time thresholds — review immediately"})
+        # NOTE: Claim-based "compliance" alerts (SLA breaches, high/elevated denial
+        # rate, 90+ day AR) were intentionally removed — they were noise on the
+        # claims data and not wanted. Only credentialing/enrollment lifecycle
+        # alerts remain below.
 
-        # 2. Credentialing expirations (next 90 days)
+        # Credentialing expirations (next 90 days)
         for window, level in [(30, "danger"), (60, "warning"), (90, "info")]:
             exp = cur.execute(
                 f"""SELECT COUNT(*) FROM credentialing {cond}
@@ -5432,7 +5429,7 @@ def get_alerts(client_id: int = None):
                                "detail": f"Review and initiate revalidation"})
                 break  # Show most urgent only
 
-        # 3. Overdue follow-ups (credentialing & enrollment)
+        # Overdue follow-ups (credentialing & enrollment)
         for tbl, label in [("credentialing", "Credentialing"), ("enrollment", "Enrollment")]:
             overdue = cur.execute(
                 f"""SELECT COUNT(*) FROM {tbl} {cond}
@@ -5442,33 +5439,6 @@ def get_alerts(client_id: int = None):
             if overdue:
                 alerts.append({"type": "warning", "icon": "📅", "title": f"{overdue} Overdue {label} Follow-ups",
                                "detail": "Past follow-up dates need attention"})
-
-        # 4. High denial rate warning
-        total_sub = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate != ''", p
-        ).fetchone()[0]
-        total_denied = cur.execute(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate != ''", p
-        ).fetchone()[0]
-        if total_sub > 10:
-            rate = round(total_denied / total_sub * 100, 1)
-            if rate > 15:
-                alerts.append({"type": "danger", "icon": "❌", "title": f"High Denial Rate: {rate}%",
-                               "detail": "Denial rate exceeds 15% — review denial patterns"})
-            elif rate > 10:
-                alerts.append({"type": "warning", "icon": "⚠️", "title": f"Elevated Denial Rate: {rate}%",
-                               "detail": "Denial rate above 10% — monitor closely"})
-
-        # 5. Unpaid claims > 90 days
-        old_ar = cur.execute(
-            f"""SELECT COUNT(*), COALESCE(SUM(BalanceRemaining),0) FROM claims_master
-                {cond} {'AND' if cond else 'WHERE'} ClaimStatus NOT IN ('Paid','Closed')
-                AND BalanceRemaining > 0
-                AND CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) > 90""", p
-        ).fetchone()
-        if old_ar[0] > 0:
-            alerts.append({"type": "danger", "icon": "💰", "title": f"{old_ar[0]} Claims in 90+ Day AR (${old_ar[1]:,.0f})",
-                            "detail": "These claims need escalated collection efforts"})
     finally:
         conn.close()
     return alerts
