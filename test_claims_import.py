@@ -534,3 +534,45 @@ def test_dashboard_claim_buckets(hub_env):
     # Rolling A/R is reported with the team start date.
     assert d["rolling_ar_start"] == "2026-06-18"
     assert "rolling_ar" in d
+
+
+def _xlsx_bytes(rows, sheet_name="Sheet1"):
+    """Build a minimal single-sheet .xlsx in memory from a list of rows."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    for r in rows:
+        ws.append(list(r))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_posted_bucket_reflects_posted_payments(hub_env):
+    """A posted-payments (LIMS-style) export must populate the dashboard
+    'Posted' bucket from the payments table, and stay idempotent on re-import
+    so deposits are never double-counted."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["BATCH #", "DEPOSIT DATE", "PAYER NAME", "AMOUNT", "EFT NUMBER"],
+        ["B100", "2026-06-20", "Aetna", "1000.00", "EFT001"],
+        ["B100", "2026-06-21", "Cigna", "1500.50", "EFT002"],
+    ]
+    content = _xlsx_bytes(rows)
+
+    # Import twice — Posted must not double-count.
+    for _ in range(2):
+        imported, errors = client_routes._import_claims_from_excel(
+            content, ".xlsx", cid, uploaded_by="susan"
+        )
+    assert errors == []
+    assert imported == 2
+
+    d = client_db.get_dashboard(cid)
+    cb = d["claim_buckets"]
+    # Posted = real deposits from the payments table.
+    assert cb["posted"]["count"] == 2
+    assert cb["posted"]["amount"] == pytest.approx(2500.50)
