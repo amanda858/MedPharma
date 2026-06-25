@@ -721,9 +721,18 @@ def test_client_login_scopes_to_assigned_account(hub_env):
         r = tc.post("/hub/api/login",
                     json={"username": "tivany", "password": "billout26!x"})
         assert r.status_code == 200, r.text
+        accounts = tc.get("/hub/api/accounts")
         dash = tc.get("/hub/api/dashboard")
         claims = tc.get("/hub/api/claims")
         tc.post("/hub/api/logout")
+
+    # The account selector must offer the ASSIGNED lab account (which holds the
+    # claims), not the client's own empty login row — otherwise picking the card
+    # loads dashboard/client/<own id> and everything reads $0.
+    assert accounts.status_code == 200, accounts.text
+    acct_ids = [int(a.get("id")) for a in accounts.json()]
+    assert int(lab_cid) in acct_ids, acct_ids
+    assert int(member_id) not in acct_ids, acct_ids
 
     assert dash.status_code == 200, dash.text
     buckets = dash.json().get("claim_buckets", {})
