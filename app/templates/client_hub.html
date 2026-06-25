@@ -7596,10 +7596,12 @@
 
       // Overall Summary — built on the LOCKED claim buckets (Billed / Denied /
       // Paid / Posted) so the report always matches the dashboard. "Claims Out"
-      // == Billed (the superset of every claim line with a Bill Date). Denied is
-      // a sub-view of Billed (a denied claim is still a billed claim), never a
-      // separate pile. Collection rate is measured against BILLED charges (the
-      // correct denominator), not every claim row on file.
+      // == Billed (the superset of every claim line with a Bill Date). Denied
+      // and Rolling A/R are both SUB-VIEWS of Billed (a denied claim is still a
+      // billed claim; rolling A/R is the unpaid balance of billed claims), never
+      // separate piles. No "collection rate" is shown — claims billed in the
+      // current window haven't had time to adjudicate, so a paid/billed ratio
+      // would misrepresent the team's work.
       narrative.push(`<strong>Overall Account Summary:</strong>`);
       const bk = d.claim_buckets || {};
       const billed = bk.billed || { count: 0, amount: 0 };
@@ -7609,10 +7611,9 @@
       const rollingAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : null;
       const rollingStart = d.rolling_ar_start ? fmtShortDate(d.rolling_ar_start) : null;
       if (billed.count > 0) {
-        const collectionRate = billed.amount > 0 ? Math.round((paid.amount / billed.amount) * 100) : 0;
-        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Of that, <strong>$${fmt(paid.amount)}</strong> has been paid (${collectionRate}% of billed) and <strong>$${fmt(posted.amount)}</strong> posted/deposited.`);
+        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Paid to date: <strong>$${fmt(paid.amount)}</strong>; posted/deposited: <strong>$${fmt(posted.amount)}</strong>.`);
         if (rollingAR !== null) {
-          narrative.push(`💰 <strong>Rolling A/R${rollingStart ? ` since ${rollingStart}` : ''}:</strong> <strong>$${fmt(rollingAR)}</strong> outstanding on claims billed in the current window. Total A/R on file (incl. legacy): <strong>$${fmt(cl.total_balance)}</strong>.`);
+          narrative.push(`💰 <strong>Rolling A/R${rollingStart ? ` since ${rollingStart}` : ''}:</strong> <strong>$${fmt(rollingAR)}</strong> — the still-open balance on those billed claims (part of the Billed total above, not a separate category). Total A/R on file incl. legacy: <strong>$${fmt(cl.total_balance)}</strong>.`);
         }
         if (denied.count > 0) {
           const denialRate = billed.count > 0 ? Math.round((denied.count / billed.count) * 100) : 0;
@@ -7668,11 +7669,10 @@
         for (const [spName, spData] of Object.entries(subs)) {
           const label = SP_LABELS[spName] || spName;
           const sc = spData.claims || {};
-          const scRate = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
           narrative.push('');
           narrative.push(`<strong style="color:${spName === 'OMT' ? '#6366f1' : '#0ea5e9'}">${label}:</strong>`);
           if (sc.total) {
-            narrative.push(`• <strong>${sc.total} claims</strong> — Charged: <strong>$${fmt(sc.total_charged)}</strong>, Paid: <strong>$${fmt(sc.total_paid)}</strong> (${scRate}% collection rate), AR: <strong>$${fmt(sc.total_balance)}</strong>`);
+            narrative.push(`• <strong>${sc.total} claims</strong> — Charged: <strong>$${fmt(sc.total_charged)}</strong>, Paid: <strong>$${fmt(sc.total_paid)}</strong>, AR: <strong>$${fmt(sc.total_balance)}</strong>`);
           } else {
             narrative.push(`• No claims data recorded.`);
           }
@@ -7725,7 +7725,6 @@
       const cred = spData.credentialing || {};
       const enr = spData.enrollment || {};
       const edi = spData.edi || {};
-      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
       const color = spName === 'OMT' ? '#6366f1' : '#0ea5e9';
 
       let html = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
@@ -7738,8 +7737,8 @@
           <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Charged</div>
         </div>
         <div style="background:${color}10;border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:20px;font-weight:700;color:${color}">${collRate}%</div>
-          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Collection Rate</div>
+          <div style="font-size:20px;font-weight:700;color:${color}">$${fmt(cl.total_balance)}</div>
+          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Open AR</div>
         </div>
       </div>`;
 
@@ -7782,7 +7781,8 @@
 
       // Summary KPIs
       const cl = d.claims || {};
-      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+      const rollAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : 0;
+      const rollStart = d.rolling_ar_start ? fmtShortDate(d.rolling_ar_start) : '';
       document.getElementById('reportSummary').innerHTML = `
         <div style="margin-bottom:14px;padding:12px 16px;background:var(--gray-50);border-radius:10px;border:1px solid var(--gray-200)">
           <div style="font-size:16px;font-weight:700;color:var(--gray-800);margin-bottom:4px">${esc(company)} — ${periodLabel} Report</div>
@@ -7806,8 +7806,8 @@
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Outstanding AR</div>
           </div>
           <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--warning)">${collRate}%</div>
-            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Collection Rate</div>
+            <div style="font-size:24px;font-weight:700;color:var(--warning)">$${fmt(rollAR)}</div>
+            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Rolling A/R${rollStart ? ' · since ' + rollStart : ''}</div>
           </div>
           <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--warning)">${d.payments?.count || 0}</div>
@@ -7960,11 +7960,19 @@
       lines.push(`${company} Report - Generated ${d.generated_at}`);
       lines.push('');
 
-      // AI Narrative (plain text version)
+      // AI Narrative (plain text version) — uses the locked Billed/Denied/Paid/
+      // Posted buckets; no collection rate (claims billed recently haven't had
+      // time to adjudicate). Rolling A/R is the unpaid balance of billed claims.
       lines.push('OVERALL ACCOUNT SUMMARY');
       const cl = d.claims || {};
-      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
-      lines.push(`Total Claims: ${cl.total || 0} | Charged: $${cl.total_charged || 0} | Paid: $${cl.total_paid || 0} | Collection Rate: ${collRate}% | AR: $${cl.total_balance || 0}`);
+      const eb = d.claim_buckets || {};
+      const ebBilled = eb.billed || { count: 0, amount: 0 };
+      const ebDenied = eb.denied || { count: 0, amount: 0 };
+      const ebPaid = eb.paid || { count: 0, amount: 0 };
+      const ebPosted = eb.posted || { count: 0, amount: 0 };
+      const ebRollAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : 0;
+      lines.push(`Claims Out (Billed): ${ebBilled.count} | Billed $${ebBilled.amount} | Denied (incl. in Billed) ${ebDenied.count}/$${ebDenied.amount} | Paid $${ebPaid.amount} | Posted $${ebPosted.amount}`);
+      lines.push(`Rolling A/R (unpaid balance of billed claims${d.rolling_ar_start ? ' since ' + d.rolling_ar_start : ''}): $${ebRollAR} | Total A/R incl. legacy: $${cl.total_balance || 0}`);
       lines.push('');
 
       // Sub-profile summary
@@ -7972,9 +7980,8 @@
         for (const [spName, spData] of Object.entries(d.sub_profiles)) {
           const label = SP_LABELS[spName] || spName;
           const sc = spData.claims || {};
-          const sr = sc.total_charged > 0 ? Math.round((sc.total_paid / sc.total_charged) * 100) : 0;
           lines.push(`${label}`);
-          lines.push(`Claims: ${sc.total || 0} | Charged: $${sc.total_charged || 0} | Paid: $${sc.total_paid || 0} | Collection Rate: ${sr}% | AR: $${sc.total_balance || 0}`);
+          lines.push(`Claims: ${sc.total || 0} | Charged: $${sc.total_charged || 0} | Paid: $${sc.total_paid || 0} | AR: $${sc.total_balance || 0}`);
           lines.push(`Credentialing: ${(spData.credentialing?.detail || []).length} | Enrollment: ${(spData.enrollment?.detail || []).length} | EDI: ${(spData.edi?.detail || []).length}`);
           lines.push('');
         }
@@ -8022,7 +8029,8 @@
       const company = d.client?.company || 'Client';
       const periodLabel = { all: 'All Time', mtd: 'Month to Date', ytd: 'Year to Date' }[d.period] || d.period;
       const cl = d.claims || {};
-      const collRate = cl.total_charged > 0 ? Math.round((cl.total_paid / cl.total_charged) * 100) : 0;
+      const pbk = d.claim_buckets || {};
+      const pRollAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : 0;
 
       let html = `<html><head><title>${company} Report</title><style>
         body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#333;padding:24px;max-width:1000px;margin:0 auto}
@@ -8054,17 +8062,22 @@
       html += generateAINarrative(d).replace(/<strong[^>]*>/g, '<b>').replace(/<\/strong>/g, '</b>');
       html += `</div>`;
 
-      // KPIs
+      // KPIs — locked Billed/Denied/Paid/Posted buckets (match the dashboard).
+      // No collection rate; Rolling A/R shown as the unpaid balance of billed claims.
+      const pBilled = pbk.billed || { count: 0, amount: 0 };
+      const pDenied = pbk.denied || { count: 0, amount: 0 };
+      const pPaid = pbk.paid || { count: 0, amount: 0 };
+      const pPosted = pbk.posted || { count: 0, amount: 0 };
       html += `<div class="sg">
-        <div class="sb"><div class="v">${cl.total || 0}</div><div class="l">Total Claims</div></div>
-        <div class="sb"><div class="v">$${fmt(cl.total_charged)}</div><div class="l">Total Charged</div></div>
-        <div class="sb"><div class="v">$${fmt(cl.total_paid)}</div><div class="l">Total Paid</div></div>
-        <div class="sb"><div class="v">$${fmt(cl.total_balance)}</div><div class="l">Outstanding AR</div></div>
+        <div class="sb"><div class="v">${pBilled.count}</div><div class="l">Claims Out (Billed)</div></div>
+        <div class="sb"><div class="v">$${fmt(pBilled.amount)}</div><div class="l">Billed Charges</div></div>
+        <div class="sb"><div class="v">${pDenied.count} · $${fmt(pDenied.amount)}</div><div class="l">Denied (incl. in Billed)</div></div>
+        <div class="sb"><div class="v">$${fmt(pRollAR)}</div><div class="l">Rolling A/R${d.rolling_ar_start ? ' · since ' + fmtShortDate(d.rolling_ar_start) : ''}</div></div>
       </div>`;
       html += `<div class="sg">
-        <div class="sb"><div class="v">${collRate}%</div><div class="l">Collection Rate</div></div>
-        <div class="sb"><div class="v">${d.payments?.count || 0}</div><div class="l">Payments</div></div>
-        <div class="sb"><div class="v">$${fmt(d.payments?.total)}</div><div class="l">Payment Total</div></div>
+        <div class="sb"><div class="v">$${fmt(pPaid.amount)}</div><div class="l">Paid</div></div>
+        <div class="sb"><div class="v">$${fmt(pPosted.amount)}</div><div class="l">Posted</div></div>
+        <div class="sb"><div class="v">$${fmt(cl.total_balance)}</div><div class="l">Total A/R (incl. legacy)</div></div>
         <div class="sb"><div class="v">${(d.credentialing?.detail || []).length}</div><div class="l">Cred Records</div></div>
       </div>`;
 
