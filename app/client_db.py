@@ -2604,6 +2604,28 @@ def get_notes(client_id: int, claim_key: str = None, module: str = None, ref_id:
     return rows
 
 
+def get_claim_client_ids(claim_key: str):
+    """Return the distinct client_id(s) that own a claim with this ClaimKey.
+
+    ClaimKeys are effectively unique per claim, but the same key could in
+    principle appear under more than one account, so we return every match and
+    let the caller pick the one the user is authorized for. Used so claim notes
+    resolve to the claim's real owning account (admins/staff browse claims
+    across every account, but notes are keyed by client_id)."""
+    if not claim_key:
+        return []
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT client_id FROM claims_master WHERE ClaimKey=?",
+            (claim_key,),
+        )
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def add_note(data: dict) -> int:
     conn = get_db()
     try:

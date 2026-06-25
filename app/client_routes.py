@@ -33,7 +33,7 @@ from app.client_db import (
     get_claims, get_claim, create_claim, update_claim, delete_claim,
     get_ar_worklist,
     get_payments, create_payment, delete_payment,
-    get_notes, add_note,
+    get_notes, add_note, get_claim_client_ids,
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_edi, create_edi, update_edi, delete_edi,
@@ -2609,21 +2609,42 @@ class NoteIn(BaseModel):
     Author: Optional[str] = ""
 
 
+def _resolve_note_client_id(user: dict, claim_key: Optional[str]) -> int:
+    """Pick the client_id a claim's notes live under. Notes are keyed by
+    client_id, but admins/staff browse claims across every account and a
+    biller's claims live under the lab's account (not the biller's own login),
+    so scoping notes to the viewer's own id hides them. When a claim_key is
+    given, resolve the claim's real owning account and authorize it:
+      • admin/staff may read any claim's notes,
+      • an account login only its own account(s).
+    Falls back to the legacy scope when the claim can't be resolved."""
+    role = (user.get("role") or "").lower()
+    if claim_key:
+        owners = get_claim_client_ids(claim_key)
+        if owners:
+            if role in ("admin", "staff"):
+                return owners[0]
+            allowed = set(_doc_account_ids(user)) | {user["id"]}
+            for oc in owners:
+                if oc in allowed:
+                    return oc
+    scope = _client_scope(user)
+    return scope if scope is not None else user["id"]
+
+
 @router.get("/notes")
 def list_notes(claim_key: Optional[str] = None, module: Optional[str] = None,
                ref_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = _client_scope(user)
-    cid = scope if scope is not None else user["id"]
+    cid = _resolve_note_client_id(user, claim_key)
     return get_notes(cid, claim_key, module, ref_id)
 
 
 @router.post("/notes")
 def post_note(body: NoteIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
-    scope = _client_scope(user)
-    cid = scope if scope is not None else user["id"]
     data = body.model_dump()
+    cid = _resolve_note_client_id(user, data.get("ClaimKey"))
     data["client_id"] = cid
     if not data.get("Author"):
         data["Author"] = user.get("username", "")
