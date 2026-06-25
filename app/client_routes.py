@@ -5461,6 +5461,12 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
     imported = 0
     errors = []
     counter = 1
+    # When the file is a posted-payments export (LIMS deposits), each row is a
+    # payment actually posted/deposited — not just a claim. We mirror those into
+    # the payments table so the dashboard "Posted" bucket reflects the real money
+    # posted (e.g. the ~$7k of EFT deposits), in addition to landing on the claim.
+    _is_payment_template = (_tpl_used == "lims_payments")
+    payment_rows = []
 
     # Pass 1: fuzzy-map every row, and tally how many times each file-provided
     # claim/account number appears. A single claim frequently spans several
@@ -5621,8 +5627,41 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                     str(uploaded_by or ""),
                 ))
                 imported += 1
+                if _is_payment_template:
+                    _pmt_amt = _parse_float(mapped.get("PaidAmount", 0))
+                    if _pmt_amt > 0:
+                        _ck = str(mapped.get("ClaimKey", ""))
+                        payment_rows.append({
+                            "ClaimKey": _ck,
+                            "PostDate": _parse_date(mapped.get("PaidDate", "")),
+                            "PaymentAmount": _pmt_amt,
+                            "PayerType": "Primary",
+                            "CheckNumber": _ck[4:] if _ck.startswith("PMT-") else "",
+                            "sub_profile": str(mapped.get("sub_profile", "")),
+                        })
             except Exception as e:
                 errors.append(f"Row {counter}: {e}")
+
+        # Mirror posted payments into the payments table so the "Posted" bucket
+        # reflects real deposits. Delete-then-insert keyed on the deterministic
+        # PMT-<eft> ClaimKey keeps this idempotent across reimports (no double
+        # counting). PostedBy carries the uploader so attribution is preserved.
+        if payment_rows:
+            _pmt_keys = list({pr["ClaimKey"] for pr in payment_rows})
+            cur.executemany(
+                "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
+                [(client_id, k) for k in _pmt_keys],
+            )
+            for pr in payment_rows:
+                cur.execute(
+                    """INSERT INTO payments
+                       (client_id, ClaimKey, PostDate, PaymentAmount, PayerType,
+                        CheckNumber, PostedBy, sub_profile)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (client_id, pr["ClaimKey"], pr["PostDate"], pr["PaymentAmount"],
+                     pr["PayerType"], pr["CheckNumber"], str(uploaded_by or ""),
+                     pr["sub_profile"]),
+                )
 
         conn.commit()
     finally:
