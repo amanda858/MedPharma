@@ -5467,9 +5467,9 @@
       const cb = d.claim_buckets || {};
       const cbCards = [
         { key: 'billed', label: 'Billed',  color: 'var(--primary)', hint: 'Claims out the door' },
-        { key: 'denied', label: 'Denied',  color: '#dc2626',        hint: 'Reworked / denied' },
+        { key: 'denied', label: 'Denied',  color: '#dc2626',        hint: 'Included in Billed' },
         { key: 'paid',   label: 'Paid',    color: 'var(--success)', hint: 'Money paid' },
-        { key: 'posted', label: 'Posted',  color: '#0891b2',        hint: 'Payments posted' },
+        { key: 'posted', label: 'Posted',  color: '#0891b2',        hint: 'Same as Paid · date in claim notes' },
       ];
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');

@@ -3497,7 +3497,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Claims Submitted:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
     <span><b>Paid:</b> ${data.get('paid_total_amount', data.get('payments_total_amount', 0)):,.2f}</span>
-    <span><b>Denied:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f})</span>
+    <span><b>Denied:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f}) <i style="color:#6b7280">— incl. in Submitted</i></span>
     <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
     <span><b>Rolling AR (pre-{_esc(str(data.get('rolling_ar_cutoff','')))}):</b> ${data.get('rolling_ar', 0):,.2f}</span>
     <span><b>Generated:</b> {generated}</span>
@@ -3511,6 +3511,13 @@ def download_production_report(
       <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Denied</th><th>Posted</th><th>$ Paid</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
+    <p style="font-size:11px;color:#6b7280;margin-top:8px">
+      <b>Note:</b> Denied claims are <b>included</b> in Claims Submitted — a denied
+      claim is still a billed claim (the denial only reflects what it was before it
+      was reworked). The Denied column flags how many of those submitted claims were
+      reworked/denied. Posted reflects payments posted (same dollars as Paid); each
+      claim's posting date is recorded in its claim notes.
+    </p>
   </section>
 
   <section class="section">
@@ -5652,6 +5659,16 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                 "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
                 [(client_id, k) for k in _pmt_keys],
             )
+            # Posting is captured per-claim in the notes log so Paid and Posted
+            # stay the SAME number on the dashboard, while each claim still shows
+            # whether (and when) its payment was posted — flagged "recently
+            # posted" when the deposit landed in the last 7 days. Module='Payment'
+            # auto-notes are cleared first so reimports never stack duplicates.
+            cur.executemany(
+                "DELETE FROM notes_log WHERE client_id=? AND ClaimKey=? AND Module='Payment' AND Author='system'",
+                [(client_id, k) for k in _pmt_keys],
+            )
+            _recent_cutoff = (business_today() - timedelta(days=7)).isoformat()
             for pr in payment_rows:
                 cur.execute(
                     """INSERT INTO payments
@@ -5661,6 +5678,17 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                     (client_id, pr["ClaimKey"], pr["PostDate"], pr["PaymentAmount"],
                      pr["PayerType"], pr["CheckNumber"], str(uploaded_by or ""),
                      pr["sub_profile"]),
+                )
+                _pdate = str(pr["PostDate"] or "").strip()
+                _recent = bool(_pdate) and _pdate >= _recent_cutoff
+                _prefix = "Recently posted" if _recent else "Posted"
+                _when = f" on {_pdate}" if _pdate else ""
+                _eft = pr.get("CheckNumber") or ""
+                _note = f"{_prefix}{_when}: ${pr['PaymentAmount']:,.2f}" + (f" (EFT {_eft})" if _eft else "")
+                cur.execute(
+                    """INSERT INTO notes_log (client_id, ClaimKey, Module, RefID, Note, Author)
+                       VALUES (?,?,?,?,?,?)""",
+                    (client_id, pr["ClaimKey"], "Payment", 0, _note, "system"),
                 )
 
         conn.commit()
