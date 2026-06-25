@@ -2999,6 +2999,50 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {base_cond} GROUP BY Status", base_p)
         enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
 
+        # ── Claim lifecycle buckets (Billed / Denied / Paid / Posted) ──
+        # The four numbers the team monitors. Billed is the SUPERSET — every claim
+        # line that has been billed (has a Bill Date). Denied / Paid / Posted are
+        # overlapping status sub-views of that superset (a denied claim is still a
+        # billed claim; it just tells you what state it's in now).
+        #   Billed  = claim lines with a Bill Date            (charge value)
+        #   Denied  = status Denied/Appeals OR a denial reason (charge value)
+        #   Paid    = claim lines with money paid             (paid value)
+        #   Posted  = payments actually posted/deposited      (payment value)
+        ROLLING_AR_START = "2026-06-18"  # first day the team began entering data
+        claim_buckets = {
+            "billed": {"count": 0, "amount": 0.0},
+            "denied": {"count": 0, "amount": 0.0},
+            "paid":   {"count": 0, "amount": 0.0},
+            "posted": {"count": 0, "amount": 0.0},
+        }
+        b = claim_buckets
+        b["billed"]["count"] = q1(
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(BillDate,'') != ''", p)
+        b["billed"]["amount"] = q1(
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(BillDate,'') != ''", p)
+        b["denied"]["count"] = q1(
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'') != '')", p)
+        b["denied"]["amount"] = q1(
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'') != '')", p)
+        b["paid"]["count"] = q1(
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(PaidAmount,0) > 0", p)
+        b["paid"]["amount"] = q1(
+            f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(PaidAmount,0) > 0", p)
+        # Posted = payments actually posted (payments table). No DOS column -> base_cond.
+        b["posted"]["count"] = q1(
+            f"SELECT COUNT(*) FROM payments {base_cond}", base_p)
+        b["posted"]["amount"] = q1(
+            f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond}", base_p)
+        for _bk in claim_buckets:
+            claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
+
+        # Rolling A/R since the team's first data-entry day (6/18). Outstanding
+        # balance on claims billed on/after the start date — the live A/R the team
+        # has actually generated (vs. legacy balances carried in from before 6/18).
+        rolling_ar = q1(
+            f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master {cond} "
+            f"{'AND' if cond else 'WHERE'} BillDate >= ?", p + [ROLLING_AR_START])
+
         # Client profile
         profile = {}
         if client_id:
@@ -3031,6 +3075,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "total_paid": round(total_paid, 2),
             "ar_aging": aging,
             "billing_activity": billing_activity,
+            "claim_buckets": claim_buckets,
+            "rolling_ar": round(rolling_ar, 2),
+            "rolling_ar_start": ROLLING_AR_START,
             "status_distribution": status_dist,
             "payor_mix": payor_mix,
             "denial_categories": denial_cats,

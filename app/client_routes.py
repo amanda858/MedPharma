@@ -572,6 +572,24 @@ def _infer_excel_category(content: bytes, ext: str, filename: str = "", descript
         }
         return intercepted_category, debug
 
+    # Hardcoded format templates ("the glasses"): some recurring claim exports have
+    # no usable headers (headerless / batch-summary / multi-sheet positional), so
+    # keyword + structural detection can't see them. If a template matches, the file
+    # is unambiguously claims data — route it to Claims so it auto-imports.
+    try:
+        if _extract_templated_claim_rows(content, ext):
+            debug = {
+                "scores": scores,
+                "headers_sample": headers[:20],
+                "best_score": None,
+                "second_score": None,
+                "intercept": intercept,
+                "template": True,
+            }
+            return "Claims", debug
+    except Exception:
+        pass
+
     # Structural detection: if the columns clearly describe claims data, route to
     # Claims even when the keyword score is weak. This stops daily billed
     # spreadsheets (mis-filed under "General") from being saved as inert documents.
@@ -1622,6 +1640,24 @@ def admin_diag_claim_mapping(hub_session: Optional[str] = Cookie(None)):
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
+            # Hardcoded template recognition takes precedence — it's how headerless
+            # / batch-summary / multi-sheet SV exports are read.
+            tpl = _extract_templated_claim_rows(content, ext)
+            if tpl:
+                tpl_name, tpl_rows = tpl
+                from collections import Counter as _Counter
+                by_status = dict(_Counter(str(rw.get("Claim Status", "")) for rw in tpl_rows))
+                info.update({
+                    "status": "ok",
+                    "recognized_via": f"template:{tpl_name}",
+                    "rows_parsed": len(tpl_rows),
+                    "template_status_breakdown": by_status,
+                    "recognized_as_claims": True,
+                    "has_money_column": True,
+                    "has_claim_key_column": True,
+                })
+                files.append(info)
+                continue
             parsed = _parse_excel_rows(content, ext, combine_sheets=True)
             headers = list(parsed[0].keys()) if parsed else []
             mapped = {}
@@ -1636,6 +1672,7 @@ def admin_diag_claim_mapping(hub_session: Optional[str] = Cookie(None)):
             mapped_targets = set(mapped.values())
             info.update({
                 "status": "ok",
+                "recognized_via": "headers" if match["is_claims"] else "none",
                 "rows_parsed": len(parsed),
                 "headers_detected": [str(h) for h in headers],
                 "mapped_columns": mapped,
@@ -1695,12 +1732,14 @@ def admin_diag_reimport_all_claims(hub_session: Optional[str] = Cookie(None)):
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
-            parsed = _parse_excel_rows(content, ext, combine_sheets=True)
-            headers = list(parsed[0].keys()) if parsed else []
-            if not _claims_structural_match(headers)["is_claims"]:
-                results.append({"file": r["original_name"], "imported": 0,
-                                "note": "not recognized as claims"})
-                continue
+            templated = bool(_extract_templated_claim_rows(content, ext))
+            if not templated:
+                parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+                headers = list(parsed[0].keys()) if parsed else []
+                if not _claims_structural_match(headers)["is_claims"]:
+                    results.append({"file": r["original_name"], "imported": 0,
+                                    "note": "not recognized as claims"})
+                    continue
             imported, errors = _import_claims_from_excel(
                 content, ext, int(r["client_id"]), uploaded_by=str(r["uploaded_by"] or ""))
             total_imported += int(imported or 0)
@@ -4388,6 +4427,274 @@ def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     return rows
 
 
+# ─── Hardcoded format templates ("the glasses") ───────────────────────────────
+# Some recurring claim exports cannot be read by column-name matching because they
+# have NO header row (the first row is data), or they are batch SUMMARIES rather
+# than per-claim detail, or they are multi-sheet workbooks where the meaningful
+# data lives on a non-first sheet in a fixed positional layout. Generic header
+# matching physically cannot recognize these, so the daily uploads never moved the
+# totals. These templates pin the EXACT shape of each known recurring file and emit
+# rows already labeled with synthetic headers that CLAIMS_COLUMN_MAP understands
+# (plus an injected status), so the rest of the import pipeline works unchanged.
+#
+# SAFETY: each template only fires when its fingerprint matches precisely. If the
+# layout ever changes, the template simply does not match and the file falls back
+# to the generic parser (i.e. behaves exactly as before — never wrong numbers).
+
+_SVD_CLAIMNO_RE = re.compile(r"^[A-Za-z]{2,5}\d+-\d+$")   # e.g. SVD9322-52429
+_CARC_RE = re.compile(r"^[A-Za-z]{1,3}\d{1,4}([, ]+[A-Za-z]{1,3}\d{1,4})*$")  # PR49 / CO22, CO50
+
+
+def _cell_iso_date(v):
+    """Best-effort ISO date string from a cell (datetime or 'YYYY-MM-DD ...')."""
+    if v is None:
+        return ""
+    if isinstance(v, (datetime, date)):
+        return v.strftime("%Y-%m-%d")
+    s = str(v).strip()
+    if not s:
+        return ""
+    if " " in s and len(s) > 10:
+        s = s.split(" ")[0]
+    return s
+
+
+def _load_xlsx_sheets(content: bytes):
+    """Return [(sheet_name, [row_tuples...]), ...] for an .xlsx workbook, or []."""
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        return []
+    out = []
+    for sn in wb.sheetnames:
+        ws = wb[sn]
+        rows = [r for r in ws.iter_rows(values_only=True)]
+        out.append((sn, rows))
+    wb.close()
+    return out
+
+
+def _tpl_svd_batch_summary(sheets):
+    """SVD DAILY batch log: per-batch summary of claims submitted.
+    Header row carries DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED. Each row
+    is one batch (e.g. 76 claims = $10,761), NOT one claim — so it is expanded into
+    N synthetic billed claims (charge = billed / N) with a deterministic key so a
+    re-upload updates in place and never double counts. This is the authoritative
+    'claims out / Billed' source."""
+    for sn, rows in sheets:
+        if not rows:
+            continue
+        # Find the header row within the first few rows.
+        for hidx in range(min(4, len(rows))):
+            cells = [_norm_key(str(c)) if c is not None else "" for c in rows[hidx]]
+            joined = " ".join(cells)
+            has_date = any(c == "date" for c in cells)
+            has_batch = any("batch" in c for c in cells)
+            has_claims = any(("claim" in c) and ("numer" in c or "number" in c or "of claim" in c) for c in cells)
+            has_billed = any("billed" in c for c in cells)
+            if has_date and has_batch and has_claims and has_billed:
+                ci = {}
+                for i, c in enumerate(cells):
+                    if c == "date" and "date" not in ci:
+                        ci["date"] = i
+                    elif "batch" in c and "batch" not in ci:
+                        ci["batch"] = i
+                    elif "claim" in c and "claims" not in ci:
+                        ci["claims"] = i
+                    elif "billed" in c and "billed" not in ci:
+                        ci["billed"] = i
+                if not all(k in ci for k in ("date", "batch", "claims", "billed")):
+                    continue
+                out = []
+                for r in rows[hidx + 1:]:
+                    if not r or not any(c is not None and str(c).strip() for c in r):
+                        continue
+                    try:
+                        n = int(float(str(r[ci["claims"]]).replace(",", "").strip()))
+                    except Exception:
+                        continue
+                    if n <= 0 or n > 5000:
+                        continue
+                    try:
+                        billed = float(str(r[ci["billed"]]).replace("$", "").replace(",", "").strip())
+                    except Exception:
+                        billed = 0.0
+                    batch = str(r[ci["batch"]] or "").split(".")[0].strip()
+                    bdate = _cell_iso_date(r[ci["date"]])
+                    per = round(billed / n, 2) if n else 0.0
+                    for i in range(n):
+                        out.append({
+                            "Claim #": f"SVDB-{batch}-{i+1}",
+                            "Claim Status": "Billed/Submitted",
+                            "Charge Amount": per,
+                            "Bill Date": bdate,
+                            "Provider Name": "SV Diagnostic Labs",
+                        })
+                if out:
+                    return out
+    return None
+
+
+def _tpl_svd_denials(sheets):
+    """SVD denial / AR report: NO header row, fixed positional layout. The sheet
+    stacks TWO record shapes that both describe billed claims:
+      • Denial worklist  — col0 is the claim number (SVD9322-52429), col4 a CARC
+        code (PR49 / CO22), col16 the charge. These were billed, then denied, and
+        are reworked — so they count as Billed AND carry a denial.
+      • A/R aging detail  — col0 is a numeric id, col26 is the claim number
+        (SVD3166-47529), col28 the charge, col29 the allowed. Billed claims sitting
+        in A/R. Both shapes are emitted as billed claims keyed on the real claim #."""
+    def _col(r, i):
+        return r[i] if (r and len(r) > i and r[i] is not None) else ""
+    for sn, rows in sheets:
+        if len(rows) < 2:
+            continue
+        # Fingerprint: the worklist shape (claim # in col0 + CARC in col4) must be
+        # present so we never positionally mis-read an unrelated wide sheet.
+        sample = [r for r in rows[:60] if r and any(c is not None and str(c).strip() for c in r)]
+        if len(sample) < 3:
+            continue
+        key_hits = sum(1 for r in sample if _SVD_CLAIMNO_RE.match(str(_col(r, 0)).strip()))
+        carc_hits = sum(1 for r in sample if _CARC_RE.match(str(_col(r, 4)).strip()))
+        if key_hits < 2 or carc_hits < 2:
+            continue
+        out = []
+        for r in rows:
+            if not r:
+                continue
+            c0 = str(_col(r, 0)).strip()
+            c26 = str(_col(r, 26)).strip()
+            if _SVD_CLAIMNO_RE.match(c0):
+                # Denial worklist line — billed claim that was denied.
+                first = str(_col(r, 10)).strip()
+                last = str(_col(r, 11)).strip()
+                name = (", ".join(p for p in (last, first) if p)).strip(", ")
+                codes = str(_col(r, 4)).strip()
+                reason = str(_col(r, 5)).strip()
+                out.append({
+                    "Claim #": c0,
+                    "Claim Status": "Denied",
+                    "Payor": str(_col(r, 1)).strip(),
+                    "DOS": _cell_iso_date(_col(r, 2)),
+                    "CPT Code": str(_col(r, 3)).strip(),
+                    "Denial Reason": (codes + (" - " if codes and reason else "") + reason).strip(),
+                    "Patient Name": name,
+                    "Bill Date": _cell_iso_date(_col(r, 13)),
+                    "Denied Date": _cell_iso_date(_col(r, 14)),
+                    "Owner": str(_col(r, 15)).strip(),
+                    "Charge Amount": _col(r, 16),
+                    "Paid Amount": _col(r, 17),
+                })
+            elif _SVD_CLAIMNO_RE.match(c26):
+                # A/R aging detail line — billed claim still outstanding.
+                first = str(_col(r, 2)).strip()
+                last = str(_col(r, 3)).strip()
+                name = (", ".join(p for p in (last, first) if p)).strip(", ")
+                bdate = _cell_iso_date(_col(r, 24)) or _cell_iso_date(_col(r, 6))
+                out.append({
+                    "Claim #": c26,
+                    "Claim Status": "A/R Follow-Up",
+                    "Payor": str(_col(r, 9)).strip(),
+                    "DOS": _cell_iso_date(_col(r, 6)),
+                    "CPT Code": str(_col(r, 15)).strip(),
+                    "Patient Name": name,
+                    "Bill Date": bdate,
+                    "Charge Amount": _col(r, 28),
+                    "Allowed Amount": _col(r, 29),
+                    "Paid Amount": _col(r, 30),
+                })
+        if out:
+            return out
+    return None
+    return None
+
+
+def _tpl_lims_payments(sheets):
+    """LIMS payments/ERA sheet: deposits posted. Header carries BATCH # / DEPOSIT
+    DATE / PAYER NAME / AMOUNT / EFT NUMBER. Each row is a posted payment."""
+    for sn, rows in sheets:
+        if not rows:
+            continue
+        cells = [_norm_key(str(c)) if c is not None else "" for c in rows[0]]
+        has_amount = any(c == "amount" for c in cells)
+        has_payer = any("payer" in c for c in cells)
+        has_eft = any("eft" in c for c in cells)
+        has_deposit = any("deposit" in c for c in cells)
+        if not (has_amount and (has_eft or has_deposit) and has_payer):
+            continue
+        idx = {}
+        for i, c in enumerate(cells):
+            if c == "amount":
+                idx["amount"] = i
+            elif "payer" in c:
+                idx["payer"] = i
+            elif "eft" in c:
+                idx["eft"] = i
+            elif "deposit date" in c or (("deposit" in c) and "date" in c):
+                idx["date"] = i
+        out = []
+        for r in rows[1:]:
+            if not r or not any(c is not None and str(c).strip() for c in r):
+                continue
+            try:
+                amt = float(str(r[idx["amount"]]).replace("$", "").replace(",", "").strip())
+            except Exception:
+                amt = 0.0
+            eft = str(r[idx["eft"]]).split(".")[0].strip() if "eft" in idx and len(r) > idx["eft"] and r[idx["eft"]] is not None else ""
+            payer = str(r[idx["payer"]]).strip() if "payer" in idx and len(r) > idx["payer"] and r[idx["payer"]] is not None else ""
+            pdate = _cell_iso_date(r[idx["date"]]) if "date" in idx and len(r) > idx["date"] else ""
+            key = f"PMT-{eft}" if eft else f"PMT-{payer}-{pdate}-{amt}"
+            out.append({
+                "Claim #": key,
+                "Claim Status": "Paid",
+                "Payor": payer,
+                "Paid Amount": amt,
+                "Paid Date": pdate,
+                "Bill Date": pdate,
+            })
+        if out:
+            return out
+    return None
+
+
+# Priority order — the first template whose fingerprint matches wins for a given
+# workbook, so a file contributes to exactly one bucket and never double counts.
+_CLAIM_TEMPLATES = (
+    ("svd_batch_summary", _tpl_svd_batch_summary),
+    ("svd_denials", _tpl_svd_denials),
+    ("lims_payments", _tpl_lims_payments),
+)
+
+
+def _extract_templated_claim_rows(content: bytes, ext: str):
+    """If the file matches a known recurring SV format, return (template_name,
+    labeled_rows); otherwise None. Only .xlsx workbooks are templated."""
+    if ext not in (".xlsx",):
+        return None
+    sheets = _load_xlsx_sheets(content)
+    if not sheets:
+        return None
+    for name, fn in _CLAIM_TEMPLATES:
+        try:
+            rows = fn(sheets)
+        except Exception:
+            rows = None
+        if rows:
+            return name, rows
+    return None
+
+
+def _load_claim_rows(content: bytes, ext: str):
+    """Claim ingestion entry point: try the hardcoded format templates first (so
+    headerless / batch-summary / multi-sheet SV exports are recognized), then fall
+    back to the generic smart-header parser. Returns (rows, template_name|None)."""
+    tpl = _extract_templated_claim_rows(content, ext)
+    if tpl:
+        return tpl[1], tpl[0]
+    return _parse_excel_rows(content, ext), None
+
+
 def _parse_pdf_rows(content: bytes) -> list[dict]:
     """Parse table-like PDF content into list[dict] using detected headers.
 
@@ -5140,8 +5447,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                 pass
         return s
 
-    # Parse rows using the shared smart parser (handles multi-sheet, smart header detection)
-    rows = _parse_excel_rows(content, ext)
+    # Parse rows: try the hardcoded format templates first (so headerless /
+    # batch-summary / multi-sheet SV exports are recognized), then fall back to the
+    # shared smart parser (multi-sheet, smart header detection).
+    rows, _tpl_used = _load_claim_rows(content, ext)
 
     if not rows:
         return 0, ["No rows found in file"]
@@ -5517,10 +5826,15 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
-            parsed = _parse_excel_rows(content, ext, combine_sheets=True)
-            headers = list(parsed[0].keys()) if parsed else []
-            if not _claims_structural_match(headers)["is_claims"]:
-                continue
+            # Recognize via hardcoded templates OR generic structural match. The
+            # template check lets headerless / batch-summary / multi-sheet SV
+            # exports (which carry no recognizable headers) be ingested too.
+            templated = bool(_extract_templated_claim_rows(content, ext))
+            if not templated:
+                parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+                headers = list(parsed[0].keys()) if parsed else []
+                if not _claims_structural_match(headers)["is_claims"]:
+                    continue
             imported, _errors = _import_claims_from_excel(
                 content, ext, int(r["client_id"]),
                 uploaded_by=str(r["uploaded_by"] or ""))

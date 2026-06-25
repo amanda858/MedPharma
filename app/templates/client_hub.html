@@ -2211,6 +2211,17 @@
             </div>
           </div>
 
+          <!-- Claims Out — the four lifecycle buckets the team monitors:
+               Billed (superset) / Denied / Paid / Posted. Plus rolling A/R since
+               the team's start date. Visible to every user, scoped to their data. -->
+          <div class="card" id="dashClaimBucketsCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--primary);display:none">
+            <div class="card-header">
+              <div class="card-title">📤 Claims Out</div>
+              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Denied · Paid · Posted</div>
+            </div>
+            <div id="dashClaimBuckets" style="padding:16px"></div>
+          </div>
+
           <div class="kpi-grid" id="kpiGrid" data-module-section="claims"></div>
           <!-- Billed Activity Card — lines billed + charge value, by Bill Date.
                Visible to every user, scoped to their own data. -->
@@ -5444,6 +5455,37 @@
       <div class="kpi-label">${k.label}</div>
     </div>
   `).join('');
+
+      // Claims Out — the four lifecycle buckets (Billed / Denied / Paid / Posted).
+      // Billed is the superset; Denied/Paid are sub-views of it. Posted = payments
+      // actually deposited. Plus rolling A/R since the team's start date (6/18).
+      const cb = d.claim_buckets || {};
+      const cbCards = [
+        { key: 'billed', label: 'Billed',  color: 'var(--primary)', hint: 'Claims out the door' },
+        { key: 'denied', label: 'Denied',  color: '#dc2626',        hint: 'Reworked / denied' },
+        { key: 'paid',   label: 'Paid',    color: 'var(--success)', hint: 'Money paid' },
+        { key: 'posted', label: 'Posted',  color: '#0891b2',        hint: 'Payments posted' },
+      ];
+      const cbCard = document.getElementById('dashClaimBucketsCard');
+      const cbEl = document.getElementById('dashClaimBuckets');
+      const cbHasData = cbCards.some(c => cb[c.key] && (cb[c.key].count || cb[c.key].amount));
+      if (cbCard) cbCard.style.display = cbHasData ? '' : 'none';
+      if (cbEl && cbHasData) {
+        cbEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+          cbCards.map(c => {
+            const v = cb[c.key] || { count: 0, amount: 0 };
+            return `<div style="background:var(--gray-50);border-radius:10px;padding:16px;text-align:center;border-top:3px solid ${c.color}">
+              <div style="font-size:24px;font-weight:800;color:${c.color}">$${fmt(v.amount)}</div>
+              <div style="font-size:13px;color:var(--gray-600);margin-top:2px">${v.count} claim${v.count === 1 ? '' : 's'}</div>
+              <div style="font-size:12px;font-weight:700;color:var(--gray-700);text-transform:uppercase;margin-top:8px">${c.label}</div>
+              <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${c.hint}</div>
+            </div>`;
+          }).join('') + `</div>`;
+        const cbSub = document.getElementById('dashClaimBucketsSub');
+        if (cbSub && d.rolling_ar != null) {
+          cbSub.textContent = `Rolling A/R since ${d.rolling_ar_start || '6/18'}: $${fmt(d.rolling_ar)}`;
+        }
+      }
 
       // Billed Activity — lines billed + charge value by Bill Date, scoped to the
       // user's own data so every user monitors their own billing activity.
