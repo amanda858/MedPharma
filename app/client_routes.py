@@ -968,10 +968,17 @@ def accounts(hub_session: Optional[str] = Cookie(None)):
         ]
         clients = [c for c in all_active if int(c.get("id", 0) or 0) in granted_ids]
     else:
-        # Client users should only see their own account card.
+        # Client users see the account(s) they're ASSIGNED to — the lab whose
+        # claims they actually track — not their own (often empty) login row.
+        # A dedicated login like "Tivany" has id 26 but is granted access to
+        # account 10 (SV Diagnostics); showing card 26 would load an empty
+        # dashboard. Fall back to their own id only when they have no
+        # assignment (account-owner logins whose own id holds the data).
+        assigned = [int(c) for c in accounts_assigned_to_user(uid) if int(c) != uid]
+        target_ids = set(assigned) if assigned else {uid}
         clients = [
             c for c in list_clients()
-            if int(c.get("id", 0) or 0) == uid
+            if int(c.get("id", 0) or 0) in target_ids
         ]
 
     deduped: dict[str, dict] = {}
