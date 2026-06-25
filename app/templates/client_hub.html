@@ -4574,10 +4574,9 @@
       // Time-based greeting
       const hour = new Date().getHours();
       const greetWord = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
-      const greetName = currentUser ? (currentUser.contact_name || currentUser.username || '') : '';
       const greetEl = document.getElementById('accountGreeting');
       const subEl   = document.getElementById('accountSubtitle');
-      if (greetEl) greetEl.textContent = greetName ? `${greetWord}, ${greetName}! 👋` : `${greetWord}! 👋`;
+      if (greetEl) greetEl.textContent = `${greetWord}! 👋`;
       if (subEl)   subEl.textContent   = 'Select a client account below to continue.';
       const newClientBtn = document.getElementById('selectorNewClientBtn');
       if (newClientBtn) newClientBtn.style.display = isFullAdmin() ? '' : 'none';
@@ -5385,12 +5384,9 @@
       // Time-based greeting shown below the title in the hero banner
       const hour = new Date().getHours();
       const greetWord = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
-      const greetName = currentUser ? (currentUser.contact_name || currentUser.username || '') : '';
       const greetSubtitleEl = document.getElementById('dashGreetingLine');
       if (greetSubtitleEl) {
-        greetSubtitleEl.textContent = greetName
-          ? `${greetWord}, ${greetName}!`
-          : `${greetWord}!`;
+        greetSubtitleEl.textContent = `${greetWord}!`;
       }
 
       // Load today's activity card (internal team production — hide for clients)
