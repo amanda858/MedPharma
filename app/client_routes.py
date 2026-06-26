@@ -3558,7 +3558,7 @@ def download_production_report(
     <span><b>Period:</b> {_esc(period_label)}</span>
     <span><b>Claims Submitted:</b> {data.get('billed_total_count', 0)} (${data.get('billed_total_amount', 0):,.2f})</span>
     <span><b>Paid:</b> ${data.get('paid_total_amount', data.get('payments_total_amount', 0)):,.2f}</span>
-    <span><b>Reworked:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f}) <i style="color:#6b7280">— submitted claims, incl. in Submitted</i></span>
+    <span><b>Prior Denials &amp; Rebill:</b> {data.get('denied_total_count', 0)} (${data.get('denied_total_amount', 0):,.2f}) <i style="color:#6b7280">— submitted claims, incl. in Submitted</i></span>
     <span><b>Posted:</b> {data.get('payments_total_count', 0)}</span>
     <span><b>Rolling AR (pre-{_esc(str(data.get('rolling_ar_cutoff','')))}):</b> ${data.get('rolling_ar', 0):,.2f}</span>
     <span><b>Generated:</b> {generated}</span>
@@ -3569,16 +3569,17 @@ def download_production_report(
   <section class="section">
     <h2>👥 Production by User</h2>
     <table>
-      <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Reworked</th><th>Posted</th><th>$ Paid</th></tr></thead>
+      <thead><tr><th>Team Member</th><th>Claims Submitted</th><th>$ Submitted</th><th>Prior Denials &amp; Rebill</th><th>Posted</th><th>$ Paid</th></tr></thead>
       <tbody>{_user_rows()}</tbody>
     </table>
     <p style="font-size:11px;color:#6b7280;margin-top:8px">
-      <b>Note:</b> Every claim here was <b>submitted</b>. The Reworked column flags
-      how many submitted claims had been denied and were reworked/resubmitted — a
-      reworked claim is still a submitted, billed claim (the prior denial only
-      reflects what it was before it was reworked), so it stays counted in Claims
-      Submitted. Posted reflects payments posted (same dollars as Paid); each
-      claim's posting date is recorded in its claim notes.
+      <b>Note:</b> Every claim here was <b>submitted</b>. The Prior Denials &amp;
+      Rebill column flags how many submitted claims had a prior denial and were
+      rebilled/resubmitted — a rebilled claim is still a submitted, billed claim
+      (the prior denial only reflects what it was before it was reworked and
+      rebilled), so it stays counted in Claims Submitted. Posted reflects payments
+      posted (same dollars as Paid); each claim's posting date is recorded in its
+      claim notes.
     </p>
   </section>
 
