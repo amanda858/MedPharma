@@ -531,6 +531,23 @@ def _claims_structural_match(headers: list[str]) -> dict:
     return {"has_claim_key": has_key, "signals": signals, "is_claims": is_claims}
 
 
+def _is_clearinghouse_ack(headers: list[str]) -> bool:
+    """True when a sheet is a clearinghouse acknowledgement / submission report
+    rather than an originating charge register.
+
+    Such a file lists claims that were already billed from a real charge register
+    and merely echoes their submission state (Received / Accepted / Forwarded …)
+    keyed by a clearinghouse control number, so counting its charges again simply
+    double-bills the same claims. It is identified by the tell-tale trio a plain
+    charge register never carries together: a control-number column, a status
+    column, and a processed / acknowledged column."""
+    hl = [str(h).strip().lower() for h in headers if str(h or "").strip()]
+    has_control = any("control" in h for h in hl)
+    has_status = any("status" in h for h in hl)
+    has_proc = any(("process" in h) or ("acknowledg" in h) for h in hl)
+    return has_control and has_status and has_proc
+
+
 def _infer_excel_category(content: bytes, ext: str, filename: str = "", description: str = "") -> tuple[Optional[str], dict]:
     """Infer the best import category from Excel headers + filename/description text."""
     scores = {"Claims": 0, "Credentialing": 0, "Enrollment": 0, "EDI": 0}
@@ -1965,7 +1982,10 @@ def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] 
                 match = _claims_structural_match(headers)
                 mapped_targets = {_fuzzy_match_column(h, CLAIMS_COLUMN_MAP) for h in headers}
                 has_money = bool(mapped_targets & {"ChargeAmount", "PaidAmount", "BalanceRemaining"})
-                if match["is_claims"] and has_money:
+                if _is_clearinghouse_ack(headers):
+                    # Submission acknowledgement echoing an already-billed register.
+                    ok, reason = False, "clearinghouse acknowledgement (submission recap skipped)"
+                elif match["is_claims"] and has_money:
                     ok, reason = True, "headers"
                 else:
                     reason = "not a per-claim register (recap/worklist skipped)"
@@ -4910,34 +4930,50 @@ def _tpl_svd_batch_summary(sheets):
 
 
 def _tpl_svd_denials(sheets):
-    """SVD denial / AR report: NO header row, fixed positional layout. The sheet
-    stacks TWO record shapes that both describe billed claims:
+    """SVD denial / AR report: NO header row, fixed positional layout, usually a
+    MULTI-SHEET workbook. The export stacks TWO record shapes that both describe
+    billed claims, and the A/R aging frequently spills onto a SECOND sheet:
       • Denial worklist  — col0 is the claim number (SVD9322-52429), col4 a CARC
         code (PR49 / CO22), col16 the charge. These were billed, then denied, and
         are reworked — so they count as Billed AND carry a denial.
       • A/R aging detail  — col0 is a numeric id, col26 is the claim number
         (SVD3166-47529), col28 the charge, col29 the allowed. Billed claims sitting
-        in A/R. Both shapes are emitted as billed claims keyed on the real claim #."""
+        in A/R. Both shapes are emitted as billed claims keyed on the real claim #.
+    EVERY submitted / reworked line is emitted — nothing is collapsed. A claim that
+    was worked in the denial queue AND tracked in A/R (often across two sheets and
+    multiple aging snapshots) represents real, repeated billing activity, so each
+    occurrence keeps its own row: the first sighting carries the clean claim #, and
+    later sightings become claim#2 / claim#3 … (deterministic in file order, so a
+    re-upload updates in place and never drifts). ALL sheets are scanned, so a
+    workbook whose A/R lives on a later sheet is fully read instead of abandoned."""
     def _col(r, i):
         return r[i] if (r and len(r) > i and r[i] is not None) else ""
+    all_out = []
+    seq: dict = {}
+    matched = False
     for sn, rows in sheets:
         if len(rows) < 2:
             continue
-        # Fingerprint: the worklist shape (claim # in col0 + CARC in col4) must be
-        # present so we never positionally mis-read an unrelated wide sheet.
+        # Fingerprint each sheet independently. A sheet qualifies if it carries the
+        # denial worklist shape (claim # in col0 + CARC in col4) OR the A/R aging
+        # shape (claim # in col26). The A/R-only test is what lets a second sheet
+        # holding nothing but aging detail still be recognized and read.
         sample = [r for r in rows[:60] if r and any(c is not None and str(c).strip() for c in r)]
         if len(sample) < 3:
             continue
         key_hits = sum(1 for r in sample if _SVD_CLAIMNO_RE.match(str(_col(r, 0)).strip()))
         carc_hits = sum(1 for r in sample if _CARC_RE.match(str(_col(r, 4)).strip()))
-        if key_hits < 2 or carc_hits < 2:
+        ar_hits = sum(1 for r in sample if _SVD_CLAIMNO_RE.match(str(_col(r, 26)).strip()))
+        if not ((key_hits >= 2 and carc_hits >= 2) or ar_hits >= 2):
             continue
-        out = []
+        matched = True
         for r in rows:
             if not r:
                 continue
             c0 = str(_col(r, 0)).strip()
             c26 = str(_col(r, 26)).strip()
+            base = ""
+            rec = None
             if _SVD_CLAIMNO_RE.match(c0):
                 # Denial worklist line — billed claim that was denied.
                 first = str(_col(r, 10)).strip()
@@ -4945,8 +4981,8 @@ def _tpl_svd_denials(sheets):
                 name = (", ".join(p for p in (last, first) if p)).strip(", ")
                 codes = str(_col(r, 4)).strip()
                 reason = str(_col(r, 5)).strip()
-                out.append({
-                    "Claim #": c0,
+                base = c0
+                rec = {
                     "Claim Status": "Denied",
                     "Payor": str(_col(r, 1)).strip(),
                     "DOS": _cell_iso_date(_col(r, 2)),
@@ -4958,15 +4994,15 @@ def _tpl_svd_denials(sheets):
                     "Owner": str(_col(r, 15)).strip(),
                     "Charge Amount": _col(r, 16),
                     "Paid Amount": _col(r, 17),
-                })
+                }
             elif _SVD_CLAIMNO_RE.match(c26):
                 # A/R aging detail line — billed claim still outstanding.
                 first = str(_col(r, 2)).strip()
                 last = str(_col(r, 3)).strip()
                 name = (", ".join(p for p in (last, first) if p)).strip(", ")
                 bdate = _cell_iso_date(_col(r, 24)) or _cell_iso_date(_col(r, 6))
-                out.append({
-                    "Claim #": c26,
+                base = c26
+                rec = {
                     "Claim Status": "A/R Follow-Up",
                     "Payor": str(_col(r, 9)).strip(),
                     "DOS": _cell_iso_date(_col(r, 6)),
@@ -4976,11 +5012,17 @@ def _tpl_svd_denials(sheets):
                     "Charge Amount": _col(r, 28),
                     "Allowed Amount": _col(r, 29),
                     "Paid Amount": _col(r, 30),
-                })
-        if out:
-            return out
-    return None
-    return None
+                }
+            if rec is None:
+                continue
+            # Unique key per submitted/reworked line so the gross billed total is
+            # preserved instead of being deduped away. First sighting keeps the
+            # clean claim #; repeats become claim#2, claim#3 … (stable file order).
+            n = seq.get(base, 0) + 1
+            seq[base] = n
+            rec["Claim #"] = base if n == 1 else f"{base}#{n}"
+            all_out.append(rec)
+    return all_out if (matched and all_out) else None
 
 
 def _tpl_lims_payments(sheets):
