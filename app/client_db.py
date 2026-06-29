@@ -3027,7 +3027,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # overlapping status sub-views of that superset (a denied claim is still a
         # billed claim; it just tells you what state it's in now).
         #   Billed  = claim lines with a Bill Date            (charge value)
-        #   Denied  = status Denied/Appeals OR a denial reason (charge value)
+        #   Denied  = status Denied/Appeals OR a real Denied Date (charge value)
         #   Paid    = claim lines with money paid             (paid value)
         #   Posted  = payments actually posted/deposited      (payment value)
         ROLLING_AR_START = "2026-06-18"  # first day the team began entering data
@@ -3047,10 +3047,16 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             f"SELECT COUNT(*) FROM claims_master {cond}", p)
         b["billed"]["amount"] = q1(
             f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond}", p)
+        # A claim is DENIED only when its status says so (Denied/Appeals) or it
+        # carries a real Denied Date. A populated DenialReason is NOT a denial
+        # signal: remittance files put CARC/RARC remark + adjustment-reason codes
+        # (e.g. CO-45 contractual) on paid and adjusted claims too, so keying off
+        # DenialReason counted the entire billed book as "denied". This matches
+        # the production report's denial definition (status OR Denied Date).
         b["denied"]["count"] = q1(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'') != '')", p)
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR TRIM(COALESCE(DeniedDate,'')) != '')", p)
         b["denied"]["amount"] = q1(
-            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'') != '')", p)
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} (ClaimStatus IN ('Denied','Appeals') OR TRIM(COALESCE(DeniedDate,'')) != '')", p)
         b["paid"]["count"] = q1(
             f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(PaidAmount,0) > 0", p)
         b["paid"]["amount"] = q1(

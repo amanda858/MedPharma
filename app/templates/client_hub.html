@@ -2212,13 +2212,13 @@
             </div>
           </div>
 
-          <!-- Claims Out — the four lifecycle buckets the team monitors:
-               Billed (superset) / Denied / Paid / Posted. Plus rolling A/R since
+          <!-- Claims Out — the lifecycle buckets the team monitors:
+               Billed (superset) / Denied / Paid/Posted. Plus rolling A/R since
                the team's start date. Visible to every user, scoped to their data. -->
           <div class="card" id="dashClaimBucketsCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--primary);display:none">
             <div class="card-header">
               <div class="card-title">📤 Claims Out</div>
-              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Prior Denials & Rebill · Paid · Posted</div>
+              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Prior Denials & Rebill · Paid/Posted</div>
             </div>
             <div id="dashClaimBuckets" style="padding:16px"></div>
           </div>
@@ -5311,7 +5311,7 @@
       return [localDateStr(start), localDateStr(end)];
     }
 
-    // Biller self-view: each team member's own Submitted / Paid / Denied / Posted
+    // Biller self-view: each team member's own Submitted / Paid/Posted / Denied
     // / Rolling AR. The /production/report endpoint already scopes to the caller
     // when they aren't admin/Eric, so this shows only their own work.
     async function loadMyNumbers() {
@@ -5363,9 +5363,8 @@
       body.innerHTML = `
         <div style="display:flex;flex-wrap:wrap;gap:12px">
           ${tile('Claims Submitted', billedCount, money2(billedAmount) + ' submitted', '#eff6ff', '#bfdbfe', '#1d4ed8', '#1e3a8a')}
-          ${tile('Paid', money2(paidAmount), 'dollars collected', '#ecfdf5', '#a7f3d0', '#047857', '#065f46')}
+          ${tile('Paid/Posted', money2(paidAmount), postedCount + ' payment(s) posted', '#ecfdf5', '#a7f3d0', '#047857', '#065f46')}
           ${tile('Denied', deniedCount, 'claim(s) denied', '#fef2f2', '#fecaca', '#b91c1c', '#991b1b')}
-          ${tile('Posted', postedCount, 'payment(s) posted', '#fefce8', '#fde68a', '#a16207', '#854d0e')}
           ${tile('Rolling AR', money2(rollingAr), 'open before ' + esc(arCutoff), '#f5f3ff', '#ddd6fe', '#6d28d9', '#5b21b6')}
         </div>
         <div style="margin-top:10px;font-size:12px;color:var(--gray-500)">
@@ -5460,24 +5459,33 @@
     </div>
   `).join('');
 
-      // Claims Out — the four lifecycle buckets (Billed / Denied / Paid / Posted).
-      // Billed is the superset; Denied/Paid are sub-views of it. Posted = payments
-      // actually deposited. Plus rolling A/R since the team's start date (6/18).
+      // Claims Out — the lifecycle buckets (Billed / Denied / Paid/Posted).
+      // Billed is the superset; Denied is a sub-view of it. Paid/Posted is the
+      // collected money (payments recorded on claims + deposits posted). Plus
+      // rolling A/R since the team's start date (6/18).
       const cb = d.claim_buckets || {};
+      // Paid and Posted are the same collected money (payer payments recorded on
+      // claims + deposits posted), so they're shown as ONE honest "Paid/Posted"
+      // tile rather than two columns that read like double the collections.
+      const _paidB = cb.paid || { count: 0, amount: 0 };
+      const _postedB = cb.posted || { count: 0, amount: 0 };
+      const _paidPosted = {
+        count: Math.max(_paidB.count || 0, _postedB.count || 0),
+        amount: Math.max(_paidB.amount || 0, _postedB.amount || 0),
+      };
       const cbCards = [
-        { key: 'billed', label: 'Billed',  color: 'var(--primary)', hint: 'Claims out the door' },
-        { key: 'denied', label: 'Prior Denials & Rebill', color: '#dc2626', hint: 'Rebilled · counted in Billed' },
-        { key: 'paid',   label: 'Paid',    color: 'var(--success)', hint: 'Money paid' },
-        { key: 'posted', label: 'Posted',  color: '#0891b2',        hint: 'Same as Paid · date in claim notes' },
+        { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
+        { label: 'Prior Denials & Rebill', color: '#dc2626', hint: 'Denied / appealed · counted in Billed', v: cb.denied || { count: 0, amount: 0 } },
+        { label: 'Paid/Posted', color: 'var(--success)', hint: 'Payments paid & posted', v: _paidPosted },
       ];
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
-      const cbHasData = cbCards.some(c => cb[c.key] && (cb[c.key].count || cb[c.key].amount));
+      const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
       if (cbCard) cbCard.style.display = cbHasData ? '' : 'none';
       if (cbEl && cbHasData) {
-        cbEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">` +
+        cbEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(${cbCards.length},1fr);gap:12px">` +
           cbCards.map(c => {
-            const v = cb[c.key] || { count: 0, amount: 0 };
+            const v = c.v || { count: 0, amount: 0 };
             return `<div style="background:var(--gray-50);border-radius:10px;padding:16px;text-align:center;border-top:3px solid ${c.color}">
               <div style="font-size:24px;font-weight:800;color:${c.color}">$${fmt(v.amount)}</div>
               <div style="font-size:13px;color:var(--gray-600);margin-top:2px">${v.count} claim${v.count === 1 ? '' : 's'}</div>
@@ -7594,7 +7602,7 @@
       narrative.push('');
 
       // Overall Summary — built on the LOCKED claim buckets (Billed / Denied /
-      // Paid / Posted) so the report always matches the dashboard. "Claims Out"
+      // Paid/Posted) so the report always matches the dashboard. "Claims Out"
       // == Billed (the superset of every claim line with a Bill Date). Denied
       // and Rolling A/R are both SUB-VIEWS of Billed (a denied claim is still a
       // billed claim; rolling A/R is the unpaid balance of billed claims), never
@@ -7610,7 +7618,7 @@
       const rollingAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : null;
       const rollingStart = d.rolling_ar_start ? fmtShortDate(d.rolling_ar_start) : null;
       if (billed.count > 0) {
-        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Paid to date: <strong>$${fmt(paid.amount)}</strong>; posted/deposited: <strong>$${fmt(posted.amount)}</strong>.`);
+        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Paid/Posted: <strong>$${fmt(Math.max(paid.amount || 0, posted.amount || 0))}</strong>.`);
         if (rollingAR !== null) {
           narrative.push(`💰 <strong>Rolling A/R${rollingStart ? ` since ${rollingStart}` : ''}:</strong> <strong>$${fmt(rollingAR)}</strong> — the still-open balance on those billed claims (part of the Billed total above, not a separate category). Total A/R on file incl. legacy: <strong>$${fmt(cl.total_balance)}</strong>.`);
         }
@@ -7959,9 +7967,9 @@
       lines.push(`${company} Report - Generated ${d.generated_at}`);
       lines.push('');
 
-      // AI Narrative (plain text version) — uses the locked Billed/Denied/Paid/
-      // Posted buckets; no collection rate (claims billed recently haven't had
-      // time to adjudicate). Rolling A/R is the unpaid balance of billed claims.
+      // AI Narrative (plain text version) — uses the locked Billed / Denied /
+      // Paid/Posted buckets; no collection rate (claims billed recently haven't
+      // had time to adjudicate). Rolling A/R is the unpaid balance of billed claims.
       lines.push('OVERALL ACCOUNT SUMMARY');
       const cl = d.claims || {};
       const eb = d.claim_buckets || {};
@@ -7970,7 +7978,8 @@
       const ebPaid = eb.paid || { count: 0, amount: 0 };
       const ebPosted = eb.posted || { count: 0, amount: 0 };
       const ebRollAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : 0;
-      lines.push(`Claims Out (Billed): ${ebBilled.count} | Billed $${ebBilled.amount} | Prior Denials & Rebill (incl. in Billed) ${ebDenied.count}/$${ebDenied.amount} | Paid $${ebPaid.amount} | Posted $${ebPosted.amount}`);
+      const ebPaidPosted = Math.max(ebPaid.amount || 0, ebPosted.amount || 0);
+      lines.push(`Claims Out (Billed): ${ebBilled.count} | Billed $${ebBilled.amount} | Prior Denials & Rebill (incl. in Billed) ${ebDenied.count}/$${ebDenied.amount} | Paid/Posted $${ebPaidPosted}`);
       lines.push(`Rolling A/R (unpaid balance of billed claims${d.rolling_ar_start ? ' since ' + d.rolling_ar_start : ''}): $${ebRollAR} | Total A/R incl. legacy: $${cl.total_balance || 0}`);
       lines.push('');
 
@@ -8061,12 +8070,13 @@
       html += generateAINarrative(d).replace(/<strong[^>]*>/g, '<b>').replace(/<\/strong>/g, '</b>');
       html += `</div>`;
 
-      // KPIs — locked Billed/Denied/Paid/Posted buckets (match the dashboard).
+      // KPIs — locked Billed / Denied / Paid/Posted buckets (match the dashboard).
       // No collection rate; Rolling A/R shown as the unpaid balance of billed claims.
       const pBilled = pbk.billed || { count: 0, amount: 0 };
       const pDenied = pbk.denied || { count: 0, amount: 0 };
       const pPaid = pbk.paid || { count: 0, amount: 0 };
       const pPosted = pbk.posted || { count: 0, amount: 0 };
+      const pPaidPosted = Math.max(pPaid.amount || 0, pPosted.amount || 0);
       html += `<div class="sg">
         <div class="sb"><div class="v">${pBilled.count}</div><div class="l">Claims Out (Billed)</div></div>
         <div class="sb"><div class="v">$${fmt(pBilled.amount)}</div><div class="l">Billed Charges</div></div>
@@ -8074,10 +8084,10 @@
         <div class="sb"><div class="v">$${fmt(pRollAR)}</div><div class="l">Rolling A/R${d.rolling_ar_start ? ' · since ' + fmtShortDate(d.rolling_ar_start) : ''}</div></div>
       </div>`;
       html += `<div class="sg">
-        <div class="sb"><div class="v">$${fmt(pPaid.amount)}</div><div class="l">Paid</div></div>
-        <div class="sb"><div class="v">$${fmt(pPosted.amount)}</div><div class="l">Posted</div></div>
+        <div class="sb"><div class="v">$${fmt(pPaidPosted)}</div><div class="l">Paid/Posted</div></div>
         <div class="sb"><div class="v">$${fmt(cl.total_balance)}</div><div class="l">Total A/R (incl. legacy)</div></div>
         <div class="sb"><div class="v">${(d.credentialing?.detail || []).length}</div><div class="l">Cred Records</div></div>
+        <div class="sb"><div class="v">${(d.enrollment?.detail || []).length}</div><div class="l">Enroll Records</div></div>
       </div>`;
 
       // Sub-profile section

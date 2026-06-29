@@ -4134,9 +4134,13 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
             "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause}", bk_base)),
             "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause}", bk_base)), 2),
         },
+        # Denied = real denials only (status Denied/Appeals or a Denied Date),
+        # NOT any claim carrying a DenialReason remark/adjustment code — those
+        # appear on paid/adjusted claims too and inflated denials to the whole
+        # billed book. Kept identical to the dashboard + production report.
         "denied": {
-            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'')!='')", bk_base)),
-            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR COALESCE(DenialReason,'')!='')", bk_base)), 2),
+            "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR TRIM(COALESCE(DeniedDate,''))!='')", bk_base)),
+            "amount": round(float(_bk_one(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?{sp_clause} AND (ClaimStatus IN ('Denied','Appeals') OR TRIM(COALESCE(DeniedDate,''))!='')", bk_base)), 2),
         },
         "paid": {
             "count": int(_bk_one(f"SELECT COUNT(*) FROM claims_master WHERE client_id=?{sp_clause} AND COALESCE(PaidAmount,0)>0", bk_base)),
