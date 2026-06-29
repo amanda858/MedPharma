@@ -574,53 +574,130 @@ def single_active_client_account(cur):
     return int(rows[0][0]) if len(rows) == 1 else None
 
 
-def _reparent_misfiled_claims(cur):
-    """Self-heal misfiled claim data so the account total computes correctly.
+def _primary_client_account(cur):
+    """Best default client account for data that arrives without an explicit
+    account. Deterministic and UNIVERSAL — works whether there is one client
+    account or many, so it never has to guess in the multi-account case.
+    Priority:
+      1. PRIMARY_CLIENT_ACCOUNT_ID env override (operator escape hatch).
+      2. The designated primary by name — SV Diagnostics.
+      3. The single active client account, when there's exactly one.
+      4. The active client account with the most claims (the busiest real
+         account); lowest id breaks ties.
+    Returns an int id, or None when there are no active client accounts."""
+    # 1) explicit operator override
+    raw = (os.environ.get("PRIMARY_CLIENT_ACCOUNT_ID") or "").strip()
+    if raw.isdigit():
+        ok = cur.execute(
+            "SELECT id FROM clients WHERE id=? AND COALESCE(role,'client')='client' "
+            "AND COALESCE(is_active,1)=1",
+            (int(raw),),
+        ).fetchone()
+        if ok:
+            return int(ok[0])
+    # 2) designated primary by name (SV Diagnostics is the primary account)
+    row = cur.execute(
+        "SELECT id FROM clients WHERE COALESCE(role,'client')='client' "
+        "AND COALESCE(is_active,1)=1 AND ("
+        "LOWER(company) LIKE '%sv diagnostic%' OR "
+        "LOWER(username) LIKE '%sv diagnostic%' OR "
+        "LOWER(contact_name) LIKE '%sv diagnostic%') "
+        "ORDER BY id LIMIT 1"
+    ).fetchone()
+    if row:
+        return int(row[0])
+    # 3) exactly one active client account
+    one = single_active_client_account(cur)
+    if one:
+        return one
+    # 4) busiest active client account by claim count
+    try:
+        row = cur.execute(
+            "SELECT c.id, COUNT(cm.id) n FROM clients c "
+            "LEFT JOIN claims_master cm ON cm.client_id=c.id "
+            "WHERE COALESCE(c.role,'client')='client' AND COALESCE(c.is_active,1)=1 "
+            "GROUP BY c.id ORDER BY n DESC, c.id ASC LIMIT 1"
+        ).fetchone()
+        if row:
+            return int(row[0])
+    except Exception as e:
+        log.warning("_primary_client_account: %s", e)
+    return None
 
-    Claims/payments filed under a STAFF or ADMIN login id are orphaned: those
-    logins are not client accounts, so no account dashboard ever shows them.
-    This happens when a staff member imports without an account selected and the
-    import scope falls back to their own user id. When exactly one active client
-    account exists, every such row is moved onto it. Idempotent and safe to run
-    on every startup; skips entirely when the destination is ambiguous (0 or 2+
-    client accounts) so it can never move data to the wrong place."""
-    acct = single_active_client_account(cur)
-    if not acct:
-        return 0
+
+def primary_client_account():
+    """Public wrapper around ``_primary_client_account`` — opens its own
+    connection. Returns the best default client account id, or None."""
+    conn = get_db()
+    try:
+        return _primary_client_account(conn.cursor())
+    finally:
+        conn.close()
+
+
+def _reparent_misfiled_claims(cur):
+    """Self-heal misfiled claim data so account totals compute correctly.
+
+    Claims/payments filed under a STAFF/ADMIN/BIZDEV login id are orphaned —
+    those logins are not client accounts, so no account dashboard ever shows
+    them. This happens when a staff member imports without an account selected
+    and the import scope falls back to their own user id.
+
+    UNIVERSAL: works with any number of client accounts. Each orphaned source
+    login is routed independently to:
+      1. the single client account that source user is assigned to (the most
+         precise signal — via client_user_access), else
+      2. the designated primary client account (SV Diagnostics).
+    Idempotent and safe to run on every startup; a source login with no
+    resolvable target is left untouched rather than guessed."""
+    primary = _primary_client_account(cur)
     staff_ids = [
         int(r[0]) for r in cur.execute(
             "SELECT id FROM clients WHERE role IN ('admin','staff','bizdev')"
         ).fetchall()
     ]
-    staff_ids = [s for s in staff_ids if s != acct]
-    if not staff_ids:
-        return 0
-    qmarks = ",".join("?" * len(staff_ids))
     moved = 0
-    for tbl in ("claims_master", "payments"):
+    for src in staff_ids:
+        # Resolve the destination account for THIS source login.
+        target = None
         try:
-            before = cur.execute(
-                f"SELECT COUNT(*) FROM {tbl} WHERE client_id IN ({qmarks})",
-                staff_ids,
-            ).fetchone()[0]
-            if not before:
-                continue
-            # UPDATE OR IGNORE: a row that would collide with an existing
-            # (client_id, ClaimKey) under the account is left in place rather
-            # than aborting the whole move — the account already has that claim.
-            cur.execute(
-                f"UPDATE OR IGNORE {tbl} SET client_id=? WHERE client_id IN ({qmarks})",
-                [acct, *staff_ids],
-            )
-            after = cur.execute(
-                f"SELECT COUNT(*) FROM {tbl} WHERE client_id IN ({qmarks})",
-                staff_ids,
-            ).fetchone()[0]
-            moved += (before - after)
-        except Exception as e:
-            log.warning("_reparent_misfiled_claims: %s on %s", e, tbl)
+            assigned = [
+                int(r[0]) for r in cur.execute(
+                    "SELECT DISTINCT client_id FROM client_user_access WHERE user_id=?",
+                    (src,),
+                ).fetchall()
+                if r[0] is not None and int(r[0]) != src
+            ]
+            if len(assigned) == 1:
+                target = assigned[0]
+        except Exception:
+            target = None
+        if target is None:
+            target = primary
+        if not target or int(target) == int(src):
+            continue
+        for tbl in ("claims_master", "payments"):
+            try:
+                before = cur.execute(
+                    f"SELECT COUNT(*) FROM {tbl} WHERE client_id=?", (src,)
+                ).fetchone()[0]
+                if not before:
+                    continue
+                # UPDATE OR IGNORE: a row that would collide with an existing
+                # (client_id, ClaimKey) under the target is left in place rather
+                # than aborting the whole move — the account already has it.
+                cur.execute(
+                    f"UPDATE OR IGNORE {tbl} SET client_id=? WHERE client_id=?",
+                    (target, src),
+                )
+                after = cur.execute(
+                    f"SELECT COUNT(*) FROM {tbl} WHERE client_id=?", (src,)
+                ).fetchone()[0]
+                moved += (before - after)
+            except Exception as e:
+                log.warning("_reparent_misfiled_claims: %s on %s", e, tbl)
     if moved:
-        log.info("_reparent_misfiled_claims: moved %d row(s) to account %d", moved, acct)
+        log.info("_reparent_misfiled_claims: moved %d row(s) onto client accounts", moved)
     return moved
 
 

@@ -808,25 +808,30 @@ def _client_upload_account(user: dict) -> int:
 
 
 def _single_client_account_or(default_id: int) -> int:
-    """The one active client account's id, or ``default_id`` when there isn't
-    exactly one. Used so a staff/admin import with no account selected lands on
-    the obvious client account instead of the staff member's own login id (which
-    would hide the imported claims from every account dashboard)."""
+    """Resolve the client account a staff/admin import with no account selected
+    should land in, so claims are never parked under a personal login id (which
+    hides them from every account dashboard). UNIVERSAL — works with any number
+    of client accounts. Priority:
+      1. the single client account this user is assigned to (client_user_access);
+      2. the designated primary client account (SV Diagnostics, else busiest);
+      3. the caller's own id, only as a last resort."""
+    uid = int(default_id or 0)
+    # 1) explicit membership — most precise
     try:
-        from .client_db import get_db
-        conn = get_db()
-        try:
-            rows = conn.execute(
-                "SELECT id FROM clients WHERE COALESCE(role,'client')='client' "
-                "AND COALESCE(is_active,1)=1"
-            ).fetchall()
-        finally:
-            conn.close()
-        if len(rows) == 1:
-            return int(rows[0][0])
+        assigned = [int(c) for c in accounts_assigned_to_user(uid) if int(c) != uid]
+        if len(assigned) == 1:
+            return assigned[0]
+    except Exception:
+        pass
+    # 2) designated primary / busiest client account — universal default
+    try:
+        from .client_db import primary_client_account
+        acct = primary_client_account()
+        if acct:
+            return int(acct)
     except Exception as e:
         log.warning("_single_client_account_or: %s", e)
-    return int(default_id)
+    return uid
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
