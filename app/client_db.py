@@ -3207,6 +3207,21 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 
+        # Billed Out per team member. Every billed claim line is credited to the
+        # hub user who uploaded it (uploaded_by), under the SAME client/sub-profile
+        # scope as the headline total_charge, so the per-person rows sum EXACTLY to
+        # the comprehensive Billed Out figure. This is the "each user tallied on
+        # their own account" view: e.g. the biller who submitted a file is credited
+        # with that file's full billed charges.
+        cur.execute(
+            f"SELECT COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)') AS who, "
+            f"       COUNT(*) AS n, COALESCE(SUM(ChargeAmount),0) AS amt "
+            f"FROM claims_master {cond} GROUP BY who ORDER BY amt DESC", p)
+        billed_by_member = [
+            {"member": str(r[0]), "count": int(r[1] or 0), "amount": round(float(r[2] or 0), 2)}
+            for r in cur.fetchall()
+        ]
+
         # Rolling A/R since the team's first data-entry day (6/18). Outstanding
         # balance on claims billed on/after the start date — the live A/R the team
         # has actually generated (vs. legacy balances carried in from before 6/18).
@@ -3247,6 +3262,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "ar_aging": aging,
             "billing_activity": billing_activity,
             "claim_buckets": claim_buckets,
+            "billed_by_member": billed_by_member,
             "rolling_ar": round(rolling_ar, 2),
             "rolling_ar_start": ROLLING_AR_START,
             "status_distribution": status_dist,

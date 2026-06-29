@@ -5479,6 +5479,26 @@
       const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
       if (cbCard) cbCard.style.display = cbHasData ? '' : 'none';
       if (cbEl && cbHasData) {
+        // Per-member Billed Out — credits each biller with the full charges from
+        // the files they submitted (uploaded_by). Rows sum exactly to Billed Out.
+        const prettyMember = (s) => {
+          s = String(s || '').trim();
+          if (!s || s === '(unattributed)') return 'Unattributed';
+          const local = s.split('@')[0].replace(/[._]+/g, ' ').trim();
+          return local.replace(/\b\w/g, c => c.toUpperCase());
+        };
+        const members = (d.billed_by_member || []).filter(m => (m.amount || m.count));
+        const memberRows = members.length ? (
+          `<div style="margin-top:16px;border-top:1px solid var(--gray-200);padding-top:12px">
+             <div style="font-size:12px;font-weight:700;color:var(--gray-700);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Billed Out by Team Member</div>` +
+          members.map(m => `
+            <div style="display:flex;align-items:center;padding:7px 0;border-bottom:1px solid var(--gray-100)">
+              <span style="font-size:13px;font-weight:600;color:var(--gray-700)">${esc(prettyMember(m.member))}</span>
+              <span style="font-size:12px;color:var(--gray-400);margin-left:auto;margin-right:14px">${m.count} claim${m.count === 1 ? '' : 's'}</span>
+              <span style="font-size:15px;font-weight:800;color:var(--primary);min-width:96px;text-align:right">$${fmt(m.amount)}</span>
+            </div>`).join('') +
+          `</div>`
+        ) : '';
         cbEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(${cbCards.length},1fr);gap:12px">` +
           cbCards.map(c => {
             const v = c.v || { count: 0, amount: 0 };
@@ -5488,7 +5508,7 @@
               <div style="font-size:12px;font-weight:700;color:var(--gray-700);text-transform:uppercase;margin-top:8px">${c.label}</div>
               <div style="font-size:10px;color:var(--gray-400);margin-top:2px">${c.hint}</div>
             </div>`;
-          }).join('') + `</div>`;
+          }).join('') + `</div>` + memberRows;
         const cbSub = document.getElementById('dashClaimBucketsSub');
         if (cbSub) {
           cbSub.textContent = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_paidPosted.amount || 0)}`;
