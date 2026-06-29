@@ -5433,15 +5433,11 @@
         document.getElementById('prof-address').innerHTML = profItem('Address', prof.address);
       }
 
-      // KPI grid. Headline A/R is the rolling A/R since the team start date
-      // (6/18) — the live A/R the team has actually generated — for tracking.
-      // The full legacy A/R (all dates) is kept alongside it for reference.
-      const rollingArStart = d.rolling_ar_start || '2026-06-18';
-      const rollingArLabel = 'A/R (since ' + fmtShortDate(rollingArStart) + ')';
+      // KPI grid. Headline is Billed Out (total charges billed out) — the number
+      // the team tracks. A/R tiles removed; AR is just the unpaid slice of Billed.
       const kpis = [
-        { label: 'Active Claims', val: d.active_claims || 0, color: 'indigo', icon: '📋' },
-        { label: rollingArLabel, val: '$' + fmt(d.rolling_ar != null ? d.rolling_ar : d.total_ar), color: 'blue', icon: '💰' },
-        { label: 'Total AR (all)', val: '$' + fmt(d.total_ar), color: 'blue', icon: '🧾' },
+        { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
+        { label: 'Active Claims', val: d.active_claims || 0, color: 'blue', icon: '📋' },
         { label: 'Submitted MTD', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
         { label: 'Payments MTD', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
         { label: 'Denials MTD', val: d.denied_mtd || 0, color: 'red', icon: '❌' },
@@ -5494,8 +5490,8 @@
             </div>`;
           }).join('') + `</div>`;
         const cbSub = document.getElementById('dashClaimBucketsSub');
-        if (cbSub && d.rolling_ar != null) {
-          cbSub.textContent = `Rolling A/R since ${d.rolling_ar_start || '6/18'}: $${fmt(d.rolling_ar)}`;
+        if (cbSub) {
+          cbSub.textContent = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_paidPosted.amount || 0)}`;
         }
       }
 
@@ -7618,10 +7614,7 @@
       const rollingAR = (typeof d.rolling_ar === 'number') ? d.rolling_ar : null;
       const rollingStart = d.rolling_ar_start ? fmtShortDate(d.rolling_ar_start) : null;
       if (billed.count > 0) {
-        narrative.push(`<strong>Claims Out (Billed):</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed. Paid/Posted: <strong>$${fmt(Math.max(paid.amount || 0, posted.amount || 0))}</strong>.`);
-        if (rollingAR !== null) {
-          narrative.push(`💰 <strong>Rolling A/R${rollingStart ? ` since ${rollingStart}` : ''}:</strong> <strong>$${fmt(rollingAR)}</strong> — the still-open balance on those billed claims (part of the Billed total above, not a separate category). Total A/R on file incl. legacy: <strong>$${fmt(cl.total_balance)}</strong>.`);
-        }
+        narrative.push(`<strong>Billed Out:</strong> <strong>${billed.count} claims</strong> totaling <strong>$${fmt(billed.amount)}</strong> in charges have been billed out. Paid/Posted: <strong>$${fmt(Math.max(paid.amount || 0, posted.amount || 0))}</strong>.`);
         if (denied.count > 0) {
           const denialRate = billed.count > 0 ? Math.round((denied.count / billed.count) * 100) : 0;
           narrative.push(`🔄 <strong>${denied.count} of those billed claims (${denialRate}%)</strong> totaling <strong>$${fmt(denied.amount)}</strong> are <strong>prior denials that were rebilled</strong> — they are submitted, billed claims (counted inside Billed); the prior denial only reflects their state before they were reworked and rebilled.`);
@@ -7718,7 +7711,6 @@
       if (credPendingCount) actions.push(`Follow up on ${credPendingCount} pending credentialing application(s).`);
       const enrPendingCount = (enr.summary || []).filter(s => (s.status || '').toLowerCase().includes('pending')).reduce((s, i) => s + i.count, 0);
       if (enrPendingCount) actions.push(`Track ${enrPendingCount} pending enrollment submission(s).`);
-      if (rollingAR && rollingAR > 0) actions.push(`Work the rolling A/R of $${fmt(rollingAR)}${rollingStart ? ` (since ${rollingStart})` : ''} through systematic follow-up.`);
       if (!actions.length) actions.push('Account is in good standing. Continue monitoring KPIs.');
       actions.forEach(a => narrative.push(`• ${a}`));
 
@@ -7795,26 +7787,21 @@
           <div style="font-size:16px;font-weight:700;color:var(--gray-800);margin-bottom:4px">${esc(company)} — ${periodLabel} Report</div>
           <div style="font-size:12px;color:var(--gray-400)">Generated: ${genDate}${activeSubProfile ? ' | Sub-Profile: ' + activeSubProfile : ''}${d.practice_type ? ' | Practice: ' + d.practice_type : ''}</div>
         </div>
+        <!-- Billed Out hero — the headline number. This is total charges billed
+             out, the figure that matters for the account. Outstanding/AR removed. -->
+        <div style="margin-bottom:12px;background:linear-gradient(135deg,#1e3a8a,#2563eb);border-radius:14px;padding:20px 24px;color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.25)">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;opacity:.85">Billed Out${periodLabel ? ' · ' + periodLabel : ''}</div>
+          <div style="font-size:38px;font-weight:800;line-height:1.1;margin-top:2px">$${fmt(cl.total_charged)}</div>
+          <div style="font-size:13px;opacity:.85;margin-top:2px">${cl.total || 0} claim${cl.total === 1 ? '' : 's'} billed</div>
+        </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:12px">
           <div style="background:var(--info-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--info)">${cl.total || 0}</div>
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Total Claims</div>
           </div>
-          <div style="background:var(--purple-light);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--purple)">$${fmt(cl.total_charged)}</div>
-            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Total Charged</div>
-          </div>
           <div style="background:var(--success-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--success)">$${fmt(cl.total_paid)}</div>
             <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Total Paid</div>
-          </div>
-          <div style="background:var(--danger-light);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--danger)">$${fmt(cl.total_balance)}</div>
-            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Outstanding AR</div>
-          </div>
-          <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:24px;font-weight:700;color:var(--warning)">$${fmt(rollAR)}</div>
-            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Rolling A/R${rollStart ? ' · since ' + rollStart : ''}</div>
           </div>
           <div style="background:var(--warning-light);border-radius:10px;padding:14px;text-align:center">
             <div style="font-size:24px;font-weight:700;color:var(--warning)">${d.payments?.count || 0}</div>
