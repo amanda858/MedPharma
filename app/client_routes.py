@@ -1905,6 +1905,115 @@ def reimport_all_claim_files() -> dict:
     }
 
 
+@router.post("/admin/diag/rebuild-client-claims")
+def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: rebuild a client's claims so every claim is counted exactly ONCE.
+
+    Wipes the client's claims_master + payments, then re-imports ONLY genuine
+    per-claim registers. Skips aggregate recaps that describe the same billing a
+    second time — SVD DAILY batch summaries, clearinghouse acknowledgement lists,
+    verification worklists — so Billed Out reflects each claim once instead of the
+    inflated sum of every representation. Returns before/after totals AND a
+    per-user tally (billed grouped by the uploader) so each person's number is
+    visible. Idempotent: always reconstructs from the stored source files."""
+    admin = _require_full_admin(hub_session)
+    from .client_db import get_db
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        before = cur.execute(
+            "SELECT COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?",
+            (client_id,)).fetchone()
+        before_rows, before_billed = int(before[0]), float(before[1] or 0)
+        files = cur.execute(
+            """SELECT id, filename, original_name, category, uploaded_by
+               FROM client_files WHERE client_id=? AND file_type='excel'""",
+            (client_id,)).fetchall()
+        # Wipe so the re-import reconstructs cleanly — clears stale rows left by
+        # older keying passes and any previously-expanded batch phantoms.
+        cur.execute("DELETE FROM claims_master WHERE client_id=?", (client_id,))
+        cur.execute("DELETE FROM payments WHERE client_id=?", (client_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    per_file = []
+    for r in files:
+        path = os.path.join(UPLOAD_DIR, r["filename"])
+        if not os.path.isfile(path):
+            per_file.append({"file": r["original_name"], "imported": 0,
+                             "skipped": "missing_on_disk"})
+            continue
+        ext = os.path.splitext(r["original_name"] or "")[1].lower()
+        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+            ext = os.path.splitext(r["filename"])[1].lower()
+        try:
+            with open(path, "rb") as fh:
+                content = fh.read()
+            # Gate: only genuine per-claim registers import. A recognized template
+            # (svd_denials / lims_payments — batch summary is no longer registered)
+            # qualifies; otherwise require a structural claims match WITH a money
+            # column so ack lists / worklists / headerless recaps are skipped.
+            tpl = _extract_templated_claim_rows(content, ext)
+            ok, reason = False, ""
+            if tpl:
+                ok, reason = True, f"template:{tpl[0]}"
+            else:
+                parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+                headers = list(parsed[0].keys()) if parsed else []
+                match = _claims_structural_match(headers)
+                mapped_targets = {_fuzzy_match_column(h, CLAIMS_COLUMN_MAP) for h in headers}
+                has_money = bool(mapped_targets & {"ChargeAmount", "PaidAmount", "BalanceRemaining"})
+                if match["is_claims"] and has_money:
+                    ok, reason = True, "headers"
+                else:
+                    reason = "not a per-claim register (recap/worklist skipped)"
+            if not ok:
+                per_file.append({"file": r["original_name"], "uploaded_by": r["uploaded_by"],
+                                 "imported": 0, "skipped": reason})
+                continue
+            imported, errors = _import_claims_from_excel(
+                content, ext, int(client_id), uploaded_by=str(r["uploaded_by"] or ""))
+            per_file.append({"file": r["original_name"], "uploaded_by": r["uploaded_by"],
+                             "imported": int(imported or 0), "via": reason,
+                             "errors": (errors or [])[:2]})
+        except Exception as e:
+            per_file.append({"file": r["original_name"], "imported": 0,
+                             "skipped": f"{type(e).__name__}: {e}"})
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        after = cur.execute(
+            "SELECT COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE client_id=?",
+            (client_id,)).fetchone()
+        after_rows, after_billed = int(after[0]), float(after[1] or 0)
+        per_user = [
+            {"uploaded_by": (row[0] or "(unattributed)"),
+             "claims": int(row[1]),
+             "billed": round(float(row[2] or 0), 2)}
+            for row in cur.execute(
+                """SELECT uploaded_by, COUNT(*), COALESCE(SUM(ChargeAmount),0)
+                   FROM claims_master WHERE client_id=?
+                   GROUP BY uploaded_by ORDER BY SUM(ChargeAmount) DESC""",
+                (client_id,)).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "viewed_by": admin.get("username"),
+        "client_id": client_id,
+        "before": {"claims": before_rows, "billed": round(before_billed, 2)},
+        "after": {"claims": after_rows, "billed": round(after_billed, 2)},
+        "removed_inflation": round(before_billed - after_billed, 2),
+        "per_user_tally": per_user,
+        "files": per_file,
+    }
+
+
 @router.post("/admin/diag/ensure-team")
 def admin_diag_ensure_team(hub_session: Optional[str] = Cookie(None)):
     """Admin-only: re-run _ensure_medpharma_team_accounts immediately on the
@@ -4924,8 +5033,13 @@ def _tpl_lims_payments(sheets):
 
 # Priority order — the first template whose fingerprint matches wins for a given
 # workbook, so a file contributes to exactly one bucket and never double counts.
+# NOTE: svd_batch_summary is intentionally NOT registered. The SVD DAILY batch
+# log is a per-batch *recap* (DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED) of
+# claims that already arrive as per-claim detail (the "Claim Sent" register).
+# Expanding each batch into N synthetic claims double-counted the same billing
+# and inflated Billed Out by ~$110K. The per-claim registers are the single
+# source of truth for Billed Out, so batch summaries are read as documents only.
 _CLAIM_TEMPLATES = (
-    ("svd_batch_summary", _tpl_svd_batch_summary),
     ("svd_denials", _tpl_svd_denials),
     ("lims_payments", _tpl_lims_payments),
 )
