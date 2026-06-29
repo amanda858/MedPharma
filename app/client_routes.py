@@ -4008,6 +4008,15 @@ async def upload_file(
             effective_category = "Claims"
             category_source = "auto-claims-fallback"
             claims_fallback = True
+    elif file_type in ("pdf", "document") and requested_category not in DATA_IMPORT_CATEGORIES:
+        # Universal read: the team routinely sends daily worklists / ERAs as PDF
+        # or Word, not just spreadsheets. Don't shelve them as inert documents —
+        # attempt a Claims read so the rows compute. The importer extracts table
+        # rows and skips any that don't map to claim columns, so a non-claims PDF
+        # imports 0 rows and is reverted to a plain document below.
+        effective_category = "Claims"
+        category_source = "auto-claims-fallback"
+        claims_fallback = True
 
     file_id = add_file(
         client_id=scope,
@@ -4025,7 +4034,7 @@ async def upload_file(
     imported = 0
     import_errors = []
     import_category = None
-    if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
+    if effective_category in DATA_IMPORT_CATEGORIES and file_type in ("excel", "pdf", "document"):
         import_category = effective_category
         _uploader = user.get("username") or ""
         _sub_profile = (sub_profile or "").strip()
@@ -4034,13 +4043,13 @@ async def upload_file(
                 imported, import_errors = _import_claims_from_excel(
                     content, ext, scope, uploaded_by=_uploader,
                     default_sub_profile=_sub_profile)
-            elif effective_category == "Credentialing":
+            elif file_type == "excel" and effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
                 if import_errors and any('header' in e.lower() or 'no rows' in e.lower() for e in import_errors):
                     import_errors.append("Required headers: Provider, Payor, Type, Status, Submitted, Follow Up, Approved, Expiration, Owner, Notes, Sub Profile")
-            elif effective_category == "Enrollment":
+            elif file_type == "excel" and effective_category == "Enrollment":
                 imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
-            elif effective_category == "EDI":
+            elif file_type == "excel" and effective_category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
@@ -4067,9 +4076,10 @@ async def upload_file(
         if any(k in _fn for k in ("daily", "claim", "worklist", "billed", "remit",
                                   "era", "deposit", "svd", "ledger", "aging", "payment")):
             data_warning = (
-                f"\u201c{file.filename}\u201d looks like claims data but was uploaded as a "
-                f"{(ext.lstrip('.') or 'non-spreadsheet')} file, which cannot be imported. "
-                "Re-upload it as Excel/CSV (.xlsx or .csv) so it computes into the totals."
+                f"\u201c{file.filename}\u201d looks like claims data. We tried to read it "
+                f"automatically but couldn't extract claim rows from this "
+                f"{(ext.lstrip('.') or 'file')}. For reliable totals, re-upload it as "
+                "Excel/CSV (.xlsx or .csv) with claim columns."
             )
 
     try:
@@ -4939,20 +4949,52 @@ def _extract_templated_claim_rows(content: bytes, ext: str):
     return None
 
 
+# Header tokens that mark a *claims* table (patient / charge / CPT / payor /
+# claim no.). Used when reading PDFs and Word docs so a claims worklist exported
+# to PDF or Word is recognized and read into claims — not just spreadsheet exports.
+_CLAIM_DOC_HEADER_KEYWORDS = (
+    "patient", "member", "subscriber", "account", "mrn", "dos",
+    "date of service", "service date", "from date", "claim", "claim no",
+    "claim number", "cpt", "procedure", "code", "charge", "charges", "billed",
+    "amount", "balance", "allowed", "paid", "payment", "payor", "payer",
+    "insurance", "carrier", "provider", "rendering", "npi", "status",
+    "denial", "adjustment", "units", "modifier", "icd", "diagnosis", "dx",
+)
+
+
 def _load_claim_rows(content: bytes, ext: str):
-    """Claim ingestion entry point: try the hardcoded format templates first (so
-    headerless / batch-summary / multi-sheet SV exports are recognized), then fall
-    back to the generic smart-header parser. Returns (rows, template_name|None)."""
+    """Claim ingestion entry point — the UNIVERSAL reader.
+
+    Reads claim rows out of whatever format the team actually sends: Excel/CSV
+    exports, but also PDF daily worklists and Word documents. Spreadsheets try
+    the hardcoded format templates first (headerless / batch-summary / multi-sheet
+    SV exports), then the generic smart-header parser. PDFs and Word docs run
+    through the table extractors with claim-aware header detection. Returns
+    (rows, template_name|None). Never raises for PDF/Word — an unreadable doc
+    yields [] so the caller treats it as a plain document, not an error."""
+    e = (ext or "").lower()
+    if e == ".pdf":
+        try:
+            return _parse_pdf_rows(content, header_keywords=_CLAIM_DOC_HEADER_KEYWORDS), None
+        except Exception:
+            return [], None
+    if e in (".doc", ".docx"):
+        try:
+            return _parse_docx_rows(content, header_keywords=_CLAIM_DOC_HEADER_KEYWORDS), None
+        except Exception:
+            return [], None
     tpl = _extract_templated_claim_rows(content, ext)
     if tpl:
         return tpl[1], tpl[0]
     return _parse_excel_rows(content, ext), None
 
 
-def _parse_pdf_rows(content: bytes) -> list[dict]:
+def _parse_pdf_rows(content: bytes, header_keywords: tuple = None) -> list[dict]:
     """Parse table-like PDF content into list[dict] using detected headers.
 
     Intended for controlled imports where PDFs are exported in tabular layout.
+    `header_keywords` overrides the tokens used to locate the header row, so the
+    same extractor reads production-log PDFs and claims-worklist PDFs alike.
     """
     try:
         from pypdf import PdfReader
@@ -4985,9 +5027,10 @@ def _parse_pdf_rows(content: bytes) -> list[dict]:
 
     header_idx = -1
     headers: list[str] = []
-    header_keywords = (
-        "date", "work date", "task", "description", "hours", "qty", "quantity", "category", "user", "notes",
-    )
+    if header_keywords is None:
+        header_keywords = (
+            "date", "work date", "task", "description", "hours", "qty", "quantity", "category", "user", "notes",
+        )
     for i, line in enumerate(lines[:60]):
         parts = _split_line(line)
         if len(parts) < 3:
@@ -5023,7 +5066,7 @@ def _parse_pdf_rows(content: bytes) -> list[dict]:
     return rows
 
 
-def _parse_docx_rows(content: bytes) -> list[dict]:
+def _parse_docx_rows(content: bytes, header_keywords: tuple = None) -> list[dict]:
     """Parse a Word (.docx) document into list[dict].
 
     Prefers the document's first real table (header row + data rows). If the
@@ -5075,10 +5118,11 @@ def _parse_docx_rows(content: bytes) -> list[dict]:
         parts = [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
         return parts if len(parts) >= 3 else [line.strip()]
 
-    header_keywords = (
-        "date", "work date", "task", "description", "hours", "qty", "quantity",
-        "category", "user", "notes",
-    )
+    if header_keywords is None:
+        header_keywords = (
+            "date", "work date", "task", "description", "hours", "qty", "quantity",
+            "category", "user", "notes",
+        )
     header_idx, headers = -1, []
     for i, line in enumerate(fake_pdf_lines[:60]):
         parts = _split_line(line)
@@ -6066,16 +6110,16 @@ async def replace_file(
     # Auto re-import if data category
     imported = 0
     import_errors = []
-    if file_type == "excel" and effective_category in DATA_IMPORT_CATEGORIES:
+    if effective_category in DATA_IMPORT_CATEGORIES and file_type in ("excel", "pdf", "document"):
         _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
                 imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
-            elif effective_category == "Credentialing":
+            elif file_type == "excel" and effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
-            elif effective_category == "Enrollment":
+            elif file_type == "excel" and effective_category == "Enrollment":
                 imported, import_errors = _import_enrollment_from_excel(content, ext, scope, uploaded_by=_uploader)
-            elif effective_category == "EDI":
+            elif file_type == "excel" and effective_category == "EDI":
                 imported, import_errors = _import_edi_from_excel(content, ext, scope, uploaded_by=_uploader)
         except Exception as e:
             import_errors = [str(e)]
@@ -6114,7 +6158,7 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
         cur = conn.cursor()
         cats = ",".join("?" * len(DATA_IMPORT_CATEGORIES))
         params = list(DATA_IMPORT_CATEGORIES)
-        where = f"file_type='excel' AND category NOT IN ({cats})"
+        where = f"file_type IN ('excel','pdf','document') AND category NOT IN ({cats})"
         if client_id is not None:
             where += " AND client_id=?"
             params.append(int(client_id))
@@ -6132,11 +6176,13 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
         path = os.path.join(UPLOAD_DIR, r["filename"])
         if not os.path.isfile(path):
             continue
+        SWEEP_EXTS = (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx")
         ext = os.path.splitext(r["original_name"] or "")[1].lower()
-        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+        if ext not in SWEEP_EXTS:
             ext = os.path.splitext(r["filename"])[1].lower()
-        if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+        if ext not in SWEEP_EXTS:
             continue
+        spreadsheet = ext in (".xlsx", ".xls", ".csv", ".ods", ".odf")
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
@@ -6147,16 +6193,18 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
             # Unless the sheet clearly belongs to another data section, ATTEMPT the
             # claims import and let the importer be the judge: it skips any row that
             # doesn't map to claim columns, so a genuinely non-claims sheet imports
-            # 0 rows and is left untouched below.
-            templated = bool(_extract_templated_claim_rows(content, ext))
-            if not templated:
-                parsed = _parse_excel_rows(content, ext, combine_sheets=True)
-                headers = list(parsed[0].keys()) if parsed else []
-                if not _claims_structural_match(headers)["is_claims"]:
-                    inferred, _dbg = _infer_excel_category(
-                        content, ext, r["original_name"] or "", "")
-                    if inferred in ("Credentialing", "Enrollment", "EDI"):
-                        continue  # belongs to another section — don't import as claims
+            # 0 rows and is left untouched below. PDFs / Word docs skip the
+            # spreadsheet-only structural pre-check and go straight to extraction.
+            if spreadsheet:
+                templated = bool(_extract_templated_claim_rows(content, ext))
+                if not templated:
+                    parsed = _parse_excel_rows(content, ext, combine_sheets=True)
+                    headers = list(parsed[0].keys()) if parsed else []
+                    if not _claims_structural_match(headers)["is_claims"]:
+                        inferred, _dbg = _infer_excel_category(
+                            content, ext, r["original_name"] or "", "")
+                        if inferred in ("Credentialing", "Enrollment", "EDI"):
+                            continue  # belongs to another section — don't import as claims
             imported, _errors = _import_claims_from_excel(
                 content, ext, int(r["client_id"]),
                 uploaded_by=str(r["uploaded_by"] or ""))
@@ -6180,12 +6228,12 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
 
 @router.post("/files/{file_id}/import-claims")
 def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cookie(None)):
-    """Import an already-uploaded spreadsheet into claims_master.
+    """Import an already-uploaded file into claims_master.
 
     Recovers daily work that was saved under a non-data category (e.g. "General")
-    and therefore never auto-imported. Reads the stored file from disk, runs it
-    through the Claims importer, and re-files it under "Claims" so it's no longer
-    flagged as a pending import."""
+    and therefore never auto-imported. Reads the stored file from disk — Excel,
+    CSV, PDF or Word — runs it through the universal Claims reader, and re-files it
+    under "Claims" so it's no longer flagged as a pending import."""
     user = _require_user(hub_session)
     if user.get("role") in ("admin", "staff"):
         rec = get_file_record(file_id, _client_scope(user))
@@ -6196,14 +6244,6 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
     if not rec:
         raise HTTPException(404, "File not found")
 
-    if (rec.get("file_type") or "") != "excel":
-        raise HTTPException(
-            400,
-            "Only spreadsheet files (Excel/CSV) can be imported into claims. "
-            "PDFs and Word documents can't be imported — the data needs to be in "
-            "a spreadsheet with claim columns.",
-        )
-
     path = os.path.join(UPLOAD_DIR, rec["filename"])
     if not os.path.isfile(path):
         raise HTTPException(
@@ -6212,7 +6252,7 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
         )
 
     ext = os.path.splitext(rec.get("original_name") or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
         ext = os.path.splitext(rec["filename"])[1].lower()
     with open(path, "rb") as f:
         content = f.read()
