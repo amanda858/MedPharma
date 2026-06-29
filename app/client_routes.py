@@ -6356,6 +6356,10 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
                 if not templated:
                     parsed = _parse_excel_rows(content, ext, combine_sheets=True)
                     headers = list(parsed[0].keys()) if parsed else []
+                    if _is_clearinghouse_ack(headers):
+                        # Submission acknowledgement recap (echoes an already-billed
+                        # register) — importing it double-bills, so never sweep it in.
+                        continue
                     if not _claims_structural_match(headers)["is_claims"]:
                         inferred, _dbg = _infer_excel_category(
                             content, ext, r["original_name"] or "", "")
