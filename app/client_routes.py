@@ -3992,6 +3992,7 @@ async def upload_file(
     effective_category = requested_category
     category_source = "requested"
     infer_debug = None
+    claims_fallback = False
 
     if file_type == "excel" and requested_category not in DATA_IMPORT_CATEGORIES:
         inferred, infer_debug = _infer_excel_category(content, ext, file.filename or "", description or "")
@@ -3999,9 +4000,14 @@ async def upload_file(
             effective_category = inferred
             category_source = "auto"
         else:
-            # Can't map to a data section — save as a plain document without importing.
-            effective_category = requested_category
-            category_source = "document"
+            # Unclassified spreadsheet: do NOT silently shelve it as an inert
+            # document. Attempt a Claims import so every uploaded worklist
+            # computes even when its headers don't score. The importer skips
+            # rows that don't map to claim columns, so a genuinely non-claims
+            # sheet imports 0 rows and is reverted to a document below.
+            effective_category = "Claims"
+            category_source = "auto-claims-fallback"
+            claims_fallback = True
 
     file_id = add_file(
         client_id=scope,
@@ -4040,6 +4046,32 @@ async def upload_file(
             import_errors = [str(e)]
 
     # ── Funnel notification to admin (every upload, regardless of category) ──
+    # Claims-fallback that found nothing claim-like → it wasn't claims data.
+    # Revert to a plain document under the originally requested category so it
+    # isn't mis-shelved under Claims.
+    if claims_fallback and imported == 0:
+        effective_category = requested_category
+        category_source = "document"
+        import_category = None
+        try:
+            update_file_record(file_id, {"category": requested_category}, scope)
+        except Exception as _e:
+            log.warning("upload claims-fallback revert failed: %s", _e)
+
+    # Surface the most common silent failure: a claims-looking PDF / Word doc
+    # cannot be imported. Tell the uploader to send the spreadsheet instead so
+    # the numbers actually move, instead of letting it sit inert.
+    data_warning = None
+    if file_type in ("pdf", "document") and effective_category not in DATA_IMPORT_CATEGORIES:
+        _fn = (file.filename or "").lower()
+        if any(k in _fn for k in ("daily", "claim", "worklist", "billed", "remit",
+                                  "era", "deposit", "svd", "ledger", "aging", "payment")):
+            data_warning = (
+                f"\u201c{file.filename}\u201d looks like claims data but was uploaded as a "
+                f"{(ext.lstrip('.') or 'non-spreadsheet')} file, which cannot be imported. "
+                "Re-upload it as Excel/CSV (.xlsx or .csv) so it computes into the totals."
+            )
+
     try:
         size_kb = max(1, file_size // 1024)
         nice_name = file.filename or unique_name
@@ -4051,6 +4083,8 @@ async def upload_file(
             detail_bits.append(f"auto-imported {imported} into {import_category}")
         if import_errors:
             detail_bits.append(f"{len(import_errors)} import warning(s)")
+        if data_warning:
+            detail_bits.append("NOT IMPORTED (needs Excel/CSV)")
         notify_activity(user["username"], "uploaded", "Documents", " · ".join(detail_bits))
         if imported and import_category:
             notify_bulk_activity(user["username"], "imported", import_category, imported,
@@ -4070,6 +4104,7 @@ async def upload_file(
         "imported": imported,
         "import_category": import_category,
         "import_errors": import_errors[:5],
+        "data_warning": data_warning,
     }
 
 
@@ -6105,15 +6140,23 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
-            # Recognize via hardcoded templates OR generic structural match. The
-            # template check lets headerless / batch-summary / multi-sheet SV
-            # exports (which carry no recognizable headers) be ingested too.
+            # Recognize via hardcoded templates OR generic structural match first
+            # (fast path / headerless SV exports). When neither matches we do NOT
+            # skip — that silent skip is exactly how daily worklists with unusual
+            # headers got shelved as inert "General" documents and never computed.
+            # Unless the sheet clearly belongs to another data section, ATTEMPT the
+            # claims import and let the importer be the judge: it skips any row that
+            # doesn't map to claim columns, so a genuinely non-claims sheet imports
+            # 0 rows and is left untouched below.
             templated = bool(_extract_templated_claim_rows(content, ext))
             if not templated:
                 parsed = _parse_excel_rows(content, ext, combine_sheets=True)
                 headers = list(parsed[0].keys()) if parsed else []
                 if not _claims_structural_match(headers)["is_claims"]:
-                    continue
+                    inferred, _dbg = _infer_excel_category(
+                        content, ext, r["original_name"] or "", "")
+                    if inferred in ("Credentialing", "Enrollment", "EDI"):
+                        continue  # belongs to another section — don't import as claims
             imported, _errors = _import_claims_from_excel(
                 content, ext, int(r["client_id"]),
                 uploaded_by=str(r["uploaded_by"] or ""))
