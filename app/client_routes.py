@@ -807,6 +807,28 @@ def _client_upload_account(user: dict) -> int:
     return own
 
 
+def _single_client_account_or(default_id: int) -> int:
+    """The one active client account's id, or ``default_id`` when there isn't
+    exactly one. Used so a staff/admin import with no account selected lands on
+    the obvious client account instead of the staff member's own login id (which
+    would hide the imported claims from every account dashboard)."""
+    try:
+        from .client_db import get_db
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM clients WHERE COALESCE(role,'client')='client' "
+                "AND COALESCE(is_active,1)=1"
+            ).fetchall()
+        finally:
+            conn.close()
+        if len(rows) == 1:
+            return int(rows[0][0])
+    except Exception as e:
+        log.warning("_single_client_account_or: %s", e)
+    return int(default_id)
+
+
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 class LoginIn(BaseModel):
@@ -1569,6 +1591,68 @@ def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
                       "charged": t["charged"], "paid": t["paid"]}
         except Exception as e:
             totals = {"error": f"{type(e).__name__}: {e}"}
+
+        # 4. MISFILED CLAIMS — the usual cause of a "frozen" account total while
+        # the team insists they already imported. A client login that is itself
+        # assigned to an account (has a client_user_access row) is a WORKER on
+        # that account; their uploads are meant to roll up to it. But an upload
+        # is scoped to the account only when the worker is assigned to EXACTLY
+        # ONE account — with zero or 2+ assignments the importer falls back to
+        # the worker's OWN id, so the claims land under a personal client_id and
+        # the account dashboard never reflects them. This finds claims sitting
+        # under such worker logins and names the account they should belong to.
+        misfiled = []
+        try:
+            assign_map = {}
+            for r in cur.execute(
+                """SELECT user_id AS uid, client_id AS acct
+                   FROM client_user_access
+                   WHERE user_id IN (SELECT DISTINCT client_id FROM claims_master)"""
+            ).fetchall():
+                assign_map.setdefault(int(r["uid"]), []).append(int(r["acct"]))
+            for acc in accounts:
+                cid = acc.get("client_id")
+                if cid is None or cid not in assign_map:
+                    continue
+                targets = sorted({t for t in assign_map[cid] if t != cid})
+                if targets:
+                    misfiled.append({
+                        "parked_under_login": acc.get("account"),
+                        "parked_client_id": cid,
+                        "claims": acc.get("claims"),
+                        "charged": acc.get("charged"),
+                        "should_roll_up_to": [id_to_name.get(t, f"client {t}") for t in targets],
+                        "target_client_ids": targets,
+                    })
+        except Exception as e:
+            misfiled = [{"error": f"{type(e).__name__}: {e}"}]
+
+        # 5. Claims actually CREATED per day (last 12 days), per account — shows
+        # exactly where a given day's batch (e.g. 6/28) landed. New claims stamp
+        # created_at at insert; if a day's rows show up under a worker login here
+        # (not the account) that is the smoking gun. If a day shows up NOWHERE,
+        # the file was never imported (see uploaded_but_not_imported above).
+        recent_claims = []
+        try:
+            for r in cur.execute(
+                """SELECT client_id, DATE(created_at) AS day, COUNT(*) AS n,
+                          ROUND(COALESCE(SUM(ChargeAmount),0),2) AS charged,
+                          MAX(uploaded_by) AS by_user
+                   FROM claims_master
+                   WHERE created_at >= DATE('now','-12 day')
+                   GROUP BY client_id, DATE(created_at)
+                   ORDER BY day DESC, n DESC"""
+            ).fetchall():
+                recent_claims.append({
+                    "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+                    "client_id": r["client_id"],
+                    "day": r["day"],
+                    "claims_created": r["n"],
+                    "charged": r["charged"],
+                    "uploaded_by": r["by_user"],
+                })
+        except Exception as e:
+            recent_claims = [{"error": f"{type(e).__name__}: {e}"}]
     except Exception as e:
         conn.close()
         return {"error": "data_health", "detail": f"{type(e).__name__}: {e}",
@@ -1592,6 +1676,18 @@ def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
             f"{pdf_uploads} PDF upload(s) exist; PDFs are never auto-imported into "
             f"claims, so any production reported only as PDF is invisible to the totals."
         )
+    if misfiled and not (len(misfiled) == 1 and "error" in misfiled[0]):
+        _mis_claims = sum(int(m.get("claims") or 0) for m in misfiled)
+        _logins = ", ".join(sorted({str(m.get("parked_under_login")) for m in misfiled}))
+        _targets = ", ".join(sorted({t for m in misfiled for t in (m.get("should_roll_up_to") or [])}))
+        diagnosis.append(
+            f"MISFILED CLAIMS: {_mis_claims} claim(s) are parked under worker login(s) "
+            f"[{_logins}] instead of the account they belong to [{_targets}]. Their "
+            f"imports fell back to the worker's own id because the worker isn't assigned "
+            f"to exactly one account. Fix: Manage Clients → Access — assign each of those "
+            f"logins to EXACTLY ONE account ([{_targets}]), then re-parent those claims to "
+            f"that account so they roll into the dashboard total."
+        )
     if not diagnosis:
         diagnosis.append(
             "No un-imported spreadsheets detected. If a total still looks frozen, "
@@ -1611,6 +1707,8 @@ def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
         },
         "pdf_uploads": pdf_uploads,
         "recent_uploads": recent_uploads,
+        "misfiled_claims": misfiled,
+        "recent_claims_by_day": recent_claims,
         "diagnosis": diagnosis,
     }
 
@@ -3834,7 +3932,9 @@ async def upload_file(
     elif user.get("role") in ("admin", "staff"):
         scope = _client_scope(user)
         if scope is None:
-            scope = user["id"]
+            # Staff have no single scope; route data to the one client account
+            # instead of the staff member's own id (which orphans the claims).
+            scope = _single_client_account_or(user["id"])
     else:
         # Client sub-users upload into the shared account they belong to so the
         # rest of the team on that account sees the file too.
@@ -4223,7 +4323,7 @@ async def import_excel(
     """Import an Excel/CSV file directly into a data table (Claims, Credentialing, Enrollment, EDI).
     Also saves a copy of the file in Documents under the appropriate category."""
     user = _require_user(hub_session)
-    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else user["id"])
+    scope = client_id if client_id is not None else (_client_scope(user) if _client_scope(user) is not None else _single_client_account_or(user["id"]))
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):

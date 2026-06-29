@@ -431,6 +431,7 @@ def _apply_startup_user_migrations(conn):
     # cheap and idempotent.
     _ensure_medpharma_team_accounts(cur)
     _ensure_bizdev_account(cur)
+    _reparent_misfiled_claims(cur)
     conn.commit()
 
 
@@ -561,6 +562,66 @@ def _ensure_medpharma_team_accounts(cur):
             # Table may not exist on older schemas — non-fatal.
             pass
 
+
+def single_active_client_account(cur):
+    """Return the id of the ONE active client-role account, or None when there
+    isn't exactly one. Lets imports/claims that arrive without an explicit
+    account route to the obvious destination instead of a staff login id."""
+    rows = cur.execute(
+        "SELECT id FROM clients WHERE COALESCE(role,'client')='client' "
+        "AND COALESCE(is_active,1)=1"
+    ).fetchall()
+    return int(rows[0][0]) if len(rows) == 1 else None
+
+
+def _reparent_misfiled_claims(cur):
+    """Self-heal misfiled claim data so the account total computes correctly.
+
+    Claims/payments filed under a STAFF or ADMIN login id are orphaned: those
+    logins are not client accounts, so no account dashboard ever shows them.
+    This happens when a staff member imports without an account selected and the
+    import scope falls back to their own user id. When exactly one active client
+    account exists, every such row is moved onto it. Idempotent and safe to run
+    on every startup; skips entirely when the destination is ambiguous (0 or 2+
+    client accounts) so it can never move data to the wrong place."""
+    acct = single_active_client_account(cur)
+    if not acct:
+        return 0
+    staff_ids = [
+        int(r[0]) for r in cur.execute(
+            "SELECT id FROM clients WHERE role IN ('admin','staff','bizdev')"
+        ).fetchall()
+    ]
+    staff_ids = [s for s in staff_ids if s != acct]
+    if not staff_ids:
+        return 0
+    qmarks = ",".join("?" * len(staff_ids))
+    moved = 0
+    for tbl in ("claims_master", "payments"):
+        try:
+            before = cur.execute(
+                f"SELECT COUNT(*) FROM {tbl} WHERE client_id IN ({qmarks})",
+                staff_ids,
+            ).fetchone()[0]
+            if not before:
+                continue
+            # UPDATE OR IGNORE: a row that would collide with an existing
+            # (client_id, ClaimKey) under the account is left in place rather
+            # than aborting the whole move — the account already has that claim.
+            cur.execute(
+                f"UPDATE OR IGNORE {tbl} SET client_id=? WHERE client_id IN ({qmarks})",
+                [acct, *staff_ids],
+            )
+            after = cur.execute(
+                f"SELECT COUNT(*) FROM {tbl} WHERE client_id IN ({qmarks})",
+                staff_ids,
+            ).fetchone()[0]
+            moved += (before - after)
+        except Exception as e:
+            log.warning("_reparent_misfiled_claims: %s on %s", e, tbl)
+    if moved:
+        log.info("_reparent_misfiled_claims: moved %d row(s) to account %d", moved, acct)
+    return moved
 
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
