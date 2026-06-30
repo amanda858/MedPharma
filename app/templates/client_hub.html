@@ -2648,6 +2648,7 @@
                 <button class="btn btn-primary btn-sm" onclick="openUserInviteModal()">+ Add User</button>
               <button class="btn btn-primary btn-sm" onclick="openClientModal()">+ Add Client</button>
               <button class="btn btn-secondary btn-sm" onclick="downloadClientSeed()" title="Download backup of all clients — commit this file to preserve clients across deploys">💾 Backup Clients</button>
+              <button id="removeSelectedBtn" class="btn btn-danger-outline btn-sm" onclick="removeSelectedClients()" style="display:none" title="Permanently remove every account you've checked">🗑 Remove Selected (<span id="removeSelectedCount">0</span>)</button>
             </div>
           </div>
           <div class="card" style="padding:0">
@@ -2655,6 +2656,7 @@
               <table>
                 <thead>
                   <tr>
+                    <th style="width:34px;text-align:center"><input type="checkbox" id="clientSelectAll" onchange="toggleSelectAllClients(this)" title="Select all"></th>
                     <th>Username</th>
                     <th>Company</th>
                     <th>Contact</th>
@@ -4740,7 +4742,7 @@
       const newClientBtn = document.getElementById('selectorNewClientBtn');
       if (newClientBtn) newClientBtn.style.display = isFullAdmin() ? '' : 'none';
       const addUserBtn = document.getElementById('selectorAddUserBtn');
-      if (addUserBtn) addUserBtn.style.display = isStaffOrAdmin() ? '' : 'none';
+      if (addUserBtn) addUserBtn.style.display = isFullAdmin() ? '' : 'none';
 
       // Show "N team members on this hub" line so the screen never looks empty.
       refreshSelectorTeamLine();
@@ -4775,7 +4777,7 @@
           <div style="font-size:18px;font-weight:600;color:#0f172a;margin-bottom:8px;">No client accounts yet</div>
           <div style="color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Click <strong>+ New Client</strong> above to create your first client workspace, or jump straight to admin tools.</div>
           ${isFullAdmin() ? `<button onclick="showNewClientFromSelector()" style="padding:10px 24px;border-radius:8px;border:none;background:#4338ca;color:#fff;font-weight:600;cursor:pointer;">+ New Client</button>` : ''}
-          ${isStaffOrAdmin() ? `<button onclick="enterAsAdminAndOpenClients()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#fff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">👥 View / Manage Team</button>` : ''}
+          ${isFullAdmin() ? `<button onclick="enterAsAdminAndOpenClients()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#fff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">👥 View / Manage Team</button>` : ''}
           ${currentUser && currentUser.role === 'admin' ? `<button onclick="enterAsAdmin()" style="padding:10px 24px;border-radius:8px;border:1px solid #4338ca;background:#eef2ff;color:#4338ca;font-weight:600;cursor:pointer;margin-left:8px;">Enter as Admin →</button>` : ''}
           <button onclick="doLogout()" style="padding:10px 24px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:600;cursor:pointer;margin-left:8px;">Back to Login</button>
         </div>`;
@@ -4836,7 +4838,7 @@
       // adminNav (Manage Clients / Audit Log) — full admin only
       document.getElementById('adminNav').style.display = isFullAdmin() ? 'block' : 'none';
       const topAddUserBtn = document.getElementById('topAddUserBtn');
-      if (topAddUserBtn) topAddUserBtn.style.display = isStaffOrAdmin() ? '' : 'none';
+      if (topAddUserBtn) topAddUserBtn.style.display = isFullAdmin() ? '' : 'none';
       // Full ops nav for admin and staff; client nav for regular clients
       if (isStaffOrAdmin()) {
         document.getElementById('adminFullNav').style.display = 'block';
@@ -5225,7 +5227,8 @@
     async function refreshSelectorTeamLine() {
       const line = document.getElementById('selectorTeamLine');
       if (!line) return;
-      if (!isStaffOrAdmin()) { line.style.display = 'none'; return; }
+      // Team summary is admin-only — never expose the roster of user names to staff or clients.
+      if (!isFullAdmin()) { line.style.display = 'none'; return; }
       try {
         const r = await fetch('/hub/api/admin/users');
         if (!r.ok) { line.style.display = 'none'; return; }
@@ -5234,10 +5237,8 @@
         const cnt = users.length;
         document.getElementById('selectorTeamCount').textContent =
           `${cnt} team member${cnt === 1 ? '' : 's'} on this hub`;
-        const names = users.slice(0, 5).map(u => esc(u.contact_name || u.username)).join(', ');
-        const more = users.length > 5 ? ` +${users.length - 5} more` : '';
-        document.getElementById('selectorTeamNames').textContent =
-          users.length ? `· ${names}${more}` : '';
+        // Names intentionally omitted — manage individual logins via the Team button.
+        document.getElementById('selectorTeamNames').textContent = '';
         line.style.display = '';
       } catch (_) { line.style.display = 'none'; }
     }
@@ -6902,7 +6903,11 @@
       const items = d.clients || d || [];
       clientsList = items;
       const tbody = document.getElementById('clientTbody');
+      const myId = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : null;
       tbody.innerHTML = items.map(c => `<tr>
+    <td style="text-align:center">${c.id === myId
+      ? '<span title="Signed-in account — cannot remove" style="color:#9ca3af">—</span>'
+      : `<input type="checkbox" class="clientSelectCb" value="${c.id}" data-username="${esc(c.username)}" onchange="updateRemoveSelectedBtn()">`}</td>
     <td style="font-weight:600">${esc(c.username)}</td>
     <td>${esc(c.company)}</td>
     <td>${esc(c.contact_name || '—')}</td>
@@ -6918,6 +6923,50 @@
       <button class="btn btn-danger-outline btn-sm" onclick="deleteClient(${c.id},'${esc(c.username)}')">🗑 Remove</button>
     </td>
   </tr>`).join('');
+      updateRemoveSelectedBtn();
+    }
+
+    function _clientSelectCheckboxes() {
+      return Array.from(document.querySelectorAll('.clientSelectCb'));
+    }
+    function updateRemoveSelectedBtn() {
+      const all = _clientSelectCheckboxes();
+      const checked = all.filter(cb => cb.checked);
+      const countEl = document.getElementById('removeSelectedCount');
+      if (countEl) countEl.textContent = checked.length;
+      const btn = document.getElementById('removeSelectedBtn');
+      if (btn) btn.style.display = checked.length ? '' : 'none';
+      const master = document.getElementById('clientSelectAll');
+      if (master) {
+        master.checked = all.length > 0 && checked.length === all.length;
+        master.indeterminate = checked.length > 0 && checked.length < all.length;
+      }
+    }
+    function toggleSelectAllClients(master) {
+      _clientSelectCheckboxes().forEach(cb => { cb.checked = master.checked; });
+      updateRemoveSelectedBtn();
+    }
+    async function removeSelectedClients() {
+      const checked = _clientSelectCheckboxes().filter(cb => cb.checked);
+      if (!checked.length) { toast('No accounts selected', 'error'); return; }
+      const targets = checked.map(cb => ({ id: parseInt(cb.value), username: cb.getAttribute('data-username') || cb.value }));
+      const list = targets.map(t => `• ${t.username}`).join('\n');
+      if (!confirm(`Permanently remove these ${targets.length} account(s)? This cannot be undone.\n\n${list}`)) return;
+      let ok = 0, fail = 0; const errors = [];
+      for (const t of targets) {
+        try {
+          const r = await fetch(`/hub/api/clients/${t.id}`, { method: 'DELETE', credentials: 'same-origin' });
+          if (!r.ok) {
+            let detail = `HTTP ${r.status}`;
+            try { const j = await r.json(); if (j && j.detail) detail = j.detail; } catch (_) {}
+            throw new Error(detail);
+          }
+          ok++;
+        } catch (e) { fail++; errors.push(`${t.username}: ${e.message}`); }
+      }
+      await loadClients();
+      if (fail === 0) toast(`Removed ${ok} account(s)`, 'success');
+      else toast(`Removed ${ok}, failed ${fail}. ${errors.join('; ')}`, 'error');
     }
 
     async function deleteClient(cid, username) {
@@ -7145,11 +7194,12 @@
         const acctN = d.granted_accounts || account_ids.length || 0;
         const acctMsg = acctN ? ` · access to ${acctN} account${acctN === 1 ? '' : 's'}` : '';
         if (d.password_set) {
-          // Login is ready immediately — surface the credentials so the admin
-          // can copy and hand them off.
-          window.prompt('User login created — copy these credentials now:',
-            `Username: ${d.username}    Password: ${chosenPw}`);
-          toast(`User ${d.username} created — can sign in now${acctMsg}`, 'success');
+          // Login is ready immediately — surface the portal link + credentials so the
+          // admin can copy and hand them off to that one client.
+          const portalLink = `${window.location.origin}/hub`;
+          window.prompt('Portal access created — copy this and send it to the client:',
+            `Portal: ${portalLink}    Username: ${d.username}    Password: ${chosenPw}`);
+          toast(`Portal login ${d.username} created — can sign in now${acctMsg}`, 'success');
         } else if (d.email_sent) {
           toast(`Setup link emailed to ${d.email}${acctMsg}`, 'success');
         } else if (d.setup_link) {
