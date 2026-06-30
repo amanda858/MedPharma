@@ -2069,6 +2069,7 @@
         <div id="clientNav">
           <div class="nav-item" data-panel="dashboard" data-module="dashboard" onclick="navTo('dashboard')">📤 Claims Out</div>
           <div class="nav-item" data-panel="production" data-module="production" onclick="navTo('production')">📋 Team Production</div>
+          <div class="nav-item" data-panel="eligibility" data-module="eligibility" onclick="navTo('eligibility')">🩺 Eligibility Tracking</div>
           <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">📁 Documents</div>
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadgeClient" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
@@ -2084,6 +2085,7 @@
           <div class="nav-item" data-panel="credentialing" data-module="credentialing" onclick="navTo('credentialing')"><span id="navCredLabel">Credentialing</span></div>
           <div class="nav-item" data-panel="enrollment" data-module="enrollment" onclick="navTo('enrollment')">Enrollment</div>
           <div class="nav-item" data-panel="edi" data-module="edi" onclick="navTo('edi')">EDI Setup</div>
+          <div class="nav-item" data-panel="eligibility" data-module="eligibility" onclick="navTo('eligibility')">🩺 Eligibility Tracking</div>
           <div class="nav-item" data-panel="providers" data-module="providers" onclick="navTo('providers')">Client References</div>
           <div class="nav-item" data-panel="reporting" data-module="reporting" id="navReporting" onclick="navTo('reporting')">Reporting</div>
           <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">Documents</div>
@@ -2510,6 +2512,58 @@
                   </tr>
                 </thead>
                 <tbody id="enrollTbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ ELIGIBILITY TRACKING ═══ -->
+        <div class="hub-panel" id="panel-eligibility">
+          <div class="page-header">
+            <div class="page-title">🩺 Eligibility Tracking</div>
+            <div class="page-actions">
+              <select id="eligFilter" class="form-control btn-sm" onchange="renderEligTable()" style="width:auto">
+                <option value="">All Statuses</option>
+                <option>Active</option>
+                <option>Pending</option>
+                <option>Needs Re-verify</option>
+                <option>Inactive</option>
+                <option>Termed</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="exportSection('eligibility')">📤 Export CSV</button>
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥
+                Import Excel</button>
+              <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
+                onchange="importExcel(this,'Eligibility')">
+              <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
+            </div>
+          </div>
+          <div id="eligTiles" class="elig-tiles"
+            style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
+          <div id="eligStatusChart" class="section-chart-strip"></div>
+          <div class="card" style="padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Patient</th>
+                    <th>DOB</th>
+                    <th>Payor</th>
+                    <th>Member ID</th>
+                    <th>Status</th>
+                    <th>Effective</th>
+                    <th>Term</th>
+                    <th>Copay</th>
+                    <th>Deductible</th>
+                    <th>Prior Auth</th>
+                    <th>Verified By</th>
+                    <th>Verified</th>
+                    <th>Re-verify</th>
+                    <th>Notes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="eligTbody"></tbody>
               </table>
             </div>
           </div>
@@ -3939,6 +3993,78 @@
     </div>
   </div>
 
+  <!-- Eligibility Modal -->
+  <div class="modal-overlay" id="eligModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="eligModalTitle">New Eligibility Check</h2>
+        <button class="modal-close" onclick="closeModal('eligModal')">&times;</button>
+      </div>
+      <input type="hidden" id="eligEditId">
+      <div class="form-grid">
+        <div class="form-group"><label>Patient Name</label><input class="form-control" id="fEligPatient"></div>
+        <div class="form-group"><label>DOB</label><input class="form-control" type="date" id="fEligDOB"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Payor</label><input class="form-control" id="fEligPayor"></div>
+        <div class="form-group"><label>Member ID</label><input class="form-control" id="fEligMember"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Plan / Group</label><input class="form-control" id="fEligPlan"></div>
+        <div class="form-group"><label>Status</label>
+          <select class="form-control" id="fEligStatus">
+            <option>Active</option>
+            <option>Pending</option>
+            <option>Needs Re-verify</option>
+            <option>Inactive</option>
+            <option>Termed</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Effective Date</label><input class="form-control" type="date"
+            id="fEligEffective"></div>
+        <div class="form-group"><label>Term Date</label><input class="form-control" type="date" id="fEligTerm"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Copay</label><input class="form-control" id="fEligCopay" placeholder="$25"></div>
+        <div class="form-group"><label>Deductible</label><input class="form-control" id="fEligDeductible"
+            placeholder="$500 remaining"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Coinsurance</label><input class="form-control" id="fEligCoins"
+            placeholder="20%"></div>
+        <div class="form-group"><label>Out-of-Pocket Max</label><input class="form-control" id="fEligOOP"
+            placeholder="$3,000"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Prior Auth Required</label>
+          <select class="form-control" id="fEligPriorAuth">
+            <option value="">—</option>
+            <option>No</option>
+            <option>Yes</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Auth Number</label><input class="form-control" id="fEligAuthNum"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Verified By</label><input class="form-control" id="fEligVerifiedBy"></div>
+        <div class="form-group"><label>Verified Date</label><input class="form-control" type="date"
+            id="fEligVerifiedDate"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Next Re-verify</label><input class="form-control" type="date"
+            id="fEligReverify"></div>
+        <div class="form-group form-full" id="eligClientGroup" style="display:none">
+          <label>Client</label><select class="form-control" id="fEligClient"></select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control"
+          id="fEligNotes"></textarea></div>
+      <button class="btn btn-primary" onclick="saveElig()">Save</button>
+    </div>
+  </div>
+
   <!-- EDI Modal -->
   <div class="modal-overlay" id="ediModal">
     <div class="modal modal-sm">
@@ -4220,6 +4346,20 @@
 
     // Role helpers
     function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
+
+    // A login is "eligibility-only" when it's a client login whose modules include
+    // 'eligibility' but NOT the billing dashboard ('claims'/'dashboard'). Such logins
+    // (PCR eligibility verifiers) land on the Eligibility board instead of Claims Out.
+    // Existing clients always have 'claims'/'dashboard' (or null modules) → never matched.
+    function _isEligibilityOnly() {
+      if (isStaffOrAdmin()) return false;
+      const mods = (Array.isArray(activeClientModules) && activeClientModules.length)
+        ? activeClientModules
+        : (currentUser && Array.isArray(currentUser.enabled_modules) ? currentUser.enabled_modules : null);
+      if (!mods) return false;
+      const s = new Set(mods);
+      return s.has('eligibility') && !s.has('claims') && !s.has('dashboard');
+    }
     function isFullAdmin()    { return currentUser && currentUser.role === 'admin'; }
     function isBizdev()       { return currentUser && currentUser.role === 'bizdev'; }
     // Reporting is restricted to full admins and Eric only — no other user may see
@@ -4480,6 +4620,7 @@
           loadGlobalJobsStatus(globalJobsDrawerOpen);
         }
       }, 6000);
+      startLiveRefresh();
     }
 
     async function loadGlobalJobsStatus(updateDrawer = false) {
@@ -5185,6 +5326,11 @@
     // NAVIGATION
     // ═══════════════════════════════════════
     function navTo(panel) {
+      // Eligibility-only logins (PCR verifiers) have no billing dashboard — send
+      // any attempt to open the Claims Out dashboard to their Eligibility board.
+      if ((panel === 'dashboard' || !panel) && _isEligibilityOnly()) {
+        panel = 'eligibility';
+      }
       // Reporting is restricted to admins and Eric — no other user can open it.
       if (panel === 'reporting' && !canViewReporting()) {
         toast('Reports are generated by the admin only.', 'error');
@@ -5212,6 +5358,7 @@
       if (panel === 'credentialing') loadCred();
       if (panel === 'enrollment') loadEnroll();
       if (panel === 'edi') loadEdi();
+      if (panel === 'eligibility') loadEligibility();
       if (panel === 'providers') loadProviders();
       if (panel === 'clients') loadClients();
       if (panel === 'files') loadDocuments();
@@ -5241,7 +5388,7 @@
         const h = (window.location.hash || '').replace('#', '').trim();
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
-                       'providers','clients','files','profile','reporting',
+                       'eligibility','providers','clients','files','profile','reporting',
                        'production','alerts','audit','chat','emailsetup'];
         if (valid.includes(h)) navTo(h);
       }
@@ -6351,6 +6498,173 @@
           });
         }
         closeModal('enrollModal'); loadEnroll(); toast('Saved', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════
+    // ELIGIBILITY TRACKING
+    // ═══════════════════════════════════════
+    let allEligItems = [];
+    let activeEligFilter = '';
+    const ELIG_STATUSES = ['Active', 'Pending', 'Needs Re-verify', 'Inactive', 'Termed'];
+
+    async function loadEligibility() {
+      const params = new URLSearchParams();
+      if (activeClientId) params.set('client_id', activeClientId);
+      if (activeSubProfile) params.set('sub_profile', activeSubProfile);
+      try {
+        const r = await fetch('/hub/api/eligibility' + (params.toString() ? '?' + params : ''));
+        const d = await r.json();
+        allEligItems = Array.isArray(d) ? d : (d.eligibility || []);
+      } catch (_) { allEligItems = []; }
+      renderEligTiles();
+      renderSectionChart('eligStatusChart', allEligItems, 'Status', ELIG_STATUSES, (status) => {
+        activeEligFilter = status || '';
+        const sel = document.getElementById('eligFilter');
+        if (sel) sel.value = activeEligFilter;
+        renderEligTable();
+      });
+      activeEligFilter = document.getElementById('eligFilter')?.value || '';
+      syncPillHighlight('eligStatusChart', activeEligFilter);
+      renderEligTable();
+    }
+
+    function _eligNeedsReverify(i) {
+      if ((i.Status || '') === 'Needs Re-verify') return true;
+      const d = (i.NextReverifyDate || '').trim();
+      if (!d) return false;
+      const dt = new Date(d);
+      return !isNaN(dt.getTime()) && dt <= new Date();
+    }
+
+    function renderEligTiles() {
+      const el = document.getElementById('eligTiles');
+      if (!el) return;
+      const total = allEligItems.length;
+      const active = allEligItems.filter(i => (i.Status || '') === 'Active').length;
+      const pending = allEligItems.filter(i => (i.Status || '') === 'Pending').length;
+      const inactive = allEligItems.filter(i => ['Inactive', 'Termed'].includes(i.Status || '')).length;
+      const reverify = allEligItems.filter(_eligNeedsReverify).length;
+      const tile = (label, val, color) => `<div style="flex:1;min-width:130px;background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${color};border-radius:10px;padding:14px 16px">
+          <div style="font-size:24px;font-weight:800;color:${color}">${val}</div>
+          <div style="font-size:12px;color:#6b7280;font-weight:600;margin-top:2px">${label}</div>
+        </div>`;
+      el.innerHTML = tile('Patients Tracked', total, '#4338ca')
+        + tile('Active Coverage', active, '#059669')
+        + tile('Pending Verification', pending, '#d97706')
+        + tile('Inactive / Termed', inactive, '#6b7280')
+        + tile('Needs Re-verify', reverify, '#dc2626');
+    }
+
+    function renderEligTable() {
+      const sel = document.getElementById('eligFilter');
+      activeEligFilter = sel ? sel.value : activeEligFilter;
+      const items = activeEligFilter
+        ? allEligItems.filter(i => (i.Status || '').toLowerCase() === activeEligFilter.toLowerCase())
+        : allEligItems;
+      const tbody = document.getElementById('eligTbody');
+      if (!tbody) return;
+      if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="15"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map(i => {
+        const reverify = _eligNeedsReverify(i);
+        const auth = esc(i.PriorAuthRequired || '—') + (i.AuthNumber ? ' · ' + esc(i.AuthNumber) : '');
+        return `<tr>
+    <td style="font-weight:600">${esc(i.PatientName || '—')}</td>
+    <td style="font-size:12px">${esc(i.DOB || '—')}</td>
+    <td>${esc(i.Payor || '—')}</td>
+    <td style="font-size:12px">${esc(i.MemberID || '—')}</td>
+    <td>${statusBadge(i.Status)}</td>
+    <td style="font-size:12px">${esc(i.EffectiveDate || '—')}</td>
+    <td style="font-size:12px">${esc(i.TermDate || '—')}</td>
+    <td style="font-size:12px">${esc(i.Copay || '—')}</td>
+    <td style="font-size:12px">${esc(i.Deductible || '—')}</td>
+    <td style="font-size:12px">${auth}</td>
+    <td style="font-size:12px">${esc(i.VerifiedBy || '—')}</td>
+    <td style="font-size:12px">${esc(i.VerifiedDate || '—')}</td>
+    <td style="font-size:12px;${reverify ? 'color:var(--danger);font-weight:600' : ''}">${esc(i.NextReverifyDate || '—')}</td>
+    <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
+    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
+  </tr>`;
+      }).join('');
+    }
+
+    function editEligItem(id) {
+      const item = allEligItems.find(x => x.id === id);
+      if (item) openEligModal(item);
+    }
+
+    function openEligModal(item) {
+      document.getElementById('eligEditId').value = item?.id || '';
+      document.getElementById('eligModalTitle').textContent = item ? 'Edit Eligibility' : 'New Eligibility Check';
+      const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v || ''; };
+      set('fEligPatient', item?.PatientName);
+      set('fEligDOB', item?.DOB);
+      set('fEligPayor', item?.Payor);
+      set('fEligMember', item?.MemberID);
+      set('fEligPlan', item?.PlanGroup);
+      set('fEligStatus', item?.Status || 'Pending');
+      set('fEligEffective', item?.EffectiveDate);
+      set('fEligTerm', item?.TermDate);
+      set('fEligCopay', item?.Copay);
+      set('fEligDeductible', item?.Deductible);
+      set('fEligCoins', item?.Coinsurance);
+      set('fEligOOP', item?.OOPMax);
+      set('fEligPriorAuth', item?.PriorAuthRequired || '');
+      set('fEligAuthNum', item?.AuthNumber);
+      set('fEligVerifiedBy', item?.VerifiedBy);
+      set('fEligVerifiedDate', item?.VerifiedDate);
+      set('fEligReverify', item?.NextReverifyDate);
+      set('fEligNotes', item?.Notes);
+      if (isStaffOrAdmin()) {
+        const g = document.getElementById('eligClientGroup');
+        if (g) g.style.display = '';
+        populateClientDrop('fEligClient', item?.client_id);
+      }
+      document.getElementById('eligModal').classList.add('open');
+    }
+
+    async function saveElig() {
+      const editId = document.getElementById('eligEditId').value;
+      const g = id => document.getElementById(id)?.value || '';
+      const data = {
+        PatientName: g('fEligPatient'), DOB: g('fEligDOB'), Payor: g('fEligPayor'),
+        MemberID: g('fEligMember'), PlanGroup: g('fEligPlan'), Status: g('fEligStatus'),
+        EffectiveDate: g('fEligEffective'), TermDate: g('fEligTerm'), Copay: g('fEligCopay'),
+        Deductible: g('fEligDeductible'), Coinsurance: g('fEligCoins'), OOPMax: g('fEligOOP'),
+        PriorAuthRequired: g('fEligPriorAuth'), AuthNumber: g('fEligAuthNum'),
+        VerifiedBy: g('fEligVerifiedBy'), VerifiedDate: g('fEligVerifiedDate'),
+        NextReverifyDate: g('fEligReverify'), Notes: g('fEligNotes'),
+      };
+      try {
+        if (editId) {
+          await fetch(`/hub/api/eligibility/${editId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+        } else {
+          // Client logins omit client_id — the server scopes the write to the
+          // account they're assigned to, so every PCR verifier shares one board.
+          if (isStaffOrAdmin()) {
+            data.client_id = parseInt(document.getElementById('fEligClient')?.value) || activeClientId;
+          }
+          if (activeSubProfile) data.sub_profile = activeSubProfile;
+          await fetch('/hub/api/eligibility', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+        }
+        closeModal('eligModal'); loadEligibility(); toast('Saved', 'success');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deleteEligRow(id) {
+      if (!confirm('Delete this eligibility record?')) return;
+      try {
+        await fetch(`/hub/api/eligibility/${id}`, { method: 'DELETE' });
+        loadEligibility(); toast('Deleted', 'success');
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -10330,6 +10644,7 @@
       { key: 'credentialing', label: 'Credentialing' },
       { key: 'enrollment',    label: 'Enrollment' },
       { key: 'edi',           label: 'EDI Setup' },
+      { key: 'eligibility',   label: 'Eligibility Tracking' },
       { key: 'providers',     label: 'Client References' },
       { key: 'reporting',     label: 'Reporting' },
       { key: 'documents',     label: 'Documents' },
@@ -10337,7 +10652,7 @@
     ];
 
     // New-client defaults: keep advanced payor modules off unless explicitly enabled.
-    const ADVANCED_MODULES = new Set(['credentialing', 'enrollment', 'edi']);
+    const ADVANCED_MODULES = new Set(['credentialing', 'enrollment', 'edi', 'eligibility']);
     const NEW_CLIENT_DEFAULT_MODULES = [
       'dashboard', 'profile', 'production', 'claims', 'providers', 'reporting', 'documents', 'chat'
     ];
@@ -10505,8 +10820,12 @@
       // Claims Out (dashboard) is the client's home for tracking claims, so it
       // stays reachable for every role regardless of enabled_modules.
       const ALWAYS_VISIBLE = new Set(['dashboard']);
+      // Exception: eligibility-only logins (PCR verifiers) have no billing
+      // dashboard at all, so Claims Out is hidden and Eligibility is their home.
+      const eligOnly = _isEligibilityOnly();
       navItems.forEach(n => {
         const key = n.getAttribute('data-module');
+        if (eligOnly && key === 'dashboard') { n.style.display = 'none'; return; }
         if (!enabled) { n.style.display = ''; return; }
         if (ALWAYS_VISIBLE.has(key)) { n.style.display = ''; return; }
         if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
@@ -10580,6 +10899,33 @@
         activeClientModules = null;
       }
       applyModuleVisibility();
+    }
+
+    // ── Real-time refresh ────────────────────────────────────────────────
+    // Keep the live boards (Claims Out dashboard + Eligibility) in sync with the
+    // server: re-pull on a timer and the moment the tab regains focus. Skipped
+    // while a modal is open (don't clobber in-progress edits) or the tab is
+    // hidden (no point polling in the background). Idempotent — safe to call once
+    // per app entry; the timer is created only the first time.
+    let _liveRefreshTimer = null;
+    function _refreshLivePanel() {
+      try {
+        if (!currentUser) return;
+        if (document.visibilityState !== 'visible') return;
+        if (document.getElementById('appShell')?.style.display === 'none') return;
+        if (document.querySelector('.modal-overlay.open')) return;
+        const active = document.querySelector('.hub-panel.active');
+        if (!active) return;
+        if (active.id === 'panel-dashboard') loadDashboard();
+        else if (active.id === 'panel-eligibility') loadEligibility();
+      } catch (_) {}
+    }
+    function startLiveRefresh() {
+      if (_liveRefreshTimer) return;
+      _liveRefreshTimer = setInterval(_refreshLivePanel, 60000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') _refreshLivePanel();
+      });
     }
 
     // ═══════════════════════════════════════

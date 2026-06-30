@@ -36,6 +36,7 @@ from app.client_db import (
     get_notes, add_note, get_claim_client_ids,
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
+    get_eligibility, create_eligibility, update_eligibility, delete_eligibility,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
@@ -3157,6 +3158,101 @@ def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     delete_enrollment(rid)
     notify_activity(user["username"], "deleted", "Enrollment", f"Record #{rid}")
+    return {"ok": True}
+
+
+# ─── Eligibility / Benefits Verification ──────────────────────────────────────
+
+class EligIn(BaseModel):
+    client_id: Optional[int] = None
+    PatientName: Optional[str] = ""
+    DOB: Optional[str] = ""
+    Payor: Optional[str] = ""
+    MemberID: Optional[str] = ""
+    PlanGroup: Optional[str] = ""
+    Status: Optional[str] = "Pending"
+    EffectiveDate: Optional[str] = ""
+    TermDate: Optional[str] = ""
+    Copay: Optional[str] = ""
+    Deductible: Optional[str] = ""
+    Coinsurance: Optional[str] = ""
+    OOPMax: Optional[str] = ""
+    PriorAuthRequired: Optional[str] = ""
+    AuthNumber: Optional[str] = ""
+    VerifiedBy: Optional[str] = ""
+    VerifiedDate: Optional[str] = ""
+    NextReverifyDate: Optional[str] = ""
+    Notes: Optional[str] = ""
+    sub_profile: Optional[str] = ""
+
+
+class EligUpdate(BaseModel):
+    PatientName: Optional[str] = None
+    DOB: Optional[str] = None
+    Payor: Optional[str] = None
+    MemberID: Optional[str] = None
+    PlanGroup: Optional[str] = None
+    Status: Optional[str] = None
+    EffectiveDate: Optional[str] = None
+    TermDate: Optional[str] = None
+    Copay: Optional[str] = None
+    Deductible: Optional[str] = None
+    Coinsurance: Optional[str] = None
+    OOPMax: Optional[str] = None
+    PriorAuthRequired: Optional[str] = None
+    AuthNumber: Optional[str] = None
+    VerifiedBy: Optional[str] = None
+    VerifiedDate: Optional[str] = None
+    NextReverifyDate: Optional[str] = None
+    Notes: Optional[str] = None
+    sub_profile: Optional[str] = None
+
+
+@router.get("/eligibility")
+def list_elig(status: Optional[str] = None, client_id: Optional[int] = None,
+              sub_profile: Optional[str] = None,
+              hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    return get_eligibility(scope, status, sub_profile=sub_profile)
+
+
+@router.post("/eligibility")
+def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    data = body.model_dump()
+    # Eligibility is a SHARED, account-level board: every PCR eligibility login
+    # must read/write the SAME account's records. So scope a client login's
+    # writes to the account it tracks (its assigned account), NOT its own row id
+    # — otherwise each verifier would only see records they personally entered.
+    if user["role"] not in ("admin", "staff"):
+        data["client_id"] = _client_account_id(user)
+    elif not data.get("client_id"):
+        data["client_id"] = _client_scope(user)
+    if not data.get("client_id"):
+        raise HTTPException(status_code=400, detail="client_id required")
+    data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
+    eid = create_eligibility(data)
+    notify_activity(user["username"], "created", "Eligibility",
+                    f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
+    return {"id": eid, "ok": True}
+
+
+@router.put("/eligibility/{rid}")
+def edit_elig(rid: int, body: EligUpdate, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    update_eligibility(rid, changes)
+    notify_activity(user["username"], "updated", "Eligibility",
+                    f"Record #{rid}, fields: {', '.join(changes.keys())}")
+    return {"ok": True}
+
+
+@router.delete("/eligibility/{rid}")
+def remove_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    delete_eligibility(rid)
+    notify_activity(user["username"], "deleted", "Eligibility", f"Record #{rid}")
     return {"ok": True}
 
 

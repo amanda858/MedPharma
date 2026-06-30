@@ -899,6 +899,38 @@ def init_client_hub_db():
             FOREIGN KEY (provider_id) REFERENCES providers(id)
         );
 
+        -- ── eligibility / benefits verification ────────────────────────
+        -- Patient-level insurance eligibility tracking (a separate dashboard
+        -- from billing). Money/benefit fields are TEXT so a verifier can record
+        -- "$25", "Met", "$500 remaining", etc. without losing nuance.
+        CREATE TABLE IF NOT EXISTS eligibility (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id           INTEGER NOT NULL,
+            PatientName         TEXT DEFAULT '',
+            DOB                 TEXT DEFAULT '',
+            Payor               TEXT DEFAULT '',
+            MemberID            TEXT DEFAULT '',
+            PlanGroup           TEXT DEFAULT '',
+            Status              TEXT DEFAULT 'Pending',  -- Active, Pending, Inactive, Needs Re-verify, Termed
+            EffectiveDate       TEXT DEFAULT '',
+            TermDate            TEXT DEFAULT '',
+            Copay               TEXT DEFAULT '',
+            Deductible          TEXT DEFAULT '',
+            Coinsurance         TEXT DEFAULT '',
+            OOPMax              TEXT DEFAULT '',
+            PriorAuthRequired   TEXT DEFAULT '',         -- Yes / No
+            AuthNumber          TEXT DEFAULT '',
+            VerifiedBy          TEXT DEFAULT '',
+            VerifiedDate        TEXT DEFAULT '',
+            NextReverifyDate    TEXT DEFAULT '',
+            Notes               TEXT DEFAULT '',
+            sub_profile         TEXT DEFAULT '',
+            uploaded_by         TEXT DEFAULT '',
+            created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+
         -- ── EDI / ERA / EFT setup ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS edi_setup (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1326,7 +1358,7 @@ def init_client_hub_db():
 
     # ── Migrate existing DBs: add sub_profile column to data tables ───────
     sub_profile_tables = ["claims_master", "payments", "providers",
-                          "credentialing", "enrollment", "edi_setup"]
+                          "credentialing", "enrollment", "edi_setup", "eligibility"]
     for tbl in sub_profile_tables:
         cur.execute(f"PRAGMA table_info({tbl})")
         cols = {row[1] for row in cur.fetchall()}
@@ -1337,7 +1369,7 @@ def init_client_hub_db():
     # ── Migrate existing DBs: per-user upload attribution on data tables ──
     # Records which hub user uploaded each imported row so the compiled Team
     # Production report can break work down per user (not just per account).
-    uploaded_by_tables = ["claims_master", "credentialing", "enrollment", "edi_setup"]
+    uploaded_by_tables = ["claims_master", "credentialing", "enrollment", "edi_setup", "eligibility"]
     for tbl in uploaded_by_tables:
         cur.execute(f"PRAGMA table_info({tbl})")
         cols = {row[1] for row in cur.fetchall()}
@@ -2910,6 +2942,84 @@ def delete_enrollment(rec_id: int):
     conn = get_db()
     try:
         conn.execute("DELETE FROM enrollment WHERE id=?", (rec_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── Eligibility / Benefits Verification ──────────────────────────────────────
+
+_ELIGIBILITY_FIELDS = [
+    "PatientName", "DOB", "Payor", "MemberID", "PlanGroup", "Status",
+    "EffectiveDate", "TermDate", "Copay", "Deductible", "Coinsurance", "OOPMax",
+    "PriorAuthRequired", "AuthNumber", "VerifiedBy", "VerifiedDate",
+    "NextReverifyDate", "Notes", "sub_profile",
+]
+
+
+def get_eligibility(client_id: int = None, status: str = None, sub_profile: str = None):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        q = "SELECT * FROM eligibility WHERE 1=1"
+        params = []
+        if client_id is not None:
+            q += " AND client_id=?"; params.append(client_id)
+        if status:
+            q += " AND Status=?"; params.append(status)
+        if sub_profile:
+            q += " AND sub_profile=?"; params.append(sub_profile)
+        q += " ORDER BY updated_at DESC"
+        cur.execute(q, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return rows
+
+
+def create_eligibility(data: dict) -> int:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO eligibility
+            (client_id,PatientName,DOB,Payor,MemberID,PlanGroup,Status,EffectiveDate,TermDate,
+             Copay,Deductible,Coinsurance,OOPMax,PriorAuthRequired,AuthNumber,
+             VerifiedBy,VerifiedDate,NextReverifyDate,Notes,sub_profile,uploaded_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (data["client_id"], data.get("PatientName", ""), data.get("DOB", ""),
+             data.get("Payor", ""), data.get("MemberID", ""), data.get("PlanGroup", ""),
+             data.get("Status", "Pending"), data.get("EffectiveDate", ""), data.get("TermDate", ""),
+             data.get("Copay", ""), data.get("Deductible", ""), data.get("Coinsurance", ""),
+             data.get("OOPMax", ""), data.get("PriorAuthRequired", ""), data.get("AuthNumber", ""),
+             data.get("VerifiedBy", ""), data.get("VerifiedDate", ""), data.get("NextReverifyDate", ""),
+             data.get("Notes", ""), data.get("sub_profile", ""), data.get("uploaded_by", "")))
+        conn.commit()
+        eid = cur.lastrowid
+    finally:
+        conn.close()
+    return eid
+
+
+def update_eligibility(rec_id: int, data: dict):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        parts, params = ["updated_at=?"], [datetime.now().isoformat()]
+        for f in _ELIGIBILITY_FIELDS:
+            if f in data:
+                parts.append(f"{f}=?")
+                params.append(data[f])
+        params.append(rec_id)
+        cur.execute(f"UPDATE eligibility SET {','.join(parts)} WHERE id=?", params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_eligibility(rec_id: int):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM eligibility WHERE id=?", (rec_id,))
         conn.commit()
     finally:
         conn.close()
