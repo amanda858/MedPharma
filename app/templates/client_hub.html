@@ -3311,10 +3311,6 @@
                 <select class="form-control btn-sm" id="prodFilterClient" style="width:auto;min-width:220px" onchange="loadProduction()">
                   <option value="">All clients (combined)</option>
                 </select>
-                <label style="font-weight:600;font-size:13px">User:</label>
-                <select class="form-control btn-sm" id="prodFilterUser" style="width:auto;min-width:200px" onchange="loadProduction()">
-                  <option value="">All users</option>
-                </select>
               </div>
             </div>
             <div class="card" id="prodLogEntryCard" style="margin-bottom:18px">
@@ -3389,7 +3385,6 @@
                   <thead>
                     <tr>
                       <th>Date</th>
-                      <th>User</th>
                       <th>Category</th>
                       <th>Task</th>
                       <th>Qty</th>
@@ -9574,19 +9569,7 @@
             .map(c => `<option value="${c.id}">${esc(brand(c.company || c.username))}</option>`).join('');
         if (activeClientId) cSel.value = String(activeClientId);
       }
-      try {
-        const r = await fetch('/hub/api/admin/users');
-        if (r.ok) {
-          const users = await r.json();
-          const uSel = document.getElementById('prodFilterUser');
-          if (uSel) uSel.innerHTML = '<option value="">All users</option>' +
-            (users || []).map(u => {
-              const label = u.contact_name || u.username;
-              const suffix = u.role === 'bizdev' ? ' (Business Development)' : '';
-              return `<option value="${esc(u.username)}">${esc(label)}${suffix}</option>`;
-            }).join('');
-        }
-      } catch (_) {}
+      // User filter removed — individual staff names are no longer surfaced here.
       _prodFiltersLoaded = true;
     }
 
@@ -9642,12 +9625,11 @@
         const logs = d.logs || [];
         const tbody = document.getElementById('prodTbody');
         if (!logs.length) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-400);padding:24px">No production entries yet. Log your first task above!</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:24px">No production entries yet. Log your first task above!</td></tr>';
           return;
         }
         tbody.innerHTML = logs.map(l => `<tr>
           <td style="font-weight:600;white-space:nowrap">${esc(l.work_date)}</td>
-          <td><span class="badge badge-blue">${esc(l.username)}</span></td>
           <td><span class="badge badge-purple">${esc(l.category)}</span></td>
           <td>${esc(l.task_description)}</td>
           <td style="text-align:center;font-weight:600">${l.quantity}</td>
