@@ -7877,34 +7877,25 @@ def accounts_assigned_to_user(user_id: int) -> list[int]:
 
 
 def list_clients_for_user(user_id: int) -> list[int]:
-    """Client IDs visible to ``user_id``.
+    """Client account IDs a STAFF user is allowed to see.
 
-    Legacy/default-open behavior is preserved for existing clients that have no
-    rows in ``client_user_access`` yet: those clients remain visible to all
-    staff. Once a client has at least one explicit access row, only the listed
-    staff users can see it.
+    Explicit-access only: a staff user sees a client account ONLY when they have
+    a ``client_user_access`` row granting it. There is no "default-open" rule —
+    an account with no access rows is visible to admins only, never to every
+    staff user. (The old default-open behavior leaked un-assigned accounts such
+    as "Forma" to billers who were never granted them.) Admins bypass this list
+    entirely and always see all accounts.
     """
     conn = get_db()
     try:
         rows = conn.execute(
             """
-            SELECT c.id
+            SELECT DISTINCT c.id
             FROM clients c
+            JOIN client_user_access cua ON cua.client_id = c.id
             WHERE COALESCE(c.role, 'client')='client'
               AND COALESCE(c.is_active,1)=1
-              AND (
-                    NOT EXISTS (
-                        SELECT 1
-                        FROM client_user_access cua_any
-                        WHERE cua_any.client_id = c.id
-                    )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM client_user_access cua_self
-                        WHERE cua_self.client_id = c.id
-                          AND cua_self.user_id = ?
-                    )
-              )
+              AND cua.user_id = ?
             ORDER BY c.id
             """,
             (int(user_id),),
