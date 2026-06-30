@@ -548,6 +548,67 @@ def _is_clearinghouse_ack(headers: list[str]) -> bool:
     return has_control and has_status and has_proc
 
 
+def _is_batch_transmission_log(headers: list[str]) -> bool:
+    """True when a sheet is the SVD DAILY batch-transmission log (DATE / BATCH # /
+    NUMBER OF CLAIMS / TOTAL BILLED / CLEARINGHOUSE) rather than a per-claim charge
+    register.
+
+    This is Melissa & Susan's COLLECTIVE daily clearinghouse-transmission summary --
+    a cumulative recap that values each submitted claim at a flat rate. Those very
+    claims are already itemized with their real charges in the per-claim register
+    (Susan's "Claim Sent"), so counting its TOTAL BILLED again double-bills the same
+    submissions (~$176K instead of the team's true combined ~$91K). It is identified
+    by the batch-number + total-billed pairing a per-claim register never carries,
+    alongside a claim-count or clearinghouse column (SV's spellings vary)."""
+    hl = [str(h).strip().lower() for h in headers if str(h or "").strip()]
+    has_batch = any("batch" in h for h in hl)
+    has_billed = any("billed" in h for h in hl)
+    has_count = any("claim" in h and ("numer" in h or "number" in h or "no" in h or "#" in h or "of" in h) for h in hl)
+    has_ch = any(("clearing" in h) or ("claring" in h) for h in hl)
+    return has_batch and has_billed and (has_count or has_ch)
+
+
+def _is_svd_batch_workbook(content: bytes, ext: str) -> bool:
+    """True when ANY sheet of an Excel workbook is the SVD DAILY batch-transmission
+    log, scanning the whole file rather than only the combined first-sheet headers.
+
+    The SVD DAILY workbook pairs a batch-summary sheet (DATE / BATCH # / NUMBER OF
+    CLAIMS / TOTAL BILLED / CLEARINGHOUSE) with a 'LIST BY PT FOR BATCHES' per-claim
+    detail sheet that restates the very same submissions at a flat per-claim rate.
+    Both sheets describe claims already itemized with their real charges in Susan's
+    per-claim register, so importing the workbook double-bills Melissa + Susan
+    (~$176K instead of their true combined ~$91K). Because the generic combined
+    parser can surface either sheet, a header-only guard is unreliable for the
+    multi-sheet copies — so this scans every sheet's first non-empty row and the
+    distinctive detail-sheet name to skip the workbook deterministically."""
+    if (ext or "").lower() not in (".xlsx", ".xlsm"):
+        return False
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        return False
+    try:
+        for sn in wb.sheetnames:
+            if "list by pt for batches" in _norm_text(sn):
+                return True
+            ws = wb[sn]
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i > 4:
+                    break
+                cells = [str(c) for c in row if c is not None and str(c).strip()]
+                if cells and _is_batch_transmission_log(cells):
+                    return True
+        return False
+    except Exception:
+        return False
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+
+
 def _infer_excel_category(content: bytes, ext: str, filename: str = "", description: str = "") -> tuple[Optional[str], dict]:
     """Infer the best import category from Excel headers + filename/description text."""
     scores = {"Claims": 0, "Credentialing": 0, "Enrollment": 0, "EDI": 0}
@@ -1970,10 +2031,13 @@ def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] 
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
-            # Gate: genuine per-claim registers AND the SVD DAILY batch log import.
-            # A recognized template (svd_denials / svd_batch_summary / lims_payments)
-            # qualifies; otherwise require a structural claims match WITH a money
-            # column so ack lists / worklists / headerless recaps are skipped.
+            # Gate: genuine per-claim registers import. A recognized template
+            # (svd_denials / lims_payments) qualifies; otherwise require a structural
+            # claims match WITH a money column so ack lists, worklists and batch-summary
+            # recaps are skipped. The SVD DAILY transmission log is Melissa & Susan's
+            # COLLECTIVE clearinghouse recap of the same claims already itemized (with
+            # real charges) in Susan's per-claim register, so counting its TOTAL BILLED
+            # again double-bills the pair (~$176K instead of their true combined ~$91K).
             tpl = _extract_templated_claim_rows(content, ext)
             ok, reason = False, ""
             if tpl:
@@ -1987,6 +2051,10 @@ def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] 
                 if _is_clearinghouse_ack(headers):
                     # Submission acknowledgement echoing an already-billed register.
                     ok, reason = False, "clearinghouse acknowledgement (submission recap skipped)"
+                elif _is_batch_transmission_log(headers) or _is_svd_batch_workbook(content, ext):
+                    # SVD DAILY collective transmission recap -- same claims as the
+                    # per-claim register; counting it again double-bills the submissions.
+                    ok, reason = False, "batch transmission log (SVD DAILY recap skipped)"
                 elif match["is_claims"] and has_money:
                     ok, reason = True, "headers"
                 else:
@@ -4870,67 +4938,6 @@ def _load_xlsx_sheets(content: bytes):
     return out
 
 
-def _tpl_svd_batch_summary(sheets):
-    """SVD DAILY batch log: per-batch summary of claims submitted.
-    Header row carries DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED. Each row
-    is one batch (e.g. 76 claims = $10,761), NOT one claim — so it is expanded into
-    N synthetic billed claims (charge = billed / N) with a deterministic key so a
-    re-upload updates in place and never double counts. This is the authoritative
-    'claims out / Billed' source."""
-    for sn, rows in sheets:
-        if not rows:
-            continue
-        # Find the header row within the first few rows.
-        for hidx in range(min(4, len(rows))):
-            cells = [_norm_key(str(c)) if c is not None else "" for c in rows[hidx]]
-            joined = " ".join(cells)
-            has_date = any(c == "date" for c in cells)
-            has_batch = any("batch" in c for c in cells)
-            has_claims = any(("claim" in c) and ("numer" in c or "number" in c or "of claim" in c) for c in cells)
-            has_billed = any("billed" in c for c in cells)
-            if has_date and has_batch and has_claims and has_billed:
-                ci = {}
-                for i, c in enumerate(cells):
-                    if c == "date" and "date" not in ci:
-                        ci["date"] = i
-                    elif "batch" in c and "batch" not in ci:
-                        ci["batch"] = i
-                    elif "claim" in c and "claims" not in ci:
-                        ci["claims"] = i
-                    elif "billed" in c and "billed" not in ci:
-                        ci["billed"] = i
-                if not all(k in ci for k in ("date", "batch", "claims", "billed")):
-                    continue
-                out = []
-                for r in rows[hidx + 1:]:
-                    if not r or not any(c is not None and str(c).strip() for c in r):
-                        continue
-                    try:
-                        n = int(float(str(r[ci["claims"]]).replace(",", "").strip()))
-                    except Exception:
-                        continue
-                    if n <= 0 or n > 5000:
-                        continue
-                    try:
-                        billed = float(str(r[ci["billed"]]).replace("$", "").replace(",", "").strip())
-                    except Exception:
-                        billed = 0.0
-                    batch = str(r[ci["batch"]] or "").split(".")[0].strip()
-                    bdate = _cell_iso_date(r[ci["date"]])
-                    per = round(billed / n, 2) if n else 0.0
-                    for i in range(n):
-                        out.append({
-                            "Claim #": f"SVDB-{batch}-{i+1}",
-                            "Claim Status": "Billed/Submitted",
-                            "Charge Amount": per,
-                            "Bill Date": bdate,
-                            "Provider Name": "SV Diagnostic Labs",
-                        })
-                if out:
-                    return out
-    return None
-
-
 def _tpl_svd_denials(sheets):
     """SVD denial / AR report: NO header row, fixed positional layout, usually a
     MULTI-SHEET workbook. The export stacks TWO record shapes that both describe
@@ -5078,18 +5085,16 @@ def _tpl_lims_payments(sheets):
 # Priority order — the first template whose fingerprint matches wins for a given
 # workbook, so a file contributes to exactly one bucket and never double counts.
 # The SVD DAILY batch log (DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED) is
-# Melissa's daily clearinghouse-transmission report. Accession-level checks confirm
-# its claims do NOT overlap the per-claim registers — Susan's "Claim Sent" runs
-# through 6/18, Jessica's denials are older reworks, and the batch log carries the
-# 6/19-6/24 sends (zero shared accessions) — so it is genuine, DISTINCT billing,
-# not a recap. Each batch is expanded into N synthetic billed claims keyed
-# SVDB-{batch}-{i}, so a re-upload (or a teammate saving the same report) updates
-# in place and never double counts.
-_SVD_DAILY_OWNER = "melissa@medprosc.com"
-
+# Melissa & Susan's COLLECTIVE daily clearinghouse-transmission report -- the team
+# confirmed it is the same ~$91K of submissions already itemized per-claim (with the
+# real charge amounts) in Susan's "Claim Sent" register. The batch log only values
+# each claim at a flat ~$141 estimate; it is a transmission VIEW of work already
+# counted, NOT separate billing. It is therefore intentionally NOT in _CLAIM_TEMPLATES
+# -- importing it would double-count Melissa + Susan to ~$176K instead of their true
+# combined ~$91K. It is kept as a document and guarded by _is_batch_transmission_log;
+# Melissa's distinct outputs are eligibility (LIMS) and payments (ERA'S STEDI).
 _CLAIM_TEMPLATES = (
     ("svd_denials", _tpl_svd_denials),
-    ("svd_batch_summary", _tpl_svd_batch_summary),
     ("lims_payments", _tpl_lims_payments),
 )
 
@@ -5916,14 +5921,6 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
     if not rows:
         return 0, ["No rows found in file"]
 
-    # The SVD DAILY batch log is Melissa's daily production regardless of which
-    # teammate uploads a copy. Pin its billing to her account so duplicate uploads
-    # can't split or reassign the credit (the upsert below sets uploaded_by from the
-    # last writer, and the SVDB-{batch}-{i} keys dedupe identical batches across
-    # copies).
-    if _tpl_used == "svd_batch_summary":
-        uploaded_by = _SVD_DAILY_OWNER
-
     conn = get_db()
     cur = conn.cursor()
     today_str = business_today_iso()
@@ -6374,6 +6371,10 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
                     if _is_clearinghouse_ack(headers):
                         # Submission acknowledgement recap (echoes an already-billed
                         # register) — importing it double-bills, so never sweep it in.
+                        continue
+                    if _is_batch_transmission_log(headers) or _is_svd_batch_workbook(content, ext):
+                        # SVD DAILY collective transmission recap -- the same claims as
+                        # the per-claim register; importing it double-bills Melissa+Susan.
                         continue
                     if not _claims_structural_match(headers)["is_claims"]:
                         inferred, _dbg = _infer_excel_category(
