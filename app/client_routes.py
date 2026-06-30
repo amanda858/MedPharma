@@ -947,11 +947,20 @@ class LoginIn(BaseModel):
 class InviteUserIn(BaseModel):
     company: Optional[str] = ""
     contact_name: Optional[str] = ""
-    email: str
+    # Email is optional: when an initial_password is set the admin is minting a
+    # ready-to-use login, so no setup-link email is required.
+    email: Optional[str] = ""
     phone: Optional[str] = ""
     role: Optional[str] = "staff"
     username: Optional[str] = ""
     initial_password: Optional[str] = ""
+    # Optional: grant the new user access to these existing account ids at
+    # creation time, so an admin can mint a login for "whatever account".
+    account_ids: Optional[list[int]] = None
+    # When an initial_password is set, control whether the user must change it
+    # on first login. Defaults False so admin-set credentials persist as-is
+    # (useful for shared/service logins handed off directly).
+    require_password_change: Optional[bool] = False
 
 
 class SetupPasswordIn(BaseModel):
@@ -1393,14 +1402,24 @@ def list_admin_users(hub_session: Optional[str] = Cookie(None)):
 def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
     email = (body.email or "").strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Valid email is required")
+    initial_password = (body.initial_password or "").strip()
+    # Email is optional WHEN a password is set (admin mints a ready-to-use
+    # login). Otherwise an email is required so we can send a setup link.
+    if email and "@" not in email:
+        raise HTTPException(status_code=400, detail="Email address is not valid")
+    if not email and not initial_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter an email to send a setup link, or set a password so the user can sign in immediately",
+        )
+    if initial_password and len(initial_password) < 10:
+        raise HTTPException(status_code=400, detail="Password must be at least 10 characters")
 
     payload = body.model_dump()
     payload["email"] = email
-    initial_password = (payload.pop("initial_password", "") or "").strip()
-    if initial_password and len(initial_password) < 10:
-        raise HTTPException(status_code=400, detail="Initial password must be at least 10 characters")
+    payload.pop("initial_password", None)
+    account_ids = [int(a) for a in (payload.pop("account_ids", None) or []) if str(a).isdigit()]
+    require_password_change = bool(payload.pop("require_password_change", False))
     if not (payload.get("company") or "").strip():
         payload["company"] = (admin.get("company") or "").strip() or "MedPharma Team"
     # Staff can invite users but cannot create full-admin accounts.
@@ -1414,27 +1433,44 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not create user invite: {e}")
 
+    new_uid = int(invite.get("client_id", 0) or 0)
+
+    # Grant the new login access to whichever accounts the admin picked. Merge
+    # with each account's existing access list so other users are never dropped.
+    granted_accounts = 0
+    for acct in account_ids:
+        try:
+            current = [int(u.get("id")) for u in list_client_access(acct) if u.get("id")]
+            if new_uid and new_uid not in current:
+                current.append(new_uid)
+            set_client_access(acct, current, granted_by=admin.get("username", ""))
+            granted_accounts += 1
+        except Exception as e:
+            log.warning("grant access to account %s for new user %s failed: %s", acct, new_uid, e)
+
     base_url = str(request.base_url).rstrip("/")
     setup_link = f"{base_url}/hub?setup_token={invite['token']}"
     display_name = invite.get("contact_name") or invite.get("username") or "there"
-    subject = "MedPharma Hub: Set your password"
-    text_body = (
-        f"Hi {display_name},\n\n"
-        f"Your MedPharma Hub account is ready.\n"
-        f"Username: {invite.get('username','')}\n"
-        f"Role: {invite.get('role','client')}\n\n"
-        f"Set your password using this link (expires in 72 hours):\n{setup_link}\n\n"
-        "If you did not expect this email, contact your administrator."
-    )
-    html_body = (
-        f"<p>Hi {display_name},</p>"
-        f"<p>Your MedPharma Hub account is ready.</p>"
-        f"<p><b>Username:</b> {invite.get('username','')}<br/>"
-        f"<b>Role:</b> {invite.get('role','client')}</p>"
-        f"<p><a href=\"{setup_link}\" style=\"padding:10px 16px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:6px;\">Set Password</a></p>"
-        f"<p style=\"font-size:12px;color:#64748b\">Or copy this link: {setup_link}</p>"
-    )
-    sent, via = _send_direct_email(email, subject, text_body, html_body)
+    sent, via = (False, "skipped-no-email")
+    if email:
+        subject = "MedPharma Hub: Set your password"
+        text_body = (
+            f"Hi {display_name},\n\n"
+            f"Your MedPharma Hub account is ready.\n"
+            f"Username: {invite.get('username','')}\n"
+            f"Role: {invite.get('role','client')}\n\n"
+            f"Set your password using this link (expires in 72 hours):\n{setup_link}\n\n"
+            "If you did not expect this email, contact your administrator."
+        )
+        html_body = (
+            f"<p>Hi {display_name},</p>"
+            f"<p>Your MedPharma Hub account is ready.</p>"
+            f"<p><b>Username:</b> {invite.get('username','')}<br/>"
+            f"<b>Role:</b> {invite.get('role','client')}</p>"
+            f"<p><a href=\"{setup_link}\" style=\"padding:10px 16px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:6px;\">Set Password</a></p>"
+            f"<p style=\"font-size:12px;color:#64748b\">Or copy this link: {setup_link}</p>"
+        )
+        sent, via = _send_direct_email(email, subject, text_body, html_body)
 
     password_set = False
     if initial_password:
@@ -1442,7 +1478,7 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
             updated = consume_password_setup_token(invite.get("token", ""), initial_password)
             password_set = bool(updated)
             if password_set:
-                set_must_change_password(int(invite.get("client_id", 0) or 0), True)
+                set_must_change_password(int(invite.get("client_id", 0) or 0), require_password_change)
         except Exception:
             password_set = False
 
@@ -1485,6 +1521,7 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
         "email_sent": sent,
         "delivery": via,
         "password_set": password_set,
+        "granted_accounts": granted_accounts,
         "setup_link": setup_link,
         "expires_at": invite.get("expires_at"),
     }

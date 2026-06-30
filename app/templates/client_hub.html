@@ -3829,7 +3829,7 @@
   <div class="modal-overlay" id="userInviteModal">
     <div class="modal modal-sm">
       <div class="modal-header">
-        <h2 id="userInviteTitle">Invite New User</h2>
+        <h2 id="userInviteTitle">Create User</h2>
         <button class="modal-close" onclick="closeModal('userInviteModal')">&times;</button>
       </div>
       <div class="form-grid">
@@ -3837,7 +3837,7 @@
         <div class="form-group"><label>Full Name</label><input class="form-control" id="fUContact" placeholder="User full name"></div>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Email *</label><input class="form-control" type="email" id="fUEmail" placeholder="user@example.com"></div>
+        <div class="form-group"><label>Email <span style="font-size:11px;color:#94a3b8">(optional)</span></label><input class="form-control" type="email" id="fUEmail" placeholder="user@example.com"></div>
         <div class="form-group"><label>Phone</label><input class="form-control" id="fUPhone" placeholder="(555) 000-0000"></div>
       </div>
       <div class="form-grid">
@@ -3848,13 +3848,30 @@
             <option value="admin">Admin</option>
           </select>
         </div>
-        <div class="form-group"><label>Username (optional)</label><input class="form-control" id="fUUsername" placeholder="auto-generated if blank"></div>
+        <div class="form-group"><label>Username <span style="font-size:11px;color:#94a3b8">(optional)</span></label><input class="form-control" id="fUUsername" placeholder="auto-generated if blank"></div>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Temporary Password (optional)</label><input class="form-control" type="password" id="fUInitialPassword" placeholder="Set now so they can login immediately"></div>
+        <div class="form-group"><label>Password <span style="font-size:11px;color:#94a3b8">(optional)</span></label><input class="form-control" type="password" id="fUInitialPassword" placeholder="Set one so they can sign in right away"></div>
       </div>
-      <div style="font-size:12px;color:#64748b;margin-bottom:12px">The user will receive an email with a secure link to set their own password.</div>
-      <button class="btn btn-primary" style="margin-top:6px" onclick="sendUserInvite()">Send Invite</button>
+
+      <!-- ── Which existing accounts this login can open ── -->
+      <div class="form-group" style="margin-top:6px">
+        <label style="font-weight:600;margin-bottom:6px;display:block">Grant Account Access
+          <span style="font-size:11px;color:#94a3b8;font-weight:400">(pick any accounts this login should open — choose as many as you need)</span>
+        </label>
+        <input class="form-control" id="fUAccountSearch" placeholder="Filter accounts…" style="margin-bottom:6px" oninput="filterUserAccountChecks(this.value)">
+        <div id="fUAccountsWrap"
+          style="max-height:160px;overflow-y:auto;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
+          <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading accounts…</div>
+        </div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;margin:8px 0;cursor:pointer">
+        <input type="checkbox" id="fURequirePwChange">
+        Require them to change this password at first login
+      </label>
+      <div style="font-size:12px;color:#64748b;margin-bottom:12px">Set a password to let them sign in immediately, or leave it blank and enter an email to send a secure password-setup link.</div>
+      <button class="btn btn-primary" style="margin-top:6px" onclick="sendUserInvite()">Create User</button>
     </div>
   </div>
 
@@ -7015,11 +7032,13 @@
       _inviteForClientId = null;
       _inviteForClientName = '';
       const hdr = document.getElementById('userInviteTitle');
-      if (hdr) hdr.textContent = 'Invite New User';
+      if (hdr) hdr.textContent = 'Create User';
       ['fUContact','fUEmail','fUPhone','fUUsername','fUInitialPassword'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      const pwChange = document.getElementById('fURequirePwChange');
+      if (pwChange) pwChange.checked = false;
       const companyEl = document.getElementById('fUCompany');
       const selectedClient = clientsList.find(c => c.id === activeClientId);
       const defaultCompany = (selectedClient && selectedClient.company)
@@ -7033,6 +7052,9 @@
         const adminOpt = roleEl.querySelector('option[value="admin"]');
         if (adminOpt) adminOpt.style.display = isFullAdmin() ? '' : 'none';
       }
+      // Pre-check the active account (if one is selected) so a login for the
+      // current account is one click away; admin can pick any others.
+      populateUserAccountChecks(activeClientId ? [activeClientId] : []);
 
       document.getElementById('userInviteModal').classList.add('open');
     }
@@ -7046,6 +7068,8 @@
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      const pwChange = document.getElementById('fURequirePwChange');
+      if (pwChange) pwChange.checked = false;
       const companyEl = document.getElementById('fUCompany');
       if (companyEl) companyEl.value = brand((currentUser && currentUser.company) || 'MedPharma');
       const roleEl = document.getElementById('fURole');
@@ -7054,8 +7078,10 @@
         const adminOpt = roleEl.querySelector('option[value="admin"]');
         if (adminOpt) adminOpt.style.display = isFullAdmin() ? '' : 'none';
       }
+      // Pre-check the account this button belongs to.
+      populateUserAccountChecks([cid]);
       const hdr = document.getElementById('userInviteTitle');
-      if (hdr) hdr.textContent = `Add Team Member — ${company || 'Account'}`;
+      if (hdr) hdr.textContent = `Add User — ${company || 'Account'}`;
       document.getElementById('userInviteModal').classList.add('open');
     }
 
@@ -7067,6 +7093,9 @@
         || '';
       const resolvedCompany = companyInput || fallbackCompany;
 
+      const account_ids = Array.from(
+        document.querySelectorAll('#fUAccountsWrap input.fUAccountCb:checked')
+      ).map(cb => parseInt(cb.value, 10)).filter(Number.isFinite);
       const data = {
         company: resolvedCompany,
         contact_name: document.getElementById('fUContact').value.trim(),
@@ -7075,12 +7104,19 @@
         role: document.getElementById('fURole').value,
         username: document.getElementById('fUUsername').value.trim(),
         initial_password: document.getElementById('fUInitialPassword').value || '',
+        require_password_change: !!(document.getElementById('fURequirePwChange') || {}).checked,
+        account_ids,
       };
       if (data.initial_password && data.initial_password.length < 10) {
-        toast('Temporary password must be at least 10 characters', 'error');
+        toast('Password must be at least 10 characters', 'error');
         return;
       }
-      if (!data.email || !data.email.includes('@')) { toast('Valid email is required', 'error'); return; }
+      const hasEmail = data.email && data.email.includes('@');
+      if (!hasEmail && !data.initial_password) {
+        toast('Enter an email to send a setup link, or set a password so they can sign in now', 'error');
+        return;
+      }
+      const chosenPw = data.initial_password;
       try {
         const r = await fetch('/hub/api/admin/users/invite', {
           method: 'POST',
@@ -7088,10 +7124,10 @@
           body: JSON.stringify(data),
         });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.detail || 'Failed to invite user');
-        // If this invite was launched from a specific client's "Add User"
-        // button, grant the new user access to that client right away.
-        if (_inviteForClientId && d.user_id) {
+        if (!r.ok) throw new Error(d.detail || 'Failed to create user');
+        // Safety net: if launched from a specific account's "Add User" button
+        // and that account wasn't in the picker, grant it explicitly too.
+        if (_inviteForClientId && d.user_id && !account_ids.includes(parseInt(_inviteForClientId, 10))) {
           try {
             const aR = await fetch(`/hub/api/clients/${_inviteForClientId}/access`);
             const aD = await aR.json();
@@ -7102,27 +7138,29 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ user_ids: ids }),
             });
-            toast(`${d.username || 'User'} added to ${_inviteForClientName} and granted access`, 'success');
-          } catch (e) {
-            toast('User created, but granting account access failed: ' + e.message, 'warning');
-          }
+          } catch (e) { /* server-side grant already attempted */ }
         }
         closeModal('userInviteModal');
         await loadClients();
-        if (d.email_sent) {
-          toast(`Invite sent to ${d.email}`, 'success');
-        } else {
-          toast(`Invite created, but email was not sent (${d.delivery})`, 'warning');
-          if (d.setup_link) {
-            try {
-              await navigator.clipboard.writeText(d.setup_link);
-              toast('Setup link copied to clipboard. Send it to the employee.', 'success');
-            } catch (_) { }
-            window.prompt('Invite created. Copy this setup link and send it to the employee:', d.setup_link);
-          }
-        }
+        const acctN = d.granted_accounts || account_ids.length || 0;
+        const acctMsg = acctN ? ` · access to ${acctN} account${acctN === 1 ? '' : 's'}` : '';
         if (d.password_set) {
-          toast(`Employee created. Username: ${d.username}. They can login now with the temporary password.`, 'success');
+          // Login is ready immediately — surface the credentials so the admin
+          // can copy and hand them off.
+          window.prompt('User login created — copy these credentials now:',
+            `Username: ${d.username}    Password: ${chosenPw}`);
+          toast(`User ${d.username} created — can sign in now${acctMsg}`, 'success');
+        } else if (d.email_sent) {
+          toast(`Setup link emailed to ${d.email}${acctMsg}`, 'success');
+        } else if (d.setup_link) {
+          try {
+            await navigator.clipboard.writeText(d.setup_link);
+            toast(`Setup link copied to clipboard — send it to the user${acctMsg}`, 'success');
+          } catch (_) {
+            window.prompt('Copy this setup link and send it to the user:', d.setup_link);
+          }
+        } else {
+          toast(`User ${d.username} created${acctMsg}`, 'success');
         }
       } catch (e) {
         toast(e.message || 'Failed to invite user', 'error');
@@ -10726,6 +10764,51 @@
       } catch (e) {
         wrap.innerHTML = `<div style="grid-column:1/-1;color:#ef4444;font-size:12px">Could not load users: ${esc(e.message)}</div>`;
       }
+    }
+
+    // Populate the "Grant Account Access" picker in the Create User modal with
+    // every existing account, pre-checking any ids passed in preselectIds.
+    async function populateUserAccountChecks(preselectIds) {
+      const wrap = document.getElementById('fUAccountsWrap');
+      if (!wrap) return;
+      const search = document.getElementById('fUAccountSearch');
+      if (search) search.value = '';
+      wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading accounts…</div>';
+      const sel = new Set((preselectIds || []).map(x => parseInt(x, 10)).filter(Number.isFinite));
+      let list = [];
+      try {
+        const r = await fetch('/hub/api/clients');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        list = (d.clients || d || []).slice();
+        clientsList = list;
+      } catch (e) {
+        wrap.innerHTML = `<div style="grid-column:1/-1;color:#ef4444;font-size:12px">Could not load accounts: ${esc(e.message)}</div>`;
+        return;
+      }
+      list.sort((a, b) => (a.company || a.username || '').localeCompare(b.company || b.username || ''));
+      if (!list.length) {
+        wrap.innerHTML = '<div style="grid-column:1/-1;color:#94a3b8;font-size:12px">No accounts yet — create one from “+ Add Client”.</div>';
+        return;
+      }
+      wrap.innerHTML = list.map(c => {
+        const checked = sel.has(parseInt(c.id, 10));
+        const hay = ((c.company || '') + ' ' + (c.username || '')).toLowerCase();
+        const label = `${esc(c.company || c.username)} <span style="color:#94a3b8;font-size:11px">(${esc(c.username)})</span>`;
+        return `<label class="fUAcctRow" data-search="${esc(hay)}" style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;cursor:pointer">
+          <input type="checkbox" class="fUAccountCb" value="${c.id}" ${checked ? 'checked' : ''}>
+          ${label}
+        </label>`;
+      }).join('');
+    }
+
+    // Live filter for the account picker so a long account list stays usable.
+    function filterUserAccountChecks(q) {
+      const needle = (q || '').trim().toLowerCase();
+      document.querySelectorAll('#fUAccountsWrap .fUAcctRow').forEach(row => {
+        const hay = row.getAttribute('data-search') || '';
+        row.style.display = (!needle || hay.includes(needle)) ? '' : 'none';
+      });
     }
 
     // ── Manage Clients table row helpers ─────────────────────────────────
