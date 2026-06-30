@@ -2984,10 +2984,13 @@ def delete_edi(rec_id: int):
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 def get_dashboard(client_id: int = None, sub_profile: str = None,
-                  date_from: str = None, date_to: str = None):
+                  date_from: str = None, date_to: str = None,
+                  member_idents: list = None):
     """Full KPI dashboard — pass client_id=None for admin (all clients).
        Pass sub_profile='MHP' or 'OMT' to filter by sub-profile.
-       Pass date_from / date_to (YYYY-MM-DD) for date range filtering on DOS."""
+       Pass date_from / date_to (YYYY-MM-DD) for date range filtering on DOS.
+       Pass member_idents=[...] (lowercase uploaded_by tokens) to scope every
+       metric to the work one hub user personally uploaded — their per-user view."""
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -3001,6 +3004,26 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         if sub_profile:
             base_conditions.append("sub_profile=?")
             base_p.append(sub_profile)
+
+        # The payments table has NO uploaded_by column, so the per-user (member)
+        # filter can't apply to it — capture the payments scope (client + sub-
+        # profile only) BEFORE the member clause is added below.
+        pay_conditions = list(base_conditions)
+        pay_p = list(base_p)
+
+        # Per-user (member) scope: when set, every table that carries uploaded_by
+        # (claims_master, credentialing, enrollment) is restricted to the work this
+        # hub user personally uploaded, so a staff biller's dashboard reflects ONLY
+        # what they did. Added to base_conditions so it propagates to those tables.
+        member_scoped = False
+        if member_idents:
+            _mi = [str(m).strip().lower() for m in member_idents if str(m or "").strip()]
+            if _mi:
+                _ph = ",".join("?" for _ in _mi)
+                base_conditions.append(
+                    f"LOWER(TRIM(COALESCE(uploaded_by,''))) IN ({_ph})")
+                base_p.extend(_mi)
+                member_scoped = True
 
         # Claims-specific conditions (include DOS date filter)
         claims_conditions = list(base_conditions)
@@ -3016,6 +3039,8 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         p = claims_p
         # Base cond for non-claims tables (payments, credentialing, etc.)
         base_cond = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
+        # Payments scope deliberately excludes the member filter (no uploaded_by).
+        pay_cond = ("WHERE " + " AND ".join(pay_conditions)) if pay_conditions else ""
 
         today = business_today()
         mtd_start = today.replace(day=1).isoformat()
@@ -3043,11 +3068,16 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                         p + [mtd_start])
         denied_all = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus IN ('Denied','Appeals')", p)
 
-        # Payments MTD (payments table has no DOS column — use base_cond)
-        pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate >= ?",
-                     base_p + [mtd_start])
-        pay_ytd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate >= ?",
-                     base_p + [ytd_start])
+        # Payments MTD (payments table has no DOS column — use pay_cond). Payments
+        # carry no uploaded_by, so a per-user (member-scoped) view reports 0 rather
+        # than leaking other billers' / other clients' payments.
+        if member_scoped:
+            pay_mtd = pay_ytd = 0
+        else:
+            pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ?",
+                         pay_p + [mtd_start])
+            pay_ytd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ?",
+                         pay_p + [ytd_start])
 
         # Totals for rates
         total_submitted = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate != ''", p)
@@ -3146,10 +3176,14 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                         {cond} {'AND' if cond else 'WHERE'} DenialCategory != '' GROUP BY DenialCategory ORDER BY COUNT(*) DESC""", p)
         denial_cats = {r[0]: r[1] for r in cur.fetchall()}
 
-        # Payment trend (last 6 months — payments table, use base_cond)
-        cur.execute(f"""SELECT strftime('%Y-%m', PostDate) as mo, COALESCE(SUM(PaymentAmount),0)
-                        FROM payments {base_cond} {'AND' if base_cond else 'WHERE'} PostDate != '' GROUP BY mo ORDER BY mo DESC LIMIT 6""", base_p)
-        pay_trend = [{"month": r[0], "amount": round(r[1], 2)} for r in reversed(cur.fetchall())]
+        # Payment trend (last 6 months — payments table, use pay_cond). Payments
+        # are not member-attributable, so a per-user view shows no trend.
+        if member_scoped:
+            pay_trend = []
+        else:
+            cur.execute(f"""SELECT strftime('%Y-%m', PostDate) as mo, COALESCE(SUM(PaymentAmount),0)
+                            FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate != '' GROUP BY mo ORDER BY mo DESC LIMIT 6""", pay_p)
+            pay_trend = [{"month": r[0], "amount": round(r[1], 2)} for r in reversed(cur.fetchall())]
 
         # Credentialing stats (no DOS column — use base_cond)
         cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {base_cond} GROUP BY Status", base_p)
@@ -3199,11 +3233,16 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(PaidAmount,0) > 0", p)
         b["paid"]["amount"] = q1(
             f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} COALESCE(PaidAmount,0) > 0", p)
-        # Posted = payments actually posted (payments table). No DOS column -> base_cond.
-        b["posted"]["count"] = q1(
-            f"SELECT COUNT(*) FROM payments {base_cond}", base_p)
-        b["posted"]["amount"] = q1(
-            f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {base_cond}", base_p)
+        # Posted = payments actually posted (payments table). No uploaded_by, so a
+        # per-user view reports 0 (payments aren't attributable to one biller).
+        if member_scoped:
+            b["posted"]["count"] = 0
+            b["posted"]["amount"] = 0.0
+        else:
+            b["posted"]["count"] = q1(
+                f"SELECT COUNT(*) FROM payments {pay_cond}", pay_p)
+            b["posted"]["amount"] = q1(
+                f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 

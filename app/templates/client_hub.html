@@ -2139,6 +2139,7 @@
               <div>
                 <div id="dashTitle" style="display:none"></div>
                 <div style="font-size:21px;color:#fff;font-weight:800;letter-spacing:-.3px" id="dashGreetingLine"></div>
+                <div id="dashScopeBadge" style="display:none;margin-top:8px;font-size:13px;color:#fff;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.32);border-radius:20px;padding:4px 12px;font-weight:600;width:fit-content"></div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <div id="dashAdminControls" style="display:none;gap:8px;align-items:center">
@@ -5386,6 +5387,24 @@
       const greetSubtitleEl = document.getElementById('dashGreetingLine');
       if (greetSubtitleEl) {
         greetSubtitleEl.textContent = `${greetWord}!`;
+      }
+
+      // Per-user scope badge — make it explicit when the dashboard reflects only
+      // ONE person's uploaded work (a staff biller's self-view, or an admin
+      // drilling into a teammate) vs. the comprehensive team totals.
+      const scopeBadge = document.getElementById('dashScopeBadge');
+      if (scopeBadge) {
+        if (d.scoped_member) {
+          const who = String(d.scoped_member).split('@')[0]
+            .replace(/[._]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          const selfView = currentUser && currentUser.role === 'staff' && !canViewReporting();
+          scopeBadge.textContent = selfView
+            ? `👤 Your work only — ${who}`
+            : `👤 ${who}'s work only`;
+          scopeBadge.style.display = '';
+        } else {
+          scopeBadge.style.display = 'none';
+        }
       }
 
       // Load today's activity card (internal team production — hide for clients)

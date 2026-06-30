@@ -819,6 +819,30 @@ def _owner_identities(user: dict) -> set:
     return {i for i in idents if i}
 
 
+def _dashboard_member_scope(user: dict, member: Optional[str] = None) -> Optional[list]:
+    """Decide whose uploaded work the dashboard should reflect.
+
+    - A STAFF biller (e.g. susan / melissa / jessica) always sees ONLY the work
+      they personally uploaded — their own per-user dashboard.
+    - A full admin sees the COMPREHENSIVE totals across everyone, unless they
+      explicitly drill into one person via ?member=… .
+    - Client / bizdev logins see their account's full totals (no per-user split).
+
+    Returns the list of lowercase uploaded_by identity tokens to scope to, or
+    None for the comprehensive (all-members) view."""
+    role = (user.get("role") or "").lower()
+    if role == "staff":
+        return sorted(_owner_identities(user)) or None
+    if role == "admin" and member:
+        m = str(member).strip().lower()
+        if m:
+            idents = {m}
+            if "@" in m:
+                idents.add(m.split("@", 1)[0])
+            return sorted(idents)
+    return None
+
+
 def _assert_client_can_view(user: dict, client_id: int) -> None:
     """Reject if the user is not allowed to view this client's data.
 
@@ -3209,7 +3233,7 @@ def remove_edi(rid: int, hub_session: Optional[str] = Cookie(None)):
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @router.get("/dashboard")
-def dashboard(hub_session: Optional[str] = Cookie(None)):
+def dashboard(hub_session: Optional[str] = Cookie(None), member: Optional[str] = None):
     user = _require_user(hub_session)
     scope = _client_scope(user)
     try:
@@ -3217,13 +3241,19 @@ def dashboard(hub_session: Optional[str] = Cookie(None)):
             auto_import_pending_claim_files(scope)
     except Exception as _e:
         log.warning("auto-import on dashboard failed: %s", _e)
-    data = get_dashboard(scope)
+    member_idents = _dashboard_member_scope(user, member)
+    data = get_dashboard(scope, member_idents=member_idents)
+    # Per-user dashboards already ARE one person's work, and the comprehensive
+    # view is intentionally totals-only — so drop the per-member breakdown.
+    data["billed_by_member"] = []
+    data["scoped_member"] = (member_idents[0] if member_idents else None)
     data["user"] = user
     return data
 
 
 @router.get("/dashboard/client/{client_id}")
 def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
+                        member: Optional[str] = None,
                         hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     _assert_client_can_view(user, client_id)
@@ -3231,7 +3261,10 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
         auto_import_pending_claim_files(client_id)
     except Exception as _e:
         log.warning("auto-import on client dashboard failed: %s", _e)
-    data = get_dashboard(client_id, sub_profile=sub_profile)
+    member_idents = _dashboard_member_scope(user, member)
+    data = get_dashboard(client_id, sub_profile=sub_profile, member_idents=member_idents)
+    data["billed_by_member"] = []
+    data["scoped_member"] = (member_idents[0] if member_idents else None)
     data["user"] = user
     return data
 
