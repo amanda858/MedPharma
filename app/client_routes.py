@@ -37,6 +37,7 @@ from app.client_db import (
     get_credentialing, create_credentialing, update_credentialing, delete_credentialing,
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_eligibility, create_eligibility, update_eligibility, delete_eligibility,
+    get_eligibility_one,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
@@ -3221,6 +3222,7 @@ class EligIn(BaseModel):
     NextReverifyDate: Optional[str] = ""
     Notes: Optional[str] = ""
     sub_profile: Optional[str] = ""
+    Stage: Optional[str] = "Received"
 
 
 class EligUpdate(BaseModel):
@@ -3243,6 +3245,13 @@ class EligUpdate(BaseModel):
     NextReverifyDate: Optional[str] = None
     Notes: Optional[str] = None
     sub_profile: Optional[str] = None
+    Stage: Optional[str] = None
+    IntakeFileId: Optional[int] = None
+    IntakeFileName: Optional[str] = None
+    ReportFileId: Optional[int] = None
+    ReportFileName: Optional[str] = None
+    CompletedBy: Optional[str] = None
+    CompletedAt: Optional[str] = None
 
 
 @router.get("/eligibility")
@@ -3291,6 +3300,72 @@ def remove_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
     delete_eligibility(rid)
     notify_activity(user["username"], "deleted", "Eligibility", f"Record #{rid}")
     return {"ok": True}
+
+
+@router.post("/eligibility/{rid}/file")
+async def upload_elig_file(
+    rid: int,
+    kind: str = Form("intake"),
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Attach a document to an eligibility record.
+
+    kind='intake'  → a client-uploaded intake document.
+    kind='report'  → the MedPharma-completed report; also marks the record
+                     Completed and stamps who/when. The file is stored in the
+                     same account's Documents so the existing download route and
+                     account scoping apply unchanged.
+    """
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    kind = (kind or "intake").strip().lower()
+    if kind not in ("intake", "report"):
+        raise HTTPException(400, "kind must be 'intake' or 'report'")
+    # Only MedPharma (admin/staff) may file the completed report.
+    if kind == "report" and user.get("role") not in ("admin", "staff"):
+        raise HTTPException(403, "Only MedPharma staff can upload the completed report")
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    ALLOWED = (".xlsx", ".xls", ".csv", ".ods", ".odf", ".odt", ".odp",
+               ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".txt", ".rtf",
+               ".png", ".jpg", ".jpeg")
+    if ext not in ALLOWED:
+        raise HTTPException(400, "Unsupported file type")
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum is 50MB")
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(UPLOAD_DIR, unique_name), "wb") as f:
+        f.write(content)
+
+    scope = int(rec.get("client_id") or 0)
+    category = "Eligibility Report" if kind == "report" else "Eligibility Intake"
+    file_id = add_file(
+        client_id=scope, filename=unique_name, original_name=file.filename or "file",
+        file_type=("pdf" if ext == ".pdf" else "document"), file_size=len(content),
+        category=category, description=f"{category} — {rec.get('PatientName', '')}",
+        row_count=0, uploaded_by=user["username"],
+    )
+    if kind == "report":
+        update_eligibility(rid, {
+            "ReportFileId": file_id, "ReportFileName": file.filename or "report",
+            "Stage": "Completed",
+            "CompletedBy": (user.get("username") or ""),
+            "CompletedAt": datetime.now().isoformat(),
+        })
+        notify_activity(user["username"], "completed report", "Eligibility",
+                        f"{rec.get('PatientName', '')} — {file.filename or ''}")
+    else:
+        update_eligibility(rid, {
+            "IntakeFileId": file_id, "IntakeFileName": file.filename or "intake",
+        })
+        notify_activity(user["username"], "uploaded intake", "Eligibility",
+                        f"{rec.get('PatientName', '')} — {file.filename or ''}")
+    return {"ok": True, "file_id": file_id,
+            "stage": "Completed" if kind == "report" else rec.get("Stage", "Received")}
 
 
 # ─── EDI Setup ────────────────────────────────────────────────────────────────

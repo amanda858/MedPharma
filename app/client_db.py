@@ -924,6 +924,14 @@ def init_client_hub_db():
             VerifiedDate        TEXT DEFAULT '',
             NextReverifyDate    TEXT DEFAULT '',
             Notes               TEXT DEFAULT '',
+            -- intake → completed-reporting workflow (PCR eligibility)
+            Stage               TEXT DEFAULT 'Received',  -- Received, In Progress, Completed
+            IntakeFileId        INTEGER,                  -- client-uploaded intake document (client_files.id)
+            IntakeFileName      TEXT DEFAULT '',
+            ReportFileId        INTEGER,                  -- MedPharma-uploaded completed report (client_files.id)
+            ReportFileName      TEXT DEFAULT '',
+            CompletedBy         TEXT DEFAULT '',
+            CompletedAt         TEXT DEFAULT '',
             sub_profile         TEXT DEFAULT '',
             uploaded_by         TEXT DEFAULT '',
             created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -1375,6 +1383,24 @@ def init_client_hub_db():
         cols = {row[1] for row in cur.fetchall()}
         if "uploaded_by" not in cols:
             cur.execute(f"ALTER TABLE {tbl} ADD COLUMN uploaded_by TEXT DEFAULT ''")
+    conn.commit()
+
+    # ── Migrate existing DBs: eligibility intake → completed-reporting workflow ──
+    # Turns the eligibility board into a document pipeline: clients upload intake
+    # docs, MedPharma uploads the completed report, results roll to a dashboard.
+    cur.execute("PRAGMA table_info(eligibility)")
+    elig_cols = {row[1] for row in cur.fetchall()}
+    for col, col_def in (
+        ("Stage", "TEXT DEFAULT 'Received'"),
+        ("IntakeFileId", "INTEGER"),
+        ("IntakeFileName", "TEXT DEFAULT ''"),
+        ("ReportFileId", "INTEGER"),
+        ("ReportFileName", "TEXT DEFAULT ''"),
+        ("CompletedBy", "TEXT DEFAULT ''"),
+        ("CompletedAt", "TEXT DEFAULT ''"),
+    ):
+        if col not in elig_cols:
+            cur.execute(f"ALTER TABLE eligibility ADD COLUMN {col} {col_def}")
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
@@ -2960,6 +2986,9 @@ _ELIGIBILITY_FIELDS = [
     "EffectiveDate", "TermDate", "Copay", "Deductible", "Coinsurance", "OOPMax",
     "PriorAuthRequired", "AuthNumber", "VerifiedBy", "VerifiedDate",
     "NextReverifyDate", "Notes", "sub_profile",
+    # intake → completed-reporting workflow
+    "Stage", "IntakeFileId", "IntakeFileName", "ReportFileId", "ReportFileName",
+    "CompletedBy", "CompletedAt",
 ]
 
 
@@ -3029,6 +3058,18 @@ def delete_eligibility(rec_id: int):
         conn.commit()
     finally:
         conn.close()
+
+
+def get_eligibility_one(rec_id: int):
+    """Fetch a single eligibility record by id (used to scope file attachments)."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM eligibility WHERE id=?", (rec_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
 
 
 # ─── EDI Setup ────────────────────────────────────────────────────────────────

@@ -540,6 +540,12 @@
     .account-card:hover .ac-del { opacity: 1 }
     .account-card .ac-del:hover { background: #fee2e2; border-color: #fca5a5 }
 
+    /* Eligibility sub-view switcher (Intake / Completed Reporting / Dashboard) */
+    .elig-subtabs { display: flex; gap: 6px; margin: 0 0 18px; border-bottom: 1px solid var(--gray-200); flex-wrap: wrap }
+    .elig-subtab { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 10px 16px; font-size: 14px; font-weight: 600; color: var(--gray-500); cursor: pointer }
+    .elig-subtab:hover { color: var(--gray-700) }
+    .elig-subtab.active { color: #4338ca; border-bottom-color: #4338ca }
+
     .account-card:hover {
       border-color: var(--primary);
       box-shadow: 0 8px 30px rgba(99, 102, 241, .15);
@@ -2541,13 +2547,55 @@
           </div>
         </div>
 
-        <!-- ═══ ELIGIBILITY TRACKING ═══ -->
+        <!-- ═══ ELIGIBILITY (Intake → Completed Reporting → Dashboard) ═══ -->
         <div class="hub-panel" id="panel-eligibility">
           <div class="page-header">
-            <div class="page-title">🩺 Eligibility Tracking</div>
-            <div class="page-actions">
+            <div class="page-title">🩺 Eligibility</div>
+          </div>
+
+          <!-- Sub-view switcher -->
+          <div class="elig-subtabs">
+            <button id="eligTabBtn-intake" class="elig-subtab active" onclick="switchEligView('intake')">📥 Client Intake</button>
+            <button id="eligTabBtn-reporting" class="elig-subtab" onclick="switchEligView('reporting')">✅ Completed Reporting</button>
+            <button id="eligTabBtn-dashboard" class="elig-subtab" onclick="switchEligView('dashboard')">📊 Dashboard</button>
+          </div>
+
+          <!-- ── CLIENT INTAKE ─────────────────────────────────────── -->
+          <div id="eligView-intake" class="elig-view">
+            <div class="card" id="eligIntakeDrop"
+              style="border:2px dashed var(--gray-300);background:var(--gray-50);text-align:center;padding:26px 20px;margin-bottom:16px">
+              <div style="font-size:30px;margin-bottom:6px">📥</div>
+              <div style="font-size:15px;font-weight:600;color:var(--gray-700)">Submit a patient for eligibility verification</div>
+              <div style="font-size:12px;color:var(--gray-400);margin-top:4px;max-width:520px;margin-left:auto;margin-right:auto">Add the patient's details and upload their insurance card / demographics. MedPharma completes the verification and posts the finished report back here.</div>
+              <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="openEligIntake()">+ New Intake</button>
+            </div>
+            <div class="card" style="padding:0">
+              <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+                <span class="card-title">📋 Submissions</span>
+                <span id="eligIntakeCount" style="font-size:13px;color:var(--gray-400)"></span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Patient</th><th>Payor</th><th>Submitted</th><th>Stage</th>
+                      <th>Intake Doc</th><th>Result</th><th>Report</th><th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="eligIntakeTbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── COMPLETED REPORTING (MedPharma) ───────────────────── -->
+          <div id="eligView-reporting" class="elig-view" style="display:none">
+            <div class="page-actions" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:14px">
               <select id="eligFilter" class="form-control btn-sm" onchange="renderEligTable()" style="width:auto">
-                <option value="">All Statuses</option>
+                <option value="">All Stages &amp; Statuses</option>
+                <option>Received</option>
+                <option>In Progress</option>
+                <option>Completed</option>
                 <option>Active</option>
                 <option>Pending</option>
                 <option>Needs Re-verify</option>
@@ -2555,40 +2603,51 @@
                 <option>Termed</option>
               </select>
               <button class="btn btn-secondary btn-sm" onclick="exportSection('eligibility')">📤 Export CSV</button>
-              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥
-                Import Excel</button>
-              <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
-                onchange="importExcel(this,'Eligibility')">
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥 Import Excel</button>
+              <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="importExcel(this,'Eligibility')">
               <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
             </div>
+            <div class="card" style="padding:0">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Patient</th>
+                      <th>Stage</th>
+                      <th>DOB</th>
+                      <th>Payor</th>
+                      <th>Member ID</th>
+                      <th>Status</th>
+                      <th>Effective</th>
+                      <th>Term</th>
+                      <th>Copay</th>
+                      <th>Deductible</th>
+                      <th>Prior Auth</th>
+                      <th>Verified By</th>
+                      <th>Verified</th>
+                      <th>Re-verify</th>
+                      <th>Intake</th>
+                      <th>Report</th>
+                      <th>Notes</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="eligTbody"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div id="eligTiles" class="elig-tiles"
-            style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
-          <div id="eligStatusChart" class="section-chart-strip"></div>
-          <div class="card" style="padding:0">
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Patient</th>
-                    <th>DOB</th>
-                    <th>Payor</th>
-                    <th>Member ID</th>
-                    <th>Status</th>
-                    <th>Effective</th>
-                    <th>Term</th>
-                    <th>Copay</th>
-                    <th>Deductible</th>
-                    <th>Prior Auth</th>
-                    <th>Verified By</th>
-                    <th>Verified</th>
-                    <th>Re-verify</th>
-                    <th>Notes</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="eligTbody"></tbody>
-              </table>
+
+          <!-- ── DASHBOARD ─────────────────────────────────────────── -->
+          <div id="eligView-dashboard" class="elig-view" style="display:none">
+            <div id="eligTiles" class="elig-tiles" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
+            <div class="card" style="margin-bottom:16px">
+              <div class="card-header"><span class="card-title">◆ Intake Pipeline</span></div>
+              <div id="eligStageChart" class="section-chart-strip" style="margin-top:8px"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><span class="card-title">◆ Eligibility Results</span></div>
+              <div id="eligStatusChart" class="section-chart-strip" style="margin-top:8px"></div>
             </div>
           </div>
         </div>
@@ -4118,9 +4177,53 @@
           <label>Client</label><select class="form-control" id="fEligClient"></select>
         </div>
       </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Stage</label>
+          <select class="form-control" id="fEligStage">
+            <option>Received</option>
+            <option>In Progress</option>
+            <option>Completed</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Completed Report (PDF / Doc)</label>
+          <input class="form-control" type="file" id="fEligReportFile"
+            accept=".pdf,.doc,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.txt,.rtf">
+          <div id="eligReportExisting" style="font-size:11px;color:#6b7280;margin-top:4px"></div>
+        </div>
+      </div>
       <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control"
           id="fEligNotes"></textarea></div>
       <button class="btn btn-primary" onclick="saveElig()">Save</button>
+    </div>
+  </div>
+
+  <!-- Eligibility Intake Modal (client-facing) -->
+  <div class="modal-overlay" id="eligIntakeModal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2>📥 New Intake</h2>
+        <button class="modal-close" onclick="closeModal('eligIntakeModal')">&times;</button>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Patient Name *</label><input class="form-control" id="fIntakePatient"></div>
+        <div class="form-group"><label>DOB</label><input class="form-control" type="date" id="fIntakeDOB"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Insurance / Payor</label><input class="form-control" id="fIntakePayor"></div>
+        <div class="form-group"><label>Member ID</label><input class="form-control" id="fIntakeMember"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Plan / Group</label><input class="form-control" id="fIntakePlan"></div>
+        <div class="form-group form-full" id="intakeClientGroup" style="display:none">
+          <label>Client</label><select class="form-control" id="fIntakeClient"></select>
+        </div>
+      </div>
+      <div class="form-group"><label>Upload document (insurance card, demographics, request)</label>
+        <input class="form-control" type="file" id="fIntakeFile"
+          accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xlsx,.xls,.csv,.txt,.rtf"></div>
+      <div class="form-group" style="margin-bottom:16px"><label>Notes</label><textarea class="form-control"
+          id="fIntakeNotes" placeholder="Anything MedPharma should know"></textarea></div>
+      <button class="btn btn-primary" onclick="saveEligIntake()">Submit Intake</button>
     </div>
   </div>
 
@@ -6587,9 +6690,13 @@
     // ═══════════════════════════════════════
     let allEligItems = [];
     let activeEligFilter = '';
+    let activeEligView = 'intake';
+    let _eligViewInit = false;
     const ELIG_STATUSES = ['Active', 'Pending', 'Needs Re-verify', 'Inactive', 'Termed'];
+    const ELIG_STAGES = ['Received', 'In Progress', 'Completed'];
 
     async function loadEligibility() {
+      setupEligTabs();
       const params = new URLSearchParams();
       if (activeClientId) params.set('client_id', activeClientId);
       if (activeSubProfile) params.set('sub_profile', activeSubProfile);
@@ -6598,16 +6705,36 @@
         const d = await r.json();
         allEligItems = Array.isArray(d) ? d : (d.eligibility || []);
       } catch (_) { allEligItems = []; }
-      renderEligTiles();
-      renderSectionChart('eligStatusChart', allEligItems, 'Status', ELIG_STATUSES, (status) => {
-        activeEligFilter = status || '';
-        const sel = document.getElementById('eligFilter');
-        if (sel) sel.value = activeEligFilter;
-        renderEligTable();
-      });
-      activeEligFilter = document.getElementById('eligFilter')?.value || '';
-      syncPillHighlight('eligStatusChart', activeEligFilter);
+      // Render every sub-view (cheap) so switching tabs is instant.
+      renderEligIntakeList();
       renderEligTable();
+      renderEligTiles();
+      renderEligDashboardCharts();
+    }
+
+    // Show/hide the three eligibility sub-views. Clients never see the MedPharma
+    // "Completed Reporting" worklist — they upload intake + download their report.
+    function setupEligTabs() {
+      const staff = isStaffOrAdmin();
+      const repBtn = document.getElementById('eligTabBtn-reporting');
+      if (repBtn) repBtn.style.display = staff ? '' : 'none';
+      if (!_eligViewInit) {
+        _eligViewInit = true;
+        activeEligView = staff ? 'reporting' : 'intake';
+      }
+      if (!staff && activeEligView === 'reporting') activeEligView = 'intake';
+      switchEligView(activeEligView);
+    }
+
+    function switchEligView(view) {
+      if (view === 'reporting' && !isStaffOrAdmin()) view = 'intake';
+      activeEligView = view;
+      ['intake', 'reporting', 'dashboard'].forEach(v => {
+        const panel = document.getElementById('eligView-' + v);
+        const btn = document.getElementById('eligTabBtn-' + v);
+        if (panel) panel.style.display = (v === view) ? '' : 'none';
+        if (btn) btn.classList.toggle('active', v === view);
+      });
     }
 
     function _eligNeedsReverify(i) {
@@ -6618,35 +6745,112 @@
       return !isNaN(dt.getTime()) && dt <= new Date();
     }
 
+    function stageBadge(stage) {
+      const s = stage || 'Received';
+      const map = { 'Received': 'badge-blue', 'In Progress': 'badge-amber', 'Completed': 'badge-green' };
+      return `<span class="badge ${map[s] || 'badge-gray'}">${esc(s)}</span>`;
+    }
+
+    function _eligFileLink(fileId, name, primary) {
+      if (!fileId) return '—';
+      const cls = primary ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+      const label = primary ? '⬇ Download' : ('📄 ' + esc((name || 'View').slice(0, 18)));
+      return `<a href="/hub/api/files/${fileId}/download" class="${cls}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label}</a>`;
+    }
+
+    // ── Dashboard tiles + charts ──
     function renderEligTiles() {
       const el = document.getElementById('eligTiles');
       if (!el) return;
-      const total = allEligItems.length;
-      const active = allEligItems.filter(i => (i.Status || '') === 'Active').length;
-      const pending = allEligItems.filter(i => (i.Status || '') === 'Pending').length;
-      const inactive = allEligItems.filter(i => ['Inactive', 'Termed'].includes(i.Status || '')).length;
-      const reverify = allEligItems.filter(_eligNeedsReverify).length;
+      const items = allEligItems;
+      const total = items.length;
+      const stageCount = s => items.filter(i => (i.Stage || 'Received') === s).length;
+      const received = stageCount('Received');
+      const inprog = stageCount('In Progress');
+      const completed = stageCount('Completed');
+      let sum = 0, n = 0;
+      items.forEach(i => {
+        if ((i.Stage || '') === 'Completed' && i.created_at && i.CompletedAt) {
+          const a = new Date(i.created_at), b = new Date(i.CompletedAt);
+          if (!isNaN(a.getTime()) && !isNaN(b.getTime()) && b >= a) { sum += (b - a) / 86400000; n++; }
+        }
+      });
+      const avg = n ? (sum / n) : null;
+      const avgLabel = avg == null ? '—' : (avg < 1 ? '<1d' : Math.round(avg) + 'd');
       const tile = (label, val, color) => `<div style="flex:1;min-width:130px;background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${color};border-radius:10px;padding:14px 16px">
           <div style="font-size:24px;font-weight:800;color:${color}">${val}</div>
           <div style="font-size:12px;color:#6b7280;font-weight:600;margin-top:2px">${label}</div>
         </div>`;
-      el.innerHTML = tile('Patients Tracked', total, '#4338ca')
-        + tile('Active Coverage', active, '#059669')
-        + tile('Pending Verification', pending, '#d97706')
-        + tile('Inactive / Termed', inactive, '#6b7280')
-        + tile('Needs Re-verify', reverify, '#dc2626');
+      el.innerHTML = tile('Total Patients', total, '#4338ca')
+        + tile('Received', received, '#0ea5e9')
+        + tile('In Progress', inprog, '#d97706')
+        + tile('Completed', completed, '#059669')
+        + tile('Avg Turnaround', avgLabel, '#7c3aed');
     }
 
+    function renderEligDashboardCharts() {
+      renderSectionChart('eligStageChart',
+        allEligItems.map(i => ({ Stage: i.Stage || 'Received' })),
+        'Stage', ELIG_STAGES, (stage) => {
+          if (!isStaffOrAdmin()) return;
+          activeEligFilter = stage || '';
+          const sel = document.getElementById('eligFilter');
+          if (sel) sel.value = activeEligFilter;
+          switchEligView('reporting');
+          renderEligTable();
+        });
+      renderSectionChart('eligStatusChart', allEligItems, 'Status', ELIG_STATUSES, (status) => {
+        if (!isStaffOrAdmin()) return;
+        activeEligFilter = status || '';
+        const sel = document.getElementById('eligFilter');
+        if (sel) sel.value = activeEligFilter;
+        switchEligView('reporting');
+        renderEligTable();
+      });
+    }
+
+    // ── Client Intake list ──
+    function renderEligIntakeList() {
+      const tbody = document.getElementById('eligIntakeTbody');
+      const cnt = document.getElementById('eligIntakeCount');
+      if (!tbody) return;
+      const items = allEligItems;
+      if (cnt) cnt.textContent = items.length ? `${items.length} submission${items.length === 1 ? '' : 's'}` : '';
+      if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="es-icon">📥</div><p>No submissions yet — click “+ New Intake”.</p></div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map(i => {
+        const stage = i.Stage || 'Received';
+        const completed = stage === 'Completed';
+        const result = completed ? statusBadge(i.Status) : '<span style="color:#9ca3af;font-size:12px">Pending</span>';
+        const report = completed ? _eligFileLink(i.ReportFileId, i.ReportFileName, true) : '—';
+        const canAddDoc = !i.IntakeFileId;
+        return `<tr>
+    <td style="font-weight:600">${esc(i.PatientName || '—')}</td>
+    <td>${esc(i.Payor || '—')}</td>
+    <td style="font-size:12px">${esc((i.created_at || '').slice(0, 10) || '—')}</td>
+    <td>${stageBadge(stage)}</td>
+    <td>${_eligFileLink(i.IntakeFileId, i.IntakeFileName, false)}</td>
+    <td>${result}</td>
+    <td>${report}</td>
+    <td style="white-space:nowrap">${canAddDoc ? `<button class="btn btn-secondary btn-sm" onclick="eligIntakeAddDoc(${i.id})">📎 Add Doc</button> ` : ''}<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
+  </tr>`;
+      }).join('');
+    }
+
+    // ── Completed Reporting worklist (MedPharma) ──
     function renderEligTable() {
       const sel = document.getElementById('eligFilter');
       activeEligFilter = sel ? sel.value : activeEligFilter;
-      const items = activeEligFilter
-        ? allEligItems.filter(i => (i.Status || '').toLowerCase() === activeEligFilter.toLowerCase())
+      const f = (activeEligFilter || '').toLowerCase();
+      const items = f
+        ? allEligItems.filter(i => (i.Status || '').toLowerCase() === f || (i.Stage || 'Received').toLowerCase() === f)
         : allEligItems;
       const tbody = document.getElementById('eligTbody');
       if (!tbody) return;
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="15"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="18"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(i => {
@@ -6654,6 +6858,7 @@
         const auth = esc(i.PriorAuthRequired || '—') + (i.AuthNumber ? ' · ' + esc(i.AuthNumber) : '');
         return `<tr>
     <td style="font-weight:600">${esc(i.PatientName || '—')}</td>
+    <td>${stageBadge(i.Stage)}</td>
     <td style="font-size:12px">${esc(i.DOB || '—')}</td>
     <td>${esc(i.Payor || '—')}</td>
     <td style="font-size:12px">${esc(i.MemberID || '—')}</td>
@@ -6666,6 +6871,8 @@
     <td style="font-size:12px">${esc(i.VerifiedBy || '—')}</td>
     <td style="font-size:12px">${esc(i.VerifiedDate || '—')}</td>
     <td style="font-size:12px;${reverify ? 'color:var(--danger);font-weight:600' : ''}">${esc(i.NextReverifyDate || '—')}</td>
+    <td>${_eligFileLink(i.IntakeFileId, i.IntakeFileName, false)}</td>
+    <td>${_eligFileLink(i.ReportFileId, i.ReportFileName, true)}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
     <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
@@ -6698,7 +6905,14 @@
       set('fEligVerifiedBy', item?.VerifiedBy);
       set('fEligVerifiedDate', item?.VerifiedDate);
       set('fEligReverify', item?.NextReverifyDate);
+      set('fEligStage', item?.Stage || 'Received');
       set('fEligNotes', item?.Notes);
+      const rf = document.getElementById('fEligReportFile');
+      if (rf) rf.value = '';
+      const rl = document.getElementById('eligReportExisting');
+      if (rl) rl.innerHTML = (item && item.ReportFileId)
+        ? `Current report: <a href="/hub/api/files/${item.ReportFileId}/download" target="_blank" rel="noopener">${esc(item.ReportFileName || 'download')}</a>`
+        : '';
       if (isStaffOrAdmin()) {
         const g = document.getElementById('eligClientGroup');
         if (g) g.style.display = '';
@@ -6717,9 +6931,10 @@
         Deductible: g('fEligDeductible'), Coinsurance: g('fEligCoins'), OOPMax: g('fEligOOP'),
         PriorAuthRequired: g('fEligPriorAuth'), AuthNumber: g('fEligAuthNum'),
         VerifiedBy: g('fEligVerifiedBy'), VerifiedDate: g('fEligVerifiedDate'),
-        NextReverifyDate: g('fEligReverify'), Notes: g('fEligNotes'),
+        NextReverifyDate: g('fEligReverify'), Stage: g('fEligStage'), Notes: g('fEligNotes'),
       };
       try {
+        let rid = editId;
         if (editId) {
           await fetch(`/hub/api/eligibility/${editId}`, {
             method: 'PUT',
@@ -6732,10 +6947,18 @@
             data.client_id = parseInt(document.getElementById('fEligClient')?.value) || activeClientId;
           }
           if (activeSubProfile) data.sub_profile = activeSubProfile;
-          await fetch('/hub/api/eligibility', {
+          const r = await fetch('/hub/api/eligibility', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
           });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || 'Save failed');
+          rid = d.id;
+        }
+        // If MedPharma attached a completed report, upload it (marks Completed).
+        const rf = document.getElementById('fEligReportFile');
+        if (rid && rf && rf.files && rf.files.length) {
+          await uploadEligFile(rid, rf.files[0], 'report');
         }
         closeModal('eligModal'); loadEligibility(); toast('Saved', 'success');
       } catch (e) { toast(e.message, 'error'); }
@@ -6747,6 +6970,75 @@
         await fetch(`/hub/api/eligibility/${id}`, { method: 'DELETE' });
         loadEligibility(); toast('Deleted', 'success');
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ── Intake submission (client-facing) ──
+    function openEligIntake() {
+      ['fIntakePatient', 'fIntakeDOB', 'fIntakePayor', 'fIntakeMember', 'fIntakePlan', 'fIntakeNotes'].forEach(id => {
+        const e = document.getElementById(id); if (e) e.value = '';
+      });
+      const fi = document.getElementById('fIntakeFile'); if (fi) fi.value = '';
+      const g = document.getElementById('intakeClientGroup');
+      if (isStaffOrAdmin()) {
+        if (g) g.style.display = '';
+        populateClientDrop('fIntakeClient', activeClientId);
+      } else if (g) { g.style.display = 'none'; }
+      document.getElementById('eligIntakeModal').classList.add('open');
+    }
+
+    async function saveEligIntake() {
+      const g = id => (document.getElementById(id)?.value || '').trim();
+      const patient = g('fIntakePatient');
+      if (!patient) { toast('Patient name is required', 'error'); return; }
+      const data = {
+        PatientName: patient, DOB: g('fIntakeDOB'), Payor: g('fIntakePayor'),
+        MemberID: g('fIntakeMember'), PlanGroup: g('fIntakePlan'),
+        Notes: g('fIntakeNotes'), Status: 'Pending', Stage: 'Received',
+      };
+      if (isStaffOrAdmin()) {
+        data.client_id = parseInt(document.getElementById('fIntakeClient')?.value) || activeClientId;
+      }
+      if (activeSubProfile) data.sub_profile = activeSubProfile;
+      try {
+        const r = await fetch('/hub/api/eligibility', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Failed to submit');
+        const fileInput = document.getElementById('fIntakeFile');
+        if (d.id && fileInput && fileInput.files && fileInput.files.length) {
+          await uploadEligFile(d.id, fileInput.files[0], 'intake');
+        }
+        closeModal('eligIntakeModal'); toast('Intake submitted', 'success'); loadEligibility();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // Attach a file to an eligibility record (kind = 'intake' | 'report').
+    async function uploadEligFile(rid, file, kind) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('kind', kind);
+      const r = await fetch(`/hub/api/eligibility/${rid}/file`, { method: 'POST', body: fd });
+      if (!r.ok) {
+        let m = 'Upload failed';
+        try { const j = await r.json(); if (j && j.detail) m = j.detail; } catch (_) { }
+        throw new Error(m);
+      }
+      return r.json();
+    }
+
+    // Attach an intake document to an existing submission that has none yet.
+    function eligIntakeAddDoc(rid) {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.pdf,.png,.jpg,.jpeg,.doc,.docx,.xlsx,.xls,.csv,.txt,.rtf';
+      inp.onchange = async () => {
+        if (!inp.files || !inp.files.length) return;
+        try { await uploadEligFile(rid, inp.files[0], 'intake'); toast('Document attached', 'success'); loadEligibility(); }
+        catch (e) { toast(e.message, 'error'); }
+      };
+      inp.click();
     }
 
     // ═══════════════════════════════════════
