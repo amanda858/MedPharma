@@ -3260,6 +3260,27 @@
             </div>
           </div>
 
+          <!-- Daily Tracking Report (admin-only) — controls where this client's daily report is emailed -->
+          <div class="card" id="profileDailyReportCard" style="margin-bottom:18px;display:none">
+            <div class="card-header">
+              <div class="card-title">📧 Daily Tracking Report</div>
+            </div>
+            <div style="margin-top:12px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+                <input type="checkbox" id="pf-daily_report_optin" style="width:16px;height:16px;cursor:pointer">
+                Email this client a daily production report
+              </label>
+              <div style="font-size:12px;color:var(--gray-400);margin:6px 0 0 24px">
+                Sends to the <strong>Email</strong> above every evening (6:35&nbsp;PM EST) with an Excel attachment of the day's activity. Leave the Email blank to send nothing.
+              </div>
+              <div class="form-group" style="margin-top:14px">
+                <label>Additional Report Recipients</label>
+                <input class="form-control" id="pf-report_recipients" placeholder="cfo@client.com, billing@client.com">
+                <div style="font-size:12px;color:var(--gray-400);margin-top:4px">Comma-separated. These addresses receive the report in addition to the primary Email above.</div>
+              </div>
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-header">
               <div class="card-title">📝 Notes</div>
@@ -9188,11 +9209,26 @@
           const el = document.getElementById('pf-' + f);
           if (el) el.value = d[f] || '';
         });
+        // Daily tracking report controls — admin-only. Load the saved opt-in +
+        // extra recipients so the admin can manage where this client's daily
+        // report is emailed. (Card visibility is finalized below alongside the
+        // other profile cards so MHP+OMT hiding and admin-gating stay in sync.)
+        const optinEl = document.getElementById('pf-daily_report_optin');
+        if (optinEl) optinEl.checked = (d.daily_report_optin === undefined ? true : !!d.daily_report_optin);
+        const recipEl = document.getElementById('pf-report_recipients');
+        if (recipEl) recipEl.value = Array.isArray(d.report_recipients) ? d.report_recipients.join(', ') : '';
         const titleEl = document.getElementById('profilePanelTitle');
         if (titleEl && d.company) titleEl.textContent = '🏷️ ' + d.company + (isCombined ? ' — Sub-Profiles' : ' — Profile');
         // For MHP+OMT (e.g. Luminary): hide main profile form, only show sub-profiles
         const mainProfileCards = document.querySelectorAll('#panel-profile > .card');
-        mainProfileCards.forEach(c => c.style.display = isCombined ? 'none' : '');
+        mainProfileCards.forEach(c => {
+          if (c.id === 'profileDailyReportCard') {
+            // Tracking-report settings are admin-only and also hidden for MHP+OMT.
+            c.style.display = (isCombined || !isFullAdmin()) ? 'none' : '';
+          } else {
+            c.style.display = isCombined ? 'none' : '';
+          }
+        });
         const saveBtn = document.querySelector('#panel-profile .page-actions .btn-primary');
         if (saveBtn) saveBtn.style.display = isCombined ? 'none' : '';
         // Sub-profiles for MHP+OMT practices
@@ -10188,6 +10224,16 @@
         const el = document.getElementById('pf-' + f);
         if (el) data[f] = el.value;
       });
+      // Daily tracking report settings are admin-only. Only include them when
+      // the admin card is in play so a client saving their own profile never
+      // silently flips their opt-in off.
+      if (isFullAdmin()) {
+        const optinEl = document.getElementById('pf-daily_report_optin');
+        if (optinEl) data.daily_report_optin = !!optinEl.checked;
+        const recipEl = document.getElementById('pf-report_recipients');
+        if (recipEl) data.report_recipients = (recipEl.value || '')
+          .split(',').map(s => s.trim()).filter(s => s && s.includes('@'));
+      }
       try {
         const url = activeClientId ? `/hub/api/profile/${activeClientId}` : '/hub/api/profile';
         const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
