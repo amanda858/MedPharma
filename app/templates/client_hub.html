@@ -546,6 +546,12 @@
     .elig-subtab:hover { color: var(--gray-700) }
     .elig-subtab.active { color: #4338ca; border-bottom-color: #4338ca }
 
+    /* Client "My Claims" view is read-only: hide the row-select + actions columns */
+    #claimsTable.client-readonly th:first-child,
+    #claimsTable.client-readonly td:first-child,
+    #claimsTable.client-readonly th:last-child,
+    #claimsTable.client-readonly td:last-child { display: none }
+
     .account-card:hover {
       border-color: var(--primary);
       box-shadow: 0 8px 30px rgba(99, 102, 241, .15);
@@ -2098,6 +2104,7 @@
         <!-- CLIENT SIDEBAR: only Daily Production + Documents + Chat -->
         <div id="clientNav">
           <div class="nav-item" data-panel="dashboard" data-module="dashboard" onclick="navTo('dashboard')">📤 Claims Out</div>
+          <div class="nav-item" data-panel="claims" data-module="claims" onclick="navTo('claims')">🧾 My Claims</div>
           <div class="nav-item" data-panel="production" data-module="production" onclick="navTo('production')">📋 Team Production</div>
           <div class="nav-item" data-panel="eligibility" data-module="eligibility" onclick="navTo('eligibility')">🩺 Eligibility Tracking</div>
           <div class="nav-item" data-panel="files" data-module="documents" onclick="navTo('files')">📁 Documents</div>
@@ -2330,11 +2337,11 @@
                 style="width:auto;min-width:190px;font-weight:600" onchange="filterClaimsTable()">
               <button class="btn btn-sm btn-secondary" onclick="clearClaimsDatePicker()">All Dates</button>
               <button class="btn btn-secondary btn-sm" onclick="exportSection('claims')">📤 Export CSV</button>
-              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('claimsExcelInput').click()">📥
+              <button class="btn btn-secondary btn-sm" id="claimImportBtn" onclick="document.getElementById('claimsExcelInput').click()">📥
                 Import Excel</button>
               <input type="file" id="claimsExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none"
                 onchange="importExcel(this,'Claims')">
-              <button class="btn btn-primary btn-sm" onclick="openClaimModal()">+ New Claim</button>
+              <button class="btn btn-primary btn-sm" id="claimNewBtn" onclick="openClaimModal()">+ New Claim</button>
             </div>
           </div>
           <!-- A/R WORKLIST (prioritized — work the money first) -->
@@ -6017,7 +6024,27 @@
     // ═══════════════════════════════════════
     // CLAIMS QUEUE
     // ═══════════════════════════════════════
+    // Client logins get a read-only view of *their own* claims: hide every
+    // write/admin control (new / import / bulk / A/R worklist) and the row
+    // select + edit/delete columns. Staff & admins keep the full queue.
+    function applyClaimsRoleView() {
+      const staff = isStaffOrAdmin();
+      const tbl = document.getElementById('claimsTable');
+      if (tbl) tbl.classList.toggle('client-readonly', !staff);
+      ['arWorklistBtn', 'claimImportBtn', 'claimNewBtn'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = staff ? '' : 'none';
+      });
+      if (!staff) {
+        const bar = document.getElementById('bulkActionBar');
+        if (bar) bar.style.display = 'none';
+      }
+      const title = document.querySelector('#panel-claims .page-title');
+      if (title) title.textContent = staff ? 'Claims Queue' : 'My Claims';
+    }
+
     async function loadClaims() {
+      applyClaimsRoleView();
       buildQueueTabs([]);
       let url = '/hub/api/claims';
       const params = new URLSearchParams();
