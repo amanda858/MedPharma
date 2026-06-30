@@ -2090,6 +2090,12 @@ def update_profile(client_id: int, data: dict):
             continue
         if k == "report_recipients" and isinstance(v, (list, tuple)):
             payload[k] = _json.dumps([str(x).strip() for x in v if str(x).strip()])
+        elif k == "enabled_modules" and isinstance(v, (list, tuple)):
+            # Normalize module lists to a JSON array string. Callers that already
+            # pass a JSON string (e.g. the profile routes) hit the else branch and
+            # are stored verbatim; raw lists (e.g. from add_client) are encoded
+            # here so authenticate()'s json.loads round-trips correctly.
+            payload[k] = _json.dumps([str(x).strip() for x in v if str(x).strip()])
         elif k == "daily_report_optin":
             payload[k] = 1 if (str(v).lower() in ("1", "true", "yes", "on") or v is True) else 0
         else:
