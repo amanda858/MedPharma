@@ -1926,13 +1926,15 @@ def reimport_all_claim_files() -> dict:
 def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Admin-only: rebuild a client's claims so every claim is counted exactly ONCE.
 
-    Wipes the client's claims_master + payments, then re-imports ONLY genuine
-    per-claim registers. Skips aggregate recaps that describe the same billing a
-    second time — SVD DAILY batch summaries, clearinghouse acknowledgement lists,
-    verification worklists — so Billed Out reflects each claim once instead of the
-    inflated sum of every representation. Returns before/after totals AND a
-    per-user tally (billed grouped by the uploader) so each person's number is
-    visible. Idempotent: always reconstructs from the stored source files."""
+    Wipes the client's claims_master + payments, then re-imports the genuine
+    per-claim registers PLUS the SVD DAILY batch log (Melissa's distinct daily
+    clearinghouse sends, credited to her). Skips only aggregate recaps that
+    re-describe billing already counted elsewhere — clearinghouse acknowledgement
+    lists and verification worklists — so Billed Out reflects each claim once
+    instead of the inflated sum of every representation. Returns before/after
+    totals AND a per-user tally (billed grouped by the uploader) so each person's
+    number is visible. Idempotent: always reconstructs from the stored source
+    files."""
     admin = _require_full_admin(hub_session)
     from .client_db import get_db
 
@@ -1968,8 +1970,8 @@ def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] 
         try:
             with open(path, "rb") as fh:
                 content = fh.read()
-            # Gate: only genuine per-claim registers import. A recognized template
-            # (svd_denials / lims_payments — batch summary is no longer registered)
+            # Gate: genuine per-claim registers AND the SVD DAILY batch log import.
+            # A recognized template (svd_denials / svd_batch_summary / lims_payments)
             # qualifies; otherwise require a structural claims match WITH a money
             # column so ack lists / worklists / headerless recaps are skipped.
             tpl = _extract_templated_claim_rows(content, ext)
@@ -5075,14 +5077,19 @@ def _tpl_lims_payments(sheets):
 
 # Priority order — the first template whose fingerprint matches wins for a given
 # workbook, so a file contributes to exactly one bucket and never double counts.
-# NOTE: svd_batch_summary is intentionally NOT registered. The SVD DAILY batch
-# log is a per-batch *recap* (DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED) of
-# claims that already arrive as per-claim detail (the "Claim Sent" register).
-# Expanding each batch into N synthetic claims double-counted the same billing
-# and inflated Billed Out by ~$110K. The per-claim registers are the single
-# source of truth for Billed Out, so batch summaries are read as documents only.
+# The SVD DAILY batch log (DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED) is
+# Melissa's daily clearinghouse-transmission report. Accession-level checks confirm
+# its claims do NOT overlap the per-claim registers — Susan's "Claim Sent" runs
+# through 6/18, Jessica's denials are older reworks, and the batch log carries the
+# 6/19-6/24 sends (zero shared accessions) — so it is genuine, DISTINCT billing,
+# not a recap. Each batch is expanded into N synthetic billed claims keyed
+# SVDB-{batch}-{i}, so a re-upload (or a teammate saving the same report) updates
+# in place and never double counts.
+_SVD_DAILY_OWNER = "melissa@medprosc.com"
+
 _CLAIM_TEMPLATES = (
     ("svd_denials", _tpl_svd_denials),
+    ("svd_batch_summary", _tpl_svd_batch_summary),
     ("lims_payments", _tpl_lims_payments),
 )
 
@@ -5908,6 +5915,14 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
 
     if not rows:
         return 0, ["No rows found in file"]
+
+    # The SVD DAILY batch log is Melissa's daily production regardless of which
+    # teammate uploads a copy. Pin its billing to her account so duplicate uploads
+    # can't split or reassign the credit (the upsert below sets uploaded_by from the
+    # last writer, and the SVDB-{batch}-{i} keys dedupe identical batches across
+    # copies).
+    if _tpl_used == "svd_batch_summary":
+        uploaded_by = _SVD_DAILY_OWNER
 
     conn = get_db()
     cur = conn.cursor()
