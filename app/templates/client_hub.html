@@ -2136,8 +2136,6 @@
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
-            <div class="nav-item" data-panel="audit" onclick="navTo('audit')">Audit Log</div>
-            <div class="nav-item" data-panel="emailsetup" onclick="navTo('emailsetup')">✉️ Email Setup</div>
           </div>
         </div>
         <!-- BUSINESS DEVELOPMENT SIDEBAR: leads pipeline + weekly report + chat -->
@@ -5580,7 +5578,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'eligibility','providers','clients','files','profile','reporting',
-                       'production','alerts','audit','chat','emailsetup'];
+                       'production','alerts','chat'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
