@@ -33,7 +33,14 @@ if os.path.isdir(_STATIC_DIR):
 
 
 def _backup_db():
-    """Create a timestamped backup of the SQLite database before any startup modifications."""
+    """Create a timestamped backup of the SQLite database before any startup modifications.
+
+    Safety: if the live DB currently holds ZERO claims (e.g. it was wiped, or an
+    account holding all the data was deleted), do NOT create a backup and do NOT
+    rotate. A wiped DB always reports 0 claims, so this stops an empty snapshot
+    from pushing a still-good pre-loss backup out of the retention window.
+    Backups named KEEP_*.db are manually-preserved good copies and are never
+    rotated out."""
     try:
         if not os.path.exists(DATABASE_PATH):
             log.info("No database file found - skipping backup")
@@ -42,6 +49,19 @@ def _backup_db():
         if size < 4096:  # empty/fresh DB, nothing worth backing up
             log.info(f"Database too small ({size} bytes) - skipping backup")
             return
+        # Never let an empty-of-claims DB create a snapshot or rotate out good
+        # backups. This is the guard that protects a pre-loss backup from being
+        # deleted by routine restarts after a data-loss event.
+        try:
+            import sqlite3 as _sqlite
+            _bc = _sqlite.connect(f"file:{DATABASE_PATH}?mode=ro", uri=True)
+            _claim_n = _bc.execute("SELECT COUNT(*) FROM claims_master").fetchone()[0]
+            _bc.close()
+        except Exception:
+            _claim_n = -1  # unknown -> fall through and back up (safe default)
+        if _claim_n == 0:
+            log.warning("Live DB has 0 claims - skipping backup + rotation to preserve existing backups")
+            return
         backup_dir = os.path.join(os.path.dirname(DATABASE_PATH), "backups")
         os.makedirs(backup_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -49,14 +69,16 @@ def _backup_db():
         log.info(f"Creating DB backup: {size:,} bytes")
         shutil.copy2(DATABASE_PATH, dest)
         log.info(f"DB backup created: {dest}")
-        
-        # Keep only the 5 most recent backups
-        backups = sorted(
-            [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")],
+
+        # Keep the 20 most recent auto-backups; never rotate out protected
+        # KEEP_*.db snapshots (manually preserved good copies).
+        autos = sorted(
+            [os.path.join(backup_dir, f) for f in os.listdir(backup_dir)
+             if f.endswith(".db") and not f.startswith("KEEP_")],
             key=os.path.getmtime,
             reverse=True
         )
-        for old in backups[5:]:
+        for old in autos[20:]:
             os.remove(old)
             log.info(f"Removed old backup: {old}")
     except Exception as e:

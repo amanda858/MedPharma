@@ -2048,6 +2048,79 @@ def reimport_all_claim_files() -> dict:
     }
 
 
+@router.get("/admin/diag/backups")
+def admin_diag_backups(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only, READ-ONLY: list on-disk DB backups with how much real data each
+    one holds (claim count + charged/paid totals + uploaded-file + client counts),
+    so we can tell whether a pre-loss snapshot is still recoverable. Opens every
+    backup read-only; never writes, restores, or deletes anything."""
+    _require_full_admin(hub_session)
+    import glob
+    from .config import DATABASE_PATH
+    backup_dir = os.path.join(os.path.dirname(DATABASE_PATH), "backups")
+
+    def _probe(path: str) -> dict:
+        info = {
+            "file": os.path.basename(path),
+            "size_bytes": os.path.getsize(path),
+            "modified": datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds"),
+        }
+        try:
+            c = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                info["claims"] = c.execute("SELECT COUNT(*) FROM claims_master").fetchone()[0]
+                info["charged"] = round(c.execute("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master").fetchone()[0] or 0, 2)
+                info["paid"] = round(c.execute("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master").fetchone()[0] or 0, 2)
+                for tbl, key in (("client_files", "files"), ("clients", "clients"), ("payments", "payments")):
+                    try:
+                        info[key] = c.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+                    except Exception:
+                        info[key] = None
+                info["top_accounts"] = [
+                    {"client_id": r[0], "claims": r[1], "charged": round(r[2] or 0, 2)}
+                    for r in c.execute(
+                        "SELECT client_id, COUNT(*), COALESCE(SUM(ChargeAmount),0) "
+                        "FROM claims_master GROUP BY client_id ORDER BY 3 DESC LIMIT 8").fetchall()
+                ]
+            finally:
+                c.close()
+        except Exception as e:
+            info["error"] = f"{type(e).__name__}: {e}"
+        return info
+
+    current = {"path": DATABASE_PATH}
+    try:
+        current.update(_probe(DATABASE_PATH))
+    except Exception as e:
+        current["error"] = f"{type(e).__name__}: {e}"
+
+    backups = []
+    if os.path.isdir(backup_dir):
+        for p in sorted(glob.glob(os.path.join(backup_dir, "*.db")), key=os.path.getmtime, reverse=True):
+            backups.append(_probe(p))
+    return {"ok": True, "backup_dir": backup_dir, "current_db": current,
+            "backup_count": len(backups), "backups": backups}
+
+
+@router.post("/admin/diag/backups/keep")
+def admin_diag_backups_keep(file: str, hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: durably preserve a backup by copying it to KEEP_<file>, which the
+    startup rotation never deletes. Copy-only -- never overwrites the live DB or
+    deletes anything. Use this to lock in a good pre-loss snapshot before any restore."""
+    _require_full_admin(hub_session)
+    from .config import DATABASE_PATH
+    backup_dir = os.path.join(os.path.dirname(DATABASE_PATH), "backups")
+    base = os.path.basename(file or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]+\.db", base):
+        raise HTTPException(status_code=400, detail="invalid backup filename")
+    src = os.path.join(backup_dir, base)
+    if not os.path.isfile(src):
+        raise HTTPException(status_code=404, detail="backup not found")
+    dest = os.path.join(backup_dir, base if base.startswith("KEEP_") else f"KEEP_{base}")
+    shutil.copy2(src, dest)
+    return {"ok": True, "preserved": os.path.basename(dest), "size_bytes": os.path.getsize(dest)}
+
+
 @router.post("/admin/diag/rebuild-client-claims")
 def admin_diag_rebuild_client_claims(client_id: int, hub_session: Optional[str] = Cookie(None)):
     """Admin-only: rebuild a client's claims so every claim is counted exactly ONCE.
