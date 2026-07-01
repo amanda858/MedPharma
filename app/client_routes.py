@@ -962,6 +962,11 @@ class InviteUserIn(BaseModel):
     # on first login. Defaults False so admin-set credentials persist as-is
     # (useful for shared/service logins handed off directly).
     require_password_change: Optional[bool] = False
+    # Optional: restrict which hub modules this login can see. When omitted the
+    # login inherits the standard defaults. Set e.g. ["eligibility"] to mint an
+    # eligibility-only verifier that only ever sees the Eligibility tab (never
+    # the billing dashboard) — so "users" don't turn into full client accounts.
+    enabled_modules: Optional[list[str]] = None
 
 
 class SetupPasswordIn(BaseModel):
@@ -1423,6 +1428,7 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
     payload.pop("initial_password", None)
     account_ids = [int(a) for a in (payload.pop("account_ids", None) or []) if str(a).isdigit()]
     require_password_change = bool(payload.pop("require_password_change", False))
+    invite_enabled_modules = payload.pop("enabled_modules", None)
     if not (payload.get("company") or "").strip():
         payload["company"] = (admin.get("company") or "").strip() or "MedPharma Team"
     # Staff can invite users but cannot create full-admin accounts.
@@ -1450,6 +1456,15 @@ def invite_user(body: InviteUserIn, request: Request, hub_session: Optional[str]
             granted_accounts += 1
         except Exception as e:
             log.warning("grant access to account %s for new user %s failed: %s", acct, new_uid, e)
+
+    # Optional module restriction (e.g. eligibility-only verifier logins). Persist
+    # after creation so the new login is locked to just those tabs and never
+    # renders as a full billing client account.
+    if invite_enabled_modules is not None and new_uid:
+        try:
+            update_profile(new_uid, {"enabled_modules": invite_enabled_modules})
+        except Exception as e:
+            log.warning("could not set enabled_modules for new user %s: %s", new_uid, e)
 
     base_url = str(request.base_url).rstrip("/")
     setup_link = f"{base_url}/hub?setup_token={invite['token']}"

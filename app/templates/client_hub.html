@@ -3997,6 +3997,20 @@
         <div class="form-group"><label>Username <span style="font-size:11px;color:#94a3b8">(optional)</span></label><input class="form-control" id="fUUsername" placeholder="auto-generated if blank"></div>
       </div>
       <div class="form-grid">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Portal access
+            <span style="font-size:11px;color:#94a3b8;font-weight:400">— what this login sees after signing in</span>
+          </label>
+          <select class="form-control" id="fUAccessLevel" onchange="onUserAccessLevelChange()">
+            <option value="full">Full client access (billing dashboard + granted tabs)</option>
+            <option value="eligibility">🩺 Eligibility verifier — only the Eligibility tab</option>
+          </select>
+          <div id="fUAccessLevelHint" style="font-size:11px;color:#64748b;margin-top:4px;display:none">
+            Signs in straight to the Eligibility board. No billing dashboard, claims or reports — and it won't show up as a client account.
+          </div>
+        </div>
+      </div>
+      <div class="form-grid">
         <div class="form-group"><label>Password <span style="font-size:11px;color:#94a3b8">(optional)</span></label><input class="form-control" type="password" id="fUInitialPassword" placeholder="Set one so they can sign in right away"></div>
       </div>
 
@@ -7537,6 +7551,9 @@
       });
       const pwChange = document.getElementById('fURequirePwChange');
       if (pwChange) pwChange.checked = false;
+      const lvlEl = document.getElementById('fUAccessLevel');
+      if (lvlEl) lvlEl.value = 'full';
+      onUserAccessLevelChange();
       const companyEl = document.getElementById('fUCompany');
       const selectedClient = clientsList.find(c => c.id === activeClientId);
       const defaultCompany = (selectedClient && selectedClient.company)
@@ -7568,6 +7585,9 @@
       });
       const pwChange = document.getElementById('fURequirePwChange');
       if (pwChange) pwChange.checked = false;
+      const lvlEl = document.getElementById('fUAccessLevel');
+      if (lvlEl) lvlEl.value = 'full';
+      onUserAccessLevelChange();
       const companyEl = document.getElementById('fUCompany');
       if (companyEl) companyEl.value = brand((currentUser && currentUser.company) || 'MedPharma');
       const roleEl = document.getElementById('fURole');
@@ -7581,6 +7601,19 @@
       const hdr = document.getElementById('userInviteTitle');
       if (hdr) hdr.textContent = `Add User — ${company || 'Account'}`;
       document.getElementById('userInviteModal').classList.add('open');
+    }
+
+    // Portal access level for the Create User modal. An eligibility verifier is
+    // always an external client login limited to the Eligibility tab — force the
+    // role and reveal the explainer so "users" never become full client accounts.
+    function onUserAccessLevelChange() {
+      const lvl = (document.getElementById('fUAccessLevel') || {}).value;
+      const roleEl = document.getElementById('fURole');
+      const hint = document.getElementById('fUAccessLevelHint');
+      const isElig = lvl === 'eligibility';
+      if (isElig && roleEl) roleEl.value = 'client';
+      if (roleEl) roleEl.disabled = isElig;
+      if (hint) hint.style.display = isElig ? 'block' : 'none';
     }
 
     async function sendUserInvite() {
@@ -7605,6 +7638,13 @@
         require_password_change: !!(document.getElementById('fURequirePwChange') || {}).checked,
         account_ids,
       };
+      // Eligibility verifier: lock the new login to the Eligibility tab only and
+      // force the external-client role so it never renders as a billing account.
+      const accessLevel = (document.getElementById('fUAccessLevel') || {}).value;
+      if (accessLevel === 'eligibility') {
+        data.role = 'client';
+        data.enabled_modules = ['eligibility'];
+      }
       if (data.initial_password && data.initial_password.length < 10) {
         toast('Password must be at least 10 characters', 'error');
         return;
