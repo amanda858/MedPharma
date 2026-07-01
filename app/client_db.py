@@ -734,6 +734,7 @@ def init_client_hub_db():
             practice_type    TEXT DEFAULT '',
             report_tab_names TEXT DEFAULT '',
             enabled_modules  TEXT DEFAULT '',
+            module_labels    TEXT DEFAULT '',
             daily_report_optin INTEGER DEFAULT 1,
             report_recipients TEXT DEFAULT ''
         );
@@ -1310,6 +1311,7 @@ def init_client_hub_db():
         ("practice_type", "TEXT DEFAULT ''"),
         ("report_tab_names", "TEXT DEFAULT ''"),
         ("enabled_modules", "TEXT DEFAULT ''"),
+        ("module_labels", "TEXT DEFAULT ''"),
         ("daily_report_optin", "INTEGER DEFAULT 1"),
         ("report_recipients", "TEXT DEFAULT ''"),
     ]
@@ -1943,7 +1945,7 @@ def update_client(cid: int, data: dict):
         allowed = ["company", "contact_name", "email", "phone", "role", "is_active",
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
                    "address", "specialty", "notes", "doc_tab_names", "practice_type",
-                   "report_tab_names", "enabled_modules",
+                   "report_tab_names", "enabled_modules", "module_labels",
                    "daily_report_optin", "report_recipients"]
         parts, params = [], []
         for f in allowed:
@@ -2066,7 +2068,7 @@ def get_profile(client_id: int) -> dict:
             SELECT company, contact_name, email, phone,
                    tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
                  address, specialty, notes, doc_tab_names, practice_type, report_tab_names, enabled_modules,
-                 daily_report_optin, report_recipients
+                 module_labels, daily_report_optin, report_recipients
             FROM clients WHERE id=?""", [client_id])
         row = cur.fetchone()
     finally:
@@ -2076,7 +2078,7 @@ def get_profile(client_id: int) -> dict:
     cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
             "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
             "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
-            "daily_report_optin", "report_recipients"]
+            "module_labels", "daily_report_optin", "report_recipients"]
     d = {c: (row[i] if row[i] is not None else "") for i, c in enumerate(cols)}
     try:
         d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
@@ -2090,6 +2092,12 @@ def get_profile(client_id: int) -> dict:
         d["enabled_modules"] = _json.loads(d["enabled_modules"]) if d["enabled_modules"] else DEFAULT_ENABLED_MODULES[:]
     except Exception:
         d["enabled_modules"] = DEFAULT_ENABLED_MODULES[:]
+    # Per-account module label overrides ({module_key: custom_name}). Empty = use defaults.
+    try:
+        parsed_labels = _json.loads(d["module_labels"]) if d["module_labels"] else {}
+        d["module_labels"] = parsed_labels if isinstance(parsed_labels, dict) else {}
+    except Exception:
+        d["module_labels"] = {}
     # Daily-report opt-in defaults ON when the client has an email on file.
     try:
         d["daily_report_optin"] = int(d["daily_report_optin"] if d["daily_report_optin"] != "" else 1)
@@ -2109,12 +2117,15 @@ def update_profile(client_id: int, data: dict):
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
                "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
-               "daily_report_optin", "report_recipients"]
+               "module_labels", "daily_report_optin", "report_recipients"]
     payload = {}
     for k, v in (data or {}).items():
         if k not in allowed:
             continue
-        if k == "report_recipients" and isinstance(v, (list, tuple)):
+        if k == "module_labels" and isinstance(v, dict):
+            # Store only non-empty custom names, keyed by module id.
+            payload[k] = _json.dumps({str(mk): str(mv).strip() for mk, mv in v.items() if str(mv).strip()})
+        elif k == "report_recipients" and isinstance(v, (list, tuple)):
             payload[k] = _json.dumps([str(x).strip() for x in v if str(x).strip()])
         elif k == "enabled_modules" and isinstance(v, (list, tuple)):
             # Normalize module lists to a JSON array string. Callers that already

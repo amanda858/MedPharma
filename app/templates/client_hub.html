@@ -4488,6 +4488,16 @@
         style="padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
         <div style="grid-column:1/-1;color:#94a3b8;font-size:12px">Loading…</div>
       </div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#334155">✏️ Rename modules (optional)</summary>
+        <div style="font-size:12px;color:#64748b;margin:8px 0">
+          Give this account its own names for any module. The new name shows in that
+          client's sidebar. Leave blank to use the default.
+        </div>
+        <div id="clientModuleLabelsWrap" style="display:flex;flex-direction:column;gap:6px">
+          <div style="color:#94a3b8;font-size:12px">Loading…</div>
+        </div>
+      </details>
       <button class="btn btn-primary" style="margin-top:12px" onclick="saveClientModules()">Save Modules</button>
     </div>
   </div>
@@ -5060,6 +5070,7 @@
       // Admin sees every module — clear the per-client cache so visibility
       // is reset before navigating.
       activeClientModules = null;
+      activeClientModuleLabels = null;
       applyModuleVisibility();
       navTo('dashboard');
       startGlobalJobsMonitor();
@@ -5102,7 +5113,7 @@
       });
       document.getElementById('bizdevNav').style.display = 'block';
       const bar = document.getElementById('subProfileBar'); if (bar) bar.style.display = 'none';
-      activeClientId = null; activeClientModules = null;
+      activeClientId = null; activeClientModules = null; activeClientModuleLabels = null;
       showLeads('rcm', 'leads_rcm');
       try { loadChatRooms(); } catch (_) {}
       consumeChatDeepLink();
@@ -5468,6 +5479,9 @@
       if (credLabel) credLabel.textContent = isLab ? 'Group Contracting' : 'Credentialing';
       if (credTitle) credTitle.textContent = isLab ? 'Group Contracting' : 'Credentialing';
       updateProductionCategories(pt);
+      // Re-apply custom module names so a renamed Credentialing wins over the
+      // practice-type default set just above.
+      try { applyModuleLabels(); } catch (_) {}
     }
 
     // Returns the appropriate production log categories based on client's practice/service type
@@ -6088,7 +6102,10 @@
         { label: 'Total Charged', value: Math.round(totalCharged) },
         { label: 'Total Paid', value: Math.round(totalPaid) },
         { label: 'Adjustments', value: Math.round(totalAdj) },
-        { label: 'Outstanding', value: Math.round(totalBalance) },
+        // 'Outstanding' (sum of the imported Balance Remaining column) intentionally
+        // hidden: it's a separate imported field, not Charged − Paid, so it reads as
+        // a confusing/non-reconciling figure. Charged + Paid + Adjustments tell the
+        // real story.
       ].filter(d => d.value > 0);
       if (finData.length) {
         const fMax = Math.max(...finData.map(d => d.value), 1);
@@ -11139,6 +11156,8 @@
 
     // Cache for the active client's enabled_modules. null = "no opt-out, show all"
     let activeClientModules = null;
+    // Cache for the active client's per-module custom labels ({key: name}).
+    let activeClientModuleLabels = null;
 
     function _renderModuleCheckboxGrid(targetId, selectedSet, cssClass) {
       const wrap = document.getElementById(targetId);
@@ -11177,6 +11196,73 @@
       // currentList: array of module keys, or null for "all enabled"
       const sel = currentList ? new Set(currentList) : null;
       _renderModuleCheckboxGrid(targetId, sel, 'fCModCb');
+    }
+
+    // ── Per-account module rename (custom sidebar names) ────────────────
+    function _populateModuleRenameInputs(targetId, labels) {
+      const wrap = document.getElementById(targetId);
+      if (!wrap) return;
+      const custom = (labels && typeof labels === 'object') ? labels : {};
+      wrap.innerHTML = MODULE_CATALOG.map(m => {
+        const val = custom[m.key] || '';
+        return `<label style="display:flex;align-items:center;gap:8px;font-size:12px">
+            <span style="flex:0 0 130px;color:#475569">${esc(m.label)}</span>
+            <input type="text" class="fCModLabel" data-modkey="${m.key}" value="${esc(val)}"
+                   placeholder="${esc(m.label)}"
+                   style="flex:1;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px">
+          </label>`;
+      }).join('');
+    }
+    function _collectModuleLabels(targetId) {
+      const wrap = document.getElementById(targetId);
+      const out = {};
+      if (!wrap) return out;
+      wrap.querySelectorAll('input.fCModLabel').forEach(inp => {
+        const key = inp.getAttribute('data-modkey');
+        const val = (inp.value || '').trim();
+        if (key && val) out[key] = val;
+      });
+      return out;
+    }
+
+    // ── Apply per-account custom names to the sidebar nav ───────────────
+    function _navFirstTextNode(el) {
+      for (const n of el.childNodes) {
+        if (n.nodeType === 3 && n.textContent.trim()) return n;
+      }
+      return null;
+    }
+    function _navItemBaseText(el) {
+      const t = _navFirstTextNode(el);
+      return (t ? t.textContent : (el.textContent || '')).trim();
+    }
+    function _setNavItemText(el, label) {
+      const t = _navFirstTextNode(el);
+      const hasChildEl = Array.from(el.childNodes).some(n => n.nodeType === 1);
+      const text = hasChildEl ? (label + ' ') : label;
+      if (t) { t.textContent = text; }
+      else { el.insertBefore(document.createTextNode(text), el.firstChild); }
+    }
+    // Credentialing (dynamic span/title) and Production (role-based label) are
+    // handled by their own code paths, so they're skipped in the generic loop.
+    function applyModuleLabels() {
+      const labels = (activeClientModuleLabels && typeof activeClientModuleLabels === 'object') ? activeClientModuleLabels : {};
+      document.querySelectorAll('.nav-item[data-module]').forEach(el => {
+        const key = el.getAttribute('data-module');
+        if (key === 'credentialing' || key === 'production') return;
+        // Remember the pristine label once so clearing a rename restores it.
+        if (!el.hasAttribute('data-default-label')) {
+          el.setAttribute('data-default-label', _navItemBaseText(el));
+        }
+        const def = el.getAttribute('data-default-label') || '';
+        const override = (labels[key] || '').trim();
+        _setNavItemText(el, override || def);
+      });
+      const credOverride = (labels['credentialing'] || '').trim();
+      if (credOverride) {
+        const cl = document.getElementById('navCredLabel'); if (cl) cl.textContent = credOverride;
+        const ct = document.getElementById('credPanelTitle'); if (ct) ct.textContent = credOverride;
+      }
     }
 
     async function populateClientAccessChecks(targetId, grantedIds) {
@@ -11301,8 +11387,10 @@
         const d = await r.json();
         const mods = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
         populateClientModuleChecks('clientModulesWrap', mods);
+        _populateModuleRenameInputs('clientModuleLabelsWrap', (d && d.module_labels) || {});
       } catch (e) {
         populateClientModuleChecks('clientModulesWrap', null);
+        _populateModuleRenameInputs('clientModuleLabelsWrap', {});
         toast(`Could not load modules: ${e.message}`, 'error');
       }
     }
@@ -11312,11 +11400,12 @@
       const enabled_modules = Array.from(
         document.querySelectorAll('#clientModulesWrap input.fCModCb:checked')
       ).map(cb => cb.value);
+      const module_labels = _collectModuleLabels('clientModuleLabelsWrap');
       try {
         const r = await fetch(`/hub/api/profile/${_modulesModalClientId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled_modules })
+          body: JSON.stringify({ enabled_modules, module_labels })
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         toast('Modules updated', 'success');
@@ -11324,6 +11413,7 @@
         // If the currently selected client is the one being edited, re-apply.
         if (activeClientId === _modulesModalClientId) {
           activeClientModules = enabled_modules.slice();
+          activeClientModuleLabels = module_labels;
           applyModuleVisibility();
         }
       } catch (e) { toast(e.message, 'error'); }
@@ -11376,11 +11466,15 @@
       // Production label: the admin gets the team-wide report, everyone else
       // (staff / client) only sees their own "User Production".
       try {
-        const prodLabel = isFullAdmin() ? '📋 Team Production Report' : '📋 User Production';
+        const prodOverride = (activeClientModuleLabels && (activeClientModuleLabels.production || '').trim()) || '';
+        const prodLabel = prodOverride || (isFullAdmin() ? '📋 Team Production Report' : '📋 User Production');
         document.querySelectorAll('.nav-item[data-panel="production"]').forEach(el => {
           el.textContent = prodLabel;
         });
       } catch (_) {}
+
+      // Apply any per-account custom module names to the sidebar.
+      applyModuleLabels();
     }
 
     // Self-service per-client controls shown on the Dashboard hero (admins/staff
@@ -11410,7 +11504,7 @@
     // Called from selectAccount() / loadProfile() etc. to refresh the cache
     // and re-apply nav visibility for the active client.
     async function refreshActiveClientModules() {
-      if (!activeClientId) { activeClientModules = null; applyModuleVisibility(); return; }
+      if (!activeClientId) { activeClientModules = null; activeClientModuleLabels = null; applyModuleVisibility(); return; }
       // Admins/staff hit /profile/{cid}; clients only have permission for /profile
       const url = isStaffOrAdmin()
         ? `/hub/api/profile/${activeClientId}`
@@ -11420,8 +11514,10 @@
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         activeClientModules = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
+        activeClientModuleLabels = (d && d.module_labels && typeof d.module_labels === 'object') ? d.module_labels : null;
       } catch (_) {
         activeClientModules = null;
+        activeClientModuleLabels = null;
       }
       applyModuleVisibility();
     }
