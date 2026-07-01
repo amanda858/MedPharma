@@ -1187,6 +1187,7 @@ class ProfileUpdate(BaseModel):
     report_tabs: Optional[list] = None
     enabled_modules: Optional[list[str]] = None
     module_labels: Optional[dict] = None
+    custom_modules: Optional[list] = None
     daily_report_optin: Optional[bool] = None
     report_recipients: Optional[list[str]] = None
 

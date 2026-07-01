@@ -735,6 +735,7 @@ def init_client_hub_db():
             report_tab_names TEXT DEFAULT '',
             enabled_modules  TEXT DEFAULT '',
             module_labels    TEXT DEFAULT '',
+            custom_modules   TEXT DEFAULT '',
             daily_report_optin INTEGER DEFAULT 1,
             report_recipients TEXT DEFAULT ''
         );
@@ -1312,6 +1313,7 @@ def init_client_hub_db():
         ("report_tab_names", "TEXT DEFAULT ''"),
         ("enabled_modules", "TEXT DEFAULT ''"),
         ("module_labels", "TEXT DEFAULT ''"),
+        ("custom_modules", "TEXT DEFAULT ''"),
         ("daily_report_optin", "INTEGER DEFAULT 1"),
         ("report_recipients", "TEXT DEFAULT ''"),
     ]
@@ -1946,7 +1948,7 @@ def update_client(cid: int, data: dict):
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
                    "address", "specialty", "notes", "doc_tab_names", "practice_type",
                    "report_tab_names", "enabled_modules", "module_labels",
-                   "daily_report_optin", "report_recipients"]
+                   "custom_modules", "daily_report_optin", "report_recipients"]
         parts, params = [], []
         for f in allowed:
             if f in data and data[f] is not None:
@@ -2068,7 +2070,7 @@ def get_profile(client_id: int) -> dict:
             SELECT company, contact_name, email, phone,
                    tax_id, group_npi, individual_npi, ptan_group, ptan_individual,
                  address, specialty, notes, doc_tab_names, practice_type, report_tab_names, enabled_modules,
-                 module_labels, daily_report_optin, report_recipients
+                 module_labels, daily_report_optin, report_recipients, custom_modules
             FROM clients WHERE id=?""", [client_id])
         row = cur.fetchone()
     finally:
@@ -2078,7 +2080,7 @@ def get_profile(client_id: int) -> dict:
     cols = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
             "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
             "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
-            "module_labels", "daily_report_optin", "report_recipients"]
+            "module_labels", "daily_report_optin", "report_recipients", "custom_modules"]
     d = {c: (row[i] if row[i] is not None else "") for i, c in enumerate(cols)}
     try:
         d["doc_tabs"] = _json.loads(d["doc_tab_names"]) if d["doc_tab_names"] else DEFAULT_DOC_TABS[:]
@@ -2098,6 +2100,12 @@ def get_profile(client_id: int) -> dict:
         d["module_labels"] = parsed_labels if isinstance(parsed_labels, dict) else {}
     except Exception:
         d["module_labels"] = {}
+    # Per-account custom sidebar modules ([{key,label,icon,type,url}]). Empty = none.
+    try:
+        parsed_cm = _json.loads(d["custom_modules"]) if d["custom_modules"] else []
+        d["custom_modules"] = parsed_cm if isinstance(parsed_cm, list) else []
+    except Exception:
+        d["custom_modules"] = []
     # Daily-report opt-in defaults ON when the client has an email on file.
     try:
         d["daily_report_optin"] = int(d["daily_report_optin"] if d["daily_report_optin"] != "" else 1)
@@ -2112,12 +2120,46 @@ def get_profile(client_id: int) -> dict:
     return d
 
 
+def _sanitize_custom_modules(items) -> list:
+    """Normalize a client's custom sidebar modules to a safe, minimal shape.
+
+    Each entry becomes {key, label, icon, type[, url]}. type is 'section'
+    (an in-hub Documents-backed board) or 'link' (an external shortcut). Blank
+    labels are dropped; link URLs must be http(s) to avoid javascript: injection.
+    """
+    clean = []
+    seen = set()
+    for it in (items or []):
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label", "")).strip()[:60]
+        if not label:
+            continue
+        typ = str(it.get("type", "section")).strip().lower()
+        if typ not in ("section", "link"):
+            typ = "section"
+        key = str(it.get("key", "")).strip()
+        if not key:
+            key = "cm_" + "".join(ch for ch in label.lower() if ch.isalnum())[:24]
+        if not key or key in seen:
+            key = f"cm_{len(clean)}_" + "".join(ch for ch in label.lower() if ch.isalnum())[:16]
+        seen.add(key)
+        icon = str(it.get("icon", "")).strip()[:4]
+        entry = {"key": key, "label": label, "type": typ, "icon": icon}
+        if typ == "link":
+            url = str(it.get("url", "")).strip()
+            if url.lower().startswith(("http://", "https://")):
+                entry["url"] = url
+        clean.append(entry)
+    return clean
+
+
 def update_profile(client_id: int, data: dict):
     import json as _json
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
                "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
-               "module_labels", "daily_report_optin", "report_recipients"]
+               "module_labels", "custom_modules", "daily_report_optin", "report_recipients"]
     payload = {}
     for k, v in (data or {}).items():
         if k not in allowed:
@@ -2125,6 +2167,8 @@ def update_profile(client_id: int, data: dict):
         if k == "module_labels" and isinstance(v, dict):
             # Store only non-empty custom names, keyed by module id.
             payload[k] = _json.dumps({str(mk): str(mv).strip() for mk, mv in v.items() if str(mv).strip()})
+        elif k == "custom_modules" and isinstance(v, (list, tuple)):
+            payload[k] = _json.dumps(_sanitize_custom_modules(v))
         elif k == "report_recipients" and isinstance(v, (list, tuple)):
             payload[k] = _json.dumps([str(x).strip() for x in v if str(x).strip()])
         elif k == "enabled_modules" and isinstance(v, (list, tuple)):

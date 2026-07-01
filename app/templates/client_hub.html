@@ -2111,6 +2111,8 @@
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadgeClient" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
+          <!-- Per-account custom modules (injected at runtime) -->
+          <div id="clientNavCustom"></div>
         </div>
         <!-- ADMIN SIDEBAR: full access -->
         <div id="adminFullNav" style="display:none">
@@ -2129,6 +2131,8 @@
           <div class="nav-item" data-panel="chat" data-module="chat" onclick="navTo('chat')">💬 Team Chat
             <span id="navChatBadge" class="badge badge-red" style="display:none;margin-left:auto;font-size:10px">0</span>
           </div>
+          <!-- Per-account custom modules (injected at runtime) -->
+          <div id="adminNavCustom"></div>
           <div id="bizdevAdminNav">
             <div class="nav-section">Business Development</div>
             <div class="nav-item" data-panel="leads_rcm" onclick="adminShowLeads('rcm','leads_rcm')">💼 Leads Pipeline</div>
@@ -3274,6 +3278,42 @@
                   </tr>
                 </thead>
                 <tbody id="filesTbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ CUSTOM MODULE (per-account section: file board) ═══ -->
+        <div class="hub-panel" id="panel-custom">
+          <div class="page-header">
+            <div class="page-title" id="customPanelTitle">Custom Module</div>
+            <div class="page-actions" style="display:flex;gap:8px;align-items:center">
+              <input type="file" id="customModuleFileInput" multiple style="display:none"
+                accept=".xlsx,.xls,.csv,.ods,.odf,.odt,.odp,.pdf,.doc,.docx,.ppt,.pptx,.txt,.rtf"
+                onchange="uploadCustomModuleFiles(this)">
+              <button class="btn btn-primary btn-sm" onclick="document.getElementById('customModuleFileInput').click()">⬆ Upload</button>
+            </div>
+          </div>
+          <div id="customPanelDesc" style="font-size:12px;color:var(--gray-500);margin-bottom:12px"></div>
+          <div class="card" style="padding:0">
+            <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+              <span class="card-title" id="customFilesTitle">Files</span>
+              <span id="customFilesCount" style="font-size:13px;color:var(--gray-400)"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Filename</th>
+                    <th>Description</th>
+                    <th>Uploaded By</th>
+                    <th>Date</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="customFilesTbody">
+                  <tr><td colspan="5" style="text-align:center;padding:28px;color:var(--gray-400)">No files yet</td></tr>
+                </tbody>
               </table>
             </div>
           </div>
@@ -4498,6 +4538,17 @@
           <div style="color:#94a3b8;font-size:12px">Loading…</div>
         </div>
       </details>
+      <details style="margin-top:10px" open>
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#334155">➕ Add your own modules (optional)</summary>
+        <div style="font-size:12px;color:#64748b;margin:8px 0">
+          Add custom sidebar sections for this account. A <b>Section</b> gives this client a
+          dedicated upload / file board; a <b>Link</b> opens an external URL (payer portal,
+          shared sheet, etc.) in a new tab.
+        </div>
+        <div id="clientCustomModulesWrap" style="display:flex;flex-direction:column;gap:2px"></div>
+        <button type="button" class="btn btn-secondary btn-sm" style="margin-top:6px"
+          onclick="_addCustomModuleRow('clientCustomModulesWrap')">➕ Add module</button>
+      </details>
       <button class="btn btn-primary" style="margin-top:12px" onclick="saveClientModules()">Save Modules</button>
     </div>
   </div>
@@ -5071,6 +5122,7 @@
       // is reset before navigating.
       activeClientModules = null;
       activeClientModuleLabels = null;
+      activeClientCustomModules = null;
       applyModuleVisibility();
       navTo('dashboard');
       startGlobalJobsMonitor();
@@ -5113,7 +5165,7 @@
       });
       document.getElementById('bizdevNav').style.display = 'block';
       const bar = document.getElementById('subProfileBar'); if (bar) bar.style.display = 'none';
-      activeClientId = null; activeClientModules = null; activeClientModuleLabels = null;
+      activeClientId = null; activeClientModules = null; activeClientModuleLabels = null; activeClientCustomModules = null;
       showLeads('rcm', 'leads_rcm');
       try { loadChatRooms(); } catch (_) {}
       consumeChatDeepLink();
@@ -11158,6 +11210,10 @@
     let activeClientModules = null;
     // Cache for the active client's per-module custom labels ({key: name}).
     let activeClientModuleLabels = null;
+    // Cache for the active client's custom sidebar modules ([{key,label,icon,type[,url]}]).
+    let activeClientCustomModules = null;
+    // Which custom 'section' module is currently open (for the shared panel-custom).
+    let activeCustomModuleKey = null;
 
     function _renderModuleCheckboxGrid(targetId, selectedSet, cssClass) {
       const wrap = document.getElementById(targetId);
@@ -11263,6 +11319,158 @@
         const cl = document.getElementById('navCredLabel'); if (cl) cl.textContent = credOverride;
         const ct = document.getElementById('credPanelTitle'); if (ct) ct.textContent = credOverride;
       }
+    }
+
+    // ── Per-account CUSTOM modules (add your own sidebar sections/links) ──
+    let _customModuleRowSeq = 0;
+    function _customModuleRowHtml(m) {
+      m = m || {};
+      const typ = (m.type === 'link') ? 'link' : 'section';
+      return `<div class="cmRow" data-cmkey="${esc(m.key || '')}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:4px 0">
+          <input type="text" class="cmIcon" maxlength="2" value="${esc(m.icon || '')}" placeholder="📌"
+                 style="width:42px;text-align:center;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px">
+          <input type="text" class="cmLabel" value="${esc(m.label || '')}" placeholder="Module name"
+                 style="flex:1;min-width:120px;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px">
+          <select class="cmType" onchange="_cmToggleUrl(this)" style="padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:12px">
+            <option value="section" ${typ === 'section' ? 'selected' : ''}>Section (files)</option>
+            <option value="link" ${typ === 'link' ? 'selected' : ''}>Link (URL)</option>
+          </select>
+          <input type="url" class="cmUrl" value="${esc(m.url || '')}" placeholder="https://…"
+                 style="flex:1;min-width:140px;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;display:${typ === 'link' ? '' : 'none'}">
+          <button type="button" class="btn btn-secondary btn-sm" title="Remove"
+                  onclick="this.closest('.cmRow').remove()" style="color:#dc2626;padding:4px 9px">✕</button>
+        </div>`;
+    }
+    function _cmToggleUrl(sel) {
+      const row = sel.closest('.cmRow'); if (!row) return;
+      const url = row.querySelector('.cmUrl');
+      if (url) url.style.display = (sel.value === 'link') ? '' : 'none';
+    }
+    function _populateCustomModulesEditor(targetId, items) {
+      const wrap = document.getElementById(targetId);
+      if (!wrap) return;
+      const list = Array.isArray(items) ? items : [];
+      wrap.innerHTML = list.map(_customModuleRowHtml).join('');
+    }
+    function _addCustomModuleRow(targetId) {
+      const wrap = document.getElementById(targetId);
+      if (!wrap) return;
+      wrap.insertAdjacentHTML('beforeend', _customModuleRowHtml({}));
+    }
+    function _collectCustomModules(targetId) {
+      const wrap = document.getElementById(targetId);
+      const out = [];
+      if (!wrap) return out;
+      wrap.querySelectorAll('.cmRow').forEach(row => {
+        const label = (row.querySelector('.cmLabel')?.value || '').trim();
+        if (!label) return;
+        const type = (row.querySelector('.cmType')?.value === 'link') ? 'link' : 'section';
+        const icon = (row.querySelector('.cmIcon')?.value || '').trim();
+        const url = (row.querySelector('.cmUrl')?.value || '').trim();
+        const entry = { key: row.getAttribute('data-cmkey') || '', label, type, icon };
+        if (type === 'link') entry.url = url;
+        out.push(entry);
+      });
+      return out;
+    }
+
+    // Render the active client's custom modules into both sidebars.
+    function renderCustomModuleNav() {
+      const mods = Array.isArray(activeClientCustomModules) ? activeClientCustomModules : [];
+      ['clientNavCustom', 'adminNavCustom'].forEach(cid => {
+        const c = document.getElementById(cid);
+        if (!c) return;
+        if (!mods.length) { c.innerHTML = ''; return; }
+        c.innerHTML = mods.map(m => {
+          const icon = m.icon ? (esc(m.icon) + ' ') : (m.type === 'link' ? '🔗 ' : '📌 ');
+          const k = esc(m.key || '');
+          return `<div class="nav-item" data-custommod="${k}" onclick="navToCustomModule('${k}')">${icon}${esc(m.label)}</div>`;
+        }).join('');
+      });
+    }
+
+    // Navigate to a custom module: links open externally, sections open the
+    // shared file-board panel scoped to that module.
+    function navToCustomModule(key) {
+      const mods = Array.isArray(activeClientCustomModules) ? activeClientCustomModules : [];
+      const m = mods.find(x => x.key === key);
+      if (!m) return;
+      if (m.type === 'link') {
+        if (m.url) window.open(m.url, '_blank', 'noopener');
+        return;
+      }
+      activeCustomModuleKey = key;
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.hub-panel').forEach(p => p.classList.remove('active'));
+      const ni = document.querySelector(`.nav-item[data-custommod="${key}"]`);
+      if (ni) ni.classList.add('active');
+      const panel = document.getElementById('panel-custom');
+      if (panel) panel.classList.add('active');
+      const titleEl = document.getElementById('customPanelTitle');
+      if (titleEl) titleEl.textContent = (m.icon ? m.icon + ' ' : '') + m.label;
+      const descEl = document.getElementById('customPanelDesc');
+      if (descEl) descEl.textContent = 'Files for this section are private to this account.';
+      closeMobileSidebar();
+      loadCustomModuleFiles();
+    }
+
+    async function loadCustomModuleFiles() {
+      const key = activeCustomModuleKey;
+      const tb = document.getElementById('customFilesTbody');
+      if (!key || !tb) return;
+      const cat = 'cm:' + key;
+      try {
+        const url = activeClientId ? `/hub/api/files?client_id=${activeClientId}` : '/hub/api/files';
+        const r = await fetch(url);
+        const files = ((await r.json()).files || []).filter(f => f.category === cat);
+        const countEl = document.getElementById('customFilesCount');
+        if (countEl) countEl.textContent = files.length + ' file' + (files.length !== 1 ? 's' : '');
+        if (!files.length) {
+          tb.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:28px;color:var(--gray-400)">No files yet — click Upload to add one</td></tr>';
+          return;
+        }
+        tb.innerHTML = files.map(f => `<tr>
+            <td><strong>📄 ${esc(f.original_name)}</strong></td>
+            <td style="color:var(--gray-500);font-size:12px">${esc(f.description) || '-'}</td>
+            <td>${esc(f.uploaded_by) || '-'}</td>
+            <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
+            <td style="white-space:nowrap;display:flex;gap:4px">
+              <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Download">⬇</a>
+              <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteCustomModuleFile(${f.id})" title="Delete">🗑</button>
+            </td>
+          </tr>`).join('');
+      } catch (e) {
+        tb.innerHTML = `<tr><td colspan="5" style="color:#ef4444;padding:16px">Could not load files: ${esc(e.message)}</td></tr>`;
+      }
+    }
+
+    async function uploadCustomModuleFiles(input) {
+      const key = activeCustomModuleKey;
+      if (!key) return;
+      if (!activeClientId) { toast('Select a client account first', 'error'); return; }
+      const files = Array.from(input.files || []);
+      input.value = '';
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('category', 'cm:' + key);
+        fd.append('client_id', activeClientId);
+        try {
+          const r = await fetch('/hub/api/files/upload', { method: 'POST', body: fd });
+          if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || 'Upload failed'); }
+          toast(`${file.name} uploaded`, 'success');
+        } catch (e) { toast(e.message, 'error'); }
+      }
+      loadCustomModuleFiles();
+    }
+
+    async function deleteCustomModuleFile(id) {
+      if (!confirm('Delete this file?')) return;
+      try {
+        const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Delete failed');
+        loadCustomModuleFiles();
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     async function populateClientAccessChecks(targetId, grantedIds) {
@@ -11388,9 +11596,11 @@
         const mods = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
         populateClientModuleChecks('clientModulesWrap', mods);
         _populateModuleRenameInputs('clientModuleLabelsWrap', (d && d.module_labels) || {});
+        _populateCustomModulesEditor('clientCustomModulesWrap', (d && d.custom_modules) || []);
       } catch (e) {
         populateClientModuleChecks('clientModulesWrap', null);
         _populateModuleRenameInputs('clientModuleLabelsWrap', {});
+        _populateCustomModulesEditor('clientCustomModulesWrap', []);
         toast(`Could not load modules: ${e.message}`, 'error');
       }
     }
@@ -11401,11 +11611,12 @@
         document.querySelectorAll('#clientModulesWrap input.fCModCb:checked')
       ).map(cb => cb.value);
       const module_labels = _collectModuleLabels('clientModuleLabelsWrap');
+      const custom_modules = _collectCustomModules('clientCustomModulesWrap');
       try {
         const r = await fetch(`/hub/api/profile/${_modulesModalClientId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled_modules, module_labels })
+          body: JSON.stringify({ enabled_modules, module_labels, custom_modules })
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         toast('Modules updated', 'success');
@@ -11414,6 +11625,7 @@
         if (activeClientId === _modulesModalClientId) {
           activeClientModules = enabled_modules.slice();
           activeClientModuleLabels = module_labels;
+          activeClientCustomModules = custom_modules;
           applyModuleVisibility();
         }
       } catch (e) { toast(e.message, 'error'); }
@@ -11475,6 +11687,8 @@
 
       // Apply any per-account custom module names to the sidebar.
       applyModuleLabels();
+      // Render any per-account custom modules (added sidebar sections/links).
+      renderCustomModuleNav();
     }
 
     // Self-service per-client controls shown on the Dashboard hero (admins/staff
@@ -11504,7 +11718,7 @@
     // Called from selectAccount() / loadProfile() etc. to refresh the cache
     // and re-apply nav visibility for the active client.
     async function refreshActiveClientModules() {
-      if (!activeClientId) { activeClientModules = null; activeClientModuleLabels = null; applyModuleVisibility(); return; }
+      if (!activeClientId) { activeClientModules = null; activeClientModuleLabels = null; activeClientCustomModules = null; applyModuleVisibility(); return; }
       // Admins/staff hit /profile/{cid}; clients only have permission for /profile
       const url = isStaffOrAdmin()
         ? `/hub/api/profile/${activeClientId}`
@@ -11515,9 +11729,11 @@
         const d = await r.json();
         activeClientModules = Array.isArray(d.enabled_modules) ? d.enabled_modules : null;
         activeClientModuleLabels = (d && d.module_labels && typeof d.module_labels === 'object') ? d.module_labels : null;
+        activeClientCustomModules = (d && Array.isArray(d.custom_modules)) ? d.custom_modules : null;
       } catch (_) {
         activeClientModules = null;
         activeClientModuleLabels = null;
+        activeClientCustomModules = null;
       }
       applyModuleVisibility();
     }
