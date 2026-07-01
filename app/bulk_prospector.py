@@ -771,10 +771,14 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
             except Exception:
                 pass
 
-        # ── Real-profile resolver (off by default — cloud IPs blocked) ─────
-        # When LIVE_LINKEDIN_LOOKUP=1 we'll try to resolve direct slugs.
-        # Otherwise we skip straight to guaranteed-clickable search URLs.
-        if first and last and LIVE_LINKEDIN_LOOKUP:
+        # ── Real-profile resolver (live HTTP; skipped in fast mode) ────────
+        # These resolve_* helpers are SYNCHRONOUS and issue blocking search
+        # fetches (5s timeout each, several per prospect). They MUST be
+        # skipped when fast=True — otherwise the national pull blocks the
+        # event loop on cloud IPs (Bing/Brave throttle) and never finishes.
+        # When LIVE_LINKEDIN_LOOKUP=1 (and not fast) we resolve direct slugs;
+        # otherwise we fall back to guaranteed-clickable search URLs below.
+        if first and last and LIVE_LINKEDIN_LOOKUP and not fast:
             real_li = resolve_linkedin_profile(first, last, org)
             real_fb = resolve_facebook_profile(first, last, org)
             real_ig = resolve_instagram_profile(first, last, org)
@@ -783,10 +787,10 @@ async def _enrich_dm_only(prospects: list[dict], *, fast: bool = False) -> dict:
         # Fallbacks: when the named DM has no LinkedIn, surface the company
         # page + up to 3 verified employee profiles so the user still has
         # a real human at the org to DM.
-        company_li = resolve_company_linkedin(org) if (org and LIVE_LINKEDIN_LOOKUP) else ""
+        company_li = resolve_company_linkedin(org) if (org and LIVE_LINKEDIN_LOOKUP and not fast) else ""
         employee_lis: list[str] = []
         li_label = "DM" if (first and last) else ""
-        if not real_li and org and LIVE_LINKEDIN_LOOKUP:
+        if not real_li and org and LIVE_LINKEDIN_LOOKUP and not fast:
             employee_lis = resolve_employee_at_company(org, max_results=3)
             if employee_lis:
                 real_li = employee_lis[0]
