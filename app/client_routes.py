@@ -1096,11 +1096,20 @@ def accounts(hub_session: Optional[str] = Cookie(None)):
     # Account selector should show client companies only (not internal/admin users),
     # and avoid duplicate cards for the same company.
     if role == "admin":
-        # Full admins always see every active client account.
-        clients = [
-            c for c in list_clients()
-            if c.get("role") == "client" and int(c.get("is_active", 0) or 0) == 1
-        ]
+        # Full admins see every active client ACCOUNT — but NOT "dedicated
+        # logins" (e.g. eligibility verifiers) that exist only to sign a person
+        # in to a shared account. Those rows are users, not separate clients:
+        # they carry a client_user_access grant pointing at OTHER account(s), so
+        # they belong in Manage Clients, never on the account selector.
+        clients = []
+        for c in list_clients():
+            if c.get("role") != "client" or int(c.get("is_active", 0) or 0) != 1:
+                continue
+            cid = int(c.get("id", 0) or 0)
+            assigned = [int(a) for a in accounts_assigned_to_user(cid) if int(a) != cid]
+            if assigned:
+                continue  # user login for another account, not its own client card
+            clients.append(c)
     elif role == "staff":
         # Staff users see only client accounts they've been explicitly granted
         # access to via the Add/Edit Client picker. Staff with zero grants see
@@ -1381,6 +1390,7 @@ def _notify_client_access_granted(cid: int, new_user_ids: list[int],
 
 @router.put("/clients/{cid}/access")
 def put_client_access(cid: int, body: ClientAccessIn, request: Request,
+                      notify: bool = True,
                       hub_session: Optional[str] = Cookie(None)):
     admin = _require_full_admin(hub_session)
     requested = [int(u) for u in (body.user_ids or []) if str(u).isdigit()]
@@ -1388,7 +1398,9 @@ def put_client_access(cid: int, body: ClientAccessIn, request: Request,
     existing_ids = {int(u.get("id", 0) or 0) for u in list_client_access(cid)}
     count = set_client_access(cid, requested, granted_by=admin.get("username", ""))
     new_ids = [u for u in requested if u not in existing_ids]
-    notified = _notify_client_access_granted(cid, new_ids, admin, request)
+    # ``notify=false`` lets an admin wire up access plumbing (e.g. attaching a
+    # dedicated verifier login to its shared account) without emailing anyone.
+    notified = _notify_client_access_granted(cid, new_ids, admin, request) if notify else 0
     return {"ok": True, "count": count, "notified": notified}
 
 
@@ -2683,7 +2695,26 @@ def get_my_profile(hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     scope = _client_scope(user)
     cid = scope if scope is not None else user["id"]
-    return get_profile(cid)
+    prof = get_profile(cid)
+    # A dedicated login (e.g. an eligibility verifier) is scoped to a SHARED
+    # account that isn't its own row. It must never see more than the modules it
+    # was personally granted, so intersect the shared account's modules with the
+    # user's own module grants. Own-account logins and admin/staff are
+    # unaffected. Never lock the user out — if the intersection is empty, keep
+    # the account's modules.
+    try:
+        own_id = int(user.get("id", 0) or 0)
+        if scope is not None and int(scope) != own_id:
+            own_mods = user.get("enabled_modules")
+            acct_mods = prof.get("enabled_modules")
+            if isinstance(own_mods, list) and own_mods and isinstance(acct_mods, list):
+                restricted = [m for m in acct_mods if m in set(own_mods)]
+                if restricted:
+                    prof = dict(prof)
+                    prof["enabled_modules"] = restricted
+    except Exception:
+        log.warning("module intersection failed for profile %s", cid, exc_info=True)
+    return prof
 
 
 @router.get("/profile/{cid}")
