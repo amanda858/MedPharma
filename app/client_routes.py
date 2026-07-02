@@ -8203,3 +8203,193 @@ def track_productivity(
     if not end_date:
         end_date = business_today_iso()
     return get_productivity_report(start_date=start_date, end_date=end_date, username=username)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Prior Auth / Eligibility gate  —  ADMIN-ONLY, SANDBOX example (isolated)
+#
+# Wraps the standalone `eligibility_hybrid` package: real-time-style eligibility
+# + coverage discovery + medical necessity (LCD/NCD) + prior-auth determination,
+# collapsed into ONE disposition per ordered CPT, plus batch spreadsheet review.
+#
+# Safety posture (must never interfere with production):
+#   • Gated by _require_full_admin (role == 'admin' only).
+#   • Runs in SANDBOX (mock) mode unless ELIG_SANDBOX=0 + vendor creds are set —
+#     so there are no live payer calls and no PHI leaves the server by default.
+#   • The package is imported LAZILY inside each handler and guarded, so any
+#     problem here returns a clean error and can never crash the rest of the hub.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_ELIG_BATCH_MAX_ROWS = 1000
+_ELIG_ALLOWED_EXTS = (".xlsx", ".xlsm", ".csv")
+
+
+class PaGateIn(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    dob: str = ""                          # YYYY-MM-DD
+    gender: Optional[str] = "U"            # M / F / U
+    payer_name: Optional[str] = ""
+    member_id: Optional[str] = ""
+    ssn_last4: Optional[str] = ""
+    zip_code: Optional[str] = ""
+    date_of_service: Optional[str] = ""    # YYYY-MM-DD; defaults to today
+    cpt_codes: Optional[str] = ""          # comma / space separated
+    icd10_codes: Optional[str] = ""        # comma / space separated
+    provider_npi: Optional[str] = ""
+    provider_name: Optional[str] = ""
+
+
+def _elig_is_sandbox() -> bool:
+    v = (os.environ.get("ELIG_SANDBOX", "1") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def _elig_num(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _elig_summary(rows: list) -> dict:
+    out: dict = {}
+    for r in rows:
+        d = str(r.get("Disposition", "") or "")
+        if d:
+            out[d] = out.get(d, 0) + 1
+    return out
+
+
+def _elig_split_codes(v) -> list:
+    if not v:
+        return []
+    s = str(v)
+    for sep in (";", "|", "/", "\n", "\t", " "):
+        s = s.replace(sep, ",")
+    return [c.strip().upper() for c in s.split(",") if c.strip()]
+
+
+async def _elig_read_upload(file: UploadFile) -> list:
+    """Validate + parse an uploaded roster into raw dict rows (admin batch)."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _ELIG_ALLOWED_EXTS:
+        raise HTTPException(400, "Upload an Excel (.xlsx) or CSV file of patients.")
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum is 20MB.")
+    import tempfile
+    from eligibility_hybrid.batch import read_rows
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    try:
+        tmp.write(content)
+        tmp.close()
+        rows = read_rows(tmp.name)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the spreadsheet: {e}")
+    finally:
+        try:
+            os.remove(tmp.name)
+        except Exception:
+            pass
+    if not rows:
+        raise HTTPException(400, "No data rows found in the uploaded file.")
+    if len(rows) > _ELIG_BATCH_MAX_ROWS:
+        raise HTTPException(413, f"Too many rows ({len(rows)}). Max {_ELIG_BATCH_MAX_ROWS} per upload.")
+    return rows
+
+
+@router.post("/admin/eligibility/gate")
+def admin_eligibility_gate(body: PaGateIn, hub_session: Optional[str] = Cookie(None)):
+    """Single-patient pre-analytical gate. Admin-only; sandbox unless creds set."""
+    _require_full_admin(hub_session)
+    if not ((body.first_name or "").strip() or (body.last_name or "").strip()):
+        raise HTTPException(400, "Patient first or last name is required.")
+    try:
+        from eligibility_hybrid import PatientRequest
+        from eligibility_hybrid.batch import build_review_gate, rows_from_accession
+    except Exception as e:
+        raise HTTPException(503, f"Eligibility engine unavailable: {e}")
+    req = PatientRequest(
+        first_name=(body.first_name or "").strip(),
+        last_name=(body.last_name or "").strip(),
+        dob=(body.dob or "").strip(),
+        gender=((body.gender or "U").strip()[:1].upper() or "U"),
+        member_id=(body.member_id or "").strip() or None,
+        payer_name=(body.payer_name or "").strip() or None,
+        ssn_last4=(body.ssn_last4 or "").strip() or None,
+        zip_code=(body.zip_code or "").strip() or None,
+        date_of_service=(body.date_of_service or "").strip() or None,
+        cpt_codes=_elig_split_codes(body.cpt_codes),
+        icd10_codes=_elig_split_codes(body.icd10_codes),
+        provider_npi=(body.provider_npi or "").strip(),
+        provider_name=(body.provider_name or "").strip(),
+    )
+    try:
+        gate = build_review_gate()
+        res = gate.evaluate(req)
+        rows = rows_from_accession(req, res)
+        result = res.to_dict()
+    except Exception as e:
+        raise HTTPException(500, f"Eligibility evaluation failed: {e}")
+    return {
+        "ok": True,
+        "sandbox": _elig_is_sandbox(),
+        "result": result,
+        "rows": rows,
+        "summary": _elig_summary(rows),
+        "portfolio_expected_value": round(sum(_elig_num(r.get("Expected $")) for r in rows), 2),
+    }
+
+
+@router.post("/admin/eligibility/batch")
+async def admin_eligibility_batch(
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Batch roster review (Excel/CSV upload -> reviewed lines). Admin-only."""
+    _require_full_admin(hub_session)
+    rows_in = await _elig_read_upload(file)
+    try:
+        from eligibility_hybrid.batch import build_review_gate, review_rows
+        gate = build_review_gate()
+        reviewed = review_rows(rows_in, gate)
+    except Exception as e:
+        raise HTTPException(500, f"Batch review failed: {e}")
+    return {
+        "ok": True,
+        "sandbox": _elig_is_sandbox(),
+        "patients_in": len(rows_in),
+        "lines_reviewed": len(reviewed),
+        "rows": reviewed,
+        "summary": _elig_summary(reviewed),
+        "portfolio_expected_value": round(sum(_elig_num(r.get("Expected $")) for r in reviewed), 2),
+    }
+
+
+@router.post("/admin/eligibility/batch.xlsx")
+async def admin_eligibility_batch_export(
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Same batch review, returned as a color-coded reviewed workbook. Admin-only."""
+    _require_full_admin(hub_session)
+    rows_in = await _elig_read_upload(file)
+    import tempfile
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+    try:
+        from eligibility_hybrid.batch import build_review_gate, review_rows, write_review_xlsx
+        gate = build_review_gate()
+        reviewed = review_rows(rows_in, gate)
+        out = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        out.close()
+        write_review_xlsx(out.name, reviewed)
+    except Exception as e:
+        raise HTTPException(500, f"Batch export failed: {e}")
+    return FileResponse(
+        out.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="coverage_review.xlsx",
+        background=BackgroundTask(os.remove, out.name),
+    )

@@ -2140,6 +2140,7 @@
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
+            <div class="nav-item" data-panel="pagate" onclick="navTo('pagate')">🧬 Prior Auth / Eligibility</div>
           </div>
         </div>
         <!-- BUSINESS DEVELOPMENT SIDEBAR: leads pipeline + weekly report + chat -->
@@ -2763,6 +2764,76 @@
                 <tbody id="clientTbody"></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- ═══ PRIOR AUTH / ELIGIBILITY (admin-only, sandbox) ═══ -->
+        <div class="hub-panel" id="panel-pagate">
+          <style>
+            #panel-pagate .pg-lbl{font-size:11px;color:#64748b;font-weight:600;display:block;margin-bottom:3px}
+            #panel-pagate .pg-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+            #panel-pagate .pg-tbl th{text-align:left;padding:7px 9px;background:#f1f5f9;color:#334155;font-weight:600;border-bottom:1px solid #e2e8f0;white-space:nowrap}
+            #panel-pagate .pg-tbl td{padding:7px 9px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+            #panel-pagate .pg-chip{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:11px;color:#111}
+            #panel-pagate .pg-kv{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:12.5px;margin:4px 0}
+            #panel-pagate .pg-kv b{color:#0f172a}
+          </style>
+          <div class="page-header">
+            <div class="page-title">🧬 Prior Auth / Eligibility</div>
+            <div class="page-actions">
+              <span id="pgModeBadge" class="badge" style="background:#fef3c7;color:#92400e;font-weight:700">SANDBOX</span>
+            </div>
+          </div>
+
+          <div class="card" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:12.5px;padding:12px 16px;margin-bottom:16px">
+            <strong>Admin preview.</strong> Combines eligibility + coverage discovery + medical necessity (LCD/NCD)
+            + prior-auth into one <em>Clear&nbsp;to&nbsp;Run / Hold / ABN / Self-Pay</em> decision per test — before reagents burn.
+            Running in <strong>sandbox</strong>: no live payer calls and no PHI leaves the server until vendor credentials are added.
+          </div>
+
+          <!-- Single patient -->
+          <div class="card" style="margin-bottom:18px">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <span class="card-title">🔎 Single patient</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
+              <div><label class="pg-lbl">First name</label><input id="pgFirst" class="form-control" placeholder="Marcus"></div>
+              <div><label class="pg-lbl">Last name</label><input id="pgLast" class="form-control" placeholder="Bell"></div>
+              <div><label class="pg-lbl">Date of birth</label><input id="pgDob" type="date" class="form-control"></div>
+              <div><label class="pg-lbl">Gender</label><select id="pgGender" class="form-control"><option value="U">—</option><option value="M">M</option><option value="F">F</option></select></div>
+              <div><label class="pg-lbl">Payer <span style="font-weight:400;color:#94a3b8">(blank = discover)</span></label><input id="pgPayer" class="form-control" placeholder="UnitedHealthcare"></div>
+              <div><label class="pg-lbl">Member ID</label><input id="pgMember" class="form-control" placeholder="W2000001"></div>
+              <div><label class="pg-lbl">SSN last 4</label><input id="pgSsn" class="form-control" maxlength="4" placeholder="for discovery"></div>
+              <div><label class="pg-lbl">ZIP</label><input id="pgZip" class="form-control" placeholder="33101"></div>
+              <div><label class="pg-lbl">Date of service</label><input id="pgDos" type="date" class="form-control"></div>
+              <div><label class="pg-lbl">Ordering NPI</label><input id="pgNpi" class="form-control" placeholder="1234567890"></div>
+              <div><label class="pg-lbl">CPT code(s)</label><input id="pgCpt" class="form-control" placeholder="87631, 87635"></div>
+              <div><label class="pg-lbl">ICD-10 Dx</label><input id="pgIcd" class="form-control" placeholder="J12.81, R05.9"></div>
+            </div>
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" onclick="paGateRunSingle()">▶ Run gate</button>
+              <button class="btn btn-secondary btn-sm" onclick="paGateFillSample()">Fill sample</button>
+              <button class="btn btn-secondary btn-sm" onclick="paGateClearSingle()">Clear</button>
+            </div>
+            <div id="pgSingleResult" style="margin-top:16px"></div>
+          </div>
+
+          <!-- Batch -->
+          <div class="card">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <span class="card-title">📊 Batch roster review</span>
+              <button class="btn btn-secondary btn-sm" onclick="paGateSampleCsv()">⬇ Sample template</button>
+            </div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:10px">
+              Upload the day's accessions (Excel .xlsx or CSV). Columns are auto-detected — e.g.
+              <code>First, Last, DOB, Payer, Member ID, CPT, ICD, NPI</code>. One reviewed line per ordered test comes back.
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <input type="file" id="pgBatchFile" accept=".xlsx,.xlsm,.csv" class="form-control" style="max-width:340px">
+              <button class="btn btn-primary btn-sm" onclick="paGateRunBatch()">▶ Review batch</button>
+              <button id="pgBatchExport" class="btn btn-secondary btn-sm" onclick="paGateExport()" style="display:none">⬇ Download reviewed Excel</button>
+            </div>
+            <div id="pgBatchResult" style="margin-top:16px"></div>
           </div>
         </div>
 
@@ -5630,6 +5701,7 @@
       if (panel === 'eligibility') loadEligibility();
       if (panel === 'providers') loadProviders();
       if (panel === 'clients') loadClients();
+      if (panel === 'pagate') initPaGate();
       if (panel === 'files') loadDocuments();
       if (panel === 'profile') loadProfile();
       if (panel === 'reporting') loadReport();
@@ -5658,7 +5730,7 @@
         if (!h) return;
         const valid = ['dashboard','claims','credentialing','enrollment','edi',
                        'eligibility','providers','clients','files','profile','reporting',
-                       'production','alerts','chat'];
+                       'production','alerts','chat','pagate'];
         if (valid.includes(h)) navTo(h);
       }
       if (document.readyState === 'loading') {
@@ -5668,6 +5740,154 @@
       }
       window.addEventListener('hashchange', openFromHash);
     })();
+
+    // ── Prior Auth / Eligibility (admin-only, sandbox) ─────────────────────
+    let _pgBatchFile = null;
+    const _PG_DISP_COLORS = {
+      'CLEAR TO RUN':'#C6EFCE', 'HOLD — PRIOR AUTH':'#FFEB9C',
+      'HOLD — MEDICAL NECESSITY':'#FFC7CE', 'GET ABN':'#FFD966',
+      'SELF-PAY':'#D9D9D9', 'DENY RISK':'#FF9999',
+    };
+    function _pgEsc(v){ return String(v==null?'':v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function _pgChip(d){ const bg=_PG_DISP_COLORS[d]||'#e2e8f0'; return `<span class="pg-chip" style="background:${bg}">${_pgEsc(d)}</span>`; }
+    function _pgMoney(v){ const n=Number(v); return (v===''||v==null||isNaN(n))?'' : (n<0?'-$'+Math.abs(n).toFixed(2):'$'+n.toFixed(2)); }
+
+    function initPaGate(){ /* panel is static; nothing to load until the admin runs a check */ }
+
+    function paGateFillSample(){
+      const set=(id,v)=>{const el=document.getElementById(id); if(el) el.value=v;};
+      set('pgFirst','Marcus'); set('pgLast','Bell'); set('pgDob','1979-04-12');
+      set('pgGender','M'); set('pgPayer','UnitedHealthcare'); set('pgMember','W2000001');
+      set('pgSsn',''); set('pgZip','33101'); set('pgDos',''); set('pgNpi','1234567890');
+      set('pgCpt','87631, 87635'); set('pgIcd','J12.81, R05.9');
+    }
+    function paGateClearSingle(){
+      ['pgFirst','pgLast','pgDob','pgPayer','pgMember','pgSsn','pgZip','pgDos','pgNpi','pgCpt','pgIcd']
+        .forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+      const g=document.getElementById('pgGender'); if(g) g.value='U';
+      document.getElementById('pgSingleResult').innerHTML='';
+    }
+
+    function _pgSetMode(sandbox){
+      const b=document.getElementById('pgModeBadge'); if(!b) return;
+      if(sandbox){ b.textContent='SANDBOX'; b.style.background='#fef3c7'; b.style.color='#92400e'; }
+      else { b.textContent='LIVE'; b.style.background='#dcfce7'; b.style.color='#166534'; }
+    }
+
+    async function paGateRunSingle(){
+      const val=id=>(document.getElementById(id)?.value||'').trim();
+      const body={
+        first_name:val('pgFirst'), last_name:val('pgLast'), dob:val('pgDob'),
+        gender:val('pgGender')||'U', payer_name:val('pgPayer'), member_id:val('pgMember'),
+        ssn_last4:val('pgSsn'), zip_code:val('pgZip'), date_of_service:val('pgDos'),
+        provider_npi:val('pgNpi'), cpt_codes:val('pgCpt'), icd10_codes:val('pgIcd'),
+      };
+      if(!body.first_name && !body.last_name){ toast('Enter a patient name first.','error'); return; }
+      const box=document.getElementById('pgSingleResult');
+      box.innerHTML='<div style="color:#64748b;font-size:13px">Evaluating…</div>';
+      try{
+        const r=await fetch('/hub/api/admin/eligibility/gate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||('HTTP '+r.status)); }
+        const data=await r.json();
+        _pgSetMode(data.sandbox);
+        renderPaGateSingle(data);
+      }catch(err){ box.innerHTML=''; toast('Gate failed: '+err.message,'error'); }
+    }
+
+    function renderPaGateSingle(data){
+      const box=document.getElementById('pgSingleResult');
+      const res=data.result||{}; const cov=res.coverage||{}; const rows=data.rows||[];
+      const kv=[];
+      kv.push(`<b>Overall:</b> ${_pgChip(res.overall||'')}`);
+      kv.push(`<b>Coverage:</b> ${_pgEsc(cov.status||'')}${cov.discovered?' (discovered)':''}`);
+      if(cov.payer_name) kv.push(`<b>Payer:</b> ${_pgEsc(cov.payer_name)}`);
+      if(cov.plan_name) kv.push(`<b>Plan:</b> ${_pgEsc(cov.plan_name)}`);
+      if(cov.member_id) kv.push(`<b>Member:</b> ${_pgEsc(cov.member_id)}`);
+      if(cov.effective_date) kv.push(`<b>Effective:</b> ${_pgEsc(cov.effective_date)}`);
+      if(cov.term_date) kv.push(`<b>Term:</b> ${_pgEsc(cov.term_date)}`);
+      kv.push(`<b>Portfolio EV:</b> ${_pgMoney(data.portfolio_expected_value)}`);
+      let html=`<div class="pg-kv">${kv.join('')}</div>`;
+      html+=_pgRowsTable(rows, false);
+      box.innerHTML=html;
+    }
+
+    function _pgRowsTable(rows, showPatient){
+      if(!rows||!rows.length) return '<div style="color:#64748b;font-size:13px">No lines.</div>';
+      const cols = showPatient
+        ? ['Patient','Payer','CPT','Test','Disposition','Coverage','Prior Auth','Patient $','Expected $','Action']
+        : ['CPT','Test','Disposition','Coverage','Medically Necessary','Prior Auth','Auth #','Patient $','Expected $','Action'];
+      let h='<div style="overflow-x:auto"><table class="pg-tbl"><thead><tr>';
+      cols.forEach(c=>h+=`<th>${_pgEsc(c)}</th>`); h+='</tr></thead><tbody>';
+      rows.forEach(row=>{
+        h+='<tr>';
+        cols.forEach(c=>{
+          const v=row[c];
+          if(c==='Disposition') h+=`<td>${_pgChip(v)}</td>`;
+          else if(c==='Patient $'||c==='Expected $'||c==='Plan $') h+=`<td>${_pgMoney(v)}</td>`;
+          else h+=`<td>${_pgEsc(v)}</td>`;
+        });
+        h+='</tr>';
+      });
+      h+='</tbody></table></div>';
+      return h;
+    }
+
+    async function paGateRunBatch(){
+      const inp=document.getElementById('pgBatchFile');
+      if(!inp||!inp.files||!inp.files.length){ toast('Choose an Excel or CSV file first.','error'); return; }
+      _pgBatchFile=inp.files[0];
+      const box=document.getElementById('pgBatchResult');
+      box.innerHTML='<div style="color:#64748b;font-size:13px">Reviewing roster…</div>';
+      try{
+        const fd=new FormData(); fd.append('file', _pgBatchFile);
+        const r=await fetch('/hub/api/admin/eligibility/batch',{method:'POST',body:fd});
+        if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||('HTTP '+r.status)); }
+        const data=await r.json();
+        _pgSetMode(data.sandbox);
+        renderPaGateBatch(data);
+        const exp=document.getElementById('pgBatchExport'); if(exp) exp.style.display='';
+      }catch(err){ box.innerHTML=''; toast('Batch failed: '+err.message,'error'); }
+    }
+
+    function renderPaGateBatch(data){
+      const box=document.getElementById('pgBatchResult');
+      const rows=data.rows||[]; const sum=data.summary||{};
+      let chips='';
+      Object.keys(sum).forEach(k=>{ chips+=`<span style="margin-right:10px;white-space:nowrap">${_pgChip(k)} <b>${sum[k]}</b></span>`; });
+      let html=`<div style="font-size:12.5px;margin-bottom:10px">`
+        +`<b>${data.patients_in}</b> patients → <b>${data.lines_reviewed}</b> reviewed lines &nbsp;•&nbsp; `
+        +`Portfolio EV <b>${_pgMoney(data.portfolio_expected_value)}</b></div>`
+        +`<div style="margin-bottom:12px">${chips}</div>`;
+      html+=_pgRowsTable(rows, true);
+      box.innerHTML=html;
+    }
+
+    async function paGateExport(){
+      if(!_pgBatchFile){ toast('Review a batch first.','error'); return; }
+      try{
+        const fd=new FormData(); fd.append('file', _pgBatchFile);
+        const r=await fetch('/hub/api/admin/eligibility/batch.xlsx',{method:'POST',body:fd});
+        if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||('HTTP '+r.status)); }
+        const blob=await r.blob();
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download='coverage_review.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      }catch(err){ toast('Export failed: '+err.message,'error'); }
+    }
+
+    function paGateSampleCsv(){
+      const lines=[
+        'First,Last,DOB,Gender,Payer,Member ID,SSN,ZIP,DOS,NPI,CPT,ICD',
+        'Marcus,Bell,1979-04-12,M,UnitedHealthcare,W2000001,,33101,,1234567890,87631;87635,J12.81;R05.9',
+        'Deja,Franklin,1991-08-03,F,,,4821,33012,,1234567890,87507;87798,A08.4;N39.0',
+        'Kevin,ONeil,1965-02-20,M,Cigna,U8830012,,33607,,1234567890,87631,J12.81',
+      ];
+      const blob=new Blob([lines.join('\n')],{type:'text/csv'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='eligibility_batch_template.csv'; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+
 
     function toggleMobileSidebar() {
       const sb = document.querySelector('.sidebar');
