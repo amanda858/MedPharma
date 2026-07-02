@@ -24,6 +24,9 @@ def _codes(result):
     return [f["code"] for f in result["integrity"]]
 
 
+_NPI = "1234567893"   # canonical VALID test NPI (passes the CMS check-digit)
+
+
 # ── Rule fires when it should ──────────────────────────────────────────────
 
 def test_ncci_ptp_bundling_fires():
@@ -31,7 +34,7 @@ def test_ncci_ptp_bundling_fires():
     r = _evaluate(first_name="Marcus", last_name="Bell", dob="1979-04-12",
                   payer_name="UnitedHealthcare", member_id="W2000001",
                   cpt_codes=["87631", "87635"], icd10_codes=["J12.81", "R05.9"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     ncci = [f for f in r["integrity"] if f["code"] == "NCCI_PTP"]
     assert ncci, f"expected NCCI_PTP, got {_codes(r)}"
     assert ncci[0]["cpt"] == "87635" and "87631" in ncci[0]["related"]
@@ -43,7 +46,7 @@ def test_mue_duplicate_units_fires():
     r = _evaluate(first_name="Dana", last_name="Cole", dob="1985-05-05",
                   payer_name="Aetna", member_id="W7000002",
                   cpt_codes=["87631", "87631"], icd10_codes=["J12.81"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "MUE_EXCEEDED" in _codes(r), f"expected MUE_EXCEEDED, got {_codes(r)}"
 
 
@@ -52,7 +55,7 @@ def test_qw_modifier_medicare_fires():
     r = _evaluate(first_name="Nora", last_name="Diaz", dob="1950-03-03",
                   payer_name="Medicare Part B", member_id="1EG4TE5MK72",
                   cpt_codes=["87635"], icd10_codes=["U07.1"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "QW_MODIFIER" in _codes(r), f"expected QW_MODIFIER, got {_codes(r)}"
 
 
@@ -61,7 +64,7 @@ def test_moldx_zcode_medicare_fires():
     r = _evaluate(first_name="Harold", last_name="Reed", dob="1948-02-02",
                   payer_name="Medicare Part B", member_id="1EG4TE5MK72",
                   cpt_codes=["81479"], icd10_codes=["C34.90"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "MOLDX_ZCODE" in _codes(r), f"expected MOLDX_ZCODE, got {_codes(r)}"
 
 
@@ -70,8 +73,43 @@ def test_termination_fires():
     r = _evaluate(first_name="Kevin", last_name="ONeil", dob="1965-02-20",
                   payer_name="Cigna", member_id="U8830012",
                   cpt_codes=["87631"], icd10_codes=["J12.81"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "COVERAGE_TERMED" in _codes(r), f"expected COVERAGE_TERMED, got {_codes(r)}"
+
+
+# ── Pre-submission data-quality gates fire when they should ────────────────
+
+def test_missing_member_id_fires():
+    """No member ID → the 270 and the claim will reject (X12 subscriber loop)."""
+    r = _evaluate(first_name="Paul", last_name="Vance", dob="1970-01-01",
+                  payer_name="Aetna", member_id="",
+                  cpt_codes=["87635"], icd10_codes=["U07.1"], provider_npi=_NPI)
+    assert "MISSING_MEMBER_ID" in _codes(r), _codes(r)
+
+
+def test_invalid_npi_fires():
+    """A check-digit-invalid NPI is caught before the clearinghouse rejects it."""
+    r = _evaluate(first_name="Rita", last_name="Sosa", dob="1972-02-02",
+                  payer_name="Aetna", member_id="W9000009",
+                  cpt_codes=["87635"], icd10_codes=["U07.1"],
+                  provider_npi="1234567890")   # fails the 80840-Luhn check
+    assert "INVALID_PROVIDER_NPI" in _codes(r), _codes(r)
+
+
+def test_missing_npi_fires():
+    """No provider NPI → the 837 claim rejects at the clearinghouse."""
+    r = _evaluate(first_name="Sam", last_name="Tran", dob="1968-03-03",
+                  payer_name="Aetna", member_id="W9000010",
+                  cpt_codes=["87635"], icd10_codes=["U07.1"], provider_npi="")
+    assert "MISSING_PROVIDER_NPI" in _codes(r), _codes(r)
+
+
+def test_missing_diagnosis_fires():
+    """No ordering Dx → medical necessity cannot be established (837P requires one)."""
+    r = _evaluate(first_name="Uma", last_name="Wells", dob="1988-04-04",
+                  payer_name="Aetna", member_id="W9000011",
+                  cpt_codes=["87635"], icd10_codes=[], provider_npi=_NPI)
+    assert "MISSING_DIAGNOSIS" in _codes(r), _codes(r)
 
 
 # ── Rule stays quiet when it should (no false positives) ───────────────────
@@ -81,7 +119,7 @@ def test_clean_single_test_has_no_integrity_flags():
     r = _evaluate(first_name="Grace", last_name="Kim", dob="1990-09-09",
                   payer_name="UnitedHealthcare", member_id="W3000003",
                   cpt_codes=["87635"], icd10_codes=["U07.1"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert r["integrity"] == [], f"expected no findings, got {_codes(r)}"
 
 
@@ -90,7 +128,7 @@ def test_ncci_does_not_fire_without_the_panel():
     r = _evaluate(first_name="Iris", last_name="Lane", dob="1975-07-07",
                   payer_name="Aetna", member_id="W4000004",
                   cpt_codes=["87635"], icd10_codes=["U07.1"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "NCCI_PTP" not in _codes(r)
 
 
@@ -99,7 +137,7 @@ def test_qw_does_not_fire_for_commercial():
     r = _evaluate(first_name="Owen", last_name="Park", dob="1982-08-08",
                   payer_name="Cigna", member_id="W5000005",
                   cpt_codes=["87635"], icd10_codes=["U07.1"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert "QW_MODIFIER" not in _codes(r)
 
 
@@ -110,7 +148,7 @@ def test_every_finding_is_explainable_and_cited():
     r = _evaluate(first_name="Harold", last_name="Reed", dob="1948-02-02",
                   payer_name="Medicare Part B", member_id="1EG4TE5MK72",
                   cpt_codes=["81479", "80305"], icd10_codes=["C34.90"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert r["integrity"], "expected findings for this Medicare molecular case"
     for f in r["integrity"]:
         assert f["code"] and f["severity"] in ("info", "advisory", "warn", "block")
@@ -127,7 +165,7 @@ def test_dispositions_unchanged_by_intercept():
     r = _evaluate(first_name="Marcus", last_name="Bell", dob="1979-04-12",
                   payer_name="UnitedHealthcare", member_id="W2000001",
                   cpt_codes=["87631", "87635"], icd10_codes=["J12.81", "R05.9"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     assert r["overall"] == "CLEAR TO RUN", r["overall"]
     assert isinstance(r["total_expected_value"], (int, float))
     # per-line integrity is attached to the right CPT
@@ -139,7 +177,7 @@ def test_summary_counts_by_severity():
     r = _evaluate(first_name="Harold", last_name="Reed", dob="1948-02-02",
                   payer_name="Medicare Part B", member_id="1EG4TE5MK72",
                   cpt_codes=["81479", "80305"], icd10_codes=["C34.90"],
-                  provider_npi="1234567890")
+                  provider_npi=_NPI)
     s = summarize_findings(r["integrity"])
     assert s["total"] == len(r["integrity"]) and s["total"] >= 1
 

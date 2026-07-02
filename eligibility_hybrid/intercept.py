@@ -17,7 +17,10 @@ Incumbents check "is the member active" and stop. They routinely miss the coding
 integrity that decides whether a technically-covered test is actually PAID:
 component bundling (NCCI PTP), unit caps (MUE), duplicate ordering, waived-test
 modifiers (QW), retroactive termination as-of the date of service, and molecular
-registration (MolDX). Catching these BEFORE the sample runs is the differentiator.
+registration (MolDX). They also skip the avoidable pre-submission data defects —
+missing member ID, missing or check-digit-invalid provider NPI, missing ordering
+diagnosis — that cause front-end rejections before a payer ever adjudicates.
+Catching all of this BEFORE the sample runs is the differentiator.
 
 STARTER TABLES: the edit tables below are a representative, clearly-labeled
 starter set so the engine works today in sandbox. In production they are loaded
@@ -72,6 +75,30 @@ _BASIS_MUE = "CMS Medically Unlikely Edits (MUE) — public quarterly file."
 _BASIS_QW = "CMS CLIA-waived test list; QW modifier required for Medicare (Pub 100-04, ch. 16)."
 _BASIS_TERM = "X12 271 plan-date semantics; coverage must be verified as-of the date of service."
 _BASIS_MOLDX = "Palmetto GBA MolDX — DEX Z-Code registration required for molecular tests (MolDX LCDs)."
+_BASIS_MEMBER = "ASC X12 270/837 subscriber loop (2010BA) requires a member/subscriber ID."
+_BASIS_NPI = "HIPAA NPI Final Rule; CMS NPI check-digit (ISO/IEC 7812 Luhn on the 80840 prefix); 837P requires billing/rendering NPI."
+_BASIS_DX = "ASC X12 837P requires at least one diagnosis; payer medical-necessity policy (LCD/NCD)."
+
+
+def _valid_npi(npi: str) -> bool:
+    """CMS NPI check-digit validation: Luhn over '80840' + the first 9 digits.
+
+    This is the published national standard (HIPAA NPI Final Rule / ISO 7812),
+    not a vendor algorithm — it catches transposed/typo NPIs that would reject.
+    """
+    s = (npi or "").strip()
+    if len(s) != 10 or not s.isdigit():
+        return False
+    base = "80840" + s[:9]
+    total = 0
+    for i, ch in enumerate(reversed(base)):
+        d = int(ch)
+        if i % 2 == 0:                     # double every other digit, from the right
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return (10 - (total % 10)) % 10 == int(s[9])
 
 
 @dataclass
@@ -194,6 +221,31 @@ def run_intercept(req: PatientRequest, coverage: CoverageResult, lines) -> list[
     term = _as_of_dos_termed(coverage, req.dos)
     if term:
         findings.append(term)
+
+    # 6) Pre-submission data-quality gates — the avoidable defects that cause
+    #    front-end (clearinghouse) rejections before a payer ever adjudicates.
+    #    Most eligibility tools never check these; catching them here saves a cycle.
+    if not (req.member_id or "").strip():
+        findings.append(Finding(
+            "MISSING_MEMBER_ID", SEV_WARN,
+            "No subscriber/member ID — the eligibility (270) request and the claim will reject.",
+            _BASIS_MEMBER, "Capture the member ID from the insurance card before submission."))
+    npi = (req.provider_npi or "").strip()
+    if not npi:
+        findings.append(Finding(
+            "MISSING_PROVIDER_NPI", SEV_WARN,
+            "No billing/rendering provider NPI — the 837 claim will reject at the clearinghouse.",
+            _BASIS_NPI, "Add the provider NPI before submission."))
+    elif not _valid_npi(npi):
+        findings.append(Finding(
+            "INVALID_PROVIDER_NPI", SEV_WARN,
+            f"Provider NPI {npi} fails the CMS check-digit test — it is not a valid NPI.",
+            _BASIS_NPI, "Correct the NPI (check for a typo/transposition) and confirm it in NPPES."))
+    if not [c for c in (req.icd10_codes or []) if (c or "").strip()]:
+        findings.append(Finding(
+            "MISSING_DIAGNOSIS", SEV_WARN,
+            "No ordering diagnosis (ICD-10) — medical necessity cannot be established and the claim will reject.",
+            _BASIS_DX, "Attach at least one ordering diagnosis code."))
 
     findings.sort(key=lambda f: _SEV_RANK.get(f.severity, 0), reverse=True)
     return [f.to_dict() for f in findings]

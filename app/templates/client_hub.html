@@ -2810,7 +2810,7 @@
               <div><label class="pg-lbl">SSN last 4</label><input id="pgSsn" class="form-control" maxlength="4" placeholder="for discovery"></div>
               <div><label class="pg-lbl">ZIP</label><input id="pgZip" class="form-control" placeholder="33101"></div>
               <div><label class="pg-lbl">Date of service</label><input id="pgDos" type="date" class="form-control"></div>
-              <div><label class="pg-lbl">Ordering NPI</label><input id="pgNpi" class="form-control" placeholder="1234567890"></div>
+              <div><label class="pg-lbl">Ordering NPI</label><input id="pgNpi" class="form-control" placeholder="1234567893"></div>
               <div><label class="pg-lbl">CPT code(s)</label><input id="pgCpt" class="form-control" placeholder="87631, 87635"></div>
               <div><label class="pg-lbl">ICD-10 Dx</label><input id="pgIcd" class="form-control" placeholder="J12.81, R05.9"></div>
             </div>
@@ -5783,7 +5783,7 @@
       const set=(id,v)=>{const el=document.getElementById(id); if(el) el.value=v;};
       set('pgFirst','Marcus'); set('pgLast','Bell'); set('pgDob','1979-04-12');
       set('pgGender','M'); set('pgPayer','UnitedHealthcare'); set('pgMember','W2000001');
-      set('pgSsn',''); set('pgZip','33101'); set('pgDos',''); set('pgNpi','1234567890');
+      set('pgSsn',''); set('pgZip','33101'); set('pgDos',''); set('pgNpi','1234567893');
       set('pgCpt','87631, 87635'); set('pgIcd','J12.81, R05.9');
     }
     function paGateClearSingle(){
@@ -5904,9 +5904,9 @@
     function paGateSampleCsv(){
       const lines=[
         'First,Last,DOB,Gender,Payer,Member ID,SSN,ZIP,DOS,NPI,CPT,ICD',
-        'Marcus,Bell,1979-04-12,M,UnitedHealthcare,W2000001,,33101,,1234567890,87631;87635,J12.81;R05.9',
-        'Deja,Franklin,1991-08-03,F,,,4821,33012,,1234567890,87507;87798,A08.4;N39.0',
-        'Kevin,ONeil,1965-02-20,M,Cigna,U8830012,,33607,,1234567890,87631,J12.81',
+        'Marcus,Bell,1979-04-12,M,UnitedHealthcare,W2000001,,33101,,1234567893,87631;87635,J12.81;R05.9',
+        'Deja,Franklin,1991-08-03,F,,,4821,33012,,1234567893,87507;87798,A08.4;N39.0',
+        'Kevin,ONeil,1965-02-20,M,Cigna,U8830012,,33607,,1234567893,87631,J12.81',
       ];
       const blob=new Blob([lines.join('\n')],{type:'text/csv'});
       const url=URL.createObjectURL(blob);
