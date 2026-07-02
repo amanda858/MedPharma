@@ -6223,8 +6223,8 @@
       const baCards = [
         { key: 'today', label: 'Billed Today' },
         { key: 'yesterday', label: 'Billed Yesterday' },
-        { key: 'this_week', label: 'This Week (7d)' },
-        { key: 'this_month', label: 'This Month' },
+        { key: 'this_week', label: 'Last 7 Days' },
+        { key: 'this_month', label: 'Last 30 Days' },
         { key: 'all_time', label: 'All-Time Billed' },
       ];
       const baCard = document.getElementById('dashBilledActivityCard');
@@ -6232,7 +6232,7 @@
       const baHasData = baCards.some(c => (ba[c.key] && (ba[c.key].count || ba[c.key].charged)));
       if (baCard) baCard.style.display = baHasData ? '' : 'none';
       if (baEl && baHasData) {
-        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
+        const _tiles = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
           baCards.map(c => {
             const v = ba[c.key] || { count: 0, charged: 0 };
             return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
@@ -6241,6 +6241,28 @@
               <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
             </div>`;
           }).join('') + `</div>`;
+        // Per-day billed breakdown — exactly what was billed out each day (last 14 days).
+        const _days = ba.by_day || [];
+        let _byDayHtml = '';
+        if (_days.length) {
+          const _mx = Math.max(1, ..._days.map(x => x.charged || 0));
+          const _bars = _days.map(x => {
+            const _has = (x.charged || 0) > 0;
+            const _h = _has ? Math.max(4, Math.round((x.charged / _mx) * 54)) : 1;
+            const _dt = new Date(x.date + 'T00:00:00');
+            const _lbl = (_dt.getMonth() + 1) + '/' + _dt.getDate();
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${x.date}: $${fmt(x.charged)} · ${x.count} line${x.count === 1 ? '' : 's'}">
+                <div style="font-size:9px;font-weight:700;color:var(--gray-600);white-space:nowrap">${_has ? '$' + fmt(x.charged) : ''}</div>
+                <div style="width:64%;height:${_h}px;background:${_has ? 'var(--success)' : 'var(--gray-200)'};border-radius:3px 3px 0 0;margin-top:auto"></div>
+                <div style="font-size:9px;color:var(--gray-400);white-space:nowrap">${_lbl}</div>
+              </div>`;
+          }).join('');
+          _byDayHtml = `<div style="margin-top:16px">
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Billed by day — last 14 days</div>
+              <div style="display:flex;align-items:flex-end;gap:4px;height:86px;padding:0 2px">${_bars}</div>
+            </div>`;
+        }
+        baEl.innerHTML = _tiles + _byDayHtml;
       }
 
       // Data Summary Card (shows record counts per section)
@@ -8422,8 +8444,8 @@
       const baCards = [
         { key: 'today', label: 'Billed Today' },
         { key: 'yesterday', label: 'Billed Yesterday' },
-        { key: 'this_week', label: 'This Week (7d)' },
-        { key: 'this_month', label: 'This Month' },
+        { key: 'this_week', label: 'Last 7 Days' },
+        { key: 'this_month', label: 'Last 30 Days' },
         { key: 'all_time', label: 'All-Time Billed' },
       ];
       const baEl = document.getElementById('rptClaimsBilledActivity');
@@ -9647,7 +9669,7 @@
           <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
           <td><span class="badge ${stColor}">${esc(f.status)}</span></td>
           <td style="white-space:nowrap;display:flex;gap:4px;align-items:center">
-            <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Download">⬇ Download</a>
+            <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Open / download" target="_blank" rel="noopener">⬇ Download</a>
             ${isPendingImport(f) ? `<button class="btn btn-sm" style="color:#fff;background:#d97706;border:none;font-size:12px;font-weight:600" onclick="importFileToClaims(${f.id})" title="Import this spreadsheet into claims">⬆ Import to Claims</button>` : ''}
             <button class="btn btn-sm" style="color:#7c3aed;background:#f5f3ff;border:none;font-size:12px" onclick="replaceFile(${f.id})" title="Replace with new version">🔄 Replace</button>
             <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteFile(${f.id})" title="Delete">🗑 Delete</button>
@@ -11825,7 +11847,7 @@
             <td>${esc(f.uploaded_by) || '-'}</td>
             <td style="font-size:12px">${(f.created_at || '').slice(0, 10)}</td>
             <td style="white-space:nowrap;display:flex;gap:4px">
-              <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Download">⬇</a>
+              <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Open / download" target="_blank" rel="noopener">⬇</a>
               <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteCustomModuleFile(${f.id})" title="Delete">🗑</button>
             </td>
           </tr>`).join('');

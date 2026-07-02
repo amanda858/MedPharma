@@ -3572,6 +3572,86 @@ def link_elig_file(rid: int, body: EligLinkFileIn,
     return {"ok": True, "file_id": int(body.file_id), "kind": kind}
 
 
+class EligReassignIn(BaseModel):
+    from_client_id: int
+    to_client_id: int
+    uploaded_by: Optional[str] = None      # optional: only this uploader's rows
+    unassign_user_id: Optional[int] = None  # optional: drop shared-board access
+    dry_run: bool = False
+
+
+@router.post("/admin/eligibility/reassign")
+def reassign_eligibility(body: EligReassignIn, hub_session: Optional[str] = Cookie(None)):
+    """Move eligibility records (and their documents) from one account to another.
+
+    Used when a verifier's login was pooling intakes onto a shared board but the
+    work actually belongs to a specific client account. Optionally filters by
+    ``uploaded_by`` and can drop the verifier's access to the old shared board so
+    their scope follows the data. ``dry_run`` returns the counts without writing.
+    Admin-only; reversible by running it again in the opposite direction."""
+    admin = _require_full_admin(hub_session)
+    src, dst = int(body.from_client_id), int(body.to_client_id)
+    if src == dst:
+        raise HTTPException(400, "Source and destination accounts must differ")
+    ub = (body.uploaded_by or "").strip().lower()
+
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        elig_where = "client_id=?"
+        elig_params: list = [src]
+        if ub:
+            elig_where += " AND lower(COALESCE(uploaded_by,''))=?"
+            elig_params.append(ub)
+        elig_rows = cur.execute(
+            f"SELECT id, PatientName, IntakeFileId, ReportFileId "
+            f"FROM eligibility WHERE {elig_where}", elig_params).fetchall()
+
+        file_ids = set()
+        for r in elig_rows:
+            for fk in ("IntakeFileId", "ReportFileId"):
+                if r[fk]:
+                    file_ids.add(int(r[fk]))
+        # Also carry over any files filed under the source account by this
+        # uploader (covers documents never linked to a specific record).
+        file_where = "client_id=?"
+        file_params: list = [src]
+        if ub:
+            file_where += " AND lower(COALESCE(uploaded_by,''))=?"
+            file_params.append(ub)
+        for r in cur.execute(f"SELECT id FROM client_files WHERE {file_where}",
+                             file_params).fetchall():
+            file_ids.add(int(r["id"]))
+
+        summary = {
+            "from_client_id": src, "to_client_id": dst, "uploaded_by": ub or None,
+            "eligibility_records": len(elig_rows), "files": len(file_ids),
+            "unassign_user_id": body.unassign_user_id, "dry_run": bool(body.dry_run),
+            "sample_patients": [r["PatientName"] for r in elig_rows[:5]],
+        }
+        if body.dry_run:
+            return {"ok": True, **summary}
+
+        cur.execute(f"UPDATE eligibility SET client_id=?, updated_at=? WHERE {elig_where}",
+                    [dst, datetime.now().isoformat(), *elig_params])
+        if file_ids:
+            marks = ",".join(["?"] * len(file_ids))
+            cur.execute(f"UPDATE client_files SET client_id=? WHERE id IN ({marks})",
+                        [dst, *file_ids])
+        if body.unassign_user_id:
+            cur.execute("DELETE FROM client_user_access WHERE client_id=? AND user_id=?",
+                        (src, int(body.unassign_user_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    notify_activity(admin["username"], "reassigned eligibility", "Eligibility",
+                    f"{summary['eligibility_records']} record(s), "
+                    f"{summary['files']} file(s) {src}→{dst}")
+    return {"ok": True, **summary}
+
+
 # ─── EDI Setup ────────────────────────────────────────────────────────────────
 
 class EDIIn(BaseModel):
@@ -4827,8 +4907,10 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
     from datetime import date as _ba_date
     _today = business_today()
     _yesterday = _today.fromordinal(_today.toordinal() - 1)
-    _week_start = _today.fromordinal(_today.toordinal() - 6)  # inclusive last 7 days
-    _month_start = _today.replace(day=1)
+    _week_start = _today.fromordinal(_today.toordinal() - 6)    # inclusive last 7 days
+    _month_start = _today.fromordinal(_today.toordinal() - 29)  # rolling last 30 days
+    _day_start = _today.fromordinal(_today.toordinal() - 13)    # per-day breakdown, last 14 days
+    _by_day_acc = {}  # 'YYYY-MM-DD' -> [count, charged]
     billing_activity = {
         "today": {"count": 0, "charged": 0.0},
         "yesterday": {"count": 0, "charged": 0.0},
@@ -4860,8 +4942,20 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         if d >= _month_start:
             billing_activity["this_month"]["count"] += 1
             billing_activity["this_month"]["charged"] += amt
+        if d >= _day_start:
+            _slot = _by_day_acc.setdefault(d.isoformat(), [0, 0.0])
+            _slot[0] += 1
+            _slot[1] += amt
     for _k in billing_activity:
         billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
+    # Explicit per-day billed totals (last 14 days, zero-filled) so the report
+    # shows exactly what was billed out each day.
+    _bd_list = []
+    for _i in range(13, -1, -1):
+        _dd = _today.fromordinal(_today.toordinal() - _i).isoformat()
+        _c, _s = _by_day_acc.get(_dd, [0, 0.0])
+        _bd_list.append({"date": _dd, "count": _c, "charged": round(_s, 2)})
+    billing_activity["by_day"] = _bd_list
 
     denial_agg = {}
     for c in claims:
@@ -6634,10 +6728,21 @@ def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
             "happening, uploads are not being saved to persistent storage.)",
         )
     from fastapi.responses import FileResponse
+    # Open PDFs and images INLINE (preview in a browser tab) so intake scans can
+    # be viewed without downloading; everything else downloads as an attachment.
+    _INLINE_MEDIA = {
+        ".pdf": "application/pdf",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".gif": "image/gif", ".webp": "image/webp", ".txt": "text/plain",
+    }
+    _ext = os.path.splitext(rec.get("original_name") or rec.get("filename") or "")[1].lower()
+    _media = _INLINE_MEDIA.get(_ext, "application/octet-stream")
+    _disposition = "inline" if _ext in _INLINE_MEDIA else "attachment"
     return FileResponse(
         path,
         filename=rec["original_name"],
-        media_type="application/octet-stream",
+        media_type=_media,
+        content_disposition_type=_disposition,
     )
 
 

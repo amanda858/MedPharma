@@ -3345,8 +3345,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         }
         _ba_today = today
         _ba_yesterday = today.fromordinal(today.toordinal() - 1)
-        _ba_week_start = today.fromordinal(today.toordinal() - 6)  # inclusive last 7 days
-        _ba_month_start = today.replace(day=1)
+        _ba_week_start = today.fromordinal(today.toordinal() - 6)    # inclusive last 7 days
+        _ba_month_start = today.fromordinal(today.toordinal() - 29)  # rolling last 30 days
+        _ba_day_start = today.fromordinal(today.toordinal() - 13)    # per-day breakdown, last 14 days
+        _ba_by_day = {}  # 'YYYY-MM-DD' -> [count, charged]
         cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master
                         {base_cond} {'AND' if base_cond else 'WHERE'} COALESCE(BillDate,'') != ''""", base_p)
         for _bd_raw, _amt_raw in cur.fetchall():
@@ -3371,8 +3373,20 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             if _d >= _ba_month_start:
                 billing_activity["this_month"]["count"] += 1
                 billing_activity["this_month"]["charged"] += _amt
+            if _d >= _ba_day_start:
+                _slot = _ba_by_day.setdefault(_d.isoformat(), [0, 0.0])
+                _slot[0] += 1
+                _slot[1] += _amt
         for _k in billing_activity:
             billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
+        # Explicit per-day billed totals (last 14 days, zero-filled) so the
+        # dashboard shows exactly what was billed out each day.
+        _by_day = []
+        for _i in range(13, -1, -1):
+            _dd = today.fromordinal(today.toordinal() - _i).isoformat()
+            _c, _s = _ba_by_day.get(_dd, [0, 0.0])
+            _by_day.append({"date": _dd, "count": _c, "charged": round(_s, 2)})
+        billing_activity["by_day"] = _by_day
 
         # Status distribution (flat: status → count, for frontend bar chart)
         cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {cond} GROUP BY ClaimStatus", p)
