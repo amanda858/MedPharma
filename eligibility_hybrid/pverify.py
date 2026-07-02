@@ -1,10 +1,13 @@
-"""pVerify adapter — real-time REST eligibility + insurance discovery.
+"""pVerify connector — real-time REST eligibility + insurance discovery.
 
-Faithful to pVerify's documented REST contract: OAuth2 client-credentials token
--> Bearer -> /API/EligibilitySummary and /API/InsuranceDiscovery. With no
-credentials it runs in SANDBOX mode and returns deterministic mock responses so
-the whole engine works today. Confirm exact field casing against the pVerify
-sandbox once credentials are provisioned.
+MedPharma-authored connector to a third-party clearinghouse via that vendor's
+PUBLISHED REST contract: OAuth2 client-credentials token -> Bearer ->
+/API/EligibilitySummary and /API/InsuranceDiscovery. It contains no vendor
+proprietary code; the vendor is a swappable data source behind MedPharma's own
+`EligibilityProvider` interface. With no credentials it runs in SANDBOX mode and
+returns deterministic MedPharma-authored mock responses so the whole engine works
+today. Confirm exact field casing against the pVerify sandbox once credentials
+are provisioned.
 """
 from __future__ import annotations
 

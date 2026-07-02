@@ -1,6 +1,20 @@
-"""MedPharma hybrid eligibility engine (pVerify + Office Ally).
+"""MedPharma Coverage Intercept — a proprietary MedPharma product.
 
-Standalone foundation — deliberately NOT wired into the production hub yet.
+Ownership & provenance
+----------------------
+This package is MedPharma intellectual property, independently invented. Its
+decision logic — coverage resolution, medical necessity, prior-auth decisioning,
+the accession disposition gate, and the claim-integrity intercept — is ORIGINAL
+work built on PUBLIC standards (X12 270/271/278, HL7 FHIR Da Vinci, CMS
+LCD/NCD, NCCI/MUE, CLIA/QW, Palmetto GBA MolDX). Those are open standards and
+government rules; MedPharma's implementation of them is its own.
+
+Third-party clearinghouses are reached only through pluggable CONNECTORS behind
+MedPharma's own `EligibilityProvider` interface. The connectors talk to each
+vendor's PUBLISHED API and contain no vendor proprietary code — the vendor is a
+swappable data source ("buy the pipes"); the intelligence is MedPharma's
+("build the brain"). Sandbox mocks are MedPharma-authored, not vendor artifacts.
+
 Runs in sandbox (mock) mode with zero credentials; drop in real creds via env
 (see config.py) to go live.
 
@@ -13,6 +27,8 @@ Runs in sandbox (mock) mode with zero credentials; drop in real creds via env
 from .config import build_default_engine
 from .gate import AccessionGate, AccessionResult, CptDisposition, Disposition
 from .hybrid import HybridEligibilityEngine, HybridStrategy
+from .intercept import (ENGINE_NAME, METHOD, PRODUCT_NAME, Finding, run_intercept,
+                        summarize_findings)
 from .models import (Benefit, CoverageResult, CoverageStatus, CptCoverage,
                      CptStatus, EligibilityProvider, PatientRequest, ProviderError)
 from .officeally import OfficeAllyProvider
@@ -21,6 +37,8 @@ from .policy import (MedNecResult, check_medical_necessity, is_prior_auth_requir
 from .prior_auth import (PaChannel, PaStatus, PriorAuthEngine, PriorAuthRequest,
                          PriorAuthResult)
 from .pverify import PVerifyProvider
+
+PRODUCT = PRODUCT_NAME
 
 __all__ = [
     "PatientRequest", "CoverageResult", "Benefit", "CptCoverage",
@@ -31,4 +49,6 @@ __all__ = [
     "MedNecResult", "check_medical_necessity", "is_prior_auth_required",
     "is_traditional_medicare",
     "PriorAuthEngine", "PriorAuthRequest", "PriorAuthResult", "PaStatus", "PaChannel",
+    "run_intercept", "summarize_findings", "Finding",
+    "PRODUCT_NAME", "PRODUCT", "ENGINE_NAME", "METHOD",
 ]

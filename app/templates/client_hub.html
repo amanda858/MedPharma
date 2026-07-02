@@ -2140,7 +2140,7 @@
           <div id="adminNav">
             <div class="nav-section">Admin</div>
             <div class="nav-item" data-panel="clients" onclick="navTo('clients')">Manage Clients</div>
-            <div class="nav-item" data-panel="pagate" onclick="navTo('pagate')">🧬 Prior Auth / Eligibility</div>
+            <div class="nav-item" data-panel="pagate" onclick="navTo('pagate')">🧬 Coverage Intercept</div>
           </div>
         </div>
         <!-- BUSINESS DEVELOPMENT SIDEBAR: leads pipeline + weekly report + chat -->
@@ -2777,17 +2777,21 @@
             #panel-pagate .pg-chip{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:11px;color:#111}
             #panel-pagate .pg-kv{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:12.5px;margin:4px 0}
             #panel-pagate .pg-kv b{color:#0f172a}
+            #panel-pagate .pg-find{border-radius:8px;padding:8px 11px;margin-bottom:7px}
           </style>
           <div class="page-header">
-            <div class="page-title">🧬 Prior Auth / Eligibility</div>
+            <div class="page-title">🧬 MedPharma Coverage Intercept</div>
             <div class="page-actions">
+              <span class="badge" style="background:#eef2ff;color:#3730a3;font-weight:700">PROPRIETARY</span>
               <span id="pgModeBadge" class="badge" style="background:#fef3c7;color:#92400e;font-weight:700">SANDBOX</span>
             </div>
           </div>
 
           <div class="card" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:12.5px;padding:12px 16px;margin-bottom:16px">
-            <strong>Admin preview.</strong> Combines eligibility + coverage discovery + medical necessity (LCD/NCD)
-            + prior-auth into one <em>Clear&nbsp;to&nbsp;Run / Hold / ABN / Self-Pay</em> decision per test — before reagents burn.
+            <strong>MedPharma proprietary engine.</strong> One <em>Clear&nbsp;to&nbsp;Run / Hold / ABN / Self-Pay</em>
+            decision per test — eligibility + coverage discovery + medical necessity (LCD/NCD) + prior-auth, plus a
+            <strong>claim-integrity intercept</strong> (NCCI bundling, MUE units, QW, MolDX, as-of-DOS termination) that
+            catches what “is-the-member-active” checks miss. Independently built on public standards (X12, FHIR, CMS/NCCI/MUE); every finding cites its source.
             Running in <strong>sandbox</strong>: no live payer calls and no PHI leaves the server until vendor credentials are added.
           </div>
 
@@ -5752,6 +5756,27 @@
     function _pgChip(d){ const bg=_PG_DISP_COLORS[d]||'#e2e8f0'; return `<span class="pg-chip" style="background:${bg}">${_pgEsc(d)}</span>`; }
     function _pgMoney(v){ const n=Number(v); return (v===''||v==null||isNaN(n))?'' : (n<0?'-$'+Math.abs(n).toFixed(2):'$'+n.toFixed(2)); }
 
+    const _PG_SEV = {
+      block:   {bg:'#fef2f2', bd:'#fecaca', tx:'#991b1b', label:'BLOCK'},
+      warn:    {bg:'#fffbeb', bd:'#fde68a', tx:'#92400e', label:'WARN'},
+      advisory:{bg:'#eff6ff', bd:'#bfdbfe', tx:'#1e40af', label:'ADVISORY'},
+      info:    {bg:'#f8fafc', bd:'#e2e8f0', tx:'#334155', label:'INFO'},
+    };
+    function _pgFindings(list){
+      if(!list||!list.length) return '';
+      let h='<div style="margin:14px 0 4px"><div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Claim-integrity intercept</div>';
+      list.forEach(f=>{
+        const s=_PG_SEV[f.severity]||_PG_SEV.info;
+        h+=`<div class="pg-find" style="background:${s.bg};border:1px solid ${s.bd}">`
+          +`<div style="font-size:12.5px;color:${s.tx}"><b>${s.label}</b> · <b>${_pgEsc(f.code)}</b>${f.cpt?(' · '+_pgEsc(f.cpt)):''} — ${_pgEsc(f.message)}</div>`;
+        if(f.action) h+=`<div style="font-size:11.5px;color:#475569;margin-top:3px">→ ${_pgEsc(f.action)}</div>`;
+        if(f.basis)  h+=`<div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Basis: ${_pgEsc(f.basis)}</div>`;
+        h+='</div>';
+      });
+      h+='</div>';
+      return h;
+    }
+
     function initPaGate(){ /* panel is static; nothing to load until the admin runs a check */ }
 
     function paGateFillSample(){
@@ -5807,6 +5832,7 @@
       if(cov.term_date) kv.push(`<b>Term:</b> ${_pgEsc(cov.term_date)}`);
       kv.push(`<b>Portfolio EV:</b> ${_pgMoney(data.portfolio_expected_value)}`);
       let html=`<div class="pg-kv">${kv.join('')}</div>`;
+      html+=_pgFindings(res.integrity||[]);
       html+=_pgRowsTable(rows, false);
       box.innerHTML=html;
     }

@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Optional
 
 from .hybrid import HybridEligibilityEngine
+from .intercept import run_intercept
 from .models import CoverageResult, CoverageStatus, PatientRequest
 from .policy import (check_medical_necessity, get_policy, is_prior_auth_required,
                      is_traditional_medicare)
@@ -72,6 +73,7 @@ class AccessionResult:
     coverage: CoverageResult
     lines: list[CptDisposition] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)
+    integrity: list[dict] = field(default_factory=list)  # MedPharma claim-integrity findings
 
     @property
     def total_expected_value(self) -> float:
@@ -84,6 +86,7 @@ class AccessionResult:
             "total_expected_value": self.total_expected_value,
             "coverage": self.coverage.to_dict(),
             "trace": self.trace,
+            "integrity": self.integrity,
             "lines": [{
                 "cpt": ln.cpt, "description": ln.description,
                 "disposition": ln.disposition.value,
@@ -94,6 +97,8 @@ class AccessionResult:
                 "patient_responsibility": ln.patient_responsibility,
                 "plan_pays": ln.plan_pays, "expected_value": ln.expected_value,
                 "reasons": ln.reasons, "actions": ln.actions,
+                "integrity": [f for f in self.integrity
+                              if ln.cpt == f.get("cpt") or ln.cpt in f.get("related", [])],
             } for ln in self.lines],
         }
 
@@ -114,8 +119,10 @@ class AccessionGate:
                  for cov in coverage.per_cpt]
         overall = max((ln.disposition for ln in lines),
                       key=lambda d: _SEVERITY[d], default=Disposition.CLEAR_TO_RUN)
+        integrity = run_intercept(req, coverage, lines)
         return AccessionResult(patient=req.full_name, overall=overall,
-                               coverage=coverage, lines=lines, trace=coverage.trace)
+                               coverage=coverage, lines=lines, trace=coverage.trace,
+                               integrity=integrity)
 
     def _evaluate_cpt(self, cov, coverage, req, is_medicare) -> CptDisposition:
         reasons: list[str] = []

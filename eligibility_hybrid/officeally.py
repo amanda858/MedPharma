@@ -1,12 +1,15 @@
-"""Office Ally adapter — X12 270/271 real-time eligibility + Insurance Discovery.
+"""Office Ally connector — X12 270/271 real-time eligibility + Insurance Discovery.
 
-Office Ally's clearinghouse reaches 6,000+ payers via 270/271 (SFTP, API, SOAP,
-MIME). Insurance Discovery finds active billable coverage on self-pay accounts
-(10-30% hit rate) — the piece that solves "we don't know the payer".
+MedPharma-authored connector to a third-party clearinghouse via published X12/API
+transports; contains no vendor proprietary code and is swappable behind
+MedPharma's own `EligibilityProvider` interface. Office Ally's clearinghouse
+reaches 6,000+ payers via 270/271 (SFTP, API, SOAP, MIME). Insurance Discovery
+finds active billable coverage on self-pay accounts (10-30% hit rate) — the piece
+that solves "we don't know the payer".
 
-Sandbox mode returns deterministic simulated responses. The live real-time path
-builds a 270 and parses the returned 271; live Insurance Discovery is a batch
-workflow and is left as a clearly-marked integration point.
+Sandbox mode returns deterministic MedPharma-authored simulated responses. The
+live real-time path builds a 270 and parses the returned 271; live Insurance
+Discovery is a batch workflow and is left as a clearly-marked integration point.
 """
 from __future__ import annotations
 
