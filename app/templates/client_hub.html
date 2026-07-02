@@ -2596,6 +2596,27 @@
                 </table>
               </div>
             </div>
+
+            <!-- Documents uploaded to this account, reachable from Eligibility no
+                 matter how they were sent (Documents panel, intake, etc.). -->
+            <div class="card" id="eligDocsCard" style="padding:0;margin-top:16px">
+              <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <span class="card-title">📎 Uploaded Documents</span>
+                <span style="display:flex;align-items:center;gap:10px">
+                  <label style="font-size:12px;color:var(--gray-400);display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="eligDocsShowAll" onchange="renderEligDocsList()" style="margin:0"> Show all documents</label>
+                  <span id="eligDocsCount" style="font-size:13px;color:var(--gray-400)"></span>
+                </span>
+              </div>
+              <div style="padding:0 20px 10px;font-size:12px;color:var(--gray-400)">Insurance cards, demographics and other files on this account — available here however they were uploaded. Attach one to a patient to use it for verification.</div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Document</th><th>Category</th><th>Uploaded By</th><th>Date</th><th></th></tr>
+                  </thead>
+                  <tbody id="eligDocsTbody"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <!-- ── COMPLETED REPORTING (MedPharma) ───────────────────── -->
@@ -7043,6 +7064,7 @@
     // ELIGIBILITY TRACKING
     // ═══════════════════════════════════════
     let allEligItems = [];
+    let allEligDocs = [];
     let activeEligFilter = '';
     let activeEligView = 'intake';
     let _eligViewInit = false;
@@ -7059,8 +7081,17 @@
         const d = await r.json();
         allEligItems = Array.isArray(d) ? d : (d.eligibility || []);
       } catch (_) { allEligItems = []; }
+      // Documents on this account, so intake files uploaded through ANY method
+      // (Documents panel, intake, etc.) are reachable from the Eligibility
+      // tracker — not only from the Documents panel.
+      try {
+        const dp = activeClientId ? ('?client_id=' + activeClientId) : '';
+        const dr = await fetch('/hub/api/eligibility/documents' + dp);
+        allEligDocs = (await dr.json()).documents || [];
+      } catch (_) { allEligDocs = []; }
       // Render every sub-view (cheap) so switching tabs is instant.
       renderEligIntakeList();
+      renderEligDocsList();
       renderEligTable();
       renderEligTiles();
       renderEligDashboardCharts();
@@ -7191,6 +7222,79 @@
     <td style="white-space:nowrap">${canAddDoc ? `<button class="btn btn-secondary btn-sm" onclick="eligIntakeAddDoc(${i.id})">📎 Add Doc</button> ` : ''}<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
       }).join('');
+    }
+
+    // ── Uploaded documents on this account (reachable from Eligibility) ──
+    function _eligDocLinked() {
+      const m = {};
+      (allEligItems || []).forEach(i => {
+        if (i.IntakeFileId) m[i.IntakeFileId] = { patient: i.PatientName || 'patient', kind: 'intake' };
+        if (i.ReportFileId) m[i.ReportFileId] = { patient: i.PatientName || 'patient', kind: 'report' };
+      });
+      return m;
+    }
+
+    function renderEligDocsList() {
+      const tbody = document.getElementById('eligDocsTbody');
+      const cnt = document.getElementById('eligDocsCount');
+      if (!tbody) return;
+      const showAll = !!(document.getElementById('eligDocsShowAll') || {}).checked;
+      const linked = _eligDocLinked();
+      let docs = allEligDocs || [];
+      if (!showAll) {
+        docs = docs.filter(f => {
+          const c = (f.category || '').toLowerCase();
+          return c.indexOf('eligibility') === 0 || c === 'general';
+        });
+      }
+      if (cnt) cnt.textContent = docs.length ? `${docs.length} document${docs.length === 1 ? '' : 's'}` : '';
+      if (!docs.length) {
+        tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="es-icon">📎</div><p>No documents on this account yet. Files from the Documents panel or a patient intake show up here.</p></div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = docs.map(f => {
+        const link = linked[f.id];
+        const dl = `<a href="/hub/api/files/${f.id}/download" class="btn btn-secondary btn-sm" target="_blank" rel="noopener">⬇ Download</a>`;
+        const action = link
+          ? `<span class="badge badge-green" title="Attached to ${esc(link.patient)}">✓ ${esc(link.kind)} · ${esc(link.patient)}</span>`
+          : `<span id="eligDocAct_${f.id}"><button class="btn btn-primary btn-sm" onclick="attachEligDoc(${f.id})">📎 Attach to patient</button></span>`;
+        return `<tr>
+    <td style="font-weight:600">${dl} <span style="margin-left:6px">${esc(f.original_name || 'file')}</span></td>
+    <td><span style="font-size:12px;color:var(--gray-500)">${esc(f.category || 'General')}</span></td>
+    <td style="font-size:12px">${esc(f.uploaded_by || '—')}</td>
+    <td style="font-size:12px">${esc((f.created_at || '').slice(0, 10) || '—')}</td>
+    <td style="white-space:nowrap">${action}</td>
+  </tr>`;
+      }).join('');
+    }
+
+    // Turn a stray upload into a patient intake by linking it to a submission.
+    function attachEligDoc(fileId) {
+      const cell = document.getElementById('eligDocAct_' + fileId);
+      if (!cell) return;
+      const items = allEligItems || [];
+      if (!items.length) {
+        toast('Create a patient intake first, then attach this document.', 'error');
+        return;
+      }
+      const opts = items.map(i => `<option value="${i.id}">${esc((i.PatientName || 'Patient') + (i.Payor ? ' · ' + i.Payor : ''))}</option>`).join('');
+      cell.innerHTML = `<select id="eligDocSel_${fileId}" class="form-control btn-sm" style="width:auto;display:inline-block;max-width:180px">${opts}</select> <button class="btn btn-primary btn-sm" onclick="doAttachEligDoc(${fileId})">Link</button> <button class="btn btn-secondary btn-sm" onclick="renderEligDocsList()">Cancel</button>`;
+    }
+
+    async function doAttachEligDoc(fileId) {
+      const sel = document.getElementById('eligDocSel_' + fileId);
+      const rid = sel ? parseInt(sel.value) : 0;
+      if (!rid) { toast('Choose a patient', 'error'); return; }
+      try {
+        const r = await fetch(`/hub/api/eligibility/${rid}/link-file`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_id: fileId, kind: 'intake' })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Link failed');
+        toast('Document attached to patient', 'success');
+        loadEligibility();
+      } catch (e) { toast(e.message, 'error'); }
     }
 
     // ── Completed Reporting worklist (MedPharma) ──

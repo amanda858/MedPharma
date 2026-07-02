@@ -3489,6 +3489,89 @@ async def upload_elig_file(
             "stage": "Completed" if kind == "report" else rec.get("Stage", "Received")}
 
 
+# Categories that are DATA imports (claims/credentialing/etc.), not intake docs.
+_ELIG_DOC_EXCLUDE_CATS = {c.lower() for c in DATA_IMPORT_CATEGORIES}
+
+
+@router.get("/eligibility/documents")
+def list_elig_documents(client_id: Optional[int] = None,
+                        hub_session: Optional[str] = Cookie(None)):
+    """Documents on the account that are relevant to eligibility, so files
+    uploaded through ANY method — the Documents panel, an intake, etc. — are
+    reachable from the Eligibility tracker instead of only from Documents.
+
+    Surfaces: anything already filed under an ``Eligibility*`` category, plus
+    non-data documents (insurance cards / demographics / PDFs) that aren't
+    claims/credentialing/enrollment/EDI data. Account-scoped exactly like the
+    Documents panel, so a client only ever sees their own account's files."""
+    user = _require_user(hub_session)
+    scope = client_id if client_id is not None else _doc_scope(user)
+    out = []
+    for f in list_files(scope):
+        cat = (f.get("category") or "").strip()
+        ftype = (f.get("file_type") or "").strip()
+        is_elig_cat = cat.lower().startswith("eligibility")
+        is_plain_doc = ftype in ("pdf", "document") and cat.lower() not in _ELIG_DOC_EXCLUDE_CATS
+        if is_elig_cat or is_plain_doc:
+            out.append({
+                "id": int(f.get("id") or 0),
+                "original_name": f.get("original_name") or "file",
+                "category": cat or "General",
+                "file_type": ftype,
+                "uploaded_by": f.get("uploaded_by") or "",
+                "created_at": f.get("created_at") or "",
+                "client_id": int(f.get("client_id") or 0),
+            })
+    return {"documents": out}
+
+
+class EligLinkFileIn(BaseModel):
+    file_id: int
+    kind: Optional[str] = "intake"
+
+
+@router.post("/eligibility/{rid}/link-file")
+def link_elig_file(rid: int, body: EligLinkFileIn,
+                   hub_session: Optional[str] = Cookie(None)):
+    """Link a document that was ALREADY uploaded (through any method) to an
+    eligibility record — so a stray Documents upload becomes a first-class
+    intake/report on a patient without having to re-upload it."""
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    kind = (body.kind or "intake").strip().lower()
+    if kind not in ("intake", "report"):
+        raise HTTPException(400, "kind must be 'intake' or 'report'")
+    if kind == "report" and user.get("role") not in ("admin", "staff"):
+        raise HTTPException(403, "Only MedPharma staff can attach the completed report")
+    f = get_file_record(int(body.file_id))
+    if not f:
+        raise HTTPException(404, "Document not found")
+    # Authorization: a client may only link a file and a record that both live
+    # in an account they belong to. Admin/staff are unrestricted.
+    if user.get("role") not in ("admin", "staff"):
+        allowed = set(_doc_account_ids(user))
+        if int(rec.get("client_id") or 0) not in allowed or int(f.get("client_id") or 0) not in allowed:
+            raise HTTPException(403, "You can only link documents on your own account.")
+    name = f.get("original_name") or "document"
+    if kind == "report":
+        update_eligibility(rid, {
+            "ReportFileId": int(body.file_id), "ReportFileName": name,
+            "Stage": "Completed", "CompletedBy": (user.get("username") or ""),
+            "CompletedAt": datetime.now().isoformat(),
+        })
+        notify_activity(user["username"], "linked report", "Eligibility",
+                        f"{rec.get('PatientName', '')} — {name}")
+    else:
+        update_eligibility(rid, {
+            "IntakeFileId": int(body.file_id), "IntakeFileName": name,
+        })
+        notify_activity(user["username"], "linked intake", "Eligibility",
+                        f"{rec.get('PatientName', '')} — {name}")
+    return {"ok": True, "file_id": int(body.file_id), "kind": kind}
+
+
 # ─── EDI Setup ────────────────────────────────────────────────────────────────
 
 class EDIIn(BaseModel):
