@@ -2455,6 +2455,78 @@ def backfill_missing_bill_dates():
     return updates
 
 
+def _dos_from_claim_key(key):
+    """Recover a date of service from a claim's accession number.
+
+    SV Diagnostics assigns each specimen an accession number that encodes the
+    collection (service) date as a YYMMDD prefix followed by a letter, e.g.
+    '250825SV014U' -> 2025-08-25. That accession is stored verbatim as the
+    ClaimKey, so when a headerless import drops the date-of-service column the
+    true DOS can still be read straight off the claim number. Returns the ISO
+    date string, or '' when the key carries no plausible embedded date."""
+    s = (key or "").strip()
+    if len(s) < 7 or not s[:6].isdigit() or not s[6].isalpha():
+        return ""
+    try:
+        d = date(2000 + int(s[0:2]), int(s[2:4]), int(s[4:6]))
+    except ValueError:
+        return ""
+    # Guard against a plain claim number that merely happens to start with six
+    # digits: only accept a plausibly-recent service date.
+    try:
+        upper = business_today() + timedelta(days=1)
+    except Exception:
+        upper = date.today() + timedelta(days=1)
+    if not (date(2020, 1, 1) <= d <= upper):
+        return ""
+    return d.isoformat()
+
+
+def backfill_dos_from_claim_key(client_id: int = None):
+    """Idempotent migration: recover a blank DOS from the service date embedded
+    in the claim's accession number (ClaimKey), e.g. '250825SV014U' -> 2025-08-25.
+
+    SV Diagnostics' headerless CSV backlog imported with no date-of-service
+    column, leaving ~2k rolling-AR claims with an empty DOS — which breaks A/R
+    aging and the DOS-based New-vs-Rolling split (undated claims can't be placed
+    on either side of the cutoff, nor aged correctly). Because the lab's
+    accession number encodes the collection date and is kept verbatim as the
+    ClaimKey, the real service date is recoverable deterministically without
+    re-reading the source file. Only fills rows whose DOS is blank AND whose
+    ClaimKey carries a plausible embedded date, so it never overwrites a real DOS
+    and is a no-op once the data is clean. Runs on startup; also callable per
+    account."""
+    conn = get_db()
+    filled = 0
+    try:
+        cur = conn.cursor()
+        q = ("SELECT id, ClaimKey FROM claims_master "
+             "WHERE TRIM(COALESCE(DOS, '')) = '' AND TRIM(COALESCE(ClaimKey, '')) != ''")
+        p = []
+        if client_id is not None:
+            q += " AND client_id = ?"
+            p.append(client_id)
+        cur.execute(q, p)
+        updates = []
+        for r in cur.fetchall():
+            dos = _dos_from_claim_key(r["ClaimKey"])
+            if dos:
+                updates.append((dos, r["id"]))
+        if updates:
+            cur.executemany(
+                "UPDATE claims_master SET DOS = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                updates,
+            )
+            conn.commit()
+            filled = len(updates)
+    finally:
+        conn.close()
+    if filled:
+        print(f"[migration] Recovered DOS from accession on {filled} claim(s)")
+    return filled
+
+
 def get_claims(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     try:

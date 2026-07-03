@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session, backfill_missing_bill_dates
+from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session, backfill_missing_bill_dates, backfill_dos_from_claim_key
 from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler, get_notification_status
 from app.config import DATABASE_PATH
@@ -131,6 +131,15 @@ async def startup():
             log.info("✅ Bill Dates already complete (nothing to backfill)")
     except Exception as e:
         log.error(f"Startup error: backfill_missing_bill_dates failed: {e}")
+
+    try:
+        dos_fixed = backfill_dos_from_claim_key()
+        if dos_fixed:
+            log.info(f"✅ Recovered DOS from accession on {dos_fixed} claim(s)")
+        else:
+            log.info("✅ Dates of service already complete (nothing to recover)")
+    except Exception as e:
+        log.error(f"Startup error: backfill_dos_from_claim_key failed: {e}")
 
     try:
         from app.client_routes import auto_import_pending_claim_files
