@@ -3331,8 +3331,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             else:           aging["days_90_plus"] += bal
         aging = {k: round(v, 2) for k, v in aging.items()}
 
-        # Billed Activity — count of claim lines billed and their charge value,
-        # grouped by BillDate window (today / yesterday / last 7 days / this month).
+        # Billed Activity — count of billed claim lines and their charge value,
+        # grouped by UPLOAD date (created_at) window — i.e. WHEN the claim was
+        # uploaded/imported into the hub, not the historical BillDate — so the
+        # today / yesterday / last-7 / last-30 buckets reflect upload cadence.
         # Scoped to the same client_id + sub_profile as the rest of the dashboard so
         # every user monitors their own billing activity. Computed independently of
         # the DOS date filter (base_cond) so recent billing always shows.
@@ -3349,7 +3351,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         _ba_month_start = today.fromordinal(today.toordinal() - 29)  # rolling last 30 days
         _ba_day_start = today.fromordinal(today.toordinal() - 13)    # per-day breakdown, last 14 days
         _ba_by_day = {}  # 'YYYY-MM-DD' -> [count, charged]
-        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master
+        cur.execute(f"""SELECT created_at, ChargeAmount FROM claims_master
                         {base_cond} {'AND' if base_cond else 'WHERE'} COALESCE(BillDate,'') != ''""", base_p)
         for _bd_raw, _amt_raw in cur.fetchall():
             _bd = str(_bd_raw or "").strip()[:10]
@@ -3358,7 +3360,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             except (ValueError, TypeError):
                 continue
             _amt = float(_amt_raw or 0)
-            # All-time billed since inception — every claim line with a Bill Date.
+            # All-time billed since inception — every billed claim line (dated by upload).
             billing_activity["all_time"]["count"] += 1
             billing_activity["all_time"]["charged"] += _amt
             if _d == _ba_today:

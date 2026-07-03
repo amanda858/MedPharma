@@ -4900,10 +4900,10 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         status_agg[st]["paid"] += float(c.get("PaidAmount") or 0)
     by_status = [{"status": k, **v} for k, v in status_agg.items()]
 
-    # Billed activity — charge dollars actually billed, grouped by BillDate window.
-    # Computed independently of the DOS period filter so the admin always sees how
-    # much was billed recently (today / yesterday / last 7 days / this month),
-    # respecting the sub_profile scope.
+    # Billed activity — charge dollars actually billed, grouped by UPLOAD date
+    # (created_at) — i.e. WHEN the claim was uploaded/imported, not the historical
+    # BillDate — so the today / yesterday / last-7 / last-30 buckets reflect upload
+    # cadence. Computed independently of the DOS period filter, respecting sub_profile.
     from datetime import date as _ba_date
     _today = business_today()
     _yesterday = _today.fromordinal(_today.toordinal() - 1)
@@ -4918,16 +4918,16 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         "this_month": {"count": 0, "charged": 0.0},
         "all_time": {"count": 0, "charged": 0.0},
     }
-    ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
+    ba_sql = (f"SELECT created_at, ChargeAmount FROM claims_master "
               f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
     for r in conn.execute(ba_sql, [client_id] + sp_params).fetchall():
-        bd = str(r["BillDate"] or "").strip()[:10]
+        bd = str(r["created_at"] or "").strip()[:10]
         try:
             d = _ba_date.fromisoformat(bd)
         except Exception:
             continue
         amt = float(r["ChargeAmount"] or 0)
-        # All-time billed since inception — every claim line with a Bill Date.
+        # All-time billed since inception — every billed claim line (dated by upload).
         billing_activity["all_time"]["count"] += 1
         billing_activity["all_time"]["charged"] += amt
         if d == _today:
