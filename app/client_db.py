@@ -3387,11 +3387,15 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         total_paid = q1(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond}", p)
         net_coll_rate = round(total_paid / max(total_charge, 1) * 100, 1)
 
-        # AR Aging buckets (by BillDate proxy for age)
+        # AR Aging buckets — age from the date of service first (mirrors the AR
+        # worklist), then Bill Date, then the row's last-updated date. DOS marks
+        # when the receivable actually originated, so recovered-DOS backlog ages
+        # truthfully instead of reading "current" off an import-stamped BillDate.
+        # substr(...,1,10) trims any time suffix so julianday always parses.
         aging = {"current": 0, "days_31_60": 0, "days_61_90": 0, "days_90_plus": 0}
         ar_p = p + ["Paid", "Closed"]
         cur.execute(f"""SELECT BalanceRemaining,
-                        CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) as age
+                        CAST(julianday('now') - julianday(substr(COALESCE(NULLIF(TRIM(DOS),''), NULLIF(TRIM(BillDate),''), updated_at),1,10)) AS INTEGER) as age
                         FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus NOT IN (?,?) AND BalanceRemaining > 0""",
                     ar_p)
         for row in cur.fetchall():
