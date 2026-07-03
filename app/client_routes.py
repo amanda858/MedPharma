@@ -6149,6 +6149,13 @@ def _infer_headerless_claim_rows(matrix, received_date: str):
                 row["PatientName"] = nm
         elif name_col is not None and g(name_col):
             row["PatientName"] = g(name_col)
+        # Skip file totals / footer rows. A line that carries a dollar amount but
+        # NO claim identity whatsoever — no claim id, CPT, payor, or patient — is
+        # the spreadsheet's own summary row, not a billable claim. Importing it
+        # adds the file's subtotal as a phantom claim (e.g. a lone $34k "claim"
+        # sitting among $86 lines), inflating the billed total.
+        if not any(k in row for k in ("ClaimKey", "CPTCode", "Payor", "PatientName")):
+            continue
         out.append(row)
     return out or None
 
