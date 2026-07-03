@@ -5894,6 +5894,293 @@ def _clean_val(val):
     return s
 
 
+# ── Headerless / imperfect-format claim inference ─────────────────────────────
+# Some daily exports ship with NO header row (row 0 is already data) or with
+# garbled headers that map to nothing. The smart header parser then grabs a data
+# row as the "header" and every charge imports as $0 — an entire day of billing
+# silently vanishing. Rather than demand a perfect format, we infer the meaning of
+# each column from the VALUES themselves (which column is money, the CPT, the
+# payer, the patient, the claim id) and rebuild the rows as billed claims. For a
+# headerless file we synthesize the header and stamp each claim's Bill Date with
+# the date the file was received, so the day's work is captured instead of lost.
+# This only ever fires when the normal header-based read finds NO charge column,
+# so well-formed files are never touched.
+
+_HL_INSURER_HINTS = (
+    "health", "insurance", "medicaid", "medicare", "blue", "cross", "shield",
+    "aetna", "cigna", "united", "unitedhealth", "uhc", "humana", "molina",
+    "anthem", "caresource", "ambetter", "wellcare", "meritain", "oscar", "tricare",
+    "bcbs", "ppo", "hmo", "buckeye", "amerihealth", "kaiser", "optum", "centene",
+)
+
+
+def _hl_s(v):
+    return "" if v is None else str(v).strip()
+
+
+def _hl_money(v):
+    t = _hl_s(v).replace("$", "").replace(",", "")
+    if re.fullmatch(r"-?\d+(\.\d+)?", t):
+        try:
+            return float(t)
+        except Exception:
+            return None
+    return None
+
+
+def _hl_is_cpt(v):
+    t = _hl_s(v).upper()
+    return bool(re.fullmatch(r"\d{5}", t) or re.fullmatch(r"[A-Z]\d{4}", t))
+
+
+def _hl_is_denial(v):
+    t = _hl_s(v).upper().replace(" ", "")
+    return bool(re.fullmatch(r"(CO|PI|PR|OA|CR|MA|N|M)\d+", t))
+
+
+def _hl_is_name(v):
+    t = _hl_s(v)
+    return bool(t) and all(c.isalpha() or c in " '.-" for c in t) and any(c.isalpha() for c in t)
+
+
+def _hl_is_payor(v):
+    tl = _hl_s(v).lower()
+    return any(h in tl for h in _HL_INSURER_HINTS)
+
+
+def _hl_is_claimid(v):
+    t = _hl_s(v)
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9\-]{4,29}", t)
+                and any(c.isalpha() for c in t) and any(c.isdigit() for c in t))
+
+
+def _hl_read_all_rows(content: bytes, ext: str):
+    """Read EVERY row of a spreadsheet as a list-of-lists, with NO header
+    detection (unlike _parse_excel_rows, which drops the rows above its chosen
+    header — fatal for a headerless file). Returns None if unreadable."""
+    import csv, io
+    e = (ext or "").lower()
+    try:
+        if e == ".csv":
+            text = None
+            for enc in ("utf-8-sig", "utf-8", "latin-1"):
+                try:
+                    text = content.decode(enc)
+                    break
+                except Exception:
+                    continue
+            if text is None:
+                text = content.decode("utf-8", errors="replace")
+            sample = text[:8192]
+            delim = ","
+            try:
+                delim = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+            except Exception:
+                fl = next((ln for ln in sample.splitlines() if ln.strip()), "")
+                if fl:
+                    delim = max(",;\t|", key=fl.count)
+            return [list(r) for r in csv.reader(io.StringIO(text), delimiter=delim)]
+        if e == ".xlsx":
+            sheets = _load_xlsx_sheets(content)
+            if not sheets:
+                return None
+            _name, rows = max(sheets, key=lambda s: len(s[1]))
+            return [list(r) for r in rows]
+        if e == ".xls":
+            import xlrd
+            wb = xlrd.open_workbook(file_contents=content)
+            best = None
+            for si in range(wb.nsheets):
+                ws = wb.sheet_by_index(si)
+                if best is None or ws.nrows > best.nrows:
+                    best = ws
+            if best is None:
+                return None
+            out = []
+            for ri in range(best.nrows):
+                out.append([best.cell_value(ri, ci) for ci in range(best.ncols)])
+            return out
+    except Exception:
+        return None
+    return None
+
+
+def _hl_looks_like_header(cells) -> bool:
+    """True when a row reads like a real column-header row — i.e. several of its
+    cells map to known claim columns. A genuine data row (patient names, payers,
+    amounts) maps almost nothing, so this cleanly separates the two."""
+    vals = [_clean_val(c) for c in cells]
+    nonempty = [v for v in vals if v]
+    if len(nonempty) < 2:
+        return False
+    mapped = sum(1 for v in nonempty if _fuzzy_match_column(v, CLAIMS_COLUMN_MAP))
+    return mapped >= 3
+
+
+def _infer_headerless_claim_rows(matrix, received_date: str):
+    """Infer claim columns from cell VALUES when a file has no usable header.
+    Returns a list of canonical-keyed row dicts (ChargeAmount, ClaimStatus,
+    BillDate, ClaimKey, CPTCode, Payor, DenialReason, PatientName) that flow
+    straight through the normal fuzzy-mapping importer, or None when no charge
+    column can be identified (so the caller leaves the file to the normal path)."""
+    import statistics
+    matrix = [r for r in matrix if any(_hl_s(c) for c in r)]
+    if len(matrix) < 3:
+        return None
+    ncol = max(len(r) for r in matrix)
+    N = len(matrix)
+    cols = list(range(ncol))
+    minc = max(3, int(0.3 * N))
+
+    def colvals(i):
+        return [(r[i] if i < len(r) else "") for r in matrix]
+
+    frac, meta = {}, {}
+    for i in cols:
+        vals = colvals(i)
+        nonempty = [_hl_s(v) for v in vals if _hl_s(v)]
+        c = len(nonempty) or 1
+        mvals = [m for m in (_hl_money(v) for v in vals) if m is not None]
+        nz = [m for m in mvals if m != 0]
+        distinct = len(set(nonempty))
+        frac[i] = dict(
+            money=len(mvals) / max(1, len(vals)),
+            cpt=sum(1 for v in nonempty if _hl_is_cpt(v)) / c,
+            denial=sum(1 for v in nonempty if _hl_is_denial(v)) / c,
+            name=sum(1 for v in nonempty if _hl_is_name(v)) / c,
+            singletok=sum(1 for v in nonempty if _hl_is_name(v) and len(v.split()) == 1) / c,
+            payor=sum(1 for v in nonempty if _hl_is_payor(v)) / c,
+            claimid=sum(1 for v in nonempty if _hl_is_claimid(v)) / c,
+        )
+        meta[i] = dict(
+            nonempty=len(nonempty), distinct=distinct, uniq=distinct / c,
+            money_nz=len(nz), money_sum=sum(nz),
+            money_med=statistics.median(nz) if nz else 0,
+            decimal_ct=sum(1 for m in nz if m != int(m)),
+            cpt_ct=sum(1 for v in nonempty if _hl_is_cpt(v)),
+            payor_ct=sum(1 for v in nonempty if _hl_is_payor(v)),
+            denial_ct=sum(1 for v in nonempty if _hl_is_denial(v)),
+            medlen=statistics.median([len(v) for v in nonempty]) if nonempty else 0,
+        )
+
+    # Charge = numeric, repeated (uniq<0.6 rules out unique IDs), plausible size.
+    cand = [i for i in cols if frac[i]["money"] >= 0.8 and meta[i]["money_nz"] >= minc
+            and 1 <= meta[i]["money_med"] <= 100000 and meta[i]["uniq"] < 0.6]
+    # Cluster candidates by median magnitude; the real money fields (charge,
+    # allowed, balance) share an order of magnitude, while a stray account / chart
+    # number sits alone at a different scale. Keep the largest magnitude cluster.
+    money_cols = cand
+    if len(cand) > 1:
+        ordered = sorted(cand, key=lambda i: meta[i]["money_med"])
+        clusters, cur = [], [ordered[0]]
+        for i in ordered[1:]:
+            if meta[i]["money_med"] <= meta[cur[-1]]["money_med"] * 4:
+                cur.append(i)
+            else:
+                clusters.append(cur)
+                cur = [i]
+        clusters.append(cur)
+        money_cols = max(clusters, key=lambda g: (len(g), sum(meta[i]["decimal_ct"] for i in g)))
+    charge_col = None
+    if money_cols:
+        # Within the money cluster the charge is the LARGEST amount on most rows
+        # (allowed / paid / balance are derived from it and are <= charge).
+        maxfreq = {i: 0 for i in money_cols}
+        for r in matrix:
+            vs = {i: _hl_money(r[i]) for i in money_cols
+                  if i < len(r) and _hl_money(r[i]) not in (None, 0)}
+            if not vs:
+                continue
+            mx = max(vs.values())
+            for i, v in vs.items():
+                if v == mx:
+                    maxfreq[i] += 1
+        charge_col = max(money_cols, key=lambda i: (maxfreq[i], meta[i]["money_sum"]))
+    if charge_col is None:
+        return None
+
+    def pick_most(pred, count_key, fmin, exclude=()):
+        c2 = [i for i in cols if i not in exclude and frac[i][pred] >= fmin
+              and meta[i]["nonempty"] >= minc]
+        return max(c2, key=lambda i: meta[i][count_key], default=None)
+
+    cpt_col = pick_most("cpt", "cpt_ct", 0.6, exclude={charge_col})
+    # Payor: prefer the most DIVERSE insurer column — plan-type cols (PPO/Medicaid)
+    # carry few distinct values; a real payer-name column carries many.
+    payor_col = max((i for i in cols if frac[i]["payor"] >= 0.5 and meta[i]["nonempty"] >= minc
+                     and meta[i]["medlen"] < 40),
+                    key=lambda i: (meta[i]["distinct"], meta[i]["payor_ct"]), default=None)
+    denial_col = pick_most("denial", "denial_ct", 0.5, exclude={charge_col, cpt_col})
+    claimid_cands = [i for i in cols if frac[i]["claimid"] >= 0.8 and meta[i]["uniq"] >= 0.7
+                     and meta[i]["nonempty"] >= max(3, int(0.5 * N))]
+    claimid_col = max(claimid_cands, key=lambda i: meta[i]["uniq"], default=None)
+
+    name_pair = None
+    for i in cols[:-1]:
+        if (frac[i]["singletok"] >= 0.6 and frac[i + 1]["singletok"] >= 0.6
+                and i not in (payor_col, charge_col) and i + 1 not in (payor_col, charge_col)):
+            name_pair = (i, i + 1)
+            break
+    name_col = None
+    if not name_pair:
+        c3 = [i for i in cols if frac[i]["name"] >= 0.7 and frac[i]["singletok"] < 0.5
+              and i not in (payor_col,) and meta[i]["nonempty"] >= minc]
+        name_col = c3[0] if c3 else None
+
+    out = []
+    for r in matrix:
+        def g(i):
+            return _hl_s(r[i]) if (i is not None and i < len(r)) else ""
+        if _hl_money(g(charge_col)) is None:
+            continue
+        row = {"ChargeAmount": g(charge_col), "ClaimStatus": "Billed/Submitted",
+               "BillDate": received_date}
+        if claimid_col is not None and g(claimid_col):
+            row["ClaimKey"] = g(claimid_col)
+        if cpt_col is not None and g(cpt_col):
+            row["CPTCode"] = g(cpt_col)
+        if payor_col is not None and g(payor_col):
+            row["Payor"] = g(payor_col)
+        if denial_col is not None and g(denial_col):
+            row["DenialReason"] = g(denial_col)
+        if name_pair:
+            nm = (g(name_pair[0]) + " " + g(name_pair[1])).strip()
+            if nm:
+                row["PatientName"] = nm
+        elif name_col is not None and g(name_col):
+            row["PatientName"] = g(name_col)
+        out.append(row)
+    return out or None
+
+
+def _maybe_headerless_billed_rows(content: bytes, ext: str, parsed_rows, received_date: str):
+    """Decide whether a file needs headerless inference, and if so return the
+    rebuilt billed rows. Returns None (leave the normal parse alone) when:
+      • the file isn't a spreadsheet, or
+      • the normal header-based parse already found a Charge column (well-formed
+        file — never override it), or
+      • the real top rows read like a genuine header (the file HAS headers, it
+        just lacks a charge column — e.g. a status-only worklist), or
+      • no charge column can be inferred from the values.
+    Only fires for spreadsheets whose charges would otherwise import as $0."""
+    if (ext or "").lower() not in (".csv", ".xlsx", ".xls"):
+        return None
+    # If the normal parse already yields a charge column, the file is well-formed.
+    if parsed_rows:
+        raw_keys = list(parsed_rows[0].keys())
+        if any(_fuzzy_match_column(k, CLAIMS_COLUMN_MAP) == "ChargeAmount" for k in raw_keys):
+            return None
+    matrix = _hl_read_all_rows(content, ext)
+    if not matrix or len(matrix) < 3:
+        return None
+    # A real header sitting in the first few rows means the file is NOT headerless
+    # (it just has no charge column) — don't force it into billed claims.
+    for r in matrix[:6]:
+        if _hl_looks_like_header(r):
+            return None
+    return _infer_headerless_claim_rows(matrix, received_date)
+
+
 def _import_credentialing_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
     from app.client_db import get_db as _get_db
     from datetime import datetime as _dt_now
@@ -6460,6 +6747,23 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
     if not rows:
         return 0, ["No rows found in file"]
 
+    # Safety net for headerless / imperfect exports: when a file ships without a
+    # usable header row, the smart parser silently treats a data row as the header
+    # and every charge imports as $0 — a whole day of billing vanishing. Detect
+    # that case, infer the columns from the VALUES, and rebuild the rows as billed
+    # claims dated to the day the file was received. Only fires when a hardcoded
+    # template didn't already claim the file AND the normal parse found no charge
+    # column, so well-formed files and known templates are never disturbed.
+    if _tpl_used is None:
+        try:
+            _hl_rows = _maybe_headerless_billed_rows(content, ext, rows, business_today_iso())
+        except Exception as _hl_e:
+            _hl_rows = None
+            log.warning("headerless claim inference failed: %s", _hl_e)
+        if _hl_rows:
+            rows = _hl_rows
+            _tpl_used = "headerless_billed"
+
     conn = get_db()
     cur = conn.cursor()
     today_str = business_today_iso()
@@ -6984,7 +7288,11 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
         content = f.read()
 
     client_id = int(rec["client_id"])
-    uploader = user.get("username") or ""
+    actor = user.get("username") or ""
+    # Attribute the recovered claims to whoever originally uploaded the file, not
+    # the admin re-running the import — otherwise a recovery re-import silently
+    # moves a biller's production onto the admin and breaks per-member rollups.
+    uploader = str(rec.get("uploaded_by") or "").strip() or actor
     try:
         imported, import_errors = _import_claims_from_excel(
             content, ext, client_id, uploaded_by=uploader)
@@ -6998,10 +7306,10 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
         pass
 
     try:
-        notify_activity(uploader, "imported claims", "Documents",
+        notify_activity(actor, "imported claims", "Documents",
                         f'{rec.get("original_name")} → {imported} claim row(s)')
         if imported:
-            notify_bulk_activity(uploader, "imported", "Claims", imported,
+            notify_bulk_activity(actor, "imported", "Claims", imported,
                                  f'from stored file "{rec.get("original_name")}"')
     except Exception as _e:
         log.warning("import-claims notify failed: %s", _e)
