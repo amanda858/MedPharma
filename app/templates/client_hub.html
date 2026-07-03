@@ -2255,13 +2255,13 @@
             </div>
           </div>
 
-          <!-- Claims Out — the lifecycle buckets the team monitors:
-               Billed (superset) / Denied / Paid/Posted. Plus rolling A/R since
-               the team's start date. Visible to every user, scoped to their data. -->
+          <!-- Claims Out — the billing production view the team monitors:
+               Billed Out (claims sent out the door) and Paid/Posted (collected
+               money). Visible to every user, scoped to their data. -->
           <div class="card" id="dashClaimBucketsCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--primary);display:none">
             <div class="card-header">
               <div class="card-title">📤 Claims Out</div>
-              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Prior Denials & Rebill · Paid/Posted</div>
+              <div style="font-size:11px;color:var(--gray-500)" id="dashClaimBucketsSub">Billed · Paid/Posted</div>
             </div>
             <div id="dashClaimBuckets" style="padding:16px"></div>
           </div>
@@ -2299,13 +2299,7 @@
               <div class="bar-list" id="statusChart"></div>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-bottom:18px" data-module-section="claims">
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Top Denial Categories</div>
-              </div>
-              <div class="bar-list" id="denialChart"></div>
-            </div>
+          <div style="margin-bottom:18px" data-module-section="claims">
             <div class="card">
               <div class="card-header">
                 <div class="card-title">Payor Mix</div>
@@ -6142,9 +6136,7 @@
         { label: 'Active Claims', val: d.active_claims || 0, color: 'blue', icon: '📋' },
         { label: 'Submitted MTD', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
         { label: 'Payments MTD', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
-        { label: 'Denials MTD', val: d.denied_mtd || 0, color: 'red', icon: '❌' },
         { label: 'Clean Claim Rate', val: (d.clean_claim_rate || 0) + '%', color: 'green', icon: '🎯' },
-        { label: 'Denial Rate', val: (d.denial_rate || 0) + '%', color: 'amber', icon: '⚠️' },
         { label: 'Avg Days to Pay', val: (d.avg_days_to_pay || 0) + ' days', color: 'blue', icon: '📅' },
       ];
       if (adminView) kpis.push({ label: 'SLA Breaches', val: d.sla_breaches || 0, color: 'red', icon: '🚨' });
@@ -6157,10 +6149,10 @@
     </div>
   `).join('');
 
-      // Claims Out — the lifecycle buckets (Billed / Denied / Paid/Posted).
-      // Billed is the superset; Denied is a sub-view of it. Paid/Posted is the
-      // collected money (payments recorded on claims + deposits posted). Plus
-      // rolling A/R since the team's start date (6/18).
+      // Claims Out — the billing view: Billed Out (what the team sent out the
+      // door) and Paid/Posted (collected money — payments recorded on claims +
+      // deposits posted). No denial/rework bucket: this is a billing production
+      // view, not AR/denial management.
       const cb = d.claim_buckets || {};
       // Paid and Posted are the same collected money (payer payments recorded on
       // claims + deposits posted), so they're shown as ONE honest "Paid/Posted"
@@ -6173,7 +6165,6 @@
       };
       const cbCards = [
         { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
-        { label: 'Prior Denials & Rebill', color: '#dc2626', hint: 'Denied / appealed · counted in Billed', v: cb.denied || { count: 0, amount: 0 } },
         { label: 'Paid/Posted', color: 'var(--success)', hint: 'Payments paid & posted', v: _paidPosted },
       ];
       const cbCard = document.getElementById('dashClaimBucketsCard');
@@ -6318,19 +6309,6 @@
         </div>
       </div>`).join('')
         : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No claims data</p>';
-
-      // Denial categories
-      const dc = d.denial_categories || {};
-      const dcMax = Math.max(...Object.values(dc).map(Number), 1);
-      document.getElementById('denialChart').innerHTML = Object.entries(dc).length
-        ? Object.entries(dc).map(([s, c]) => `
-      <div class="bar-row">
-        <div class="bar-lbl">${esc(s)}</div>
-        <div class="bar-track">
-          <div class="bar-fill bf-red" style="width:${Math.max(6, (c / dcMax) * 100)}%">${c}</div>
-        </div>
-      </div>`).join('')
-        : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No denials</p>';
 
       // Payor mix
       const pm = d.payor_mix || {};
