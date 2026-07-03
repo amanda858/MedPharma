@@ -3474,20 +3474,53 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 
+        # New-claim vs rolling-AR split. A claim whose DATE OF SERVICE is AFTER
+        # this cutoff is fresh production ("new claim"); a service date on/before
+        # it — or no usable service date at all (undated backlog) — is prior
+        # accounts-receivable the team is billing/working ("rolling AR"). Compare
+        # only the date portion so ISO datetimes ('2026-06-17T00:00:00') and the
+        # boundary day itself (6/15 counts as prior) classify correctly.
+        NEW_CLAIM_DOS_CUTOFF = "2026-06-15"
+        _new_case = "substr(COALESCE(DOS,''),1,10) > ?"
+
         # Billed Out per team member. Every billed claim line is credited to the
         # hub user who uploaded it (uploaded_by), under the SAME client/sub-profile
         # scope as the headline total_charge, so the per-person rows sum EXACTLY to
         # the comprehensive Billed Out figure. This is the "each user tallied on
         # their own account" view: e.g. the biller who submitted a file is credited
-        # with that file's full billed charges.
+        # with that file's full billed charges. Each row also splits that billed
+        # total into new claims (DOS after the cutoff) vs rolling AR (the rest).
         cur.execute(
             f"SELECT COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)') AS who, "
-            f"       COUNT(*) AS n, COALESCE(SUM(ChargeAmount),0) AS amt "
-            f"FROM claims_master {cond} GROUP BY who ORDER BY amt DESC", p)
-        billed_by_member = [
-            {"member": str(r[0]), "count": int(r[1] or 0), "amount": round(float(r[2] or 0), 2)}
-            for r in cur.fetchall()
-        ]
+            f"       COUNT(*) AS n, COALESCE(SUM(ChargeAmount),0) AS amt, "
+            f"       SUM(CASE WHEN {_new_case} THEN 1 ELSE 0 END) AS new_n, "
+            f"       COALESCE(SUM(CASE WHEN {_new_case} THEN ChargeAmount ELSE 0 END),0) AS new_amt "
+            f"FROM claims_master {cond} GROUP BY who ORDER BY amt DESC",
+            [NEW_CLAIM_DOS_CUTOFF, NEW_CLAIM_DOS_CUTOFF] + p)
+        billed_by_member = []
+        for r in cur.fetchall():
+            _tn = int(r[1] or 0); _ta = round(float(r[2] or 0), 2)
+            _nn = int(r[3] or 0); _na = round(float(r[4] or 0), 2)
+            billed_by_member.append({
+                "member": str(r[0]), "count": _tn, "amount": _ta,
+                "new_count": _nn, "new_amount": _na,
+                "ar_count": _tn - _nn, "ar_amount": round(_ta - _na, 2),
+            })
+
+        # Top-level billed split (same New vs Rolling AR rule) so every dashboard —
+        # including a single biller's self-view — can show the two-way breakdown.
+        _new_amt = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} "
+                      f"{'AND' if cond else 'WHERE'} {_new_case}", p + [NEW_CLAIM_DOS_CUTOFF])
+        _new_cnt = q1(f"SELECT COUNT(*) FROM claims_master {cond} "
+                      f"{'AND' if cond else 'WHERE'} {_new_case}", p + [NEW_CLAIM_DOS_CUTOFF])
+        _billed_cnt = claim_buckets["billed"]["count"]
+        _billed_amt = claim_buckets["billed"]["amount"]
+        billed_split = {
+            "cutoff": NEW_CLAIM_DOS_CUTOFF,
+            "new": {"count": int(_new_cnt or 0), "amount": round(float(_new_amt or 0), 2)},
+            "rolling_ar": {"count": int(_billed_cnt - int(_new_cnt or 0)),
+                           "amount": round(_billed_amt - float(_new_amt or 0), 2)},
+        }
 
         # Rolling A/R since the team's first data-entry day (6/18). Outstanding
         # balance on claims billed on/after the start date — the live A/R the team
@@ -3530,6 +3563,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "billing_activity": billing_activity,
             "claim_buckets": claim_buckets,
             "billed_by_member": billed_by_member,
+            "billed_split": billed_split,
             "rolling_ar": round(rolling_ar, 2),
             "rolling_ar_start": ROLLING_AR_START,
             "status_distribution": status_dist,
