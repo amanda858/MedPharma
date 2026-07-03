@@ -3735,9 +3735,12 @@ def dashboard(hub_session: Optional[str] = Cookie(None), member: Optional[str] =
         log.warning("auto-import on dashboard failed: %s", _e)
     member_idents = _dashboard_member_scope(user, member)
     data = get_dashboard(scope, member_idents=member_idents)
-    # Per-user dashboards already ARE one person's work, and the comprehensive
-    # view is intentionally totals-only — so drop the per-member breakdown.
-    data["billed_by_member"] = []
+    # "Billed Out by Team Member" — the per-biller split that sums EXACTLY to
+    # Billed Out. Show it only on the comprehensive team view for reporting users
+    # (full admins + Eric); a single-member scope (a biller's self-view or an
+    # admin drilling into one person) and non-reporting logins stay totals-only.
+    if member_idents or not (user.get("role") == "admin" or _is_eric(user)):
+        data["billed_by_member"] = []
     data["scoped_member"] = (member_idents[0] if member_idents else None)
     data["user"] = user
     return data
@@ -3755,7 +3758,11 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
         log.warning("auto-import on client dashboard failed: %s", _e)
     member_idents = _dashboard_member_scope(user, member)
     data = get_dashboard(client_id, sub_profile=sub_profile, member_idents=member_idents)
-    data["billed_by_member"] = []
+    # Keep the per-biller "Billed Out by Team Member" breakdown for reporting
+    # users (admins + Eric) on the account's full view; blank it for a single-
+    # member scope or non-reporting (client) logins. Rows sum to Billed Out.
+    if member_idents or not (user.get("role") == "admin" or _is_eric(user)):
+        data["billed_by_member"] = []
     data["scoped_member"] = (member_idents[0] if member_idents else None)
     data["user"] = user
     return data
