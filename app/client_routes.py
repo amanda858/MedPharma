@@ -6626,7 +6626,7 @@ def _import_edi_from_excel(content: bytes, ext: str, client_id: int, uploaded_by
 
 
 def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded_by: str = "",
-                              default_sub_profile: str = ""):
+                              default_sub_profile: str = "", received_date: str = ""):
     """
     Parse an Excel/CSV claims report and upsert rows into claims_master.
     Flexible column matching — maps common header names to DB columns.
@@ -6756,7 +6756,8 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
     # column, so well-formed files and known templates are never disturbed.
     if _tpl_used is None:
         try:
-            _hl_rows = _maybe_headerless_billed_rows(content, ext, rows, business_today_iso())
+            _recv = str(received_date or "").strip()[:10] or business_today_iso()
+            _hl_rows = _maybe_headerless_billed_rows(content, ext, rows, _recv)
         except Exception as _hl_e:
             _hl_rows = None
             log.warning("headerless claim inference failed: %s", _hl_e)
@@ -7185,7 +7186,7 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
             where += " AND client_id=?"
             params.append(int(client_id))
         rows = cur.execute(
-            f"SELECT id, client_id, filename, original_name, uploaded_by "
+            f"SELECT id, client_id, filename, original_name, uploaded_by, created_at "
             f"FROM client_files WHERE {where}",
             params,
         ).fetchall()
@@ -7237,7 +7238,8 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
                             continue  # belongs to another section — don't import as claims
             imported, _errors = _import_claims_from_excel(
                 content, ext, int(r["client_id"]),
-                uploaded_by=str(r["uploaded_by"] or ""))
+                uploaded_by=str(r["uploaded_by"] or ""),
+                received_date=str(r["created_at"] or "")[:10])
         except Exception as e:
             log.warning("auto-import sweep: file %s failed: %s", r["id"], e)
             continue
@@ -7293,9 +7295,13 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
     # the admin re-running the import — otherwise a recovery re-import silently
     # moves a biller's production onto the admin and breaks per-member rollups.
     uploader = str(rec.get("uploaded_by") or "").strip() or actor
+    # Date the recovered billing to the day the file was originally received (its
+    # upload timestamp), not the day of this recovery re-import — so a headerless
+    # file's synthesized Bill Date reflects when the work actually came in.
+    received_date = str(rec.get("created_at") or "")[:10]
     try:
         imported, import_errors = _import_claims_from_excel(
-            content, ext, client_id, uploaded_by=uploader)
+            content, ext, client_id, uploaded_by=uploader, received_date=received_date)
     except Exception as e:
         raise HTTPException(400, f"Import failed: {e}")
 
