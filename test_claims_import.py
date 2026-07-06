@@ -536,6 +536,54 @@ def test_dashboard_claim_buckets(hub_env):
     assert "rolling_ar" in d
 
 
+def test_dashboard_numbers_reconcile(hub_env):
+    """Every dashboard ships a self-audit ('reconciliation') proving the headline
+    numbers balance: Billed Out equals the billed bucket, the intake backlog is
+    NOT counted as billed, every billed dollar is attributed to exactly one
+    biller, and the New/Rolling split rebuilds the total. The guard must PASS on
+    real data and FAIL the instant a number is inflated or mis-allocated."""
+    client_db, client_routes = hub_env
+    cid = _make_client(client_db)
+
+    rows = [
+        ["Claim Number", "DOS", "CPT", "Charge", "Status", "Bill Date",
+         "Denial Reason", "Paid Amount"],
+        ["B1", "2026-06-19", "99213", "150.00", "Billed", "2026-06-19", "", "0"],
+        ["D1", "2026-06-20", "99214", "200.00", "Denied", "2026-06-20", "CO-16", "0"],
+        ["P1", "2026-06-22", "85025", "100.00", "Paid", "2026-06-22", "", "90.00"],
+        # Loaded but not billed yet — must stay OUT of Billed Out.
+        ["I1", "2026-06-25", "99213", "300.00", "Intake", "", "", "0"],
+    ]
+    imported, errors = client_routes._import_claims_from_excel(
+        _csv_bytes(rows), ".csv", cid
+    )
+    assert errors == []
+    assert imported == 4
+
+    d = client_db.get_dashboard(cid)
+    rec = d["reconciliation"]
+    # PASS on honest data — surface any failing check for a clear diagnosis.
+    assert rec["ok"] is True, [c for c in rec["checks"] if not c["ok"]]
+    assert rec["checks"]
+    # Billed Out excludes the intake claim, so it reconciles to the billed book.
+    assert d["claim_buckets"]["billed"]["amount"] == pytest.approx(450.0)
+    assert d["claim_buckets"]["intake"]["amount"] == pytest.approx(300.0)
+
+    # The guard must BITE: inflate one biller's billed total and it fails, so a
+    # number can never silently drift away from its attribution again.
+    broken = client_db.reconcile_dashboard({
+        "total_charge": 450.0,
+        "claim_buckets": {"billed": {"count": 3, "amount": 450.0},
+                          "paid": {"count": 1, "amount": 90.0}},
+        "billed_by_member": [{"member": "x", "count": 3, "amount": 1450.0,
+                              "new_count": 3, "new_amount": 1450.0,
+                              "ar_count": 0, "ar_amount": 0.0}],
+        "billed_split": {"new": {"count": 3, "amount": 450.0},
+                         "rolling_ar": {"count": 0, "amount": 0.0}},
+    })
+    assert broken["ok"] is False
+
+
 def _xlsx_bytes(rows, sheet_name="Sheet1"):
     """Build a minimal single-sheet .xlsx in memory from a list of rows."""
     from openpyxl import Workbook

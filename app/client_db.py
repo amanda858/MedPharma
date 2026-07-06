@@ -3557,6 +3557,67 @@ def delete_edi(rec_id: int):
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
+def reconcile_dashboard(d: dict) -> dict:
+    """Self-audit the KPI numbers so they can't silently inflate or land on the
+    wrong biller. Pure arithmetic over an already-built dashboard dict, so the
+    exact same guard runs in unit tests and on every live load. Returns
+    {"ok": bool, "checks": [{check, left, right, ok}, ...]} where each check
+    names, in plain language, the two sides that must agree."""
+    def _m(x):
+        try:
+            return round(float(x or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _n(x):
+        try:
+            return int(x or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    cb = d.get("claim_buckets") or {}
+    billed = cb.get("billed") or {}
+    paid = cb.get("paid") or {}
+    members = d.get("billed_by_member") or []
+    split = d.get("billed_split") or {}
+
+    billed_amt, billed_cnt = _m(billed.get("amount")), _n(billed.get("count"))
+    headline = _m(d.get("total_charge"))
+    mem_amt = round(sum(_m(r.get("amount")) for r in members), 2)
+    mem_cnt = sum(_n(r.get("count")) for r in members)
+    new_amt = _m((split.get("new") or {}).get("amount"))
+    new_cnt = _n((split.get("new") or {}).get("count"))
+    roll_amt = _m((split.get("rolling_ar") or {}).get("amount"))
+    roll_cnt = _n((split.get("rolling_ar") or {}).get("count"))
+    paid_amt = _m(paid.get("amount"))
+
+    checks = []
+
+    def _add(label, left, right, ok=None):
+        if ok is None:
+            ok = abs(float(left) - float(right)) <= 0.01
+        checks.append({"check": label, "left": left, "right": right, "ok": bool(ok)})
+
+    # One number, one meaning: the headline "Billed Out" IS the billed bucket.
+    _add("Billed Out headline = Billed bucket", headline, billed_amt)
+    # Not inflated / correctly allocated: every billed dollar (and claim) is
+    # credited to exactly one biller — the per-person rows sum to the whole.
+    _add("Sum of per-biller billed $ = Billed Out", mem_amt, billed_amt)
+    _add("Sum of per-biller claims = Billed count", mem_cnt, billed_cnt)
+    # The New-vs-Rolling split rebuilds the billed total exactly (no leakage).
+    _add("New + Rolling billed $ = Billed Out", round(new_amt + roll_amt, 2), billed_amt)
+    _add("New + Rolling claims = Billed count", new_cnt + roll_cnt, billed_cnt)
+    # Money collected can never exceed money billed.
+    _add("Collected <= Billed Out", paid_amt, billed_amt, ok=(paid_amt <= billed_amt + 0.01))
+    # Each biller's own New + Rolling split ties back to their own billed total.
+    _bad = [r.get("member") for r in members
+            if abs((_m(r.get("new_amount")) + _m(r.get("ar_amount"))) - _m(r.get("amount"))) > 0.01
+            or (_n(r.get("new_count")) + _n(r.get("ar_count"))) != _n(r.get("count"))]
+    _add("Each biller's New+Rolling = their billed total", len(_bad), 0, ok=(not _bad))
+
+    return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
+
 def get_dashboard(client_id: int = None, sub_profile: str = None,
                   date_from: str = None, date_to: str = None,
                   member_idents: list = None):
@@ -3943,7 +4004,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                         "ptan_group","ptan_individual","address","specialty","notes"]
                 profile = {c: (row[i] or "") for i, c in enumerate(cols)}
 
-        return {
+        _dash = {
             "total_ar": round(total_ar, 2),
             "active_claims": active,
             "submitted_mtd": submitted_mtd,
@@ -3975,6 +4036,12 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "enrollment_stats": enroll_stats,
             "profile": profile,
         }
+        # Self-audit the headline numbers on every load: prove Billed Out equals
+        # the billed bucket, that every billed dollar is attributed to exactly one
+        # biller, and that the New/Rolling split rebuilds the total. Cheap pure
+        # arithmetic, so any drift is caught the instant it happens.
+        _dash["reconciliation"] = reconcile_dashboard(_dash)
+        return _dash
     finally:
         conn.close()
 
