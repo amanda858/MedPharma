@@ -2590,6 +2590,27 @@ def dedupe_resubmitted_claims(client_id: int = None):
                 archived_at  TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Admin-only rework ledger: when a duplicate line was billed by a
+        # DIFFERENT team member than the one whose line survives (or a denial is
+        # resolved by someone else), record who caused the rework and who fixed
+        # it so real team production can be measured. Never exposed to clients.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS claim_rework_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id       INTEGER,
+                claim_base_key  TEXT,
+                dos             TEXT,
+                cpt             TEXT,
+                amount          REAL,
+                original_owner  TEXT,
+                original_status TEXT,
+                fixer_owner     TEXT,
+                fixer_status    TEXT,
+                reason          TEXT,
+                detected_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(client_id, claim_base_key, dos, cpt, original_owner, fixer_owner)
+            )
+        """)
         q = "SELECT * FROM claims_master"
         p = []
         if client_id is not None:
@@ -2622,12 +2643,26 @@ def dedupe_resubmitted_claims(client_id: int = None):
             # Higher is better: most paid, most-progressed, clean base key, oldest row.
             return (paid, st, clean, -int(r.get("id") or 0))
 
+        DENIED = {"denied", "rejected"}
+
+        def _biller(r):
+            """The team member who owns this billing line — the hub user who
+            uploaded it (uploaded_by), falling back to the free-text Owner."""
+            b = str(r.get("uploaded_by") or "").strip()
+            return b or str(r.get("Owner") or "").strip()
+
         for members in groups.values():
             if len(members) < 2:
                 continue
             members.sort(key=_rank, reverse=True)
             survivor = members[0]
             skey = str(survivor.get("ClaimKey") or "")
+            fix_biller = _biller(survivor)
+            fix_status = str(survivor.get("ClaimStatus") or "").strip()
+            try:
+                grp_charge = round(float(survivor.get("ChargeAmount") or 0), 2)
+            except (TypeError, ValueError):
+                grp_charge = 0.0
             for dup in members[1:]:
                 dkey = str(dup.get("ClaimKey") or "")
                 dcid = int(dup.get("client_id") or 0)
@@ -2639,6 +2674,36 @@ def dedupe_resubmitted_claims(client_id: int = None):
                      "duplicate billed line (same base claim / DOS / CPT / charge)",
                      json.dumps(dup, default=str)),
                 )
+                # ── Rework accountability (admin-only) ────────────────────
+                # When the collapsed line was billed by a DIFFERENT team member
+                # than the survivor, record who caused the rework and who fixed
+                # it, so real team production is measurable. If a denial is
+                # involved, the denied biller is held accountable and the
+                # resolver gets the fix credit. Same-biller '#N' artifacts never
+                # log — client-facing billed totals are untouched either way.
+                orig_biller = _biller(dup)
+                orig_status = str(dup.get("ClaimStatus") or "").strip()
+                orig_denied = orig_status.lower() in DENIED
+                fix_denied = fix_status.lower() in DENIED
+                if fix_denied and not orig_denied:
+                    caused_b, caused_s, fixed_b, fixed_s = (
+                        fix_biller, fix_status, orig_biller, orig_status)
+                else:
+                    caused_b, caused_s, fixed_b, fixed_s = (
+                        orig_biller, orig_status, fix_biller, fix_status)
+                if caused_b and fixed_b and caused_b.lower() != fixed_b.lower():
+                    cur.execute(
+                        "INSERT OR IGNORE INTO claim_rework_log "
+                        "(client_id, claim_base_key, dos, cpt, amount, "
+                        " original_owner, original_status, fixer_owner, "
+                        " fixer_status, reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (dcid, _base_claim_key(dkey),
+                         str(dup.get("DOS") or "")[:10],
+                         str(dup.get("CPTCode") or "").strip(),
+                         grp_charge, caused_b, caused_s, fixed_b, fixed_s,
+                         "denial recovery" if (orig_denied != fix_denied)
+                         else "cross-biller duplicate"),
+                    )
                 # Repoint any attached payments / notes onto the survivor so no
                 # money or history is orphaned, then drop the duplicate claim row.
                 if dkey != skey:
@@ -2656,6 +2721,100 @@ def dedupe_resubmitted_claims(client_id: int = None):
     if removed:
         print(f"[migration] Collapsed {removed} duplicate resubmitted claim line(s)")
     return removed
+
+
+def get_rework_accountability(client_id: int = None, start_date: str = None,
+                             end_date: str = None) -> dict:
+    """Admin-only accountability view built from the daily dedupe self-check.
+
+    Surfaces reworked claims — where one team member billed a line that was
+    denied and a DIFFERENT team member had to redo / resubmit it — so real team
+    production is visible and billers are held accountable for work that had to
+    be fixed. This never changes the client-facing billed total (that already
+    reflects the single, deduped line); it only reallocates *credit* between the
+    biller who caused the rework and the one who resolved it.
+
+    Returns per-biller ``rework_caused`` / ``rework_performed`` tallies plus the
+    underlying (PHI-free) event list. Scope to one account with ``client_id``;
+    narrow by detection date with ``start_date`` / ``end_date``.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='claim_rework_log'")
+        if not cur.fetchone():
+            return {"by_user": [], "events": [], "total_reworks": 0,
+                    "total_amount": 0.0, "client_id": client_id,
+                    "start_date": start_date, "end_date": end_date}
+        conds, p = [], []
+        if client_id is not None:
+            conds.append("client_id=?")
+            p.append(client_id)
+        if start_date:
+            conds.append("date(detected_at)>=?")
+            p.append(start_date)
+        if end_date:
+            conds.append("date(detected_at)<=?")
+            p.append(end_date)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        cur.execute(f"SELECT * FROM claim_rework_log {where} "
+                    f"ORDER BY detected_at DESC", p)
+        rows = [dict(r) for r in cur.fetchall()]
+
+        by_user: dict = {}
+
+        def _slot(name):
+            key = str(name or "").strip().lower() or "(unattributed)"
+            return by_user.setdefault(key, {
+                "username": key,
+                "rework_caused": 0, "rework_caused_amount": 0.0,
+                "rework_performed": 0, "rework_performed_amount": 0.0,
+            })
+
+        events, total_amt = [], 0.0
+        for r in rows:
+            try:
+                amt = round(float(r.get("amount") or 0), 2)
+            except (TypeError, ValueError):
+                amt = 0.0
+            total_amt += amt
+            caused = _slot(r.get("original_owner"))
+            caused["rework_caused"] += 1
+            caused["rework_caused_amount"] = round(
+                caused["rework_caused_amount"] + amt, 2)
+            fixed = _slot(r.get("fixer_owner"))
+            fixed["rework_performed"] += 1
+            fixed["rework_performed_amount"] = round(
+                fixed["rework_performed_amount"] + amt, 2)
+            events.append({
+                "client_id": r.get("client_id"),
+                "claim": r.get("claim_base_key"),
+                "dos": r.get("dos"),
+                "cpt": r.get("cpt"),
+                "amount": amt,
+                "billed_by": r.get("original_owner"),
+                "billed_status": r.get("original_status"),
+                "fixed_by": r.get("fixer_owner"),
+                "fixed_status": r.get("fixer_status"),
+                "reason": r.get("reason"),
+                "detected_at": r.get("detected_at"),
+            })
+        ranked = sorted(
+            by_user.values(),
+            key=lambda u: (u["rework_caused"], u["rework_caused_amount"]),
+            reverse=True)
+        return {
+            "by_user": ranked,
+            "events": events,
+            "total_reworks": len(rows),
+            "total_amount": round(total_amt, 2),
+            "client_id": client_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+    finally:
+        conn.close()
 
 
 def get_claims(client_id: int = None, status: str = None, sub_profile: str = None):
@@ -7169,6 +7328,50 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             urow["edi_uploaded"]            = int(stats.get("edi_uploaded", 0))
             urow["total_uploaded"] = (urow["claims_uploaded"] + urow["credentialing_uploaded"]
                                       + urow["enrollment_uploaded"] + urow["edi_uploaded"])
+
+        # ── Rework accountability (admin comprehensive view only) ─────────
+        # Cumulative per-biller rework credit/demerit from the daily dedupe
+        # self-assessment: claims a biller billed that were denied and had to be
+        # redone by someone else (caused) vs reworks they performed on another
+        # biller's claim (performed). Only attached to the admin roll-up — a
+        # biller's own self-view never exposes cross-team accountability. Client
+        # billed totals are unaffected; this reallocates only *credit*.
+        for _urow in by_user_map.values():
+            _urow.setdefault("rework_caused", 0)
+            _urow.setdefault("rework_caused_amount", 0.0)
+            _urow.setdefault("rework_performed", 0)
+            _urow.setdefault("rework_performed_amount", 0.0)
+        if not self_scope:
+            try:
+                rw_conds, rw_p = [], []
+                if client_id:
+                    rw_conds.append("client_id=?")
+                    rw_p.append(client_id)
+                rw_where = ("WHERE " + " AND ".join(rw_conds)) if rw_conds else ""
+                cur.execute(
+                    f"SELECT original_owner, fixer_owner, amount "
+                    f"FROM claim_rework_log {rw_where}", rw_p)
+                for _r in cur.fetchall():
+                    try:
+                        _amt = round(float(_r["amount"] or 0), 2)
+                    except (TypeError, ValueError):
+                        _amt = 0.0
+                    _oc = alias_to_user.get(
+                        str(_r["original_owner"] or "").strip().lower(),
+                        str(_r["original_owner"] or "").strip())
+                    _fx = alias_to_user.get(
+                        str(_r["fixer_owner"] or "").strip().lower(),
+                        str(_r["fixer_owner"] or "").strip())
+                    if _oc in by_user_map:
+                        by_user_map[_oc]["rework_caused"] += 1
+                        by_user_map[_oc]["rework_caused_amount"] = round(
+                            by_user_map[_oc]["rework_caused_amount"] + _amt, 2)
+                    if _fx in by_user_map:
+                        by_user_map[_fx]["rework_performed"] += 1
+                        by_user_map[_fx]["rework_performed_amount"] = round(
+                            by_user_map[_fx]["rework_performed_amount"] + _amt, 2)
+            except Exception:
+                pass
 
         by_user = [by_user_map[k] for k in sorted(by_user_map.keys(), key=lambda x: x.lower())]
 

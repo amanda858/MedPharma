@@ -4252,6 +4252,21 @@ def production_report(client_id: Optional[int] = None,
     return report
 
 
+@router.get("/production/rework")
+def production_rework(client_id: Optional[int] = None,
+                      start_date: Optional[str] = None,
+                      end_date: Optional[str] = None,
+                      hub_session: Optional[str] = Cookie(None)):
+    """Admin/Eric-only rework accountability: which team member billed a claim
+    that was denied and had to be redone, and who resubmitted the correction.
+    Populated by the daily dedupe self-assessment. Client billed totals are
+    unaffected — this only reallocates production credit across the team so real
+    output and quality per biller are visible."""
+    _require_reporting_access(hub_session)
+    from .client_db import get_rework_accountability
+    return get_rework_accountability(client_id, start_date, end_date)
+
+
 @router.get("/production/report/download")
 def download_production_report(
     client_id: Optional[int] = None,
