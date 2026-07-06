@@ -2219,41 +2219,10 @@
               Loading…
             </div>
           </div>
-          <!-- Today's Activity Card -->
-          <div class="card" id="dashTodayCard" style="margin-bottom:18px">
-            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-              <div class="card-title">📌 Currently Being Worked On — Today</div>
-              <button class="btn btn-secondary btn-sm" onclick="navTo('production');setProdDatePreset('today')">📝 Log Work</button>
-            </div>
-            <div id="dashTodayBody" style="margin-top:10px;font-size:13px;color:var(--gray-400);text-align:center;padding:12px 0">
-              Loading…
-            </div>
-          </div>
-
-          <!-- Profile Card -->
-          <div class="card" id="profileCard" style="margin-bottom:18px;display:none">
-            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-              <div class="card-title">🏥 Client Profile</div>
-              <button class="btn btn-secondary btn-sm" id="profileToggleBtn" onclick="toggleProfile()">▲
-                Collapse</button>
-            </div>
-            <div id="profileBody">
-              <div
-                style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;padding:12px 0 6px">
-                <div id="prof-company"></div>
-                <div id="prof-specialty"></div>
-                <div id="prof-taxid"></div>
-                <div id="prof-gnpi"></div>
-                <div id="prof-inpi"></div>
-                <div id="prof-ptangrp"></div>
-                <div id="prof-ptanind"></div>
-                <div id="prof-contact"></div>
-                <div id="prof-email"></div>
-                <div id="prof-phone"></div>
-                <div id="prof-address" style="grid-column:span 2"></div>
-              </div>
-            </div>
-          </div>
+          <!-- The "Currently Being Worked On — Today" task log and the read-only
+               Client Profile summary were removed from the dashboard: work logging
+               lives on the Team Production tab, and the full (editable) Client
+               Profile has its own dedicated "Client Profile" tab. -->
 
           <!-- Claims Out — the billing production view the team monitors:
                Billed Out (claims sent out the door) and Paid/Posted (collected
@@ -6084,10 +6053,8 @@
         }
       }
 
-      // Load today's activity card (internal team production — hide for clients)
-      const todayCard = document.getElementById('dashTodayCard');
-      if (todayCard) todayCard.style.display = adminView ? '' : 'none';
-      if (adminView) loadTodayActivity();
+      // (The "Currently Being Worked On — Today" card was removed from the
+      //  dashboard — work logging lives on the Team Production tab.)
 
       // My Numbers — biller self-view. Show only for team billers (staff who are
       // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
@@ -6098,36 +6065,8 @@
         if (isBiller) loadMyNumbers();
       }
 
-      // ── Profile card ──────────────────────────────────────
-      const prof = d.profile || {};
-      const profileCard = document.getElementById('profileCard');
-      // For MHP+OMT (e.g. Luminary): don't show profile card — profiles live in sub-profiles only
-      const isCombinedPractice = activeClientPracticeType === 'MHP+OMT';
-      const hasProfile = !isCombinedPractice && (prof.company || prof.tax_id || prof.group_npi);
-      profileCard.style.display = hasProfile ? '' : 'none';
-      if (hasProfile) {
-        const profItem = (label, val, mono) => val
-          ? `<div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:10px 14px">
-               <div style="font-size:11px;color:var(--gray-400);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${label}</div>
-               <div style="font-size:14px;font-weight:700;color:var(--gray-800);${mono ? 'font-family:monospace' : ''};display:flex;align-items:center;gap:6px">
-                 ${esc(val)}
-                 <button onclick="navigator.clipboard.writeText('${val}')" title="Copy"
-                   style="background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:13px;padding:0;line-height:1">⎘</button>
-               </div>
-             </div>`
-          : '';
-        document.getElementById('prof-company').innerHTML = profItem('Practice Name', prof.company);
-        document.getElementById('prof-specialty').innerHTML = profItem('Specialty', prof.specialty);
-        document.getElementById('prof-taxid').innerHTML = profItem('Tax ID', prof.tax_id, true);
-        document.getElementById('prof-gnpi').innerHTML = profItem('Group NPI', prof.group_npi, true);
-        document.getElementById('prof-inpi').innerHTML = profItem('Individual NPI', prof.individual_npi, true);
-        document.getElementById('prof-ptangrp').innerHTML = profItem('Medicare PTAN (Group)', prof.ptan_group, true);
-        document.getElementById('prof-ptanind').innerHTML = profItem('Medicare PTAN (Individual)', prof.ptan_individual, true);
-        document.getElementById('prof-contact').innerHTML = profItem('Contact', prof.contact_name);
-        document.getElementById('prof-email').innerHTML = profItem('Email', prof.email);
-        document.getElementById('prof-phone').innerHTML = profItem('Phone', prof.phone);
-        document.getElementById('prof-address').innerHTML = profItem('Address', prof.address);
-      }
+      // (The read-only Client Profile summary card was removed from the dashboard
+      //  — the full, editable Client Profile now lives only on its own tab.)
 
       // KPI grid. Headline is Billed Out (total charges billed out) — the number
       // the team tracks. A/R tiles removed; AR is just the unpaid slice of Billed.
@@ -6416,13 +6355,6 @@
         : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No enrollment data</p>';
     }
 
-    let profileCollapsed = false;
-    function toggleProfile() {
-      profileCollapsed = !profileCollapsed;
-      document.getElementById('profileBody').style.display = profileCollapsed ? 'none' : '';
-      document.getElementById('profileToggleBtn').textContent = profileCollapsed ? '▼ Expand' : '▲ Collapse';
-    }
-
     // ═══════════════════════════════════════
     // CLAIMS QUEUE
     // ═══════════════════════════════════════
@@ -6483,30 +6415,37 @@
       const payorData = Object.entries(payorCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8);
       renderDonutChart('claimsSectionPayor', payorData, 'value', 'label');
 
-      // Financial summary bar
-      const totalCharged = claims.reduce((s, c) => s + (parseFloat(c.ChargeAmount) || 0), 0);
+      // Financial summary bar. Split charges into Billed Out vs In Intake exactly
+      // like the dashboard headline so this reconciles: a claim counts as Billed
+      // Out unless it's still pre-bill (Intake/Verification/Coding) with no Bill
+      // Date. Billed Out + In Intake = the gross charged across the whole queue.
+      const PRE_BILL_STATUSES = ['intake', 'verification', 'coding'];
+      const isBilledClaim = (c) => {
+        const st = (c.ClaimStatus || '').trim().toLowerCase();
+        const hasBillDate = (c.BillDate || '').toString().trim() !== '';
+        return !(PRE_BILL_STATUSES.includes(st) && !hasBillDate);
+      };
+      const billedCharged = claims.reduce((s, c) => s + (isBilledClaim(c) ? (parseFloat(c.ChargeAmount) || 0) : 0), 0);
+      const intakeCharged = claims.reduce((s, c) => s + (!isBilledClaim(c) ? (parseFloat(c.ChargeAmount) || 0) : 0), 0);
       const totalPaid = claims.reduce((s, c) => s + (parseFloat(c.PaidAmount) || 0), 0);
-      const totalBalance = claims.reduce((s, c) => s + (parseFloat(c.BalanceRemaining) || 0), 0);
       const totalAdj = claims.reduce((s, c) => s + (parseFloat(c.AdjustmentAmount) || 0), 0);
       const finData = [
-        { label: 'Total Charged', value: Math.round(totalCharged) },
-        { label: 'Total Paid', value: Math.round(totalPaid) },
-        { label: 'Adjustments', value: Math.round(totalAdj) },
-        // 'Outstanding' (sum of the imported Balance Remaining column) intentionally
-        // hidden: it's a separate imported field, not Charged − Paid, so it reads as
-        // a confusing/non-reconciling figure. Charged + Paid + Adjustments tell the
-        // real story.
+        { label: 'Billed Out', value: Math.round(billedCharged), color: '#3b82f6' },
+        { label: 'In Intake', value: Math.round(intakeCharged), color: '#f59e0b' },
+        { label: 'Total Paid', value: Math.round(totalPaid), color: '#22c55e' },
+        { label: 'Adjustments', value: Math.round(totalAdj), color: '#94a3b8' },
+        // 'Outstanding' (imported Balance Remaining column) intentionally hidden — it's
+        // a separate imported field, not Charged − Paid, so it reads as non-reconciling.
       ].filter(d => d.value > 0);
       if (finData.length) {
         const fMax = Math.max(...finData.map(d => d.value), 1);
-        const fColors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444'];
-        document.getElementById('claimsSectionFinancials').innerHTML = finData.map((d, i) => `
+        document.getElementById('claimsSectionFinancials').innerHTML = finData.map((d) => `
           <div style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:3px;color:var(--gray-700)">
               <span>${d.label}</span><span>$${d.value.toLocaleString()}</span>
             </div>
             <div style="background:var(--gray-100);border-radius:6px;height:22px;overflow:hidden">
-              <div style="width:${Math.max(6, (d.value / fMax) * 100)}%;height:100%;background:${fColors[i]};border-radius:6px;transition:width .5s"></div>
+              <div style="width:${Math.max(6, (d.value / fMax) * 100)}%;height:100%;background:${d.color};border-radius:6px;transition:width .5s"></div>
             </div>
           </div>`).join('');
       } else {
@@ -10211,49 +10150,6 @@
       fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ practice_type: 'Ancillary' }) })
         .then(r => { if (!r.ok) throw new Error('Failed'); toast(name.trim() + ' sub-profile added!', 'success'); loadPracticeProfiles(); })
         .catch(e => toast(e.message, 'error'));
-    }
-
-    // ═══════════════════════════════════════
-    // TODAY'S ACTIVITY (Dashboard card)
-    // ═══════════════════════════════════════
-    async function loadTodayActivity() {
-      const el = document.getElementById('dashTodayBody');
-      if (!el) return;
-      const today = localDateStr();
-      let url = `/hub/api/production?start_date=${today}&end_date=${today}`;
-      if (activeClientId) url += `&client_id=${activeClientId}`;
-      try {
-        const r = await fetch(url);
-        if (!r.ok) throw new Error('fetch failed');
-        const data = await r.json();
-        const items = Array.isArray(data) ? data : (data.logs || []);
-        if (!items.length) {
-          el.innerHTML = `<div style="color:var(--gray-400);text-align:center;padding:16px 0">
-            No activity logged yet today. <a href="#production" onclick="navTo('production');setProdDatePreset('today');return false;" style="color:var(--primary);font-weight:600">Log your first entry →</a>
-          </div>`;
-          return;
-        }
-        el.innerHTML = `<div class="table-wrap"><table>
-          <thead><tr>
-            <th>Time</th><th>Team Member</th><th>Category</th><th>Task</th><th>Qty</th><th>Hrs</th>
-          </tr></thead>
-          <tbody>
-            ${items.map(e => `<tr>
-              <td style="white-space:nowrap;font-size:12px;color:var(--gray-400)">${esc(e.work_date || today)}</td>
-              <td><span class="badge badge-blue">${esc(e.username || '')}</span></td>
-              <td><span class="badge badge-purple">${esc(e.category || '')}</span></td>
-              <td style="max-width:280px">${esc(e.task_description || '')}</td>
-              <td style="text-align:center">${e.quantity || 0}</td>
-              <td style="text-align:center">${e.time_spent || 0}h</td>
-            </tr>`).join('')}
-          </tbody>
-        </table></div>
-        <div style="margin-top:10px;text-align:right">
-          <button class="btn btn-secondary btn-sm" style="background:#eff6ff;border-color:#93c5fd;color:#1d4ed8" onclick="eodReport()">🌙 End of Day Report</button>
-        </div>`;
-      } catch (e) {
-        el.innerHTML = `<div style="color:var(--gray-400);text-align:center;padding:12px 0">Could not load today's activity.</div>`;
-      }
     }
 
     // ═══════════════════════════════════════
