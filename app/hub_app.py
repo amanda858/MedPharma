@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session, backfill_missing_bill_dates, backfill_dos_from_claim_key
+from app.client_db import get_db, init_client_hub_db, normalize_claim_statuses, validate_session, backfill_missing_bill_dates, backfill_dos_from_claim_key, dedupe_resubmitted_claims
 from app.client_routes import router as client_hub_router
 from app.notifications import start_daily_scheduler, get_notification_status
 from app.config import DATABASE_PATH
@@ -151,6 +151,15 @@ async def startup():
             log.info("✅ No pending claim files to auto-import")
     except Exception as e:
         log.error(f"Startup error: auto_import_pending_claim_files failed: {e}")
+
+    try:
+        collapsed = dedupe_resubmitted_claims()
+        if collapsed:
+            log.info(f"✅ Collapsed {collapsed} duplicate resubmitted claim line(s)")
+        else:
+            log.info("✅ No duplicate resubmitted claims to reconcile")
+    except Exception as e:
+        log.error(f"Startup error: dedupe_resubmitted_claims failed: {e}")
 
     try:
         start_daily_scheduler()

@@ -2527,6 +2527,137 @@ def backfill_dos_from_claim_key(client_id: int = None):
     return filled
 
 
+# When two rows describe the same billed line, keep the one that is furthest
+# along / most financially resolved. Higher rank wins.
+_DEDUPE_STATUS_RANK = {
+    "Paid": 9, "Closed": 8, "Appeals": 7, "A/R Follow-Up": 6,
+    "Denied": 5, "Rejected": 4, "Billed/Submitted": 3,
+    "Coding": 2, "Verification": 1, "Intake": 0,
+}
+
+
+def _base_claim_key(key):
+    """Strip a trailing importer-generated '#N' disambiguation suffix from a
+    ClaimKey. 'SVD3166-47529#3' -> 'SVD3166-47529'; a key that carries no such
+    suffix is returned unchanged. Only a trailing '#' followed by digits is
+    treated as the artifact, so a '#' that is part of the real claim number is
+    left alone."""
+    s = str(key or "").strip()
+    i = s.rfind("#")
+    if i > 0 and s[i + 1:].isdigit():
+        return s[:i]
+    return s
+
+
+def dedupe_resubmitted_claims(client_id: int = None):
+    """Idempotent daily self-assessment: collapse duplicate claim lines that
+    describe the SAME billed service into one row, so re-worked / re-listed /
+    resubmitted claims stop double-counting billed and A/R.
+
+    When a denied claim is reworked and resubmitted as a correction — or the same
+    claim is simply listed across a workbook's denial worklist and A/R aging
+    sheets, or a whole file is re-uploaded — the SVD importer keeps every
+    occurrence by tacking a '#2', '#3' … suffix onto the claim number. That
+    preserved gross billed but silently inflated it: the identical service (same
+    claim number, date of service, CPT and charge) ends up stored 2-3x under
+    keys that the (client_id, ClaimKey) upsert can't recognize as the same claim.
+
+    This groups every row by its underlying billed line — the same account, the
+    base claim number (minus the '#N' suffix), DOS, CPT and charge — and keeps a
+    single survivor per line. The survivor is the most financially-resolved /
+    most-progressed row (then the clean base claim number, then the oldest row),
+    so a denial that was reworked into A/R or paid keeps its latest state. Every
+    collapsed row is copied to ``claims_dedupe_archive`` before deletion so the
+    action is fully reversible and auditable, and any payments or notes attached
+    to a collapsed row are repointed onto the survivor so nothing is orphaned.
+
+    Anchoring on the base claim number means two genuinely different claim
+    numbers are never merged — only the importer's own '#N' twins collapse. It is
+    a no-op once the data is clean, so it is safe to run on every startup and
+    after every import. Returns the number of duplicate rows collapsed."""
+    conn = get_db()
+    removed = 0
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS claims_dedupe_archive (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id    INTEGER,
+                ClaimKey     TEXT,
+                survivor_key TEXT,
+                reason       TEXT,
+                row_json     TEXT,
+                archived_at  TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        q = "SELECT * FROM claims_master"
+        p = []
+        if client_id is not None:
+            q += " WHERE client_id = ?"
+            p.append(client_id)
+        cur.execute(q, p)
+        rows = [dict(r) for r in cur.fetchall()]
+
+        # Group rows by the underlying billed line.
+        groups: dict = {}
+        for r in rows:
+            try:
+                charge = round(float(r.get("ChargeAmount") or 0), 2)
+            except (TypeError, ValueError):
+                charge = 0.0
+            gkey = (int(r.get("client_id") or 0),
+                    _base_claim_key(r.get("ClaimKey")),
+                    str(r.get("DOS") or "")[:10],
+                    str(r.get("CPTCode") or "").strip(),
+                    charge)
+            groups.setdefault(gkey, []).append(r)
+
+        def _rank(r):
+            try:
+                paid = float(r.get("PaidAmount") or 0)
+            except (TypeError, ValueError):
+                paid = 0.0
+            st = _DEDUPE_STATUS_RANK.get(str(r.get("ClaimStatus") or "").strip(), 0)
+            clean = 0 if "#" in str(r.get("ClaimKey") or "") else 1
+            # Higher is better: most paid, most-progressed, clean base key, oldest row.
+            return (paid, st, clean, -int(r.get("id") or 0))
+
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            members.sort(key=_rank, reverse=True)
+            survivor = members[0]
+            skey = str(survivor.get("ClaimKey") or "")
+            for dup in members[1:]:
+                dkey = str(dup.get("ClaimKey") or "")
+                dcid = int(dup.get("client_id") or 0)
+                cur.execute(
+                    "INSERT INTO claims_dedupe_archive "
+                    "(client_id, ClaimKey, survivor_key, reason, row_json) "
+                    "VALUES (?,?,?,?,?)",
+                    (dcid, dkey, skey,
+                     "duplicate billed line (same base claim / DOS / CPT / charge)",
+                     json.dumps(dup, default=str)),
+                )
+                # Repoint any attached payments / notes onto the survivor so no
+                # money or history is orphaned, then drop the duplicate claim row.
+                if dkey != skey:
+                    cur.execute(
+                        "UPDATE payments SET ClaimKey=? WHERE client_id=? AND ClaimKey=?",
+                        (skey, dcid, dkey))
+                    cur.execute(
+                        "UPDATE notes_log SET ClaimKey=? WHERE client_id=? AND ClaimKey=?",
+                        (skey, dcid, dkey))
+                cur.execute("DELETE FROM claims_master WHERE id=?", (int(dup.get("id")),))
+                removed += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if removed:
+        print(f"[migration] Collapsed {removed} duplicate resubmitted claim line(s)")
+    return removed
+
+
 def get_claims(client_id: int = None, status: str = None, sub_profile: str = None):
     conn = get_db()
     try:

@@ -5494,17 +5494,20 @@ def _tpl_svd_denials(sheets):
       • A/R aging detail  — col0 is a numeric id, col26 is the claim number
         (SVD3166-47529), col28 the charge, col29 the allowed. Billed claims sitting
         in A/R. Both shapes are emitted as billed claims keyed on the real claim #.
-    EVERY submitted / reworked line is emitted — nothing is collapsed. A claim that
-    was worked in the denial queue AND tracked in A/R (often across two sheets and
-    multiple aging snapshots) represents real, repeated billing activity, so each
-    occurrence keeps its own row: the first sighting carries the clean claim #, and
-    later sightings become claim#2 / claim#3 … (deterministic in file order, so a
-    re-upload updates in place and never drifts). ALL sheets are scanned, so a
-    workbook whose A/R lives on a later sheet is fully read instead of abandoned."""
+    A line that is identical on (claim #, DOS, CPT, charge) to one already emitted
+    from this workbook is a re-listing of the SAME billed service — the export
+    repeats a claim across its denial worklist, A/R aging and successive aging
+    snapshots — so it is collapsed to a single row instead of being double-
+    counted. Genuinely different lines on the same claim (e.g. a second CPT) still
+    keep their own row: the first sighting carries the clean claim #, and later
+    distinct sightings become claim#2 / claim#3 … so gross billed is preserved
+    without inflation. ALL sheets are scanned, so a workbook whose A/R lives on a
+    later sheet is fully read instead of abandoned."""
     def _col(r, i):
         return r[i] if (r and len(r) > i and r[i] is not None) else ""
     all_out = []
     seq: dict = {}
+    seen_lines: set = set()
     matched = False
     for sn, rows in sheets:
         if len(rows) < 2:
@@ -5570,9 +5573,19 @@ def _tpl_svd_denials(sheets):
                 }
             if rec is None:
                 continue
-            # Unique key per submitted/reworked line so the gross billed total is
-            # preserved instead of being deduped away. First sighting keeps the
-            # clean claim #; repeats become claim#2, claim#3 … (stable file order).
+            # Collapse byte-identical re-listings of the same billed line. The SVD
+            # workbook repeats a claim across its denial worklist, A/R aging and
+            # successive aging snapshots — one service billed once, not 2-3x — so a
+            # line identical on (claim #, DOS, CPT, charge) to one already emitted
+            # from this file is dropped. Genuinely different lines on the same claim
+            # (e.g. a second CPT) still get a unique claim#2 / claim#3 key, so gross
+            # billed is preserved without inflation.
+            line_id = (base, str(rec.get("DOS", "")).strip(),
+                       str(rec.get("CPT Code", "")).strip(),
+                       str(rec.get("Charge Amount", "")).strip())
+            if line_id in seen_lines:
+                continue
+            seen_lines.add(line_id)
             n = seq.get(base, 0) + 1
             seq[base] = n
             rec["Claim #"] = base if n == 1 else f"{base}#{n}"
@@ -7269,6 +7282,16 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
     if files_done:
         log.info("Auto-import sweep ingested %s row(s) from %s file(s)",
                  rows_done, files_done)
+        # Daily self-assessment: collapse any duplicate resubmitted claim lines the
+        # import just introduced (the same claim re-listed / re-uploaded under a
+        # '#N' keyed variant) so billed / A/R never double-counts. Idempotent.
+        try:
+            from .client_db import dedupe_resubmitted_claims
+            collapsed = dedupe_resubmitted_claims(client_id)
+            if collapsed:
+                log.info("Auto-import sweep collapsed %s duplicate claim line(s)", collapsed)
+        except Exception as e:
+            log.warning("auto-import sweep: dedupe pass failed: %s", e)
     return {"files": files_done, "rows": rows_done}
 
 
