@@ -6186,7 +6186,10 @@
           const local = s.split('@')[0].replace(/[._]+/g, ' ').trim();
           return local.replace(/\b\w/g, c => c.toUpperCase());
         };
-        const members = (d.billed_by_member || []).filter(m => (m.amount || m.count));
+        // The per-biller breakdown is INTERNAL (which of our team worked the
+        // account). A client only ever sees their own Billed / Paid numbers, so
+        // this table is limited to staff/admin views.
+        const members = adminView ? (d.billed_by_member || []).filter(m => (m.amount || m.count)) : [];
         const _bmGcol = 'grid-template-columns:1.5fr 1fr 1fr 1fr;gap:10px';
         const _bmTNew = members.reduce((s, m) => s + (m.new_amount || 0), 0);
         const _bmTAr = members.reduce((s, m) => s + (m.ar_amount || 0), 0);
@@ -6218,7 +6221,7 @@
           </div>`
         ) : '';
         const bs = d.billed_split || null;
-        const splitLine = (bs && !members.length && ((bs.new && bs.new.amount) || (bs.rolling_ar && bs.rolling_ar.amount))) ? (
+        const splitLine = (adminView && bs && !members.length && ((bs.new && bs.new.amount) || (bs.rolling_ar && bs.rolling_ar.amount))) ? (
           `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;border-top:1px solid var(--gray-200);padding-top:14px">
              <div style="background:var(--gray-50);border-radius:10px;padding:12px 14px;text-align:center;border-top:3px solid var(--success)">
                <div style="font-size:20px;font-weight:800;color:${(bs.new.amount) > 0 ? 'var(--success)' : 'var(--gray-400)'}">$${fmt(bs.new.amount)}</div>
