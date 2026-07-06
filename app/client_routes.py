@@ -3342,6 +3342,7 @@ class EligIn(BaseModel):
     VerifiedDate: Optional[str] = ""
     NextReverifyDate: Optional[str] = ""
     Notes: Optional[str] = ""
+    BillingReadiness: Optional[str] = ""
     sub_profile: Optional[str] = ""
     Stage: Optional[str] = "Received"
 
@@ -3365,6 +3366,7 @@ class EligUpdate(BaseModel):
     VerifiedDate: Optional[str] = None
     NextReverifyDate: Optional[str] = None
     Notes: Optional[str] = None
+    BillingReadiness: Optional[str] = None
     sub_profile: Optional[str] = None
     Stage: Optional[str] = None
     IntakeFileId: Optional[int] = None

@@ -2595,6 +2595,11 @@
                 <option>Needs Re-verify</option>
                 <option>Inactive</option>
                 <option>Termed</option>
+                <option disabled>— billing readiness —</option>
+                <option>Needs Verification</option>
+                <option>Clear to Bill</option>
+                <option>On Hold</option>
+                <option>Not Billable</option>
               </select>
               <button class="btn btn-secondary btn-sm" onclick="exportSection('eligibility')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥 Import Excel</button>
@@ -2612,6 +2617,7 @@
                       <th>Payor</th>
                       <th>Member ID</th>
                       <th>Status</th>
+                      <th>Billable?</th>
                       <th>Effective</th>
                       <th>Term</th>
                       <th>Copay</th>
@@ -4287,6 +4293,16 @@
         <div class="form-group"><label>Verified By</label><input class="form-control" id="fEligVerifiedBy"></div>
         <div class="form-group"><label>Verified Date</label><input class="form-control" type="date"
             id="fEligVerifiedDate"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group form-full"><label>🩺 Billing Readiness — good to bill services?</label>
+          <select class="form-control" id="fEligBillable">
+            <option value="">Pending Verification</option>
+            <option>Clear to Bill</option>
+            <option>On Hold</option>
+            <option>Not Billable</option>
+          </select>
+        </div>
       </div>
       <div class="form-grid">
         <div class="form-group"><label>Next Re-verify</label><input class="form-control" type="date"
@@ -7126,6 +7142,15 @@
       return `<a href="/hub/api/files/${fileId}/download" class="${cls}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label}</a>`;
     }
 
+    // Honest, human-set verdict — is this patient good to bill services?
+    // '' means "not checked yet", so unworked intakes surface as Pending Verification.
+    function billableBadge(v) {
+      const s = (v || '').trim();
+      if (!s) return '<span class="badge badge-gray">Pending Verification</span>';
+      const map = { 'Clear to Bill': 'badge-green', 'On Hold': 'badge-amber', 'Not Billable': 'badge-red', 'Pending Verification': 'badge-gray' };
+      return `<span class="badge ${map[s] || 'badge-gray'}">${esc(s)}</span>`;
+    }
+
     // ── Dashboard tiles + charts ──
     function renderEligTiles() {
       const el = document.getElementById('eligTiles');
@@ -7145,11 +7170,17 @@
       });
       const avg = n ? (sum / n) : null;
       const avgLabel = avg == null ? '—' : (avg < 1 ? '<1d' : Math.round(avg) + 'd');
+      // Billing-readiness rollup — the punchline: who is good to bill vs still unworked.
+      const _isPending = i => !((i.BillingReadiness || '').trim()) || i.BillingReadiness === 'Pending Verification';
+      const needsVerif = items.filter(_isPending).length;
+      const clearToBill = items.filter(i => i.BillingReadiness === 'Clear to Bill').length;
       const tile = (label, val, color) => `<div style="flex:1;min-width:130px;background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${color};border-radius:10px;padding:14px 16px">
           <div style="font-size:24px;font-weight:800;color:${color}">${val}</div>
           <div style="font-size:12px;color:#6b7280;font-weight:600;margin-top:2px">${label}</div>
         </div>`;
       el.innerHTML = tile('Total Patients', total, '#4338ca')
+        + tile('Needs Verification', needsVerif, '#dc2626')
+        + tile('Clear to Bill', clearToBill, '#059669')
         + tile('Received', received, '#0ea5e9')
         + tile('In Progress', inprog, '#d97706')
         + tile('Completed', completed, '#059669')
@@ -7285,13 +7316,18 @@
       const sel = document.getElementById('eligFilter');
       activeEligFilter = sel ? sel.value : activeEligFilter;
       const f = (activeEligFilter || '').toLowerCase();
-      const items = f
-        ? allEligItems.filter(i => (i.Status || '').toLowerCase() === f || (i.Stage || 'Received').toLowerCase() === f)
-        : allEligItems;
+      const _isPendingElig = i => !((i.BillingReadiness || '').trim()) || i.BillingReadiness === 'Pending Verification';
+      const items = !f
+        ? allEligItems
+        : f === 'needs verification'
+          ? allEligItems.filter(_isPendingElig)
+          : allEligItems.filter(i => (i.Status || '').toLowerCase() === f
+            || (i.Stage || 'Received').toLowerCase() === f
+            || (i.BillingReadiness || '').toLowerCase() === f);
       const tbody = document.getElementById('eligTbody');
       if (!tbody) return;
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="18"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="19"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(i => {
@@ -7304,6 +7340,7 @@
     <td>${esc(i.Payor || '—')}</td>
     <td style="font-size:12px">${esc(i.MemberID || '—')}</td>
     <td>${statusBadge(i.Status)}</td>
+    <td>${billableBadge(i.BillingReadiness)}</td>
     <td style="font-size:12px">${esc(i.EffectiveDate || '—')}</td>
     <td style="font-size:12px">${esc(i.TermDate || '—')}</td>
     <td style="font-size:12px">${esc(i.Copay || '—')}</td>
@@ -7347,6 +7384,7 @@
       set('fEligVerifiedDate', item?.VerifiedDate);
       set('fEligReverify', item?.NextReverifyDate);
       set('fEligStage', item?.Stage || 'Received');
+      set('fEligBillable', item?.BillingReadiness);
       set('fEligNotes', item?.Notes);
       const rf = document.getElementById('fEligReportFile');
       if (rf) rf.value = '';
@@ -7372,7 +7410,8 @@
         Deductible: g('fEligDeductible'), Coinsurance: g('fEligCoins'), OOPMax: g('fEligOOP'),
         PriorAuthRequired: g('fEligPriorAuth'), AuthNumber: g('fEligAuthNum'),
         VerifiedBy: g('fEligVerifiedBy'), VerifiedDate: g('fEligVerifiedDate'),
-        NextReverifyDate: g('fEligReverify'), Stage: g('fEligStage'), Notes: g('fEligNotes'),
+        NextReverifyDate: g('fEligReverify'), Stage: g('fEligStage'),
+        BillingReadiness: g('fEligBillable'), Notes: g('fEligNotes'),
       };
       try {
         let rid = editId;
