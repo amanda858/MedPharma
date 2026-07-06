@@ -7209,6 +7209,14 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         billed_by_user = {}
         denied_by_user = {}
         paid_by_user = {}
+        # Denial rework accountability (admin / comprehensive): tie every denied &
+        # rebilled claim to the ORIGINAL sender (Owner) who produced the denial and
+        # the biller (uploaded_by) who reworked / rebilled it. Uses the SAME denied
+        # set, date window and Owner attribution as claims_denied below, so the
+        # totals reconcile EXACTLY with "Prior Denials & Rebill" — it only re-slices
+        # who caused vs who fixed and never adds to or inflates billed.
+        denial_recovery_sender = {}
+        denial_recovery_reworker = {}
         # One pass over every Owner-attributed claim feeds Submitted (claims with
         # a Bill Date in the window), Denied (claims denied in the window by
         # Denied Date, falling back to Bill Date) and Paid (actual dollars paid
@@ -7229,7 +7237,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             f"       substr(COALESCE(DOS,''),1,10) AS dos, "
             f"       COALESCE(ClaimStatus,'') AS st, "
             f"       COALESCE(ChargeAmount,0) AS amt, "
-            f"       COALESCE(PaidAmount,0) AS paid "
+            f"       COALESCE(PaidAmount,0) AS paid, "
+            f"       TRIM(COALESCE(uploaded_by,'')) AS reworker "
             f"FROM claims_master {attr_cond}", attr_p)
         for r in cur.fetchall():
             owner_raw = str(r["owner"] or "").strip()
@@ -7274,6 +7283,22 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                         owner, {"claims_denied": 0, "claims_denied_amount": 0.0})
                     dslot["claims_denied"] += 1
                     dslot["claims_denied_amount"] += amt
+                    # Same claim, re-sliced: the original sender (Owner) caused the
+                    # denial; the uploader (uploaded_by) reworked / rebilled it.
+                    _snd = denial_recovery_sender.setdefault(
+                        owner, {"sender": owner, "count": 0, "amount": 0.0})
+                    _snd["count"] += 1
+                    _snd["amount"] += amt
+                    _rw = str(r["reworker"] or "").strip()
+                    _rwl = _rw.lower()
+                    if _rwl == "admin" or _rwl.startswith("admin@") or _rwl.startswith("admin "):
+                        _rw = "(system)"
+                    elif not _rw:
+                        _rw = "(unattributed)"
+                    _rwk = denial_recovery_reworker.setdefault(
+                        _rw, {"reworker": _rw, "count": 0, "amount": 0.0})
+                    _rwk["count"] += 1
+                    _rwk["amount"] += amt
 
             # Paid — real dollars paid on the claim (PaidAmount), attributed by
             # Paid Date, then Bill Date, then DOS. This reflects collections that
@@ -7528,6 +7553,22 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 flags.append({"username": u["username"], "avg_hours_per_day": avg_hrs,
                               "days_worked": u["days_worked"],
                               "recommendation": "Below 6hr/day average — review time management"})
+
+        for _s in denial_recovery_sender.values():
+            _s["amount"] = round(_s["amount"], 2)
+        for _w in denial_recovery_reworker.values():
+            _w["amount"] = round(_w["amount"], 2)
+        denial_recovery = {
+            "by_sender": sorted(
+                denial_recovery_sender.values(),
+                key=lambda x: (-x["amount"], -x["count"], x["sender"].lower())),
+            "by_reworker": sorted(
+                denial_recovery_reworker.values(),
+                key=lambda x: (-x["amount"], -x["count"])),
+            "total_count": sum(int(s["count"]) for s in denial_recovery_sender.values()),
+            "total_amount": round(
+                sum(float(s["amount"]) for s in denial_recovery_sender.values()), 2),
+        }
     finally:
         conn.close()
     return {
@@ -7549,6 +7590,7 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "rolling_ar_cutoff": _ROLLING_AR_DOS_CUTOFF,
         "scope_username": self_user or None,
         "is_self_view": self_scope,
+        "denial_recovery": denial_recovery,
         "time_management_flags": flags,
     }
 

@@ -10932,6 +10932,46 @@
         </div>
       </div>`;
 
+      // ── Denial Rework Accountability (admin / comprehensive only) ──────────
+      // Ties each denied+rebilled claim to the ORIGINAL sender (Owner) who caused
+      // the denial and the biller (uploaded_by) who reworked it. Answers "which
+      // employee is slipping" and "what did the reworker fix" without inflating
+      // billed — each claim is still counted once inside Billed Out.
+      const dr = data.denial_recovery || null;
+      if (!selfView && dr && dr.total_count > 0) {
+        const drSenders = dr.by_sender || [];
+        const drReworkers = dr.by_reworker || [];
+        const drTotalAmt = Number(dr.total_amount || 0);
+        const fixedLine = drReworkers.map(w =>
+          `<strong>${esc(w.reworker)}</strong> reworked <strong>${w.count}</strong> (${money2(w.amount)})`
+        ).join(' · ');
+        html += `<div class="card" style="margin-bottom:18px;border-left:4px solid #b45309">
+          <div class="card-header"><div class="card-title">🔧 Denial Rework Accountability (${esc(start)} to ${esc(end)})</div></div>
+          <div style="margin-top:8px;font-size:13px;color:#334155">
+            <strong>${dr.total_count}</strong> denied claim(s) (${money2(drTotalAmt)}) were reworked &amp; rebilled.
+            Fixed by: ${fixedLine || '—'}.
+          </div>
+          <div class="table-wrap" style="margin-top:10px"><table>
+            <thead><tr><th>Original Sender (owner of the denied claim)</th><th style="text-align:center">Denied &amp; Reworked</th><th style="text-align:right">$ Charged</th><th style="text-align:right">% of Denials</th></tr></thead>
+            <tbody>${drSenders.map(s => `<tr>
+              <td style="font-weight:600">${esc(s.sender)}</td>
+              <td style="text-align:center;font-weight:600">${s.count}</td>
+              <td style="text-align:right;font-weight:600">${money2(s.amount)}</td>
+              <td style="text-align:right;color:#64748b">${drTotalAmt ? ((s.amount / drTotalAmt) * 100).toFixed(1) : '0.0'}%</td>
+            </tr>`).join('')}</tbody>
+            <tfoot><tr style="background:#fff7ed;font-weight:700;border-top:2px solid #fed7aa">
+              <td>Total denials reworked</td>
+              <td style="text-align:center">${dr.total_count}</td>
+              <td style="text-align:right">${money2(drTotalAmt)}</td>
+              <td style="text-align:right">100%</td>
+            </tr></tfoot>
+          </table></div>
+          <div style="margin-top:8px;font-size:12px;color:var(--gray-500)">
+            Each denied claim is <strong>counted once inside Billed Out</strong> — reworking/rebilling it does <strong>not</strong> inflate billed. This panel only re-slices <em>who originally sent</em> the claim that came back denied (accountability) vs <em>who reworked it</em>, and is recomputed live from current claims every time you generate the report.
+          </div>
+        </div>`;
+      }
+
       html += `<div class="card" style="margin-bottom:18px">
         <div class="card-header"><div class="card-title">👥 Production by User (${esc(start)} to ${esc(end)})</div></div>
         <div class="table-wrap" style="margin-top:8px"><table>

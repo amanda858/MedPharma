@@ -284,3 +284,67 @@ def test_paid_comes_from_claim_paid_amount_not_just_payments_table(cdb):
     # A payment older than the window (by Paid Date) drops out.
     narrow = cdb.get_production_report(cid, "2026-06-22", "2026-06-30")
     assert narrow["paid_total_amount"] == 80.0
+
+
+def test_denial_recovery_ties_sender_to_reworker(cdb):
+    """Denial Rework Accountability re-slices the SAME denied set two ways:
+    ``by_sender`` (the original Owner who produced the denied claim — "who is
+    slipping") and ``by_reworker`` (the uploaded_by biller who reworked/rebilled
+    it — "what was fixed"). It must reconcile EXACTLY with the report's
+    ``denied_total`` (never inflating billed), rank senders by dollars, and only
+    surface in the admin/comprehensive view — not a biller's self-view."""
+    cid = cdb.create_client({
+        "company": "SV Diagnostics", "contact_name": "SV Diagnostics",
+        "email": "sv@example.com", "phone": "555-0", "role": "client",
+        "username": "svdiag", "password": "svpass123456",
+    })
+    # jessica (the reworker) is an auto-seeded MedPharma staff login.
+
+    # Three denied claims owned by two ORIGINAL senders (free-text Owner names
+    # that aren't hub users), all reworked & rebilled by Jessica (uploaded_by).
+    cdb.create_claim({"client_id": cid, "ClaimKey": "D-1", "ChargeAmount": 100,
+                      "ClaimStatus": "Denied", "Owner": "STEPHANIE SHEPPARD",
+                      "BillDate": "2026-06-05", "DeniedDate": "2026-06-06"})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "D-2", "ChargeAmount": 50,
+                      "ClaimStatus": "Denied", "Owner": "STEPHANIE SHEPPARD",
+                      "BillDate": "2026-06-05", "DeniedDate": "2026-06-07"})
+    cdb.create_claim({"client_id": cid, "ClaimKey": "D-3", "ChargeAmount": 200,
+                      "ClaimStatus": "Denied", "Owner": "Anthony Cesario",
+                      "BillDate": "2026-06-05", "DeniedDate": "2026-06-06"})
+    # A clean (non-denied) billed claim must never enter denial recovery.
+    cdb.create_claim({"client_id": cid, "ClaimKey": "C-1", "ChargeAmount": 900,
+                      "ClaimStatus": "Billed/Submitted", "Owner": "susan",
+                      "BillDate": "2026-06-10"})
+
+    # uploaded_by is stamped at import time, not by create_claim — set it here.
+    conn = cdb.get_db()
+    conn.execute("UPDATE claims_master SET uploaded_by=? "
+                 "WHERE ClaimKey IN ('D-1','D-2','D-3')", ("jessica",))
+    conn.execute("UPDATE claims_master SET uploaded_by=? WHERE ClaimKey='C-1'", ("susan",))
+    conn.commit()
+    conn.close()
+
+    rep = cdb.get_production_report(cid)
+    dr = rep["denial_recovery"]
+
+    # Reconciles EXACTLY with the denied totals — same set, no inflation.
+    assert dr["total_count"] == rep["denied_total_count"] == 3
+    assert dr["total_amount"] == rep["denied_total_amount"] == 350.0
+
+    # by_reworker: Jessica fixed all three.
+    assert dr["by_reworker"] == [{"reworker": "jessica", "count": 3, "amount": 350.0}]
+
+    # by_sender: ranked by dollars desc — Anthony ($200) ahead of Stephanie ($150).
+    assert [s["sender"] for s in dr["by_sender"]] == ["Anthony Cesario", "STEPHANIE SHEPPARD"]
+    steph = next(s for s in dr["by_sender"] if s["sender"] == "STEPHANIE SHEPPARD")
+    assert steph["count"] == 2 and steph["amount"] == 150.0
+    anthony = next(s for s in dr["by_sender"] if s["sender"] == "Anthony Cesario")
+    assert anthony["count"] == 1 and anthony["amount"] == 200.0
+    # The clean biller never appears as a sender.
+    assert "susan" not in [s["sender"] for s in dr["by_sender"]]
+
+    # A biller's self-view still computes the block but stays scoped to their own
+    # denials (used for their card only) — Jessica has no OWNED denials here.
+    self_view = cdb.get_production_report(None, username="jessica")
+    assert self_view["is_self_view"] is True
+    assert self_view["denial_recovery"]["total_count"] == 0
