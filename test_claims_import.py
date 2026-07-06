@@ -615,11 +615,10 @@ def test_posted_payments_write_idempotent_claim_notes(hub_env):
 
 
 def test_denied_claims_counted_inside_billed(hub_env):
-    """A denied claim is still a billed claim — Denied must be a subset of the
-    Billed superset, never excluded from it. Billed (Claims Out) counts every
-    worked claim, including intake/submitted claims that lack a Bill Date (the
-    daily files don't always carry one), so the comprehensive book isn't
-    undercounted (hardcoded bucket semantics)."""
+    """A denied claim is still a billed claim — Denied stays a subset of Billed.
+    But a claim still in intake with no Bill Date has NOT gone out the door, so it
+    is excluded from Billed Out and surfaced in the separate 'intake' bucket.
+    Billed + Intake = every charge loaded, so nothing is lost."""
     client_db, client_routes = hub_env
     cid = _make_client(client_db)
 
@@ -636,10 +635,15 @@ def test_denied_claims_counted_inside_billed(hub_env):
 
     d = client_db.get_dashboard(cid)
     cb = d["claim_buckets"]
-    # Billed superset = every claim worked, incl. the denied one AND the intake
-    # claim that has no Bill Date.
-    assert cb["billed"]["count"] == 3
-    assert cb["billed"]["amount"] == pytest.approx(650.0)
+    # Billed = claims out the door: the billed one + the denied one (both carry a
+    # Bill Date). The intake claim with no Bill Date is NOT billed.
+    assert cb["billed"]["count"] == 2
+    assert cb["billed"]["amount"] == pytest.approx(350.0)
+    # The intake claim is captured separately, never silently dropped.
+    assert cb["intake"]["count"] == 1
+    assert cb["intake"]["amount"] == pytest.approx(300.0)
+    # Billed + Intake accounts for every loaded charge.
+    assert cb["billed"]["amount"] + cb["intake"]["amount"] == pytest.approx(650.0)
     # Denied is a subset, never larger than Billed.
     assert cb["denied"]["count"] == 1
     assert cb["denied"]["count"] <= cb["billed"]["count"]

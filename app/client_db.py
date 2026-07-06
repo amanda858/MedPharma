@@ -3625,6 +3625,18 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             row = cur.fetchone()
             return row[0] if row else 0
 
+        # "Billed Out" = a claim that has actually gone out the door. A claim is
+        # billed once it has moved past the pre-bill stages (Intake/Verification/
+        # Coding) OR already carries a Bill Date; a claim still sitting in intake
+        # with no Bill Date has NOT been billed yet and is reported separately as
+        # the "intake" bucket. Keeping intake out of Billed Out makes the headline
+        # reconcile with the dated Billed Activity report instead of overstating
+        # billed by the untouched backlog.
+        _prebill_ph = ",".join("?" * len(_PRE_BILL_STATUSES))
+        _billed_expr = f"(ClaimStatus NOT IN ({_prebill_ph}) OR TRIM(COALESCE(BillDate,'')) != '')"
+        _intake_expr = f"(ClaimStatus IN ({_prebill_ph}) AND TRIM(COALESCE(BillDate,'')) = '')"
+        _prebill_params = list(_PRE_BILL_STATUSES)
+
         # Total AR
         total_ar = q1(f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master {cond}", p)
         # Active claims (not Paid, not Closed)
@@ -3668,12 +3680,18 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                         FROM claims_master {cond} {'AND' if cond else 'WHERE'} PaidDate != '' AND DOS != ''""", p)
         row = cur.fetchone()
         avg_days_to_pay = round(row[0] or 0, 1)
+        # How many claims actually have BOTH a Paid Date and a service date — the
+        # rows the average above is computed from. When this is 0 the average is
+        # not "0 days", it's "no data yet"; the UI shows "—" instead of a fake 0.
+        paid_dated_count = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} PaidDate != '' AND DOS != ''", p)
 
         # SLA breaches
         sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1", p)
 
-        # Net collection rate
-        total_charge = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond}", p)
+        # Net collection rate. Charge base = billed claims only (a claim still in
+        # intake with no Bill Date hasn't been billed, so it can't be collected on
+        # and must not dilute the rate or the headline Billed Out figure).
+        total_charge = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
         total_paid = q1(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond}", p)
         net_coll_rate = round(total_paid / max(total_charge, 1) * 100, 1)
 
@@ -3802,17 +3820,19 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denied": {"count": 0, "amount": 0.0},
             "paid":   {"count": 0, "amount": 0.0},
             "posted": {"count": 0, "amount": 0.0},
+            "intake": {"count": 0, "amount": 0.0},
         }
         b = claim_buckets
-        # Claims Out (Billed) = every claim worked / out the door. This is the
-        # comprehensive book the team cares about — denied claims are billed
-        # claims, and intake/submitted claims that lack a clean Bill Date column
-        # still count (the daily files don't always carry a Bill Date, so keying
-        # on it alone undercounts). Denied / Paid / Posted remain sub-views.
+        # Claims Out (Billed) = every claim that has gone out the door: it has
+        # moved past a pre-bill stage (Intake/Verification/Coding) OR already
+        # carries a Bill Date. Denied claims are billed claims. Claims still in
+        # intake with no Bill Date are NOT billed yet — they're the "intake"
+        # bucket below — so Billed Out reconciles with the dated Billed Activity
+        # report. Denied / Paid / Posted remain sub-views of Billed.
         b["billed"]["count"] = q1(
-            f"SELECT COUNT(*) FROM claims_master {cond}", p)
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
         b["billed"]["amount"] = q1(
-            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond}", p)
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
         # A claim is DENIED only when its status says so (Denied/Appeals) or it
         # carries a real Denied Date. A populated DenialReason is NOT a denial
         # signal: remittance files put CARC/RARC remark + adjustment-reason codes
@@ -3837,6 +3857,13 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                 f"SELECT COUNT(*) FROM payments {pay_cond}", pay_p)
             b["posted"]["amount"] = q1(
                 f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
+        # Intake = loaded but not yet billed (pre-bill status AND no Bill Date).
+        # Billed + Intake = every charge loaded, so the UI can show the full book
+        # while keeping Billed Out honest.
+        b["intake"]["count"] = q1(
+            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_intake_expr}", p + _prebill_params)
+        b["intake"]["amount"] = q1(
+            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_intake_expr}", p + _prebill_params)
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 
@@ -3856,13 +3883,20 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # their own account" view: e.g. the biller who submitted a file is credited
         # with that file's full billed charges. Each row also splits that billed
         # total into new claims (DOS after the cutoff) vs rolling AR (the rest).
+        # The admin/system login isn't a real biller; its uploads are folded into
+        # a "(system)" line so the per-member rows still sum exactly to Billed Out
+        # without presenting admin as a person being measured for production.
+        _who_expr = ("CASE WHEN LOWER(TRIM(COALESCE(uploaded_by,''))) = 'admin' "
+                     "OR LOWER(TRIM(COALESCE(uploaded_by,''))) LIKE 'admin@%' THEN '(system)' "
+                     "WHEN TRIM(COALESCE(uploaded_by,'')) = '' THEN '(unattributed)' "
+                     "ELSE TRIM(uploaded_by) END")
         cur.execute(
-            f"SELECT COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)') AS who, "
+            f"SELECT {_who_expr} AS who, "
             f"       COUNT(*) AS n, COALESCE(SUM(ChargeAmount),0) AS amt, "
             f"       SUM(CASE WHEN {_new_case} THEN 1 ELSE 0 END) AS new_n, "
             f"       COALESCE(SUM(CASE WHEN {_new_case} THEN ChargeAmount ELSE 0 END),0) AS new_amt "
-            f"FROM claims_master {cond} GROUP BY who ORDER BY amt DESC",
-            [NEW_CLAIM_DOS_CUTOFF, NEW_CLAIM_DOS_CUTOFF] + p)
+            f"FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr} GROUP BY who ORDER BY amt DESC",
+            [NEW_CLAIM_DOS_CUTOFF, NEW_CLAIM_DOS_CUTOFF] + p + _prebill_params)
         billed_by_member = []
         for r in cur.fetchall():
             _tn = int(r[1] or 0); _ta = round(float(r[2] or 0), 2)
@@ -3876,9 +3910,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # Top-level billed split (same New vs Rolling AR rule) so every dashboard —
         # including a single biller's self-view — can show the two-way breakdown.
         _new_amt = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} "
-                      f"{'AND' if cond else 'WHERE'} {_new_case}", p + [NEW_CLAIM_DOS_CUTOFF])
+                      f"{'AND' if cond else 'WHERE'} {_new_case} AND {_billed_expr}", p + [NEW_CLAIM_DOS_CUTOFF] + _prebill_params)
         _new_cnt = q1(f"SELECT COUNT(*) FROM claims_master {cond} "
-                      f"{'AND' if cond else 'WHERE'} {_new_case}", p + [NEW_CLAIM_DOS_CUTOFF])
+                      f"{'AND' if cond else 'WHERE'} {_new_case} AND {_billed_expr}", p + [NEW_CLAIM_DOS_CUTOFF] + _prebill_params)
         _billed_cnt = claim_buckets["billed"]["count"]
         _billed_amt = claim_buckets["billed"]["amount"]
         billed_split = {
@@ -3921,6 +3955,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "clean_claim_rate": clean_rate,
             "denial_rate": denial_rate,
             "avg_days_to_pay": avg_days_to_pay,
+            "paid_dated_count": paid_dated_count,
             "sla_breaches": sla_breaches,
             "net_collection_rate": net_coll_rate,
             "total_charge": round(total_charge, 2),

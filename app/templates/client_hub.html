@@ -6137,7 +6137,7 @@
         { label: 'Submitted MTD', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
         { label: 'Payments MTD', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
         { label: 'Clean Claim Rate', val: (d.clean_claim_rate || 0) + '%', color: 'green', icon: '🎯' },
-        { label: 'Avg Days to Pay', val: (d.avg_days_to_pay || 0) + ' days', color: 'blue', icon: '📅' },
+        { label: 'Avg Days to Pay', val: (d.paid_dated_count ? (d.avg_days_to_pay || 0) + ' days' : '—'), color: 'blue', icon: '📅' },
       ];
       if (adminView) kpis.push({ label: 'SLA Breaches', val: d.sla_breaches || 0, color: 'red', icon: '🚨' });
 
@@ -6167,6 +6167,12 @@
         { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
         { label: 'Paid/Posted', color: 'var(--success)', hint: 'Payments paid & posted', v: _paidPosted },
       ];
+      // In Intake = loaded but not yet billed. Shown only when present so the full
+      // book (Billed + In Intake) reconciles without inflating Billed Out.
+      const _intakeB = cb.intake || { count: 0, amount: 0 };
+      if (_intakeB.count || _intakeB.amount) {
+        cbCards.push({ label: 'In Intake', color: 'var(--gray-400)', hint: 'Loaded, not yet billed', v: _intakeB });
+      }
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
       const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
