@@ -6106,12 +6106,6 @@
         { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
         { label: 'Paid/Posted', color: 'var(--success)', hint: 'Payments paid & posted', v: _paidPosted },
       ];
-      // In Intake = loaded but not yet billed. Shown only when present so the full
-      // book (Billed + In Intake) reconciles without inflating Billed Out.
-      const _intakeB = cb.intake || { count: 0, amount: 0 };
-      if (_intakeB.count || _intakeB.amount) {
-        cbCards.push({ label: 'In Intake', color: 'var(--gray-400)', hint: 'Loaded, not yet billed', v: _intakeB });
-      }
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
       const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
@@ -6415,23 +6409,16 @@
       const payorData = Object.entries(payorCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8);
       renderDonutChart('claimsSectionPayor', payorData, 'value', 'label');
 
-      // Financial summary bar. Split charges into Billed Out vs In Intake exactly
-      // like the dashboard headline so this reconciles: a claim counts as Billed
-      // Out unless it's still pre-bill (Intake/Verification/Coding) with no Bill
-      // Date. Billed Out + In Intake = the gross charged across the whole queue.
-      const PRE_BILL_STATUSES = ['intake', 'verification', 'coding'];
-      const isBilledClaim = (c) => {
-        const st = (c.ClaimStatus || '').trim().toLowerCase();
-        const hasBillDate = (c.BillDate || '').toString().trim() !== '';
-        return !(PRE_BILL_STATUSES.includes(st) && !hasBillDate);
-      };
-      const billedCharged = claims.reduce((s, c) => s + (isBilledClaim(c) ? (parseFloat(c.ChargeAmount) || 0) : 0), 0);
-      const intakeCharged = claims.reduce((s, c) => s + (!isBilledClaim(c) ? (parseFloat(c.ChargeAmount) || 0) : 0), 0);
+      // Financial summary bar. Billed Out = the full charged value of every claim
+      // in the queue — each claim is billed the moment it's loaded, so there is no
+      // separate intake split (intake is an Eligibility concept and never crosses
+      // into billing). Total Paid and Adjustments are the money collected / written
+      // off against that book.
+      const billedCharged = claims.reduce((s, c) => s + (parseFloat(c.ChargeAmount) || 0), 0);
       const totalPaid = claims.reduce((s, c) => s + (parseFloat(c.PaidAmount) || 0), 0);
       const totalAdj = claims.reduce((s, c) => s + (parseFloat(c.AdjustmentAmount) || 0), 0);
       const finData = [
         { label: 'Billed Out', value: Math.round(billedCharged), color: '#3b82f6' },
-        { label: 'In Intake', value: Math.round(intakeCharged), color: '#f59e0b' },
         { label: 'Total Paid', value: Math.round(totalPaid), color: '#22c55e' },
         { label: 'Adjustments', value: Math.round(totalAdj), color: '#94a3b8' },
         // 'Outstanding' (imported Balance Remaining column) intentionally hidden — it's

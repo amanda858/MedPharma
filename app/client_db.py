@@ -3686,17 +3686,15 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             row = cur.fetchone()
             return row[0] if row else 0
 
-        # "Billed Out" = a claim that has actually gone out the door. A claim is
-        # billed once it has moved past the pre-bill stages (Intake/Verification/
-        # Coding) OR already carries a Bill Date; a claim still sitting in intake
-        # with no Bill Date has NOT been billed yet and is reported separately as
-        # the "intake" bucket. Keeping intake out of Billed Out makes the headline
-        # reconcile with the dated Billed Activity report instead of overstating
-        # billed by the untouched backlog.
-        _prebill_ph = ",".join("?" * len(_PRE_BILL_STATUSES))
-        _billed_expr = f"(ClaimStatus NOT IN ({_prebill_ph}) OR TRIM(COALESCE(BillDate,'')) != '')"
-        _intake_expr = f"(ClaimStatus IN ({_prebill_ph}) AND TRIM(COALESCE(BillDate,'')) = '')"
-        _prebill_params = list(_PRE_BILL_STATUSES)
+        # "Billed Out" = the full charged value of every claim on the account.
+        # A claim carries a real charge the moment it is entered, so it counts as
+        # billed regardless of internal work-status — there is NO separate intake
+        # holding bucket (intake is an Eligibility concept and must never cross
+        # into billing). Billed and any pre-bill status were mutually exclusive,
+        # so counting them all as billed adds no crossover / double-count: Billed
+        # Out is simply the whole book expressed as one number.
+        _billed_expr = "1=1"
+        _prebill_params = []
 
         # Total AR
         total_ar = q1(f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master {cond}", p)
@@ -3749,9 +3747,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # SLA breaches
         sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1", p)
 
-        # Net collection rate. Charge base = billed claims only (a claim still in
-        # intake with no Bill Date hasn't been billed, so it can't be collected on
-        # and must not dilute the rate or the headline Billed Out figure).
+        # Net collection rate. Charge base = every claim's charge (the full billed
+        # book). There is no intake carve-out: a claim is billed the moment it is
+        # loaded, so the whole charged value is the headline Billed Out figure.
         total_charge = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
         total_paid = q1(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond}", p)
         net_coll_rate = round(total_paid / max(total_charge, 1) * 100, 1)
@@ -3881,15 +3879,12 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denied": {"count": 0, "amount": 0.0},
             "paid":   {"count": 0, "amount": 0.0},
             "posted": {"count": 0, "amount": 0.0},
-            "intake": {"count": 0, "amount": 0.0},
         }
         b = claim_buckets
-        # Claims Out (Billed) = every claim that has gone out the door: it has
-        # moved past a pre-bill stage (Intake/Verification/Coding) OR already
-        # carries a Bill Date. Denied claims are billed claims. Claims still in
-        # intake with no Bill Date are NOT billed yet — they're the "intake"
-        # bucket below — so Billed Out reconciles with the dated Billed Activity
-        # report. Denied / Paid / Posted remain sub-views of Billed.
+        # Claims Out (Billed) = every claim loaded for the account, valued at its
+        # full charge. Denied / Paid / Posted are sub-views of Billed. There is no
+        # intake bucket: intake belongs to Eligibility and never crosses into the
+        # billing book, so a claim is billed the instant it is entered.
         b["billed"]["count"] = q1(
             f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
         b["billed"]["amount"] = q1(
@@ -3918,13 +3913,6 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                 f"SELECT COUNT(*) FROM payments {pay_cond}", pay_p)
             b["posted"]["amount"] = q1(
                 f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
-        # Intake = loaded but not yet billed (pre-bill status AND no Bill Date).
-        # Billed + Intake = every charge loaded, so the UI can show the full book
-        # while keeping Billed Out honest.
-        b["intake"]["count"] = q1(
-            f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_intake_expr}", p + _prebill_params)
-        b["intake"]["amount"] = q1(
-            f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_intake_expr}", p + _prebill_params)
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 

@@ -538,10 +538,11 @@ def test_dashboard_claim_buckets(hub_env):
 
 def test_dashboard_numbers_reconcile(hub_env):
     """Every dashboard ships a self-audit ('reconciliation') proving the headline
-    numbers balance: Billed Out equals the billed bucket, the intake backlog is
-    NOT counted as billed, every billed dollar is attributed to exactly one
-    biller, and the New/Rolling split rebuilds the total. The guard must PASS on
-    real data and FAIL the instant a number is inflated or mis-allocated."""
+    numbers balance: Billed Out equals the billed bucket (every loaded claim,
+    valued at its full charge — there is no intake carve-out), every billed dollar
+    is attributed to exactly one biller, and the New/Rolling split rebuilds the
+    total. The guard must PASS on real data and FAIL the instant a number is
+    inflated or mis-allocated."""
     client_db, client_routes = hub_env
     cid = _make_client(client_db)
 
@@ -551,7 +552,8 @@ def test_dashboard_numbers_reconcile(hub_env):
         ["B1", "2026-06-19", "99213", "150.00", "Billed", "2026-06-19", "", "0"],
         ["D1", "2026-06-20", "99214", "200.00", "Denied", "2026-06-20", "CO-16", "0"],
         ["P1", "2026-06-22", "85025", "100.00", "Paid", "2026-06-22", "", "90.00"],
-        # Loaded but not billed yet — must stay OUT of Billed Out.
+        # A freshly-loaded claim (labelled 'Intake') counts as billed too — its
+        # full charge is part of Billed Out; there is no intake carve-out.
         ["I1", "2026-06-25", "99213", "300.00", "Intake", "", "", "0"],
     ]
     imported, errors = client_routes._import_claims_from_excel(
@@ -565,9 +567,10 @@ def test_dashboard_numbers_reconcile(hub_env):
     # PASS on honest data — surface any failing check for a clear diagnosis.
     assert rec["ok"] is True, [c for c in rec["checks"] if not c["ok"]]
     assert rec["checks"]
-    # Billed Out excludes the intake claim, so it reconciles to the billed book.
-    assert d["claim_buckets"]["billed"]["amount"] == pytest.approx(450.0)
-    assert d["claim_buckets"]["intake"]["amount"] == pytest.approx(300.0)
+    # Every loaded claim is billed — Billed Out is the full charged book, and
+    # there is no separate intake bucket.
+    assert d["claim_buckets"]["billed"]["amount"] == pytest.approx(750.0)
+    assert "intake" not in d["claim_buckets"]
 
     # The guard must BITE: inflate one biller's billed total and it fails, so a
     # number can never silently drift away from its attribution again.
@@ -664,9 +667,8 @@ def test_posted_payments_write_idempotent_claim_notes(hub_env):
 
 def test_denied_claims_counted_inside_billed(hub_env):
     """A denied claim is still a billed claim — Denied stays a subset of Billed.
-    But a claim still in intake with no Bill Date has NOT gone out the door, so it
-    is excluded from Billed Out and surfaced in the separate 'intake' bucket.
-    Billed + Intake = every charge loaded, so nothing is lost."""
+    Every loaded claim counts as billed (valued at its full charge); there is no
+    separate intake bucket, so Billed Out is the whole charged book."""
     client_db, client_routes = hub_env
     cid = _make_client(client_db)
 
@@ -683,15 +685,11 @@ def test_denied_claims_counted_inside_billed(hub_env):
 
     d = client_db.get_dashboard(cid)
     cb = d["claim_buckets"]
-    # Billed = claims out the door: the billed one + the denied one (both carry a
-    # Bill Date). The intake claim with no Bill Date is NOT billed.
-    assert cb["billed"]["count"] == 2
-    assert cb["billed"]["amount"] == pytest.approx(350.0)
-    # The intake claim is captured separately, never silently dropped.
-    assert cb["intake"]["count"] == 1
-    assert cb["intake"]["amount"] == pytest.approx(300.0)
-    # Billed + Intake accounts for every loaded charge.
-    assert cb["billed"]["amount"] + cb["intake"]["amount"] == pytest.approx(650.0)
+    # Billed = every loaded claim, valued at its full charge: the billed one, the
+    # denied one, and the freshly-loaded one all count. There is no intake bucket.
+    assert cb["billed"]["count"] == 3
+    assert cb["billed"]["amount"] == pytest.approx(650.0)
+    assert "intake" not in cb
     # Denied is a subset, never larger than Billed.
     assert cb["denied"]["count"] == 1
     assert cb["denied"]["count"] <= cb["billed"]["count"]
