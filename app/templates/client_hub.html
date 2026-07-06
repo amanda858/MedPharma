@@ -6134,8 +6134,8 @@
       const kpis = [
         { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
         { label: 'Active Claims', val: d.active_claims || 0, color: 'blue', icon: '📋' },
-        { label: 'Submitted MTD', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
-        { label: 'Payments MTD', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
+        { label: 'Submitted (This Month)', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
+        { label: 'Payments (This Month)', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
         { label: 'Clean Claim Rate', val: (d.clean_claim_rate || 0) + '%', color: 'green', icon: '🎯' },
         { label: 'Avg Days to Pay', val: (d.paid_dated_count ? (d.avg_days_to_pay || 0) + ' days' : '—'), color: 'blue', icon: '📅' },
       ];
@@ -6246,7 +6246,19 @@
           }).join('') + `</div>` + splitLine + memberRows;
         const cbSub = document.getElementById('dashClaimBucketsSub');
         if (cbSub) {
-          cbSub.textContent = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_paidPosted.amount || 0)}`;
+          // Self-serve trust signal: a small badge that turns green only when the
+          // numbers reconcile (Billed Out = the billed claims = the sum of every
+          // biller, with nothing inflated). It re-checks on every load and for any
+          // day's data, so if it stays green the screen can be trusted without
+          // checking by hand; an amber badge is the only time to look closer.
+          const _rec = d.reconciliation || null;
+          let _badge = '';
+          if (_rec) {
+            _badge = _rec.ok
+              ? ` <span title="Billed Out matches the billed claims and every dollar is attributed to one biller" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-weight:700;font-size:10px">✓ numbers balance</span>`
+              : ` <span title="A total doesn't reconcile — check the team breakdown below" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;font-weight:700;font-size:10px">⚠ check numbers</span>`;
+          }
+          cbSub.innerHTML = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_paidPosted.amount || 0)}` + _badge;
         }
       }
 
