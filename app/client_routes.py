@@ -7721,10 +7721,15 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
 
 
 # Money columns on a deposit / ERA remittance register, in the order we trust
-# them. "Posted Amount" is what actually posted to claims — already net of any
-# reversal / take-back line — so it wins over the gross "Deposit Amount"; a plain
-# "Amount" or "Total Paid" is the fallback for simpler payment lists.
-_DEPOSIT_AMOUNT_PRIORITY = ("posted amount", "deposit amount", "amount", "total paid", "paid")
+# them. "Deposit Amount" is the actual cash received into the bank for each
+# batch: it is never negative and the register's own grand-total row certifies
+# it, so it is the truest measure of collections and wins. "Posted Amount" (the
+# portion so far applied to specific claims) UNDER-counts real cash — it excludes
+# money that is deposited but not yet posted (e.g. a deposit still sitting with
+# posted = 0) and carries internal reversal / re-application lines that net out —
+# so it is only the fallback. A plain "Amount" / "Total Paid" is the last resort
+# for simpler payment lists.
+_DEPOSIT_AMOUNT_PRIORITY = ("deposit amount", "posted amount", "amount", "total paid", "paid")
 
 
 def _deposit_num(v):
