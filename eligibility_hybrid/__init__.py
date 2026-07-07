@@ -39,6 +39,7 @@ from .prior_auth import (PaChannel, PaStatus, PriorAuthEngine, PriorAuthRequest,
                          PriorAuthResult)
 from .pverify import PVerifyProvider
 from .stedi import StediProvider, build_stedi_request, parse_stedi_response
+from .stedi_payers import StediPayers, build_stedi_payers, resolve_payer_id
 
 PRODUCT = PRODUCT_NAME
 
@@ -51,6 +52,7 @@ __all__ = [
     "is_valid_mbi",
     "StediProvider", "build_stedi_provider", "build_stedi_request",
     "parse_stedi_response", "build_eligibility_provider",
+    "StediPayers", "build_stedi_payers", "resolve_payer_id",
     "AccessionGate", "AccessionResult", "CptDisposition", "Disposition",
     "MedNecResult", "check_medical_necessity", "is_prior_auth_required",
     "is_traditional_medicare",

@@ -40,6 +40,7 @@ from typing import Optional
 from .hets import _fmt_date, is_valid_mbi
 from .models import (Benefit, CoverageResult, CoverageStatus, EligibilityProvider,
                      PatientRequest, ProviderError)
+from .stedi_payers import build_stedi_payers
 
 # Stedi benefit "code" (EB01) buckets — see Stedi active-coverage docs.
 _ACTIVE_CODES = {"1", "2", "3", "4", "5"}      # 1 Active … 5 Active-Pending Invest.
@@ -62,7 +63,8 @@ class StediProvider(EligibilityProvider):
     def __init__(self, api_key: str = "", endpoint_url: str = "",
                  payer_id: str = "CMS", provider_npi: str = "",
                  provider_name: str = "", forwarded_for: str = "",
-                 timeout: int = 90):
+                 timeout: int = 90, resolve_payers: bool = True,
+                 payers_client=None):
         self.api_key = (api_key or "").strip()
         self.endpoint_url = (endpoint_url or self.DEFAULT_ENDPOINT).strip()
         self.payer_id = (payer_id or "CMS").strip()
@@ -70,6 +72,14 @@ class StediProvider(EligibilityProvider):
         self.provider_name = (provider_name or "").strip()
         self.forwarded_for = (forwarded_for or "").strip()
         self.timeout = timeout
+        # Resolve a typed payer name -> a real payer id via Stedi's Payers API.
+        self.resolve_payers = resolve_payers
+        self._payers_client = payers_client
+
+    def _payers(self):
+        if self._payers_client is None:
+            self._payers_client = build_stedi_payers(api_key=self.api_key)
+        return self._payers_client
 
     # Stedi supports insurance discovery, but this connector is verify-only here.
     def supports_discovery(self) -> bool:
@@ -93,7 +103,36 @@ class StediProvider(EligibilityProvider):
                 raw={"configured": False},
                 trace=[f"{self.name}.verify skipped: not configured"])
 
-        payer_id = (self.payer_id or req.payer_id or "CMS").strip()
+        # Stedi requires the requesting provider's NAME (org or person) on every
+        # check — refuse honestly instead of sending a request the payer rejects.
+        provider_name = (self.provider_name or req.provider_name or "").strip()
+        if not provider_name:
+            return CoverageResult(
+                status=CoverageStatus.UNKNOWN, source=self.name,
+                errors=["Stedi requires the requesting provider's name; set "
+                        "STEDI_PROVIDER_NAME. No request was sent."],
+                raw={"configured": True, "sent": False, "reason": "no_provider_name"},
+                trace=[f"{self.name}.verify aborted: no provider name"])
+
+        trace: list[str] = []
+        # Per-patient payer routing: an explicit payer id wins; otherwise resolve
+        # the typed payer name to a real payer id via Stedi's Payers API; finally
+        # fall back to the configured default (CMS = Original Medicare). This is
+        # what lets a mixed batch of hand-typed payors each reach the right payer.
+        payer_id = (req.payer_id or "").strip()
+        if not payer_id and (req.payer_name or "").strip() and self.resolve_payers:
+            try:
+                resolved = self._payers().resolve_payer_id(req.payer_name)
+            except Exception as e:  # non-fatal: fall back to the safe default
+                resolved = None
+                trace.append(f"{self.name}.payer-resolve error: {e}")
+            if resolved:
+                payer_id = resolved
+                trace.append(
+                    f"{self.name}.payer-resolve '{req.payer_name}' -> {resolved}")
+        if not payer_id:
+            payer_id = (self.payer_id or "CMS").strip()
+
         member = (req.member_id or "").strip()
 
         # Medicare (CMS) requires a valid MBI — refuse to send an invalid one.
@@ -105,23 +144,24 @@ class StediProvider(EligibilityProvider):
                     errors=[f"Member ID '{req.member_id}' is not a valid Medicare "
                             f"MBI (11-char CMS format). Request not sent to CMS."],
                     raw={"configured": True, "sent": False, "reason": "invalid_mbi"},
-                    trace=[f"{self.name}.verify aborted: MBI failed format check"])
+                    trace=trace + [f"{self.name}.verify aborted: MBI failed format check"])
         elif not member:
             return CoverageResult(
                 status=CoverageStatus.UNKNOWN, source=self.name,
                 errors=["No member ID provided; request not sent."],
                 raw={"configured": True, "sent": False, "reason": "no_member_id"},
-                trace=[f"{self.name}.verify aborted: no member id"])
+                trace=trace + [f"{self.name}.verify aborted: no member id"])
 
         body = build_stedi_request(
-            req, payer_id,
-            self.provider_npi or req.provider_npi,
-            self.provider_name or req.provider_name)
+            req, payer_id, self.provider_npi or req.provider_npi, provider_name)
         data = self._post(body)
         result = parse_stedi_response(data, req, self.name)
-        # Keep the request + the payer's raw X12 271 as audit evidence.
+        # Keep the request + payer id + the payer's raw X12 271 as audit evidence.
         result.raw["request_json"] = json.dumps(body)
-        result.trace.insert(0, f"{self.name}.verify -> Stedi 271 ({result.status.value})")
+        result.raw["tradingPartnerServiceId"] = payer_id
+        result.trace = (trace
+                        + [f"{self.name}.verify -> Stedi 271 ({result.status.value})"]
+                        + result.trace)
         return result
 
     # ── real HTTPS POST to Stedi ─────────────────────────────────────────────
