@@ -153,6 +153,17 @@ async def startup():
         log.error(f"Startup error: auto_import_pending_claim_files failed: {e}")
 
     try:
+        from app.client_routes import auto_import_pending_payment_files
+        pswept = auto_import_pending_payment_files()
+        if pswept.get("rows"):
+            log.info("✅ Posted %s deposit payment row(s) totaling %.2f from ERA/deposit registers",
+                     pswept["rows"], pswept["amount"])
+        else:
+            log.info("✅ No deposit/ERA registers to post")
+    except Exception as e:
+        log.error(f"Startup error: auto_import_pending_payment_files failed: {e}")
+
+    try:
         collapsed = dedupe_resubmitted_claims()
         if collapsed:
             log.info(f"✅ Collapsed {collapsed} duplicate resubmitted claim line(s)")

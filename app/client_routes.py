@@ -2068,10 +2068,14 @@ def reimport_all_claim_files() -> dict:
             results.append({"file": r["original_name"], "imported": 0,
                             "note": f"{type(e).__name__}: {e}"})
 
+    # Refresh posted collections from ERA/deposit registers for every account too,
+    # so a reimport pass recomputes Paid/Posted, not just billed claims.
+    payments = auto_import_pending_payment_files()
     return {
         "ok": True,
         "files_processed": len(results),
         "total_rows_imported": total_imported,
+        "payments_posted": payments,
         "results": results,
     }
 
@@ -3958,6 +3962,10 @@ def dashboard(hub_session: Optional[str] = Cookie(None), member: Optional[str] =
     try:
         if isinstance(scope, int):
             auto_import_pending_claim_files(scope)
+            # Payments counterpart: post any ERA/deposit registers so Paid/Posted
+            # reflects money actually collected (runs AFTER the claims sweep so it
+            # supersedes any deposit rows the claims path may have mirrored in).
+            auto_import_pending_payment_files(scope)
     except Exception as _e:
         log.warning("auto-import on dashboard failed: %s", _e)
     member_idents = _dashboard_member_scope(user, member)
@@ -3981,6 +3989,7 @@ def dashboard_for_client(client_id: int, sub_profile: Optional[str] = None,
     _assert_client_can_view(user, client_id)
     try:
         auto_import_pending_claim_files(client_id)
+        auto_import_pending_payment_files(client_id)
     except Exception as _e:
         log.warning("auto-import on client dashboard failed: %s", _e)
     member_idents = _dashboard_member_scope(user, member)
@@ -6291,8 +6300,13 @@ def _parse_docx_rows(content: bytes, header_keywords: tuple = None) -> list[dict
 
 
 def _norm_key(k):
-    """Normalize an Excel header: lowercase, strip, collapse whitespace, remove _/-/# chars."""
-    s = (k or "").strip().lower()
+    """Normalize an Excel header: lowercase, strip, collapse whitespace, remove _/-/# chars.
+    Also strips HTML fragments so exports whose headers carry markup — e.g. SV's
+    ERA deposit register writes 'Posted<br/> Amount' / 'Deposit<br/> Amount' —
+    normalize to plain 'posted amount' / 'deposit amount' and match cleanly."""
+    s = str(k or "").strip().lower()
+    s = re.sub(r'<[^>]+>', ' ', s)          # drop HTML tags like <br/>
+    s = s.replace("&nbsp;", " ").replace("&amp;", " ")
     s = s.replace("_", " ").replace("-", " ").replace("#", "").replace(".", " ")
     s = re.sub(r'\s+', ' ', s).strip()
     return s
@@ -7704,6 +7718,213 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
         except Exception as e:
             log.warning("auto-import sweep: dedupe pass failed: %s", e)
     return {"files": files_done, "rows": rows_done}
+
+
+# Money columns on a deposit / ERA remittance register, in the order we trust
+# them. "Posted Amount" is what actually posted to claims — already net of any
+# reversal / take-back line — so it wins over the gross "Deposit Amount"; a plain
+# "Amount" or "Total Paid" is the fallback for simpler payment lists.
+_DEPOSIT_AMOUNT_PRIORITY = ("posted amount", "deposit amount", "amount", "total paid", "paid")
+
+
+def _deposit_num(v):
+    try:
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return 0.0
+
+
+def _read_deposit_sheet(rows):
+    """Parse ONE sheet (list of cell tuples) as a posted-payment / ERA deposit
+    register. Returns [{payer, date, amount, eft}, ...] or [] if the sheet is not
+    a deposit register.
+
+    A deposit register has a money column (Posted/Deposit/Amount/Total Paid), a
+    Payer column and an EFT/Check/Trace or Batch/Deposit column. Reversal lines
+    carry a NEGATIVE amount and are KEPT (they reduce net collections); only
+    zero-amount lines and header/summary/grand-total rows (no payer and no EFT)
+    are dropped — that is what keeps a trailing "TOTAL" row from being posted as a
+    phantom second payment (the exact double-count that inflated the old total)."""
+    if not rows:
+        return []
+    hi = None
+    for i, r in enumerate(rows[:8]):
+        if r and sum(1 for c in r if c not in (None, "")) >= 3:
+            hi = i
+            break
+    if hi is None:
+        return []
+    hdr = [_norm_key(str(c)) if c is not None else "" for c in rows[hi]]
+
+    def _find(*needles):
+        for n in needles:
+            for j, h in enumerate(hdr):
+                if n in h:
+                    return j
+        return None
+
+    amt_col = None
+    for pri in _DEPOSIT_AMOUNT_PRIORITY:
+        amt_col = _find(pri)
+        if amt_col is not None:
+            break
+    payer_col = _find("payer", "payor")
+    eft_col = _find("eft", "check", "trace")
+    date_col = _find("deposit date", "payment date", "post date", "paid date")
+    if date_col is None:
+        date_col = next((j for j, h in enumerate(hdr)
+                         if "date" in h and "created" not in h and "processed" not in h), None)
+    has_batch = any(("batch" in h or "deposit" in h) for h in hdr)
+    # Must look like a payment register — not a claims / reference / batch-log sheet.
+    if amt_col is None or payer_col is None or (eft_col is None and not has_batch):
+        return []
+
+    def _g(r, j):
+        return r[j] if (j is not None and j < len(r) and r[j] is not None) else None
+
+    out = []
+    for r in rows[hi + 1:]:
+        if not r or not any(c is not None and str(c).strip() for c in r):
+            continue
+        amt = round(_deposit_num(_g(r, amt_col)), 2)
+        if amt == 0:
+            continue  # nothing posted on this line (incl. gross-only summary rows)
+        payer = str(_g(r, payer_col) or "").strip()
+        eft = str(_g(r, eft_col) or "").split(".")[0].strip() if eft_col is not None else ""
+        if not payer and not eft:
+            continue  # header echo / grand-total row
+        draw = _g(r, date_col)
+        pdate = (_cell_iso_date(draw) if draw is not None else "") or ""
+        out.append({"payer": payer, "date": pdate, "amount": amt, "eft": eft})
+    return out
+
+
+def _extract_deposit_register(content: bytes, ext: str):
+    """Read a posted-payments / ERA deposit register out of a spreadsheet and
+    return (source_sheet, [payment_row, ...]) for the SINGLE richest register
+    sheet in the workbook, or None.
+
+    Each qualifying sheet is scored by the NET sum of its money column and the
+    richest one wins, so a workbook that stacks a per-remittance tab and a per-
+    batch posting tab (the SAME money at two grains) contributes its most-complete
+    view exactly once instead of being summed and double-counted."""
+    if ext == ".xlsx":
+        sheets = _load_xlsx_sheets(content)
+    else:
+        # csv / xls / ods deposit lists: treat the parsed rows as one logical sheet.
+        parsed = _parse_excel_rows(content, ext, combine_sheets=False)
+        if not parsed:
+            return None
+        header = list(parsed[0].keys())
+        sheets = [("sheet1", [tuple(header)] +
+                   [tuple(r.get(h) for h in header) for r in parsed])]
+    if not sheets:
+        return None
+
+    best_label = None
+    best_rows = None
+    best_score = None
+    for sn, rows in sheets:
+        reg = _read_deposit_sheet(rows)
+        if not reg:
+            continue
+        score = round(sum(x["amount"] for x in reg), 2)
+        if best_score is None or score > best_score:
+            best_score, best_rows, best_label = score, reg, sn
+    if not best_rows:
+        return None
+    return best_label, best_rows
+
+
+def auto_import_pending_payment_files(client_id: Optional[int] = None) -> dict:
+    """Post ERA / deposit registers into the payments table so the dashboard's
+    Paid/Posted reflects money actually collected. The payments counterpart of
+    auto_import_pending_claim_files.
+
+    For each account we scan every uploaded spreadsheet, read the best deposit
+    register out of each (see _extract_deposit_register), and post the SINGLE
+    richest register as the authoritative collected total. Uploaded payment files
+    routinely OVERLAP — a per-remittance export, a per-deposit list and a per-
+    batch posting register all describe the same money at different grains — so
+    summing them would inflate collections; taking the most complete single
+    register is the honest, non-double-counted figure.
+
+    Idempotent and safe: it deletes only the auto-imported deposit rows
+    (ClaimKey LIKE 'PMT%') for the account and re-inserts the current register,
+    so manual per-claim payments (keyed on the real claim number) are never
+    touched. When no register is found for an account its existing rows are left
+    as-is. Returns {"files": n, "rows": n, "amount": total}."""
+    from .client_db import get_db as _get_db
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        if client_id is not None:
+            client_ids = [int(client_id)]
+        else:
+            client_ids = [r[0] for r in cur.execute(
+                "SELECT DISTINCT client_id FROM client_files WHERE file_type='excel'").fetchall()]
+        file_rows = {}
+        for cid in client_ids:
+            file_rows[cid] = cur.execute(
+                "SELECT id, filename, original_name, uploaded_by FROM client_files "
+                "WHERE file_type='excel' AND client_id=?", (cid,)).fetchall()
+    finally:
+        conn.close()
+
+    total_files = 0
+    total_rows = 0
+    grand_amount = 0.0
+    for cid in client_ids:
+        best_rows = None
+        best_amount = None
+        best_by = ""
+        for fr in file_rows.get(cid, []):
+            path = os.path.join(UPLOAD_DIR, fr["filename"])
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(fr["original_name"] or "")[1].lower()
+            if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+                ext = os.path.splitext(fr["filename"])[1].lower()
+            if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    content = fh.read()
+                reg = _extract_deposit_register(content, ext)
+            except Exception as e:
+                log.warning("payment sweep: file %s failed: %s", fr["id"], e)
+                continue
+            if not reg:
+                continue
+            _label, drows = reg
+            amount = round(sum(x["amount"] for x in drows), 2)
+            if best_amount is None or amount > best_amount:
+                best_amount, best_rows, best_by = amount, drows, str(fr["uploaded_by"] or "")
+        if best_rows is None:
+            continue  # no register for this account — leave existing rows untouched
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PMT%'", (cid,))
+            cur.executemany(
+                """INSERT INTO payments
+                   (client_id, ClaimKey, PostDate, PaymentAmount, PayerType,
+                    CheckNumber, PostedBy, sub_profile)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                [(cid,
+                  "PMT|%s|%s|%s|%s" % ((x["payer"] or "").lower(), x["date"], x["amount"], x["eft"]),
+                  x["date"], x["amount"], "Primary", x["eft"], best_by, "")
+                 for x in best_rows])
+            conn.commit()
+        finally:
+            conn.close()
+        total_files += 1
+        total_rows += len(best_rows)
+        grand_amount += best_amount or 0.0
+    if total_rows:
+        log.info("Payment sweep posted %s deposit row(s) totaling %.2f across %s account(s)",
+                 total_rows, round(grand_amount, 2), total_files)
+    return {"files": total_files, "rows": total_rows, "amount": round(grand_amount, 2)}
 
 
 @router.post("/files/{file_id}/import-claims")
