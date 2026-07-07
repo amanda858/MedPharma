@@ -6175,12 +6175,16 @@
 
       // KPI grid. Headline is Billed Out (total charges billed out) — the number
       // the team tracks. A/R tiles removed; AR is just the unpaid slice of Billed.
+      // Clean Claim Rate was removed: it was computed as paid ÷ submitted (a
+      // collections proxy, not a true first-pass acceptance rate), so it read a
+      // misleading ~0.3% off a paid side that isn't fully loaded. Rather than show
+      // a number that doesn't compute honestly, the tile is dropped until there's
+      // reliable first-pass/rejection data to build a real clean-claim rate.
       const kpis = [
         { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
         { label: 'Active Claims', val: d.active_claims || 0, color: 'blue', icon: '📋' },
         { label: 'Submitted (This Month)', val: d.submitted_mtd || 0, color: 'purple', icon: '📤' },
         { label: 'Payments (This Month)', val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅' },
-        { label: 'Clean Claim Rate', val: (d.has_paid_data ? (d.clean_claim_rate || 0) + '%' : '—'), color: 'green', icon: '🎯', title: (d.has_paid_data ? '' : 'Shows once posted payments are uploaded — needs the paid side to compute honestly') },
         { label: 'Avg Days to Pay', val: (d.paid_dated_count ? (d.avg_days_to_pay || 0) + ' days' : '—'), color: 'blue', icon: '📅', title: (d.paid_dated_count ? '' : 'Shows once claims carry a payment date') },
       ];
       if (adminView) kpis.push({ label: 'SLA Breaches', val: d.sla_breaches || 0, color: 'red', icon: '🚨' });
