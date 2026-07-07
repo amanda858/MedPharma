@@ -5204,6 +5204,175 @@ async def import_excel(
     }
 
 
+@router.post("/payments/import")
+async def import_payments_posted_route(
+    file: UploadFile = FastAPIFile(...),
+    client_id: Optional[int] = Form(None),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Upload a posted-payments / ERA deposit file.
+
+    Populates ONLY the payments table so "Payments (This Month)" and the
+    collections picture reflect real money deposited — without creating or
+    changing any claims. Idempotent on the deterministic payment key, so
+    re-uploading the same remittance never double-counts.
+    """
+    user = _require_user(hub_session)
+    scope = client_id if client_id is not None else (
+        _client_scope(user) if _client_scope(user) is not None
+        else _single_client_account_or(user["id"]))
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
+        raise HTTPException(400, "Only .xlsx, .xls, .csv, .ods, .odf files are supported for payments import")
+
+    content = await file.read()
+
+    # Keep a copy of the remittance in Documents under "Payments" for the audit trail.
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(UPLOAD_DIR, unique_name), "wb") as f:
+        f.write(content)
+    add_file(
+        client_id=scope, filename=unique_name, original_name=file.filename or "file",
+        file_type="excel", file_size=len(content), category="Payments",
+        description=f"Payments posted — {file.filename}",
+        row_count=0, uploaded_by=user["username"],
+    )
+
+    try:
+        posted, posted_amount, by_month, errors = _import_payments_posted(
+            content, ext, scope, uploaded_by=user["username"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Payments import failed: {e}")
+
+    if posted > 0:
+        notify_bulk_activity(user["username"], "posted", "Payments", posted,
+                             f"${posted_amount:,.2f} — {file.filename}")
+
+    return {
+        "posted": posted,
+        "posted_amount": posted_amount,
+        "by_month": by_month,
+        "errors": errors[:10],
+        "original_name": file.filename,
+    }
+
+
+def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
+    """Parse a posted-payments / ERA deposit file and upsert rows into the
+    payments table only (no synthetic claims).
+
+    Recognizes SV's recurring ERA deposit sheet (AMOUNT / PAYER / EFT / DEPOSIT
+    DATE) via the existing template, and also a generic deposit or per-claim
+    payment list (Amount / Payer / Deposit or Paid Date / EFT / optional Claim #).
+    Rows are keyed on the real Claim # when present, otherwise the deterministic
+    PMT-<eft> key; each key is delete-then-inserted so a re-upload replaces rather
+    than stacks. Returns (posted_count, total_amount, by_month, errors).
+    """
+    from app.client_db import get_db
+
+    payment_rows = []
+    errors = []
+
+    def _to_amount(v):
+        try:
+            return float(str(v).replace("$", "").replace(",", "").strip())
+        except Exception:
+            return 0.0
+
+    # 1) Proven template path for SV's ERA workbook (xlsx only).
+    tpl = _extract_templated_claim_rows(content, ext)
+    if tpl and tpl[0] == "lims_payments":
+        for r in tpl[1]:
+            amt = _to_amount(r.get("Paid Amount"))
+            if amt <= 0:
+                continue
+            key = str(r.get("Claim #") or "").strip()
+            eft = key[4:] if key.startswith("PMT-") else ""
+            pdate = str(r.get("Paid Date") or "")[:10]
+            payment_rows.append({
+                "ClaimKey": key or f"PMT-{r.get('Payor','')}-{pdate}-{amt}",
+                "PostDate": pdate,
+                "PaymentAmount": amt,
+                "PayerType": "Primary",
+                "CheckNumber": eft,
+            })
+    else:
+        # 2) Generic column-detected path (xlsx or csv).
+        rows = _parse_excel_rows(content, ext)
+        if not rows:
+            return 0, 0.0, {}, ["No rows found in the file"]
+
+        def _pick(d, *needles):
+            # Match needles in priority order (most specific first) so e.g. the
+            # amount column wins over a "Paid Date" column. Spaces are stripped so
+            # "Deposit Date" -> "depositdate" matches the needle regardless of
+            # header spacing.
+            norm = {k: _norm_key(str(k)).replace(" ", "") for k in d.keys()}
+            for n in needles:
+                for k, nk in norm.items():
+                    if n in nk:
+                        return d.get(k)
+            return None
+
+        for r in rows:
+            amt = _to_amount(_pick(r, "amount", "payment"))
+            if amt <= 0:
+                continue
+            payer = str(_pick(r, "payer", "payor", "insurance", "carrier") or "").strip()
+            eft = str(_pick(r, "eft", "checknumber", "check", "trace") or "").split(".")[0].strip()
+            claim_no = str(_pick(r, "claimnumber", "claim", "accession", "patientaccount") or "").strip()
+            pdate_raw = _pick(r, "depositdate", "paiddate", "postdate", "date")
+            pdate = (_cell_iso_date(pdate_raw) if pdate_raw is not None else "") or ""
+            if claim_no and not claim_no.upper().startswith("PMT-"):
+                key = claim_no
+            elif eft:
+                key = f"PMT-{eft}"
+            else:
+                key = f"PMT-{payer}-{pdate}-{amt}"
+            payment_rows.append({
+                "ClaimKey": key,
+                "PostDate": pdate,
+                "PaymentAmount": amt,
+                "PayerType": "Primary",
+                "CheckNumber": eft,
+            })
+
+    if not payment_rows:
+        return 0, 0.0, {}, (errors or ["No posted payments found — need rows with a positive Amount / Paid Amount"])
+
+    total_amount = round(sum(pr["PaymentAmount"] for pr in payment_rows), 2)
+    by_month = {}
+    for pr in payment_rows:
+        mk = (pr["PostDate"] or "")[:7] or "undated"
+        by_month[mk] = round(by_month.get(mk, 0.0) + pr["PaymentAmount"], 2)
+
+    keys = list({pr["ClaimKey"] for pr in payment_rows})
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.executemany(
+            "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
+            [(client_id, k) for k in keys],
+        )
+        cur.executemany(
+            """INSERT INTO payments
+               (client_id, ClaimKey, PostDate, PaymentAmount, PayerType,
+                CheckNumber, PostedBy, sub_profile)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            [(client_id, pr["ClaimKey"], pr["PostDate"], pr["PaymentAmount"],
+              pr["PayerType"], pr["CheckNumber"], str(uploaded_by or ""), "")
+             for pr in payment_rows],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return len(payment_rows), total_amount, by_month, errors
+
+
 def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
     """Parse Excel/CSV bytes into list of dict rows with smart header detection.
     If combine_sheets=True and multiple sheets share the same header structure,

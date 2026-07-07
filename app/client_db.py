@@ -3748,6 +3748,18 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # not "0 days", it's "no data yet"; the UI shows "—" instead of a fake 0.
         paid_dated_count = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} PaidDate != '' AND DOS != ''", p)
 
+        # Whether the paid side has been loaded yet: any posted payments in the
+        # payments table (any date), or claims that already carry a payment date.
+        # Until this is true the collected picture is empty, so a paid-dependent
+        # rate like Clean Claim Rate reads a misleading near-zero (e.g. 0.3%). The
+        # UI then shows "—" instead — the same honest treatment already used for
+        # Avg Days to Pay — and the real rate fills in once payments are posted.
+        if member_scoped:
+            payments_all = 0
+        else:
+            payments_all = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
+        has_paid_data = bool((payments_all or 0) > 0 or (paid_dated_count or 0) > 0)
+
         # SLA breaches
         sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1", p)
 
@@ -4009,6 +4021,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denial_rate": denial_rate,
             "avg_days_to_pay": avg_days_to_pay,
             "paid_dated_count": paid_dated_count,
+            "has_paid_data": has_paid_data,
             "sla_breaches": sla_breaches,
             "net_collection_rate": net_coll_rate,
             "total_charge": round(total_charge, 2),
