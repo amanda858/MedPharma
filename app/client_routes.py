@@ -3360,6 +3360,13 @@ _ELIG_STATUS_MAP = {
     "Unknown":  ("Needs Re-verify", ""),
 }
 
+# Human label for whichever real eligibility source answered (for VerifiedBy /
+# audit / activity feed). Never a sandbox — only real providers reach here.
+_ELIG_SOURCE_LABEL = {
+    "stedi": "Stedi real-time",
+    "hets": "CMS HETS (direct)",
+}
+
 
 class EligIn(BaseModel):
     client_id: Optional[int] = None
@@ -3477,14 +3484,15 @@ def remove_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
 
 @router.post("/eligibility/{rid}/verify")
 def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
-    """Run a REAL, direct-to-Medicare (CMS HETS) eligibility check for a record.
+    """Run a REAL real-time eligibility check for a record.
 
-    Honest by construction:
-      • Not configured (no CMS submitter creds yet) → returns configured:false and
-        CHANGES NOTHING. No result is ever fabricated.
-      • Invalid/again non-Medicare member id (not a valid MBI) → nothing sent.
-      • A real CMS 271 → writes coverage facts, stamps VerifiedBy/Date, and stores
-        the raw 270/271 in eligibility_checks as immutable audit evidence.
+    Uses the fastest configured real source — Stedi (self-serve API key) if
+    connected, otherwise the direct-to-CMS HETS pipe. Honest by construction:
+      • Neither connected yet → returns configured:false and CHANGES NOTHING.
+        No result is ever fabricated.
+      • Invalid Medicare member id (not a valid MBI) → nothing sent to CMS.
+      • A real 271 → writes coverage facts, stamps VerifiedBy/Date, and stores
+        the raw request + 271 in eligibility_checks as immutable audit evidence.
     """
     user = _require_user(hub_session)
     rec = get_eligibility_one(rid)
@@ -3496,36 +3504,43 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
 
     # Lazy import so any package issue returns 503 instead of crashing the hub.
     try:
-        from eligibility_hybrid import build_hets_provider, PatientRequest
+        from eligibility_hybrid import build_eligibility_provider, PatientRequest
     except Exception as e:  # pragma: no cover
         raise HTTPException(503, f"Eligibility engine unavailable: {e}")
 
-    provider = build_hets_provider()
+    provider = build_eligibility_provider()
     first, last = _split_patient_name(rec.get("PatientName"))
     req = PatientRequest(
         first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
         member_id=(rec.get("MemberID") or "").strip(),
         payer_name=(rec.get("Payor") or "Medicare").strip(),
         service_type_codes=["30"],
-        provider_npi=os.getenv("HETS_PROVIDER_NPI", ""),
-        provider_name=os.getenv("HETS_PROVIDER_NAME", ""),
+        provider_npi=os.getenv("HETS_PROVIDER_NPI") or os.getenv("STEDI_PROVIDER_NPI", ""),
+        provider_name=os.getenv("HETS_PROVIDER_NAME") or os.getenv("STEDI_PROVIDER_NAME", ""),
     )
 
     if not provider.configured:
         return {
             "ok": False, "configured": False, "changed": False,
-            "message": "Direct Medicare (HETS) isn't connected yet. Finish CMS "
-                       "submitter enrollment, then set HETS_ENDPOINT_URL, "
-                       "HETS_SUBMITTER_ID and the connectivity credentials in the "
-                       "server environment. Nothing was fabricated or changed.",
+            "message": "No real eligibility source is connected yet. Fastest path: "
+                       "create a Stedi account, generate an API key, and set "
+                       "STEDI_API_KEY + STEDI_PROVIDER_NPI in the server "
+                       "environment — that turns on real-time Medicare & commercial "
+                       "checks in minutes. Or go straight to CMS by completing HETS "
+                       "submitter enrollment and setting HETS_ENDPOINT_URL + "
+                       "HETS_SUBMITTER_ID + credentials. Nothing was fabricated or "
+                       "changed.",
         }
+
+    src = getattr(provider, "name", "eligibility")
+    src_label = _ELIG_SOURCE_LABEL.get(src, src)
 
     try:
         result = provider.verify(req)
-    except Exception as e:  # network / CMS transport failure
+    except Exception as e:  # network / transport failure
         record_eligibility_check({
             "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
-            "source": "hets", "status": "Error",
+            "source": src, "status": "Error",
             "checked_by": user.get("username", ""),
             "member_id": (rec.get("MemberID") or "").strip(),
             "payer_name": (rec.get("Payor") or "").strip(),
@@ -3536,15 +3551,17 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
     status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
     errors_txt = "; ".join(result.errors or [])
 
-    # Persist raw 270/271 as audit evidence (only real provider output reaches here).
+    # Persist raw request + 271 as audit evidence (only real provider output here).
+    raw_req = (result.raw or {}).get("x12_270") or (result.raw or {}).get("request_json") or ""
+    raw_resp = (result.raw or {}).get("x12_271") or ""
     check_id = record_eligibility_check({
         "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
-        "source": "hets", "status": status_val,
+        "source": src, "status": status_val,
         "checked_by": user.get("username", ""),
         "member_id": result.member_id or (rec.get("MemberID") or "").strip(),
         "payer_name": result.payer_name or (rec.get("Payor") or "").strip(),
-        "raw_request": (result.raw or {}).get("x12_270", ""),
-        "raw_response": (result.raw or {}).get("x12_271", ""),
+        "raw_request": raw_req,
+        "raw_response": raw_resp,
         "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
         "errors": errors_txt,
     })
@@ -3554,7 +3571,7 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
     today = datetime.now().strftime("%Y-%m-%d")
     changes: dict = {
         "Status": board_status,
-        "VerifiedBy": f"CMS HETS (direct) · {user.get('username','')}".strip(" ·"),
+        "VerifiedBy": f"{src_label} · {user.get('username','')}".strip(" ·"),
         "VerifiedDate": today,
     }
     if readiness:
@@ -3575,17 +3592,17 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
         changes["TermDate"] = result.term_date
     if result.prior_auth_required:
         changes["PriorAuthRequired"] = "Yes"
-    # Surface any CMS rejection reason inline for the verifier.
+    # Surface any payer rejection reason inline for the verifier.
     if errors_txt:
         prior = (rec.get("Notes") or "").strip()
-        stamp = f"[{today}] CMS HETS: {errors_txt}"
+        stamp = f"[{today}] {src_label}: {errors_txt}"
         changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
 
     update_eligibility(rid, changes)
-    notify_activity(user["username"], "verified (CMS HETS)", "Eligibility",
+    notify_activity(user["username"], f"verified ({src_label})", "Eligibility",
                     f"{rec.get('PatientName','')} → {status_val}")
     return {
-        "ok": True, "configured": True, "changed": True,
+        "ok": True, "configured": True, "changed": True, "source": src,
         "status": status_val, "check_id": check_id,
         "billing_readiness": readiness, "errors": result.errors or [],
         "benefit": {"copay": b.copay, "deductible": b.deductible_total,
@@ -3626,11 +3643,11 @@ def download_elig_check_raw(check_id: int, hub_session: Optional[str] = Cookie(N
         f"Member ID:  {chk.get('member_id')}\n"
         f"Payer:      {chk.get('payer_name')}\n"
         f"Errors:     {chk.get('errors') or 'none'}\n"
-        f"\n===== X12 270 (request sent) =====\n{chk.get('raw_request') or '(none)'}\n"
-        f"\n===== X12 271 (payer response) =====\n{chk.get('raw_response') or '(none)'}\n"
+        f"\n===== Request sent (270 / JSON) =====\n{chk.get('raw_request') or '(none)'}\n"
+        f"\n===== Payer response (X12 271) =====\n{chk.get('raw_response') or '(none)'}\n"
     )
     return Response(content=body, media_type="text/plain", headers={
-        "Content-Disposition": f'attachment; filename="hets_check_{check_id}.txt"'})
+        "Content-Disposition": f'attachment; filename="elig_check_{check_id}.txt"'})
 
 
 @router.post("/eligibility/{rid}/file")

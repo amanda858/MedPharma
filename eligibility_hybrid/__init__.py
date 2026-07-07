@@ -25,6 +25,7 @@ Runs in sandbox (mock) mode with zero credentials; drop in real creds via env
                                            member_id="W123", cpt_codes=["87631"]))
 """
 from .config import build_default_engine, build_hets_provider
+from .config import build_stedi_provider, build_eligibility_provider
 from .gate import AccessionGate, AccessionResult, CptDisposition, Disposition
 from .hets import HETSProvider, build_hets_270, is_valid_mbi, parse_hets_271
 from .hybrid import HybridEligibilityEngine, HybridStrategy
@@ -38,6 +39,7 @@ from .policy import (MedNecResult, check_medical_necessity, is_prior_auth_requir
 from .prior_auth import (PaChannel, PaStatus, PriorAuthEngine, PriorAuthRequest,
                          PriorAuthResult)
 from .pverify import PVerifyProvider
+from .stedi import StediProvider, build_stedi_request, parse_stedi_response
 
 PRODUCT = PRODUCT_NAME
 
@@ -48,6 +50,8 @@ __all__ = [
     "HybridEligibilityEngine", "HybridStrategy", "build_default_engine",
     "HETSProvider", "build_hets_provider", "build_hets_270", "parse_hets_271",
     "is_valid_mbi",
+    "StediProvider", "build_stedi_provider", "build_stedi_request",
+    "parse_stedi_response", "build_eligibility_provider",
     "AccessionGate", "AccessionResult", "CptDisposition", "Disposition",
     "MedNecResult", "check_medical_necessity", "is_prior_auth_required",
     "is_traditional_medicare",

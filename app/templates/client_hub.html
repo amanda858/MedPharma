@@ -7531,7 +7531,7 @@
     <td>${_eligFileLink(i.IntakeFileId, i.IntakeFileName, false)}</td>
     <td>${_eligFileLink(i.ReportFileId, i.ReportFileName, true)}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td style="white-space:nowrap"><button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL, direct-to-Medicare (CMS HETS) coverage check. Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> <button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> <button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
       }).join('');
     }
@@ -7638,14 +7638,14 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
-    // ── Real, direct-to-Medicare (CMS HETS) coverage check ──
-    // Sends the record to CMS and writes back only what a real 271 says. It never
-    // fabricates a status: if the pipe isn't connected yet it says so plainly.
+    // ── Real real-time coverage check (Stedi or direct-to-CMS HETS) ──
+    // Sends the record to a real payer and writes back only what a real 271 says.
+    // It never fabricates a status: if no source is connected it says so plainly.
     async function verifyEligNow(id) {
       const it = (allEligItems || []).find(x => x.id === id) || {};
-      // Courtesy client-side gate so we don't waste a CMS call on a bad identifier.
+      // Courtesy client-side gate so we don't waste a real call on a bad identifier.
       const iss = _precheckOne(it);
-      if (iss.length && !confirm(`This record has open issues:\n\n• ${iss.join('\n• ')}\n\nSend to Medicare anyway?`)) return;
+      if (iss.length && !confirm(`This record has open issues:\n\n• ${iss.join('\n• ')}\n\nSend the coverage check anyway?`)) return;
       let res;
       try {
         const r = await fetch(`/hub/api/eligibility/${id}/verify`, { method: 'POST' });
@@ -7654,14 +7654,14 @@
       } catch (e) { toast('Verify failed: ' + e.message, 'error'); return; }
       if (res.configured === false) {
         // Honest, non-fabricated state — the whole point of this build.
-        toast('Direct Medicare (HETS) isn’t connected yet. Nothing was changed or faked. Finish CMS submitter enrollment and set the server credentials to go live.', 'warning', 8000);
+        toast(res.message || 'No real eligibility source is connected yet. Nothing was changed or faked. Set STEDI_API_KEY (fastest) or complete CMS HETS enrollment to go live.', 'warning', 10000);
         return;
       }
-      if (res.error) { toast('CMS transport error: ' + res.error + ' (recorded to the audit trail; nothing fabricated)', 'error', 8000); loadEligibility(); return; }
+      if (res.error) { toast('Transport error: ' + res.error + ' (recorded to the audit trail; nothing fabricated)', 'error', 8000); loadEligibility(); return; }
       const st = res.status || 'Unknown';
       const tone = st === 'Active' ? 'success' : (st === 'Termed' || st === 'Inactive') ? 'error' : 'warning';
       const extra = (res.errors && res.errors.length) ? ' · ' + res.errors.join('; ') : '';
-      toast(`Medicare 271: ${st}${res.billing_readiness ? ' → ' + res.billing_readiness : ''}${extra}`, tone, 7000);
+      toast(`271 response: ${st}${res.billing_readiness ? ' → ' + res.billing_readiness : ''}${extra}`, tone, 7000);
       loadEligibility();
     }
 
@@ -7676,15 +7676,15 @@
         if (!r.ok) { toast('Could not load evidence', 'error'); return; }
       } catch (e) { toast('Could not load evidence: ' + e.message, 'error'); return; }
       let h = `<div class="card" style="padding:14px 16px;border:1px solid #e5e7eb">`
-        + `<div style="font-weight:700;font-size:13px;margin-bottom:8px">🧾 Verification evidence — real CMS 270/271 audit trail</div>`;
+        + `<div style="font-weight:700;font-size:13px;margin-bottom:8px">🧾 Verification evidence — real 270/271 audit trail</div>`;
       if (!rows.length) {
-        h += `<div style="font-size:12.5px;color:#64748b">No coverage checks have been run on this record yet. Click <b>✔︎ Verify</b> to run a real, direct-to-Medicare check. Every check is stored here as immutable 270/271 evidence.</div>`;
+        h += `<div style="font-size:12.5px;color:#64748b">No coverage checks have been run on this record yet. Click <b>✔︎ Verify</b> to run a real coverage check. Every check is stored here as immutable 270/271 evidence.</div>`;
       } else {
         h += `<div style="max-height:300px;overflow:auto;border-top:1px solid #f1f5f9">`;
         rows.forEach(c => {
           const stTone = c.status === 'Active' ? '#059669' : (c.status === 'Termed' || c.status === 'Inactive' || c.status === 'Error') ? '#dc2626' : '#b45309';
           h += `<div style="padding:8px 0;border-bottom:1px solid #f8fafc;font-size:12px;display:flex;justify-content:space-between;gap:10px;align-items:center">`
-            + `<div><b style="color:${stTone}">${esc(c.status || 'Unknown')}</b> · ${esc(c.source || 'hets')}<br>`
+            + `<div><b style="color:${stTone}">${esc(c.status || 'Unknown')}</b> · ${esc(c.source || 'eligibility')}<br>`
             + `<span style="color:#94a3b8">${esc(c.created_at || '')} · by ${esc(c.checked_by || '—')}${c.errors ? ' · ' + esc(c.errors) : ''}</span></div>`
             + `<a class="btn btn-secondary btn-sm" href="/hub/api/eligibility/check/${c.id}/raw" target="_blank" rel="noopener">Download 271</a></div>`;
         });
