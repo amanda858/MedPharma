@@ -2785,6 +2785,8 @@
             Running in <strong>sandbox</strong>: no live payer calls and no PHI leaves the server until vendor credentials are added.
           </div>
 
+          <div id="pgReadiness"></div>
+
           <!-- Single patient -->
           <div class="card" style="margin-bottom:18px">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -4243,6 +4245,10 @@
         <button class="modal-close" onclick="closeModal('eligModal')">&times;</button>
       </div>
       <input type="hidden" id="eligEditId">
+      <div id="eligIntakeDocPanel" style="display:none;margin-bottom:14px;padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;color:#0f172a">📄 Intake document (insurance card / order)</div>
+        <div id="eligIntakeDocView"></div>
+      </div>
       <div class="form-grid">
         <div class="form-group"><label>Patient Name</label><input class="form-control" id="fEligPatient"></div>
         <div class="form-group"><label>DOB</label><input class="form-control" type="date" id="fEligDOB"></div>
@@ -5777,7 +5783,28 @@
       return h;
     }
 
-    function initPaGate(){ /* panel is static; nothing to load until the admin runs a check */ }
+    function initPaGate(){
+      // Honest readiness check — tell the admin exactly what to configure to get
+      // real 270/271 results instead of sandbox.
+      fetch('/hub/api/admin/eligibility/config')
+        .then(r => r.ok ? r.json() : null)
+        .then(c => { if (c) { _pgSetMode(!!c.sandbox); _pgRenderReadiness(c); } })
+        .catch(() => {});
+    }
+
+    function _pgRenderReadiness(c){
+      const el = document.getElementById('pgReadiness');
+      if (!el) return;
+      if (c.live){
+        el.innerHTML = `<div class="card" style="background:#dcfce7;border:1px solid #86efac;color:#166534;font-size:12.5px;padding:12px 16px;margin-bottom:16px">`
+          + `✅ <strong>Real-time eligibility is LIVE.</strong> Results come from your clearinghouse (270/271) — not sandbox.</div>`;
+        return;
+      }
+      const items = (c.missing || []).map(m => `<li style="margin:3px 0">${_pgEsc(m)}</li>`).join('');
+      el.innerHTML = `<div class="card" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;font-size:12.5px;padding:12px 16px;margin-bottom:16px">`
+        + `<strong>⚠️ Real eligibility is OFF — this is sandbox.</strong> Results are simulated and must never be used to bill a claim. `
+        + `To turn on real-time 270/271 verification:<ul style="margin:8px 0 0 18px;padding:0">${items}</ul></div>`;
+    }
 
     function paGateFillSample(){
       const set=(id,v)=>{const el=document.getElementById(id); if(el) el.value=v;};
@@ -7142,6 +7169,24 @@
       return `<a href="/hub/api/files/${fileId}/download" class="${cls}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label}</a>`;
     }
 
+    // Show the uploaded intake document (insurance card / order) INLINE inside the
+    // verification modal so a verifier can read the card while recording coverage.
+    function _eligIntakeDocHtml(item) {
+      if (!item || !item.IntakeFileId) return '';
+      const url = `/hub/api/files/${item.IntakeFileId}/download`;
+      const name = item.IntakeFileName || 'document';
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      const link = `<a href="${url}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">↗ Open full size</a>`
+        + `<span style="font-size:11px;color:#6b7280;margin-left:8px">${esc(name)}</span>`;
+      let preview = '';
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        preview = `<div style="margin-top:8px"><img src="${url}" alt="intake document" style="max-width:100%;max-height:340px;border:1px solid #e5e7eb;border-radius:6px;display:block"></div>`;
+      } else if (ext === 'pdf') {
+        preview = `<div style="margin-top:8px"><iframe src="${url}" title="intake document" style="width:100%;height:380px;border:1px solid #e5e7eb;border-radius:6px"></iframe></div>`;
+      }
+      return link + preview;
+    }
+
     // Honest, human-set verdict — is this patient good to bill services?
     // '' means "not checked yet", so unworked intakes surface as Pending Verification.
     function billableBadge(v) {
@@ -7392,6 +7437,13 @@
       if (rl) rl.innerHTML = (item && item.ReportFileId)
         ? `Current report: <a href="/hub/api/files/${item.ReportFileId}/download" target="_blank" rel="noopener">${esc(item.ReportFileName || 'download')}</a>`
         : '';
+      const dp = document.getElementById('eligIntakeDocPanel');
+      const dv = document.getElementById('eligIntakeDocView');
+      if (dp && dv) {
+        const docHtml = _eligIntakeDocHtml(item);
+        dv.innerHTML = docHtml;
+        dp.style.display = docHtml ? '' : 'none';
+      }
       if (isStaffOrAdmin()) {
         const g = document.getElementById('eligClientGroup');
         if (g) g.style.display = '';

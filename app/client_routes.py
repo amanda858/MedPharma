@@ -8801,6 +8801,44 @@ def _elig_is_sandbox() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+@router.get("/admin/eligibility/config")
+def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
+    """Honest readiness check for REAL-time eligibility (admin-only).
+
+    Reports which clearinghouse credentials are present (never their secret
+    values) and exactly what is still required to leave sandbox and get live
+    270/271 results. Real eligibility needs a live payer/clearinghouse
+    connection + a BAA; the code cannot invent one.
+    """
+    _require_full_admin(hub_session)
+    pverify = bool(os.environ.get("PVERIFY_CLIENT_ID") and os.environ.get("PVERIFY_CLIENT_SECRET"))
+    officeally = bool(
+        os.environ.get("OFFICEALLY_USERNAME")
+        and os.environ.get("OFFICEALLY_PASSWORD")
+        and os.environ.get("OFFICEALLY_REALTIME_URL")
+    )
+    sandbox = _elig_is_sandbox()
+    live = (not sandbox) and (pverify or officeally)
+    missing = []
+    if not (pverify or officeally):
+        missing.append(
+            "Clearinghouse credentials \u2014 pVerify (PVERIFY_CLIENT_ID, "
+            "PVERIFY_CLIENT_SECRET) or Office Ally (OFFICEALLY_USERNAME, "
+            "OFFICEALLY_PASSWORD, OFFICEALLY_REALTIME_URL, OFFICEALLY_SENDER_ID)."
+        )
+    if sandbox:
+        missing.append("Set ELIG_SANDBOX=0 once real credentials are in place.")
+    missing.append("A signed BAA with the clearinghouse before real patient PHI is transmitted.")
+    return {
+        "ok": True,
+        "live": live,
+        "sandbox": sandbox,
+        "pverify_configured": pverify,
+        "officeally_configured": officeally,
+        "missing": missing,
+    }
+
+
 def _elig_num(v) -> float:
     try:
         return float(v)
