@@ -2604,8 +2604,10 @@
               <button class="btn btn-secondary btn-sm" onclick="exportSection('eligibility')">📤 Export CSV</button>
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥 Import Excel</button>
               <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="importExcel(this,'Eligibility')">
+              <button class="btn btn-secondary btn-sm" onclick="runEligPrecheck()" title="Validate Medicare MBI format + required data on every record. Real check, no payer call.">🔎 Pre-check</button>
               <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
             </div>
+            <div id="eligPrecheckResult" style="display:none;margin-bottom:14px"></div>
             <div class="card" style="padding:0">
               <div class="table-wrap">
                 <table>
@@ -7194,6 +7196,74 @@
       if (!s) return '<span class="badge badge-gray">Pending Verification</span>';
       const map = { 'Clear to Bill': 'badge-green', 'On Hold': 'badge-amber', 'Not Billable': 'badge-red', 'Pending Verification': 'badge-gray' };
       return `<span class="badge ${map[s] || 'badge-gray'}">${esc(s)}</span>`;
+    }
+
+    // ══ Real pre-submission check (deterministic, NO payer connection needed) ══
+    // Validates the Medicare Beneficiary Identifier (MBI) format + data completeness.
+    // Traditional Medicare & Railroad Medicare use an 11-char MBI with a fixed
+    // position pattern; Medicare Advantage members carry the PLAN's own ID (so we
+    // only require it to be present, not MBI-formatted). This does NOT confirm active
+    // coverage (that needs a live 271) — it catches the identifier/data errors that
+    // make a Medicare claim reject before it is ever adjudicated.
+    const _MBI_ALPHA = 'ACDEFGHJKMNPQRTUVWXY'; // A-Z minus S,L,O,I,B,Z
+    function _isValidMBI(raw) {
+      const s = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (s.length !== 11) return false;
+      const A = _MBI_ALPHA, AN = _MBI_ALPHA + '0123456789';
+      const rules = [/[1-9]/, A, AN, /[0-9]/, A, AN, /[0-9]/, A, A, /[0-9]/, /[0-9]/];
+      for (let i = 0; i < 11; i++) {
+        const r = rules[i];
+        const ok = (r instanceof RegExp) ? r.test(s[i]) : r.indexOf(s[i]) >= 0;
+        if (!ok) return false;
+      }
+      return true;
+    }
+    const _MA_CARRIERS = /(humana|united|uhc|aetna|wellcare|anthem|cigna|kaiser|blue\s*cross|bcbs|molina|centene|devoted|clover|elevance|highmark|care\s*plus|careplus)/i;
+    function _isMedicareFFS(payer) {
+      const p = String(payer || '').toLowerCase();
+      if (!/medicare|railroad|rrb/.test(p)) return false;      // not Medicare at all
+      if (_MA_CARRIERS.test(p)) return false;                  // Medicare Advantage -> plan ID
+      if (/advantage|part\s*c/.test(p)) return false;
+      return true;
+    }
+    function _precheckOne(i) {
+      const issues = [];
+      const name = (i.PatientName || '').trim();
+      const mbi = (i.MemberID || '').trim();
+      const payer = (i.Payor || '').trim();
+      const dob = (i.DOB || '').trim();
+      if (!name) issues.push('missing patient name');
+      if (!dob) issues.push('missing DOB');
+      if (!payer) issues.push('missing payer');
+      if (!mbi) issues.push('missing Member ID');
+      else if (_isMedicareFFS(payer) && !_isValidMBI(mbi)) issues.push('Member ID is not a valid Medicare MBI (traditional Medicare needs an 11-char MBI)');
+      return issues;
+    }
+    function runEligPrecheck() {
+      const box = document.getElementById('eligPrecheckResult');
+      if (!box) return;
+      const items = (allEligItems || []);
+      if (!items.length) { box.style.display = 'none'; toast('No eligibility records loaded.', 'error'); return; }
+      let clean = 0; const problems = [];
+      items.forEach(i => { const iss = _precheckOne(i); if (iss.length) problems.push({ name: i.PatientName || '(no name)', mbi: i.MemberID || '', issues: iss }); else clean++; });
+      const n = items.length;
+      let h = `<div class="card" style="padding:14px 16px;border:1px solid #e5e7eb">`
+        + `<div style="font-weight:700;font-size:13px;margin-bottom:8px">🔎 Pre-submission check — real, no payer call</div>`
+        + `<div style="font-size:12.5px;color:#334155;margin-bottom:10px">Validated MBI format + required data on <b>${n}</b> record${n === 1 ? '' : 's'}. `
+        + `<b style="color:#059669">${clean} submission-ready</b> · <b style="color:${problems.length ? '#dc2626' : '#059669'}">${problems.length} need${problems.length === 1 ? 's' : ''} a fix</b>. `
+        + `<span style="color:#94a3b8">Confirms the claim won't bounce on a bad identifier; does <i>not</i> confirm active coverage (that needs a live 271).</span></div>`;
+      if (problems.length) {
+        h += `<div style="max-height:280px;overflow:auto;border-top:1px solid #f1f5f9">`;
+        problems.forEach(p => {
+          const mm = p.mbi ? (' · ' + esc(p.mbi)) : '';
+          h += `<div style="padding:7px 0;border-bottom:1px solid #f8fafc;font-size:12px"><b>${esc(p.name)}</b>${mm}<br><span style="color:#b45309">⚠ ${p.issues.map(esc).join(' · ')}</span></div>`;
+        });
+        h += `</div>`;
+      } else {
+        h += `<div style="font-size:12.5px;color:#059669">✅ All records pass identifier + completeness checks.</div>`;
+      }
+      h += `<div style="text-align:right;margin-top:8px"><button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligPrecheckResult').style.display='none'">Dismiss</button></div></div>`;
+      box.innerHTML = h; box.style.display = '';
     }
 
     // ── Dashboard tiles + charts ──
