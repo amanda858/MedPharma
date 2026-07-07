@@ -1,11 +1,13 @@
-"""HybridEligibilityEngine — merges pVerify + Office Ally behind one call.
+"""HybridEligibilityEngine — a primary + an optional secondary provider behind
+one call.
 
 Default strategy = DISCOVER_THEN_VERIFY:
-  • Known payer   -> pVerify.verify (rich REST benefits); fall back to Office
-                     Ally 270/271 if pVerify errors or can't reach the payer.
-  • Unknown payer -> discovery cascade (pVerify.discover, then Office Ally, the
-                     stronger self-pay finder). On a hit, re-verify the found
-                     payer through pVerify for full benefits.
+  • Known payer   -> primary.verify (rich REST benefits); fall back to the
+                     secondary provider's 270/271 if the primary errors or
+                     can't reach the payer.
+  • Unknown payer -> discovery cascade over whichever providers support it. On
+                     a hit, re-verify the found payer through the primary for
+                     full benefits.
   • Always normalize to per-CPT coverage + patient responsibility.
 
 Every step is appended to `result.trace`, so you can see exactly what ran.
@@ -22,14 +24,15 @@ from .normalize import enrich_cpt_coverage
 class HybridStrategy(str, Enum):
     DISCOVER_THEN_VERIFY = "discover_then_verify"
     PVERIFY_FIRST = "pverify_first"
-    OFFICEALLY_FIRST = "officeally_first"
+    SECONDARY_FIRST = "secondary_first"
 
 
 class HybridEligibilityEngine:
-    def __init__(self, pverify: EligibilityProvider, officeally: EligibilityProvider,
+    def __init__(self, pverify: EligibilityProvider,
+                 secondary: Optional[EligibilityProvider] = None,
                  strategy: HybridStrategy = HybridStrategy.DISCOVER_THEN_VERIFY):
         self.pverify = pverify
-        self.officeally = officeally
+        self.secondary = secondary
         self.strategy = strategy
 
     def resolve(self, req: PatientRequest) -> CoverageResult:
@@ -65,32 +68,31 @@ class HybridEligibilityEngine:
         return result
 
     # ── helpers ─────────────────────────────────────────────────────────────
-    def _order(self) -> tuple[EligibilityProvider, EligibilityProvider]:
-        if self.strategy == HybridStrategy.OFFICEALLY_FIRST:
-            return self.officeally, self.pverify
-        return self.pverify, self.officeally
+    def _order(self) -> tuple[EligibilityProvider, ...]:
+        if self.secondary is None:
+            return (self.pverify,)
+        if self.strategy == HybridStrategy.SECONDARY_FIRST:
+            return self.secondary, self.pverify
+        return self.pverify, self.secondary
 
     def _verify_known(self, req: PatientRequest, trace: list[str],
                       discovered: bool = False) -> Optional[CoverageResult]:
-        primary, secondary = self._order()
-        try:
-            res = primary.verify(req)
-            trace.append(f"{primary.name}.verify -> {res.status.value}")
-            if res.status in (CoverageStatus.ACTIVE, CoverageStatus.TERMED):
-                return res
-        except Exception as e:  # provider-level failure -> fall back
-            trace.append(f"{primary.name}.verify ERROR: {e}")
-        try:
-            res = secondary.verify(req)
-            trace.append(f"{secondary.name}.verify (fallback) -> {res.status.value}")
-            return res
-        except Exception as e:
-            trace.append(f"{secondary.name}.verify ERROR: {e}")
-        return None
+        last: Optional[CoverageResult] = None
+        for i, prov in enumerate(self._order()):
+            tag = "" if i == 0 else " (fallback)"
+            try:
+                res = prov.verify(req)
+                trace.append(f"{prov.name}.verify{tag} -> {res.status.value}")
+                if res.status in (CoverageStatus.ACTIVE, CoverageStatus.TERMED):
+                    return res
+                last = res
+            except Exception as e:  # provider-level failure -> try the next
+                trace.append(f"{prov.name}.verify{tag} ERROR: {e}")
+        return last
 
     def _discover(self, req: PatientRequest, trace: list[str]) -> Optional[CoverageResult]:
-        for prov in (self.pverify, self.officeally):
-            if not prov.supports_discovery():
+        for prov in (self.pverify, self.secondary):
+            if prov is None or not prov.supports_discovery():
                 continue
             try:
                 res = prov.discover(req)

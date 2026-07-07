@@ -1,10 +1,14 @@
 """Environment-based configuration + a factory that wires the hybrid engine.
 
-Runs with ZERO credentials (absent creds => sandbox/mock mode). To go live, set:
+Runs with ZERO credentials (absent creds => sandbox/mock mode). The real-time
+Verify path is free / self-serve — set one of:
+
+    STEDI_API_KEY, STEDI_PROVIDER_NPI          (self-serve, live in minutes)
+    HETS_ENDPOINT_URL + HETS_SUBMITTER_ID …    (direct CMS Medicare, free)
+
+The optional pre-analytical gate tool can also use pVerify for rich benefits:
 
     PVERIFY_CLIENT_ID, PVERIFY_CLIENT_SECRET   [, PVERIFY_BASE_URL]
-    OFFICEALLY_USERNAME, OFFICEALLY_PASSWORD, OFFICEALLY_REALTIME_URL
-    OFFICEALLY_SENDER_ID
     ELIG_SANDBOX=0    (only after real creds are in place)
 """
 from __future__ import annotations
@@ -13,7 +17,6 @@ import os
 
 from .hets import HETSProvider
 from .hybrid import HybridEligibilityEngine, HybridStrategy
-from .officeally import OfficeAllyProvider
 from .pverify import PVerifyProvider
 from .stedi import StediProvider
 
@@ -94,6 +97,13 @@ def build_eligibility_provider():
 
 
 def build_default_engine() -> HybridEligibilityEngine:
+    """Wire the pre-analytical gate engine.
+
+    Primary = pVerify (optional; sandbox/mock until real creds). Secondary =
+    the free, self-serve Stedi real-time provider, so the gate's fallback
+    verify is a genuinely free real 270/271 pipe — no paid clearinghouse and no
+    Office Ally account required.
+    """
     force_sandbox = _bool(os.getenv("ELIG_SANDBOX"), default=True)
     pverify = PVerifyProvider(
         client_id=os.getenv("PVERIFY_CLIENT_ID", ""),
@@ -101,11 +111,5 @@ def build_default_engine() -> HybridEligibilityEngine:
         base_url=os.getenv("PVERIFY_BASE_URL", "https://api.pverify.com"),
         sandbox=force_sandbox,
     )
-    officeally = OfficeAllyProvider(
-        username=os.getenv("OFFICEALLY_USERNAME", ""),
-        password=os.getenv("OFFICEALLY_PASSWORD", ""),
-        sender_id=os.getenv("OFFICEALLY_SENDER_ID", ""),
-        realtime_url=os.getenv("OFFICEALLY_REALTIME_URL", ""),
-        sandbox=force_sandbox,
-    )
-    return HybridEligibilityEngine(pverify, officeally, HybridStrategy.DISCOVER_THEN_VERIFY)
+    return HybridEligibilityEngine(pverify, build_stedi_provider(),
+                                   HybridStrategy.DISCOVER_THEN_VERIFY)

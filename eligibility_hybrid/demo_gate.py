@@ -17,7 +17,7 @@ SAMPLES = [
                     payer_name="UnitedHealthcare", member_id="912345678",
                     cpt_codes=["87631", "87635"], icd10_codes=["J12.81", "R05.9"],
                     provider_npi="1972000000", provider_name="MedPharma Lab")),
-    ("Self-pay -> Office Ally discovers Medicaid, then gate",
+    ("Self-pay -> discovery finds Medicaid, then gate",
      PatientRequest(first_name="Deja", last_name="Franklin", dob="1991-06-02", gender="F",
                     ssn_last4="4821", zip_code="33101",
                     cpt_codes=["87507", "87798"], icd10_codes=["A08.4", "N39.0"],
@@ -74,7 +74,7 @@ def main():
                          auto_submit_pa=True)
     mode = "SANDBOX (mock data, no credentials)" if engine.pverify.sandbox else "LIVE"
     print(f"\nMedPharma Pre-Analytical Gate — {mode}")
-    print("eligibility (pVerify + Office Ally) + medical necessity (LCD/NCD) + prior auth"
+    print("eligibility (pVerify + Stedi) + medical necessity (LCD/NCD) + prior auth"
           " -> one disposition per test\n")
     for title, req in SAMPLES:
         _print(title, gate.evaluate(req))

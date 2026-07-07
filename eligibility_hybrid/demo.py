@@ -2,8 +2,8 @@
 
 Walks the hybrid engine through the three scenarios that matter:
   1. Known payer          -> pVerify real-time verify with rich benefits.
-  2. Unknown / self-pay    -> pVerify defers, Office Ally DISCOVERS coverage,
-                              then pVerify re-verifies it (the "merge").
+  2. Unknown / self-pay    -> pVerify defers, the discovery provider finds
+                              coverage, then pVerify re-verifies it (the "merge").
   3. Termed coverage       -> flagged before the sample is ever run.
 Plus per-CPT covered / prior-auth / patient-responsibility for each lab test.
 """
@@ -52,7 +52,7 @@ def main() -> None:
     engine = build_default_engine()
     mode = "SANDBOX (mock data, no credentials)" if engine.pverify.sandbox else "LIVE"
     print(f"\nMedPharma Hybrid Eligibility Engine  —  {mode}")
-    print("pVerify (real-time benefits) + Office Ally (payer reach & discovery),"
+    print("pVerify (real-time benefits) + Stedi (free, self-serve 270/271),"
           " merged behind one resolve() call\n")
     for req in SAMPLES:
         _print(engine.resolve(req), req)

@@ -33,7 +33,6 @@ from .intercept import (ENGINE_NAME, METHOD, PRODUCT_NAME, Finding, run_intercep
                         summarize_findings)
 from .models import (Benefit, CoverageResult, CoverageStatus, CptCoverage,
                      CptStatus, EligibilityProvider, PatientRequest, ProviderError)
-from .officeally import OfficeAllyProvider
 from .policy import (MedNecResult, check_medical_necessity, is_prior_auth_required,
                      is_traditional_medicare)
 from .prior_auth import (PaChannel, PaStatus, PriorAuthEngine, PriorAuthRequest,
@@ -46,7 +45,7 @@ PRODUCT = PRODUCT_NAME
 __all__ = [
     "PatientRequest", "CoverageResult", "Benefit", "CptCoverage",
     "CoverageStatus", "CptStatus", "EligibilityProvider", "ProviderError",
-    "PVerifyProvider", "OfficeAllyProvider",
+    "PVerifyProvider",
     "HybridEligibilityEngine", "HybridStrategy", "build_default_engine",
     "HETSProvider", "build_hets_provider", "build_hets_270", "parse_hets_271",
     "is_valid_mbi",

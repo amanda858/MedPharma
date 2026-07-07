@@ -1,8 +1,8 @@
 """Normalized, vendor-agnostic data models for the hybrid eligibility engine.
 
-Both pVerify and Office Ally responses are mapped into `CoverageResult`, so the
-rest of the application only ever deals with ONE schema regardless of which
-vendor (or combination) answered.
+Every provider response (Stedi, CMS HETS, pVerify, …) is mapped into
+`CoverageResult`, so the rest of the application only ever deals with ONE schema
+regardless of which vendor (or combination) answered.
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class CptCoverage:
 @dataclass
 class CoverageResult:
     status: CoverageStatus
-    source: str                    # "pverify" | "officeally" | "hybrid"
+    source: str                    # "stedi" | "hets" | "pverify" | "hybrid"
     payer_name: str = ""
     payer_id: str = ""
     plan_name: str = ""

@@ -176,7 +176,7 @@ class PVerifyProvider(EligibilityProvider):
 
     def _mock_discover(self, req: PatientRequest) -> Optional[CoverageResult]:
         # pVerify discovery hits on strong demographic matches; defers self-pay
-        # SSN-only cases to Office Ally (the stronger self-pay finder).
+        # SSN-only cases to the secondary discovery provider.
         h = stable_hash(req.full_name, req.dob)
         if req.payer_known or req.ssn_last4 or h % 5 != 0:
             return None

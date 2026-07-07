@@ -5821,14 +5821,18 @@
       const el = document.getElementById('pgReadiness');
       if (!el) return;
       if (c.live){
+        const src = c.verify_source==='hets' ? 'CMS HETS (direct Medicare)'
+                  : c.verify_source==='stedi' ? 'Stedi real-time'
+                  : 'your clearinghouse';
         el.innerHTML = `<div class="card" style="background:#dcfce7;border:1px solid #86efac;color:#166534;font-size:12.5px;padding:12px 16px;margin-bottom:16px">`
-          + `✅ <strong>Real-time eligibility is LIVE.</strong> Results come from your clearinghouse (270/271) — not sandbox.</div>`;
+          + `✅ <strong>Real-time verification is LIVE.</strong> The board's Verify button returns real 270/271 results from ${_pgEsc(src)} — not sandbox.</div>`;
         return;
       }
       const items = (c.missing || []).map(m => `<li style="margin:3px 0">${_pgEsc(m)}</li>`).join('');
+      const step = c.next_step ? `<div style="margin-top:8px"><strong>Fastest path:</strong> ${_pgEsc(c.next_step)}</div>` : '';
       el.innerHTML = `<div class="card" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;font-size:12.5px;padding:12px 16px;margin-bottom:16px">`
-        + `<strong>⚠️ Real eligibility is OFF — this is sandbox.</strong> Results are simulated and must never be used to bill a claim. `
-        + `To turn on real-time 270/271 verification:<ul style="margin:8px 0 0 18px;padding:0">${items}</ul></div>`;
+        + `<strong>⚠️ Real-time verification is OFF.</strong> The board's Verify button stays honest — it will not fabricate a result until a real payer source is connected. `
+        + `To turn on real 270/271 verification:<ul style="margin:8px 0 0 18px;padding:0">${items}</ul>${step}</div>`;
     }
 
     function paGateFillSample(){

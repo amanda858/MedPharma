@@ -9425,36 +9425,78 @@ def _elig_is_sandbox() -> bool:
 def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
     """Honest readiness check for REAL-time eligibility (admin-only).
 
-    Reports which clearinghouse credentials are present (never their secret
-    values) and exactly what is still required to leave sandbox and get live
-    270/271 results. Real eligibility needs a live payer/clearinghouse
-    connection + a BAA; the code cannot invent one.
+    Reports which real-time sources are connected (never their secret values)
+    and the exact fastest step to get live 270/271 results. Two independent
+    paths are reported honestly:
+
+      • verify - the eligibility board's per-patient **Verify** button (the one
+        that actually verifies the patients). Uses the fastest REAL source:
+        Stedi (self-serve API key, live in minutes) or the direct CMS HETS pipe.
+      • review - the admin pre-analytical gate/batch tool (optional pVerify,
+        with the free Stedi provider as its real-time fallback), which stays
+        sandbox until ELIG_SANDBOX=0 + real creds.
+
+    Real eligibility needs a live payer/clearinghouse connection + a BAA; the
+    code cannot invent one and never fabricates a result.
     """
     _require_full_admin(hub_session)
+
+    # -- The REAL board Verify path: Stedi -> CMS HETS (what verifies patients) --
+    stedi_configured = hets_configured = False
+    verify_source = None
+    try:
+        from eligibility_hybrid import build_stedi_provider, build_hets_provider
+        stedi_configured = bool(build_stedi_provider().configured)
+        hets_configured = bool(build_hets_provider().configured)
+    except Exception:
+        pass
+    if stedi_configured:
+        verify_source = "stedi"
+    elif hets_configured:
+        verify_source = "hets"
+    verify_live = bool(stedi_configured or hets_configured)
+
+    # -- The pre-analytical gate/batch review path: optional pVerify -----------
+    # (the free Stedi provider above is the gate tool's real-time fallback).
     pverify = bool(os.environ.get("PVERIFY_CLIENT_ID") and os.environ.get("PVERIFY_CLIENT_SECRET"))
-    officeally = bool(
-        os.environ.get("OFFICEALLY_USERNAME")
-        and os.environ.get("OFFICEALLY_PASSWORD")
-        and os.environ.get("OFFICEALLY_REALTIME_URL")
-    )
     sandbox = _elig_is_sandbox()
-    live = (not sandbox) and (pverify or officeally)
-    missing = []
-    if not (pverify or officeally):
-        missing.append(
-            "Clearinghouse credentials \u2014 pVerify (PVERIFY_CLIENT_ID, "
-            "PVERIFY_CLIENT_SECRET) or Office Ally (OFFICEALLY_USERNAME, "
-            "OFFICEALLY_PASSWORD, OFFICEALLY_REALTIME_URL, OFFICEALLY_SENDER_ID)."
+    review_live = (not sandbox) and (pverify or stedi_configured)
+
+    # Exact fastest step to make the board's Verify button return real 271s.
+    next_step = None
+    if not verify_live:
+        next_step = (
+            "Create a Stedi account, generate an API key, and set STEDI_API_KEY "
+            "+ STEDI_PROVIDER_NPI (and STEDI_PROVIDER_NAME) in the server "
+            "environment. That turns on real-time Medicare & commercial 270/271 "
+            "on the Verify button in minutes \u2014 no multi-week enrollment."
         )
-    if sandbox:
-        missing.append("Set ELIG_SANDBOX=0 once real credentials are in place.")
-    missing.append("A signed BAA with the clearinghouse before real patient PHI is transmitted.")
+
+    missing = []
+    if not verify_live:
+        missing.append(
+            "A real-time verify source \u2014 fastest is Stedi (STEDI_API_KEY, "
+            "STEDI_PROVIDER_NPI); or direct CMS HETS (HETS_ENDPOINT_URL, "
+            "HETS_SUBMITTER_ID + credentials)."
+        )
+    missing.append(
+        "A signed BAA with the clearinghouse/CMS before real patient PHI is "
+        "transmitted."
+    )
+
     return {
         "ok": True,
-        "live": live,
+        # Headline truth: is the board's Verify button live (real 271s)?
+        "live": verify_live,
+        "verify_live": verify_live,
+        "verify_source": verify_source,
+        "stedi_configured": stedi_configured,
+        "hets_configured": hets_configured,
+        "next_step": next_step,
+        # Separate pre-analytical gate/batch tool (optional pVerify):
         "sandbox": sandbox,
+        "review_live": review_live,
         "pverify_configured": pverify,
-        "officeally_configured": officeally,
         "missing": missing,
     }
 
