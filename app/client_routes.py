@@ -38,6 +38,7 @@ from app.client_db import (
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_eligibility, create_eligibility, update_eligibility, delete_eligibility,
     get_eligibility_one,
+    record_eligibility_check, get_eligibility_checks, get_eligibility_check_raw,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
@@ -3322,6 +3323,44 @@ def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
 
 # ─── Eligibility / Benefits Verification ──────────────────────────────────────
 
+def _guard_billing_readiness(readiness, verified_by, verified_date):
+    """A record may only be 'Clear to Bill' when a real verification is on file
+    (both who verified and when). Prevents billing off an unverified record."""
+    if (readiness or "").strip() == "Clear to Bill":
+        if not (verified_by and str(verified_by).strip()) or \
+           not (verified_date and str(verified_date).strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot mark 'Clear to Bill' without a recorded verification "
+                       "(Verified By + Verified Date). Run a coverage check first.")
+
+
+def _split_patient_name(name: str) -> tuple[str, str]:
+    """Best-effort split of a free-text patient name into (first, last).
+    Handles 'Last, First' and 'First Last'."""
+    name = (name or "").strip()
+    if not name:
+        return "", ""
+    if "," in name:
+        last, _, first = name.partition(",")
+        return first.strip(), last.strip()
+    parts = name.split()
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    return parts[0], " ".join(parts[1:])
+
+
+# Normalized coverage status -> the eligibility board's Status + BillingReadiness.
+# BillingReadiness is only auto-set from a REAL payer 271 (never mock).
+_ELIG_STATUS_MAP = {
+    "Active":   ("Active", "Clear to Bill"),
+    "Termed":   ("Termed", "Not Billable"),
+    "Inactive": ("Inactive", "Not Billable"),
+    "Pending":  ("Pending", ""),
+    "Unknown":  ("Needs Re-verify", ""),
+}
+
+
 class EligIn(BaseModel):
     client_id: Optional[int] = None
     PatientName: Optional[str] = ""
@@ -3400,6 +3439,10 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
         data["client_id"] = _client_scope(user)
     if not data.get("client_id"):
         raise HTTPException(status_code=400, detail="client_id required")
+    # Guardrail: never let a record be marked "Clear to Bill" without a recorded
+    # verification (who + when). Clean billing depends on this.
+    _guard_billing_readiness(data.get("BillingReadiness"),
+                             data.get("VerifiedBy"), data.get("VerifiedDate"))
     data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
     eid = create_eligibility(data)
     notify_activity(user["username"], "created", "Eligibility",
@@ -3411,6 +3454,13 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
 def edit_elig(rid: int, body: EligUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Guardrail: "Clear to Bill" requires verification evidence — check the
+    # EFFECTIVE values (this update merged over what's already on the record).
+    if changes.get("BillingReadiness") == "Clear to Bill":
+        rec = get_eligibility_one(rid) or {}
+        eff_by = changes.get("VerifiedBy", rec.get("VerifiedBy"))
+        eff_date = changes.get("VerifiedDate", rec.get("VerifiedDate"))
+        _guard_billing_readiness("Clear to Bill", eff_by, eff_date)
     update_eligibility(rid, changes)
     notify_activity(user["username"], "updated", "Eligibility",
                     f"Record #{rid}, fields: {', '.join(changes.keys())}")
@@ -3423,6 +3473,164 @@ def remove_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
     delete_eligibility(rid)
     notify_activity(user["username"], "deleted", "Eligibility", f"Record #{rid}")
     return {"ok": True}
+
+
+@router.post("/eligibility/{rid}/verify")
+def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
+    """Run a REAL, direct-to-Medicare (CMS HETS) eligibility check for a record.
+
+    Honest by construction:
+      • Not configured (no CMS submitter creds yet) → returns configured:false and
+        CHANGES NOTHING. No result is ever fabricated.
+      • Invalid/again non-Medicare member id (not a valid MBI) → nothing sent.
+      • A real CMS 271 → writes coverage facts, stamps VerifiedBy/Date, and stores
+        the raw 270/271 in eligibility_checks as immutable audit evidence.
+    """
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+
+    # Lazy import so any package issue returns 503 instead of crashing the hub.
+    try:
+        from eligibility_hybrid import build_hets_provider, PatientRequest
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(503, f"Eligibility engine unavailable: {e}")
+
+    provider = build_hets_provider()
+    first, last = _split_patient_name(rec.get("PatientName"))
+    req = PatientRequest(
+        first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
+        member_id=(rec.get("MemberID") or "").strip(),
+        payer_name=(rec.get("Payor") or "Medicare").strip(),
+        service_type_codes=["30"],
+        provider_npi=os.getenv("HETS_PROVIDER_NPI", ""),
+        provider_name=os.getenv("HETS_PROVIDER_NAME", ""),
+    )
+
+    if not provider.configured:
+        return {
+            "ok": False, "configured": False, "changed": False,
+            "message": "Direct Medicare (HETS) isn't connected yet. Finish CMS "
+                       "submitter enrollment, then set HETS_ENDPOINT_URL, "
+                       "HETS_SUBMITTER_ID and the connectivity credentials in the "
+                       "server environment. Nothing was fabricated or changed.",
+        }
+
+    try:
+        result = provider.verify(req)
+    except Exception as e:  # network / CMS transport failure
+        record_eligibility_check({
+            "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+            "source": "hets", "status": "Error",
+            "checked_by": user.get("username", ""),
+            "member_id": (rec.get("MemberID") or "").strip(),
+            "payer_name": (rec.get("Payor") or "").strip(),
+            "errors": str(e),
+        })
+        return {"ok": False, "configured": True, "changed": False, "error": str(e)}
+
+    status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
+    errors_txt = "; ".join(result.errors or [])
+
+    # Persist raw 270/271 as audit evidence (only real provider output reaches here).
+    check_id = record_eligibility_check({
+        "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+        "source": "hets", "status": status_val,
+        "checked_by": user.get("username", ""),
+        "member_id": result.member_id or (rec.get("MemberID") or "").strip(),
+        "payer_name": result.payer_name or (rec.get("Payor") or "").strip(),
+        "raw_request": (result.raw or {}).get("x12_270", ""),
+        "raw_response": (result.raw or {}).get("x12_271", ""),
+        "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
+        "errors": errors_txt,
+    })
+
+    # Map the real result back onto the board. Benefits only when present.
+    board_status, readiness = _ELIG_STATUS_MAP.get(status_val, ("Needs Re-verify", ""))
+    today = datetime.now().strftime("%Y-%m-%d")
+    changes: dict = {
+        "Status": board_status,
+        "VerifiedBy": f"CMS HETS (direct) · {user.get('username','')}".strip(" ·"),
+        "VerifiedDate": today,
+    }
+    if readiness:
+        changes["BillingReadiness"] = readiness
+    b = result.benefit
+    if b:
+        if b.copay is not None:
+            changes["Copay"] = f"${b.copay:g}"
+        if b.deductible_total is not None:
+            changes["Deductible"] = f"${b.deductible_total:g}"
+        if b.coinsurance_pct is not None:
+            changes["Coinsurance"] = f"{b.coinsurance_pct:g}%"
+        if b.oop_total is not None:
+            changes["OOPMax"] = f"${b.oop_total:g}"
+    if result.effective_date:
+        changes["EffectiveDate"] = result.effective_date
+    if result.term_date:
+        changes["TermDate"] = result.term_date
+    if result.prior_auth_required:
+        changes["PriorAuthRequired"] = "Yes"
+    # Surface any CMS rejection reason inline for the verifier.
+    if errors_txt:
+        prior = (rec.get("Notes") or "").strip()
+        stamp = f"[{today}] CMS HETS: {errors_txt}"
+        changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
+
+    update_eligibility(rid, changes)
+    notify_activity(user["username"], "verified (CMS HETS)", "Eligibility",
+                    f"{rec.get('PatientName','')} → {status_val}")
+    return {
+        "ok": True, "configured": True, "changed": True,
+        "status": status_val, "check_id": check_id,
+        "billing_readiness": readiness, "errors": result.errors or [],
+        "benefit": {"copay": b.copay, "deductible": b.deductible_total,
+                    "coinsurance_pct": b.coinsurance_pct} if b else {},
+        "effective_date": result.effective_date, "term_date": result.term_date,
+    }
+
+
+@router.get("/eligibility/{rid}/checks")
+def list_elig_checks(rid: int, hub_session: Optional[str] = Cookie(None)):
+    """Audit history of real coverage checks for one record."""
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+    return get_eligibility_checks(rid)
+
+
+@router.get("/eligibility/check/{check_id}/raw")
+def download_elig_check_raw(check_id: int, hub_session: Optional[str] = Cookie(None)):
+    """Download the raw 270/271 evidence for one check (audit artifact)."""
+    user = _require_user(hub_session)
+    chk = get_eligibility_check_raw(check_id)
+    if not chk:
+        raise HTTPException(404, "Check not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(chk.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+    body = (
+        f"MedPharma — Eligibility Verification Evidence\n"
+        f"Check ID:   {chk.get('id')}\n"
+        f"Source:     {chk.get('source')}\n"
+        f"Status:     {chk.get('status')}\n"
+        f"Checked by: {chk.get('checked_by')} at {chk.get('created_at')}\n"
+        f"Member ID:  {chk.get('member_id')}\n"
+        f"Payer:      {chk.get('payer_name')}\n"
+        f"Errors:     {chk.get('errors') or 'none'}\n"
+        f"\n===== X12 270 (request sent) =====\n{chk.get('raw_request') or '(none)'}\n"
+        f"\n===== X12 271 (payer response) =====\n{chk.get('raw_response') or '(none)'}\n"
+    )
+    return Response(content=body, media_type="text/plain", headers={
+        "Content-Disposition": f'attachment; filename="hets_check_{check_id}.txt"'})
 
 
 @router.post("/eligibility/{rid}/file")

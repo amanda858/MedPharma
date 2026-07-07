@@ -944,6 +944,30 @@ def init_client_hub_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
 
+        -- ── eligibility verification audit trail ───────────────────────
+        -- Immutable evidence of every real payer coverage check. A row is only
+        -- ever written from an ACTUAL provider response (e.g. a CMS HETS 271);
+        -- the raw_response IS the audit artifact you show in an audit. Never
+        -- populated by mock/sandbox output.
+        CREATE TABLE IF NOT EXISTS eligibility_checks (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            eligibility_id  INTEGER,                  -- eligibility.id this check is for
+            client_id       INTEGER NOT NULL,
+            source          TEXT DEFAULT '',          -- 'hets' = direct Medicare, etc.
+            status          TEXT DEFAULT '',          -- Active/Inactive/Termed/Unknown returned
+            checked_by      TEXT DEFAULT '',          -- who triggered the check
+            member_id       TEXT DEFAULT '',          -- MBI / member id queried
+            payer_name      TEXT DEFAULT '',
+            raw_request     TEXT DEFAULT '',          -- the X12 270 we sent
+            raw_response    TEXT DEFAULT '',          -- the raw 271 the payer returned
+            result_json     TEXT DEFAULT '',          -- normalized CoverageResult
+            errors          TEXT DEFAULT '',          -- AAA / provider errors, if any
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_eligchk_elig ON eligibility_checks(eligibility_id);
+        CREATE INDEX IF NOT EXISTS idx_eligchk_client ON eligibility_checks(client_id);
+
         -- ── EDI / ERA / EFT setup ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS edi_setup (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3487,6 +3511,56 @@ def get_eligibility_one(rec_id: int):
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM eligibility WHERE id=?", (rec_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def record_eligibility_check(data: dict) -> int:
+    """Persist ONE real payer coverage check as immutable audit evidence.
+
+    Only ever called with an actual provider response (e.g. a CMS HETS 271);
+    the raw_response is the artifact you produce in an audit."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO eligibility_checks
+            (eligibility_id, client_id, source, status, checked_by, member_id,
+             payer_name, raw_request, raw_response, result_json, errors)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (data.get("eligibility_id"), data["client_id"], data.get("source", ""),
+             data.get("status", ""), data.get("checked_by", ""), data.get("member_id", ""),
+             data.get("payer_name", ""), data.get("raw_request", ""),
+             data.get("raw_response", ""), data.get("result_json", ""),
+             data.get("errors", "")))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_eligibility_checks(eligibility_id: int, limit: int = 25):
+    """Most-recent-first audit history of real coverage checks for a record."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT id, source, status, checked_by, member_id, payer_name,
+                              errors, created_at
+                       FROM eligibility_checks WHERE eligibility_id=?
+                       ORDER BY id DESC LIMIT ?""", (eligibility_id, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    return rows
+
+
+def get_eligibility_check_raw(check_id: int):
+    """Full raw 270/271 evidence for one check (for the audit download)."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM eligibility_checks WHERE id=?", (check_id,))
         row = cur.fetchone()
     finally:
         conn.close()

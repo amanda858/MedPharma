@@ -24,8 +24,9 @@ Runs in sandbox (mock) mode with zero credentials; drop in real creds via env
                                            dob="1980-01-01", payer_name="Aetna",
                                            member_id="W123", cpt_codes=["87631"]))
 """
-from .config import build_default_engine
+from .config import build_default_engine, build_hets_provider
 from .gate import AccessionGate, AccessionResult, CptDisposition, Disposition
+from .hets import HETSProvider, build_hets_270, is_valid_mbi, parse_hets_271
 from .hybrid import HybridEligibilityEngine, HybridStrategy
 from .intercept import (ENGINE_NAME, METHOD, PRODUCT_NAME, Finding, run_intercept,
                         summarize_findings)
@@ -45,6 +46,8 @@ __all__ = [
     "CoverageStatus", "CptStatus", "EligibilityProvider", "ProviderError",
     "PVerifyProvider", "OfficeAllyProvider",
     "HybridEligibilityEngine", "HybridStrategy", "build_default_engine",
+    "HETSProvider", "build_hets_provider", "build_hets_270", "parse_hets_271",
+    "is_valid_mbi",
     "AccessionGate", "AccessionResult", "CptDisposition", "Disposition",
     "MedNecResult", "check_medical_necessity", "is_prior_auth_required",
     "is_traditional_medicare",
