@@ -3852,27 +3852,24 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             else:           aging["days_90_plus"] += bal
         aging = {k: round(v, 2) for k, v in aging.items()}
 
-        # Billed Activity — count of billed claim lines and their charge value,
-        # grouped by UPLOAD date (created_at) window — i.e. WHEN the claim was
-        # uploaded/imported into the hub, not the historical BillDate — so the
-        # today / yesterday / last-7 / last-30 buckets reflect upload cadence.
-        # Scoped to the same client_id + sub_profile as the rest of the dashboard so
-        # every user monitors their own billing activity. Computed independently of
-        # the DOS date filter (base_cond) so recent billing always shows.
+        # Billed Activity — billed lines + charge value grouped by CALENDAR WEEK
+        # (Mon–Fri), keyed by BillDate (when the claim was actually billed out to
+        # the payer). Simple and honest: each bucket is one work week with its own
+        # date range, so the dashboard reads "week of Jul 6–10: $X". Scoped to the
+        # same client_id + sub_profile; independent of the DOS date filter (base_cond).
+        _WEEK_COUNT = 8  # trailing calendar weeks to show, current week last
+        _this_monday = today - timedelta(days=today.weekday())     # Monday of current week
+        _week_acc = {}  # monday-iso -> [count, charged]
+        for _w in range(_WEEK_COUNT):
+            _week_acc[(_this_monday - timedelta(days=7 * _w)).isoformat()] = [0, 0.0]
+        _this_monday_iso = _this_monday.isoformat()
         billing_activity = {
-            "today": {"count": 0, "charged": 0.0},
-            "yesterday": {"count": 0, "charged": 0.0},
             "this_week": {"count": 0, "charged": 0.0},
-            "this_month": {"count": 0, "charged": 0.0},
             "all_time": {"count": 0, "charged": 0.0},
+            "week_start": _this_monday_iso,
+            "week_end": (_this_monday + timedelta(days=4)).isoformat(),
         }
-        _ba_today = today
-        _ba_yesterday = today.fromordinal(today.toordinal() - 1)
-        _ba_week_start = today.fromordinal(today.toordinal() - 6)    # inclusive last 7 days
-        _ba_month_start = today.fromordinal(today.toordinal() - 29)  # rolling last 30 days
-        _ba_day_start = today.fromordinal(today.toordinal() - 13)    # per-day breakdown, last 14 days
-        _ba_by_day = {}  # 'YYYY-MM-DD' -> [count, charged]
-        cur.execute(f"""SELECT created_at, ChargeAmount FROM claims_master
+        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master
                         {base_cond} {'AND' if base_cond else 'WHERE'} COALESCE(BillDate,'') != ''""", base_p)
         for _bd_raw, _amt_raw in cur.fetchall():
             _bd = str(_bd_raw or "").strip()[:10]
@@ -3881,35 +3878,32 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             except (ValueError, TypeError):
                 continue
             _amt = float(_amt_raw or 0)
-            # All-time billed since inception — every billed claim line (dated by upload).
+            # All-time billed since inception — every billed claim line.
             billing_activity["all_time"]["count"] += 1
             billing_activity["all_time"]["charged"] += _amt
-            if _d == _ba_today:
-                billing_activity["today"]["count"] += 1
-                billing_activity["today"]["charged"] += _amt
-            if _d == _ba_yesterday:
-                billing_activity["yesterday"]["count"] += 1
-                billing_activity["yesterday"]["charged"] += _amt
-            if _d >= _ba_week_start:
-                billing_activity["this_week"]["count"] += 1
-                billing_activity["this_week"]["charged"] += _amt
-            if _d >= _ba_month_start:
-                billing_activity["this_month"]["count"] += 1
-                billing_activity["this_month"]["charged"] += _amt
-            if _d >= _ba_day_start:
-                _slot = _ba_by_day.setdefault(_d.isoformat(), [0, 0.0])
-                _slot[0] += 1
-                _slot[1] += _amt
-        for _k in billing_activity:
-            billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
-        # Explicit per-day billed totals (last 14 days, zero-filled) so the
-        # dashboard shows exactly what was billed out each day.
-        _by_day = []
-        for _i in range(13, -1, -1):
-            _dd = today.fromordinal(today.toordinal() - _i).isoformat()
-            _c, _s = _ba_by_day.get(_dd, [0, 0.0])
-            _by_day.append({"date": _dd, "count": _c, "charged": round(_s, 2)})
-        billing_activity["by_day"] = _by_day
+            # Bucket into its calendar work week (Mon–Fri); weekend dates are ignored.
+            if _d.weekday() <= 4:
+                _wm = (_d - timedelta(days=_d.weekday())).isoformat()
+                _slot = _week_acc.get(_wm)
+                if _slot is not None:
+                    _slot[0] += 1
+                    _slot[1] += _amt
+                    if _wm == _this_monday_iso:
+                        billing_activity["this_week"]["count"] += 1
+                        billing_activity["this_week"]["charged"] += _amt
+        billing_activity["all_time"]["charged"] = round(billing_activity["all_time"]["charged"], 2)
+        billing_activity["this_week"]["charged"] = round(billing_activity["this_week"]["charged"], 2)
+        # Calendar-week breakdown (oldest → newest), each with its Mon–Fri range.
+        _by_week = []
+        for _w in range(_WEEK_COUNT - 1, -1, -1):
+            _wm = _this_monday - timedelta(days=7 * _w)
+            _c, _s = _week_acc[_wm.isoformat()]
+            _by_week.append({
+                "start": _wm.isoformat(),
+                "end": (_wm + timedelta(days=4)).isoformat(),
+                "count": _c, "charged": round(_s, 2),
+            })
+        billing_activity["by_week"] = _by_week
 
         # Status distribution (flat: status → count, for frontend bar chart)
         cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {cond} GROUP BY ClaimStatus", p)

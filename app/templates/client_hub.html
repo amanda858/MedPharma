@@ -2236,13 +2236,13 @@
           </div>
 
           <div class="kpi-grid" id="kpiGrid" data-module-section="claims"></div>
-          <!-- Billed Activity Card — lines billed + charge value, by upload date
-               (when the work was imported into the hub). Visible to every user,
+          <!-- Billed Activity Card — lines billed + charge value, by bill date
+               (when the claim was actually billed out to the payer). Visible to every user,
                scoped to their own data. -->
           <div class="card" id="dashBilledActivityCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--success);display:none">
             <div class="card-header">
               <div class="card-title">💵 Billed Activity</div>
-              <div style="font-size:11px;color:var(--gray-500)">Lines billed and charge value by upload date</div>
+              <div style="font-size:11px;color:var(--gray-500)">Charges billed by calendar week (Mon–Fri), by bill date</div>
             </div>
             <div id="dashBilledActivity" style="padding:16px"></div>
           </div>
@@ -3089,7 +3089,7 @@
             <div class="card" style="margin-bottom:16px;border-left:4px solid var(--success)">
               <div class="card-header">
                 <div class="card-title">💵 Billed Activity</div>
-                <div style="font-size:11px;color:var(--gray-500)">Charges billed by date (independent of the period filter)</div>
+                <div style="font-size:11px;color:var(--gray-500)">Charges billed by calendar week (Mon–Fri), by bill date</div>
               </div>
               <div id="rptClaimsBilledActivity" style="padding:16px"></div>
             </div>
@@ -6311,52 +6311,57 @@
         }
       }
 
-      // Billed Activity — lines billed + charge value by Bill Date, scoped to the
-      // user's own data so every user monitors their own billing activity.
+      // Billed Activity — billed lines + charge value by CALENDAR WEEK (Mon–Fri),
+      // keyed by Bill Date, scoped to the user's own data. Simple: each week shows
+      // its date range and what was billed that week.
       const ba = d.billing_activity || {};
-      const baCards = [
-        { key: 'today', label: 'Billed Today' },
-        { key: 'yesterday', label: 'Billed Yesterday' },
-        { key: 'this_week', label: 'Last 7 Days' },
-        { key: 'this_month', label: 'Last 30 Days' },
-        { key: 'all_time', label: 'All-Time Billed' },
-      ];
+      const _M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const _wkRange = (s, e) => {
+        if (!s || !e) return '';
+        const a = new Date(s + 'T00:00:00'), b = new Date(e + 'T00:00:00');
+        return a.getMonth() === b.getMonth()
+          ? `${_M[a.getMonth()]} ${a.getDate()}–${b.getDate()}`
+          : `${_M[a.getMonth()]} ${a.getDate()} – ${_M[b.getMonth()]} ${b.getDate()}`;
+      };
+      const _weeks = ba.by_week || [];
+      const _tw = ba.this_week || { count: 0, charged: 0 };
+      const _at = ba.all_time || { count: 0, charged: 0 };
+      const _twRange = _wkRange(ba.week_start, ba.week_end);
       const baCard = document.getElementById('dashBilledActivityCard');
       const baEl = document.getElementById('dashBilledActivity');
-      const baHasData = baCards.some(c => (ba[c.key] && (ba[c.key].count || ba[c.key].charged)));
+      const baHasData = (_at.count || _at.charged || _weeks.some(w => w.count || w.charged));
       if (baCard) baCard.style.display = baHasData ? '' : 'none';
       if (baEl && baHasData) {
-        const _tiles = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
-          baCards.map(c => {
-            const v = ba[c.key] || { count: 0, charged: 0 };
-            return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
-              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(v.charged)}</div>
-              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${v.count} line${v.count === 1 ? '' : 's'}</div>
-              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
-            </div>`;
-          }).join('') + `</div>`;
-        // Per-day billed breakdown — exactly what was billed out each day (last 14 days).
-        const _days = ba.by_day || [];
-        let _byDayHtml = '';
-        if (_days.length) {
-          const _mx = Math.max(1, ..._days.map(x => x.charged || 0));
-          const _bars = _days.map(x => {
+        const _tiles = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+            <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(_tw.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${_tw.count} line${_tw.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">This Week${_twRange ? ' · ' + _twRange : ''}</div>
+            </div>
+            <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(_at.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${_at.count} line${_at.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">All-Time Billed</div>
+            </div>
+          </div>`;
+        let _byWeekHtml = '';
+        if (_weeks.length) {
+          const _mx = Math.max(1, ..._weeks.map(x => x.charged || 0));
+          const _bars = _weeks.map(x => {
             const _has = (x.charged || 0) > 0;
             const _h = _has ? Math.max(4, Math.round((x.charged / _mx) * 54)) : 1;
-            const _dt = new Date(x.date + 'T00:00:00');
-            const _lbl = (_dt.getMonth() + 1) + '/' + _dt.getDate();
-            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${x.date}: $${fmt(x.charged)} · ${x.count} line${x.count === 1 ? '' : 's'}">
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${_wkRange(x.start, x.end)}: $${fmt(x.charged)} · ${x.count} line${x.count === 1 ? '' : 's'}">
                 <div style="font-size:9px;font-weight:700;color:var(--gray-600);white-space:nowrap">${_has ? '$' + fmt(x.charged) : ''}</div>
-                <div style="width:64%;height:${_h}px;background:${_has ? 'var(--success)' : 'var(--gray-200)'};border-radius:3px 3px 0 0;margin-top:auto"></div>
-                <div style="font-size:9px;color:var(--gray-400);white-space:nowrap">${_lbl}</div>
+                <div style="width:70%;height:${_h}px;background:${_has ? 'var(--success)' : 'var(--gray-200)'};border-radius:3px 3px 0 0;margin-top:auto"></div>
+                <div style="font-size:9px;color:var(--gray-400);white-space:nowrap">${_wkRange(x.start, x.end)}</div>
               </div>`;
           }).join('');
-          _byDayHtml = `<div style="margin-top:16px">
-              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Billed by day — last 14 days (by upload date)</div>
-              <div style="display:flex;align-items:flex-end;gap:4px;height:86px;padding:0 2px">${_bars}</div>
+          _byWeekHtml = `<div style="margin-top:16px">
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:8px">Billed by week (Mon–Fri, by bill date)</div>
+              <div style="display:flex;align-items:flex-end;gap:6px;height:92px;padding:0 2px">${_bars}</div>
             </div>`;
         }
-        baEl.innerHTML = _tiles + _byDayHtml;
+        baEl.innerHTML = _tiles + _byWeekHtml;
       }
 
       // Data Summary Card (shows record counts per section)
@@ -8685,27 +8690,47 @@
       if (!lastReportData) return;
       const cl = lastReportData.claims || {};
 
-      // Billed activity — recent billing by Bill Date (shows what was billed
-      // today / yesterday / this week / this month, regardless of the period filter)
+      // Billed activity — billed charges by CALENDAR WEEK (Mon–Fri), keyed by Bill
+      // Date, regardless of the period filter. Simple: each week with its range.
       const ba = cl.billing_activity || {};
-      const baCards = [
-        { key: 'today', label: 'Billed Today' },
-        { key: 'yesterday', label: 'Billed Yesterday' },
-        { key: 'this_week', label: 'Last 7 Days' },
-        { key: 'this_month', label: 'Last 30 Days' },
-        { key: 'all_time', label: 'All-Time Billed' },
-      ];
+      const _M2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const _wkRange2 = (s, e) => {
+        if (!s || !e) return '';
+        const a = new Date(s + 'T00:00:00'), b = new Date(e + 'T00:00:00');
+        return a.getMonth() === b.getMonth()
+          ? `${_M2[a.getMonth()]} ${a.getDate()}–${b.getDate()}`
+          : `${_M2[a.getMonth()]} ${a.getDate()} – ${_M2[b.getMonth()]} ${b.getDate()}`;
+      };
       const baEl = document.getElementById('rptClaimsBilledActivity');
       if (baEl) {
-        baEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">` +
-          baCards.map(c => {
-            const v = ba[c.key] || { count: 0, charged: 0 };
-            return `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
-              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(v.charged)}</div>
-              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${v.count} claim${v.count === 1 ? '' : 's'}</div>
-              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${c.label}</div>
-            </div>`;
-          }).join('') + `</div>`;
+        const _tw = ba.this_week || { count: 0, charged: 0 };
+        const _at = ba.all_time || { count: 0, charged: 0 };
+        const _weeks = ba.by_week || [];
+        const _twRange = _wkRange2(ba.week_start, ba.week_end);
+        const _tiles = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+            <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(_tw.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${_tw.count} claim${_tw.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">This Week${_twRange ? ' · ' + _twRange : ''}</div>
+            </div>
+            <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:var(--success)">$${fmt(_at.charged)}</div>
+              <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${_at.count} claim${_at.count === 1 ? '' : 's'}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">All-Time Billed</div>
+            </div>
+          </div>`;
+        const _rows = _weeks.slice().reverse().map(x => `<tr>
+            <td style="padding:6px 12px;border-top:1px solid var(--gray-100)">${_wkRange2(x.start, x.end)}</td>
+            <td style="padding:6px 12px;border-top:1px solid var(--gray-100);text-align:right;font-weight:600">${x.count}</td>
+            <td style="padding:6px 12px;border-top:1px solid var(--gray-100);text-align:right;color:var(--success)">$${fmt(x.charged)}</td>
+          </tr>`).join('');
+        const _tbl = _weeks.length ? `<table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:14px">
+            <thead><tr style="background:var(--gray-50)">
+              <th style="text-align:left;padding:6px 12px;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Week (Mon–Fri)</th>
+              <th style="text-align:right;padding:6px 12px;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Lines</th>
+              <th style="text-align:right;padding:6px 12px;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Billed</th>
+            </tr></thead><tbody>${_rows}</tbody></table>` : '';
+        baEl.innerHTML = _tiles + _tbl;
       }
 
       const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));

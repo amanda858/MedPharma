@@ -5158,62 +5158,59 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
         status_agg[st]["paid"] += float(c.get("PaidAmount") or 0)
     by_status = [{"status": k, **v} for k, v in status_agg.items()]
 
-    # Billed activity — charge dollars actually billed, grouped by UPLOAD date
-    # (created_at) — i.e. WHEN the claim was uploaded/imported, not the historical
-    # BillDate — so the today / yesterday / last-7 / last-30 buckets reflect upload
-    # cadence. Computed independently of the DOS period filter, respecting sub_profile.
-    from datetime import date as _ba_date
+    # Billed activity — charge dollars actually billed, grouped by CALENDAR WEEK
+    # (Mon–Fri), keyed by BillDate (when the claim was actually billed out to the
+    # payer). Simple and honest: each bucket is one work week with its own date
+    # range. Computed independently of the DOS period filter, respecting sub_profile.
+    from datetime import date as _ba_date, timedelta as _ba_td
     _today = business_today()
-    _yesterday = _today.fromordinal(_today.toordinal() - 1)
-    _week_start = _today.fromordinal(_today.toordinal() - 6)    # inclusive last 7 days
-    _month_start = _today.fromordinal(_today.toordinal() - 29)  # rolling last 30 days
-    _day_start = _today.fromordinal(_today.toordinal() - 13)    # per-day breakdown, last 14 days
-    _by_day_acc = {}  # 'YYYY-MM-DD' -> [count, charged]
+    _WEEK_COUNT = 8  # trailing calendar weeks to show, current week last
+    _this_monday = _today - _ba_td(days=_today.weekday())      # Monday of current week
+    _week_acc = {}  # monday-iso -> [count, charged]
+    for _w in range(_WEEK_COUNT):
+        _week_acc[(_this_monday - _ba_td(days=7 * _w)).isoformat()] = [0, 0.0]
+    _this_monday_iso = _this_monday.isoformat()
     billing_activity = {
-        "today": {"count": 0, "charged": 0.0},
-        "yesterday": {"count": 0, "charged": 0.0},
         "this_week": {"count": 0, "charged": 0.0},
-        "this_month": {"count": 0, "charged": 0.0},
         "all_time": {"count": 0, "charged": 0.0},
+        "week_start": _this_monday_iso,
+        "week_end": (_this_monday + _ba_td(days=4)).isoformat(),
     }
-    ba_sql = (f"SELECT created_at, ChargeAmount FROM claims_master "
+    ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
               f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
     for r in conn.execute(ba_sql, [client_id] + sp_params).fetchall():
-        bd = str(r["created_at"] or "").strip()[:10]
+        bd = str(r["BillDate"] or "").strip()[:10]
         try:
             d = _ba_date.fromisoformat(bd)
         except Exception:
             continue
         amt = float(r["ChargeAmount"] or 0)
-        # All-time billed since inception — every billed claim line (dated by upload).
+        # All-time billed since inception — every billed claim line.
         billing_activity["all_time"]["count"] += 1
         billing_activity["all_time"]["charged"] += amt
-        if d == _today:
-            billing_activity["today"]["count"] += 1
-            billing_activity["today"]["charged"] += amt
-        if d == _yesterday:
-            billing_activity["yesterday"]["count"] += 1
-            billing_activity["yesterday"]["charged"] += amt
-        if d >= _week_start:
-            billing_activity["this_week"]["count"] += 1
-            billing_activity["this_week"]["charged"] += amt
-        if d >= _month_start:
-            billing_activity["this_month"]["count"] += 1
-            billing_activity["this_month"]["charged"] += amt
-        if d >= _day_start:
-            _slot = _by_day_acc.setdefault(d.isoformat(), [0, 0.0])
-            _slot[0] += 1
-            _slot[1] += amt
-    for _k in billing_activity:
-        billing_activity[_k]["charged"] = round(billing_activity[_k]["charged"], 2)
-    # Explicit per-day billed totals (last 14 days, zero-filled) so the report
-    # shows exactly what was billed out each day.
-    _bd_list = []
-    for _i in range(13, -1, -1):
-        _dd = _today.fromordinal(_today.toordinal() - _i).isoformat()
-        _c, _s = _by_day_acc.get(_dd, [0, 0.0])
-        _bd_list.append({"date": _dd, "count": _c, "charged": round(_s, 2)})
-    billing_activity["by_day"] = _bd_list
+        # Bucket into its calendar work week (Mon–Fri); weekend dates are ignored.
+        if d.weekday() <= 4:
+            wm = (d - _ba_td(days=d.weekday())).isoformat()
+            slot = _week_acc.get(wm)
+            if slot is not None:
+                slot[0] += 1
+                slot[1] += amt
+                if wm == _this_monday_iso:
+                    billing_activity["this_week"]["count"] += 1
+                    billing_activity["this_week"]["charged"] += amt
+    billing_activity["all_time"]["charged"] = round(billing_activity["all_time"]["charged"], 2)
+    billing_activity["this_week"]["charged"] = round(billing_activity["this_week"]["charged"], 2)
+    # Calendar-week breakdown (oldest → newest), each with its Mon–Fri range.
+    _bw_list = []
+    for _w in range(_WEEK_COUNT - 1, -1, -1):
+        _wm = _this_monday - _ba_td(days=7 * _w)
+        _c, _s = _week_acc[_wm.isoformat()]
+        _bw_list.append({
+            "start": _wm.isoformat(),
+            "end": (_wm + _ba_td(days=4)).isoformat(),
+            "count": _c, "charged": round(_s, 2),
+        })
+    billing_activity["by_week"] = _bw_list
 
     denial_agg = {}
     for c in claims:
