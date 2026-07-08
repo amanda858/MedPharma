@@ -2200,6 +2200,21 @@
               </div>
             </div>
           </div>
+          <!-- Eligibility snapshot — shown ONLY for accounts with the eligibility
+               module (e.g. PCR verification). Gives an at-a-glance worklist summary
+               (real counts + a jump to the board) so the Dashboard isn't blank for
+               eligibility-only accounts, which bill no claims. Populated by
+               renderDashboardEligibility(); hidden for billing accounts. -->
+          <div class="card" id="dashEligSnapshotCard" style="display:none;margin-bottom:18px;border-left:4px solid #4338ca">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div>
+                <div class="card-title">🩺 Eligibility Verification</div>
+                <div style="font-size:11px;color:var(--gray-500)">Live coverage worklist — who is verified &amp; billable, and who still needs a check</div>
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="navTo('eligibility')">Open Worklist →</button>
+            </div>
+            <div id="dashEligSnapshot" style="padding:12px 4px 4px"></div>
+          </div>
           <!-- My Numbers — biller self-view (own billed/paid totals). Hidden for
                admin/Eric, who use the comprehensive Reporting + Team Production. -->
           <div class="card" id="myNumbersCard" style="display:none;margin-bottom:18px;border-left:4px solid #1e88e5">
@@ -2642,7 +2657,7 @@
                       <th>Payor</th>
                       <th>Member ID</th>
                       <th>Status</th>
-                      <th>Billable?</th>
+                      <th>Billing Viability</th>
                       <th>Effective</th>
                       <th>Term</th>
                       <th>Copay</th>
@@ -3336,8 +3351,9 @@
             </div>
           </div>
 
-          <!-- Completion Tracker -->
-          <div class="card" style="margin:16px 0 0">
+          <!-- Completion Tracker (billing accounts only — hidden for PCR
+               eligibility, which bills no claims; gated in loadCompletionTracker) -->
+          <div class="card" id="completionTrackerCard" style="margin:16px 0 0">
             <div class="card-header"><span class="card-title">◆ Workflow Completion Tracker</span></div>
             <div id="completionTracker"
               style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:4px 0">
@@ -6144,6 +6160,10 @@
         greetSubtitleEl.textContent = `${greetWord}!`;
       }
 
+      // Eligibility snapshot for eligibility-service accounts (e.g. PCR). Keeps
+      // the Dashboard useful instead of blank when billing widgets are hidden.
+      renderDashboardEligibility();
+
       // Per-user scope badge — make it explicit when the dashboard reflects only
       // ONE person's uploaded work (a staff biller's self-view, or an admin
       // drilling into a teammate) vs. the comprehensive team totals.
@@ -7339,6 +7359,96 @@
       box.innerHTML = h; box.style.display = '';
     }
 
+    // ══ Per-patient billing viability — the honest "why can we bill (or not)" ══
+    // Combines the human verdict (BillingReadiness), the real coverage Status
+    // (only ever set from a real 271, never fabricated), and the deterministic
+    // pre-check (_precheckOne). Returns a plain-language reason for EVERY record
+    // so staff see exactly why a patient is viable to bill — or what's blocking it.
+    // Never invents coverage: "viable" requires a human Clear-to-Bill or a real
+    // active 271.
+    function _billingViability(i) {
+      const verdict = (i.BillingReadiness || '').trim();
+      const status = (i.Status || '').trim().toLowerCase();
+      const note = (i.Notes || '').trim();
+      const issues = _precheckOne(i);
+      if (verdict === 'Not Billable')
+        return { level: 'no', reason: note || 'Marked not billable' };
+      if (verdict === 'On Hold')
+        return { level: 'hold', reason: note || 'On hold — awaiting information' };
+      if (verdict === 'Clear to Bill') {
+        const active = /active|eligible|verified|covered/.test(status);
+        return { level: 'yes', reason: active
+          ? ('Active coverage verified' + (i.VerifiedBy ? ' · ' + i.VerifiedBy : ''))
+          : 'Cleared to bill by staff' };
+      }
+      // Not yet decided (Pending Verification / blank).
+      if (issues.length)
+        return { level: 'blocked', reason: 'Cannot bill yet — ' + issues.join(' · ') };
+      if (/inactive|termed|ineligible|not\s*covered|denied/.test(status))
+        return { level: 'no', reason: 'Coverage came back ' + (i.Status || 'inactive') };
+      return { level: 'pending', reason: 'Data complete — needs coverage verification (run Verify)' };
+    }
+    function _viabilityHtml(i) {
+      const v = _billingViability(i);
+      const color = { yes: '#059669', pending: '#2563eb', blocked: '#b45309', hold: '#b45309', no: '#dc2626' }[v.level] || '#64748b';
+      const icon = { yes: '✅', pending: '•', blocked: '⚠', hold: '⏸', no: '⛔' }[v.level] || '';
+      return `<div style="font-size:11px;color:${color};margin-top:3px;max-width:200px;white-space:normal;line-height:1.3">${icon} ${esc(v.reason)}</div>`;
+    }
+
+    // True when the account in context does eligibility verification (its own
+    // module, or an eligibility-only login). Drives the Dashboard snapshot below.
+    function _accountHasEligibility() {
+      if (_isEligibilityOnly()) return true;
+      const mods = (Array.isArray(activeClientModules) && activeClientModules.length)
+        ? activeClientModules
+        : (currentUser && Array.isArray(currentUser.enabled_modules) ? currentUser.enabled_modules : null);
+      return !!(mods && mods.includes('eligibility'));
+    }
+
+    // Dashboard eligibility snapshot — real worklist counts for eligibility
+    // accounts (e.g. PCR). Keeps the Dashboard useful instead of blank when the
+    // billing widgets are all module-hidden. Same honest billing-viability
+    // buckets as the worklist; never fabricates coverage.
+    async function renderDashboardEligibility() {
+      const card = document.getElementById('dashEligSnapshotCard');
+      const body = document.getElementById('dashEligSnapshot');
+      if (!card || !body) return;
+      if (!_accountHasEligibility()) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      // Load the worklist once if the board hasn't been opened yet this session.
+      if (!allEligItems.length) { try { await loadEligibility(); } catch (_) {} }
+      const items = allEligItems || [];
+      const total = items.length;
+      let viable = 0, pending = 0, notBillable = 0, hold = 0;
+      items.forEach(i => {
+        const lvl = _billingViability(i).level;
+        if (lvl === 'yes') viable++;
+        else if (lvl === 'no') notBillable++;
+        else if (lvl === 'hold') hold++;
+        else pending++;  // pending + blocked = still needs a coverage check
+      });
+      const tile = (label, val, color, hint) => `<div style="flex:1;min-width:140px;background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${color};border-radius:10px;padding:14px 16px">
+          <div style="font-size:26px;font-weight:800;color:${color}">${val}</div>
+          <div style="font-size:12px;color:#6b7280;font-weight:600;margin-top:2px">${label}</div>
+          ${hint ? `<div style="font-size:11px;color:#9ca3af;margin-top:2px">${hint}</div>` : ''}
+        </div>`;
+      if (!total) {
+        body.innerHTML = `<div style="color:var(--gray-500);font-size:13px;padding:6px 2px">No patients on the eligibility worklist yet — upload an intake list or add a patient from the <a href="#" onclick="navTo('eligibility');return false" style="color:var(--primary);font-weight:600">Eligibility Tracking</a> board to start verifying coverage.</div>`;
+        return;
+      }
+      const tiles = [
+        tile('Total Patients', total, '#4338ca', ''),
+        tile('Clear to Bill', viable, '#059669', 'Coverage verified'),
+        tile('Needs Verification', pending, '#dc2626', 'Awaiting a coverage check'),
+      ];
+      if (hold) tiles.push(tile('On Hold', hold, '#b45309', 'Missing info'));
+      if (notBillable) tiles.push(tile('Not Billable', notBillable, '#6b7280', 'Coverage inactive/denied'));
+      body.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">${tiles.join('')}</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-top:14px;line-height:1.5">
+          Billability is decided by a <b>real coverage check</b> — Medicare goes straight to CMS HETS (X12 270/271), commercial via Stedi — never fabricated. Open a patient on the worklist and run <b>Verify</b> to see exactly why they’re billable, or what’s blocking it.
+        </div>`;
+    }
+
     // ── Dashboard tiles + charts ──
     function renderEligTiles() {
       const el = document.getElementById('eligTiles');
@@ -7528,7 +7638,7 @@
     <td>${esc(i.Payor || '—')}</td>
     <td style="font-size:12px">${esc(i.MemberID || '—')}</td>
     <td>${statusBadge(i.Status)}</td>
-    <td>${billableBadge(i.BillingReadiness)}</td>
+    <td>${billableBadge(i.BillingReadiness)}${_viabilityHtml(i)}</td>
     <td style="font-size:12px">${esc(i.EffectiveDate || '—')}</td>
     <td style="font-size:12px">${esc(i.TermDate || '—')}</td>
     <td style="font-size:12px">${esc(i.Copay || '—')}</td>
@@ -10031,8 +10141,25 @@
 
     async function saveDocTabNames() { await saveFolderNames(); }
 
+    // True when the account in context actually bills (claims / credentialing /
+    // enrollment). Eligibility-only accounts (e.g. PCR verifiers) bill nothing,
+    // so billing-only widgets like the Workflow Completion Tracker are hidden.
+    function _accountBillsClaims() {
+      const mods = (Array.isArray(activeClientModules) && activeClientModules.length)
+        ? activeClientModules
+        : (currentUser && Array.isArray(currentUser.enabled_modules) ? currentUser.enabled_modules : null);
+      if (!mods) return true; // admin/team global view — keep it
+      return mods.includes('claims') || mods.includes('credentialing') || mods.includes('enrollment');
+    }
+
     async function loadCompletionTracker() {
       try {
+        // The Workflow Completion Tracker measures billing progress (claims paid,
+        // credentialing approved, enrollment active). PCR eligibility accounts bill
+        // no claims, so it's meaningless noise there — hide the whole card.
+        const _ctCard = document.getElementById('completionTrackerCard');
+        if (!_accountBillsClaims()) { if (_ctCard) _ctCard.style.display = 'none'; return; }
+        if (_ctCard) _ctCard.style.display = '';
         let url = activeClientId ? `/hub/api/dashboard/client/${activeClientId}` : '/hub/api/dashboard';
         if (activeSubProfile && activeClientId) url += '?sub_profile=' + encodeURIComponent(activeSubProfile);
         const r = await fetch(url);
@@ -12355,6 +12482,10 @@
       });
 
       updateDashAdminControls();
+
+      // Refresh the Dashboard eligibility snapshot now that modules are known
+      // (handles admins selecting an eligibility account after first render).
+      try { renderDashboardEligibility(); } catch (_) {}
 
       // Production label: the admin gets the team-wide report, everyone else
       // (staff / client) only sees their own "User Production".
