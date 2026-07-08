@@ -3654,6 +3654,259 @@ def download_elig_check_raw(check_id: int, hub_session: Optional[str] = Cookie(N
         "Content-Disposition": f'attachment; filename="elig_check_{check_id}.txt"'})
 
 
+# ─── LIS/LIMS Coverage API ────────────────────────────────────────────────────
+# Two clean, documented endpoints layered over the eligibility + policy engine
+# the platform already owns (eligibility_hybrid/). Contract mirrors the
+# "Eligibility & Coverage Engine" architecture:
+#   POST /hub/api/eligibility-check → live X12 270/271 active/inactive + benefits
+#   POST /hub/api/coverage-eval     → LCD/NCD + MolDX + prior-auth decision
+# Both sit behind the hub's existing session auth. eligibility-check needs one
+# live payer connection (returns an honest UNKNOWN until then, never a fake
+# ACTIVE); coverage-eval is pure policy logic and runs with ZERO credentials.
+
+class _EligCheckPatient(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    dob: str = ""
+    member_id: str = ""
+
+
+class _EligCheckProvider(BaseModel):
+    npi: str = ""
+    tin: str = ""
+
+
+class _EligCheckPayer(BaseModel):
+    payer_code: str = ""
+    plan_id: str = ""
+    payer_name: str = ""
+
+
+class EligibilityCheckIn(BaseModel):
+    patient: _EligCheckPatient
+    provider: Optional[_EligCheckProvider] = None
+    payer: Optional[_EligCheckPayer] = None
+
+
+@router.post("/eligibility-check")
+def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Cookie(None)):
+    """Real-time eligibility (X12 270/271) for one patient.
+
+    IN  { patient{first_name,last_name,dob,member_id}, provider{npi,tin},
+          payer{payer_code,plan_id,payer_name} }
+    OUT { eligibility_status, plan_type, payer_name,
+          benefits{lab_services,genetic_testing,prior_auth_required},
+          effective_date, termination_date, raw_271 }
+
+    Honest by construction: with no live payer source connected it returns
+    eligibility_status="UNKNOWN" + configured=false and fabricates nothing.
+    provider.npi is the LAB'S OWN organizational NPI — supplied per call or from
+    one-time server config — never a per-patient or rendering-provider link.
+    """
+    _require_user(hub_session)
+    try:
+        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+        from eligibility_hybrid.policy import is_traditional_medicare
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(503, f"Eligibility engine unavailable: {e}")
+
+    pat = body.patient
+    prov = body.provider or _EligCheckProvider()
+    pay = body.payer or _EligCheckPayer()
+    payer_name = (pay.payer_name or pay.payer_code or "").strip()
+
+    req = PatientRequest(
+        first_name=(pat.first_name or "").strip(),
+        last_name=(pat.last_name or "").strip(),
+        dob=(pat.dob or "").strip(),
+        member_id=((pat.member_id or "").strip() or None),
+        payer_name=(payer_name or None),
+        payer_id=((pay.plan_id or "").strip() or None),
+        # Diagnostic-lab (5) + general health-benefit-plan (30): ask the payer to
+        # report outpatient-lab benefits alongside overall active status.
+        service_type_codes=["30", "5"],
+        # The lab's OWN NPI — per-call value wins, else one-time server config.
+        provider_npi=((prov.npi or "").strip()
+                      or os.getenv("HETS_PROVIDER_NPI")
+                      or os.getenv("STEDI_PROVIDER_NPI", "")),
+        provider_name=(os.getenv("HETS_PROVIDER_NAME")
+                       or os.getenv("STEDI_PROVIDER_NAME", "")),
+    )
+
+    provider = build_eligibility_provider()
+    if not provider.configured:
+        return {
+            "eligibility_status": "UNKNOWN",
+            "configured": False,
+            "plan_type": None,
+            "payer_name": (payer_name or None),
+            "benefits": {"lab_services": "Unknown",
+                         "genetic_testing": "Unknown",
+                         "prior_auth_required": None},
+            "effective_date": None,
+            "termination_date": None,
+            "raw_271": "",
+            "message": ("No live payer connection is set, so plan status cannot be "
+                        "verified yet. Connect CMS HETS (straight Medicare) or a "
+                        "clearinghouse key (Medicare Advantage / commercial). "
+                        "Nothing was fabricated."),
+        }
+
+    try:
+        result = provider.verify(req)
+    except Exception as e:  # network / transport failure
+        raise HTTPException(502, f"Payer transport error: {e}")
+
+    status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
+    active = status_val == "Active"
+    payer_out = result.payer_name or payer_name or ""
+    plan_type = ("Medicare" if is_traditional_medicare(payer_out)
+                 else ("Commercial" if payer_out else None))
+
+    if active:
+        cov_word = "Covered"
+    elif status_val in ("Inactive", "Termed"):
+        cov_word = "Not Covered"
+    else:
+        cov_word = "Unknown"
+
+    return {
+        "eligibility_status": status_val.upper(),
+        "configured": True,
+        "source": getattr(provider, "name", "eligibility"),
+        "plan_type": plan_type,
+        "payer_name": (payer_out or None),
+        "benefits": {"lab_services": cov_word,
+                     "genetic_testing": cov_word,
+                     "prior_auth_required": result.prior_auth_required},
+        "effective_date": (result.effective_date or None),
+        "termination_date": (result.term_date or None),
+        "raw_271": ((result.raw or {}).get("x12_271") or ""),
+        "errors": (result.errors or []),
+    }
+
+
+# MolDX Medicare Administrative Contractors — molecular tests billed to these
+# (or to traditional Medicare) require a DEX Z-code registration.
+_MOLDX_MAC_HINTS = ("palmetto", "noridian", "wps", "cgs", "moldx", "gba")
+
+
+def _is_moldx_mac(payer_name: str) -> bool:
+    p = (payer_name or "").lower()
+    return any(h in p for h in _MOLDX_MAC_HINTS)
+
+
+class _CovEvalEligibility(BaseModel):
+    eligibility_status: str = ""
+    plan_type: str = ""
+    payer_name: str = ""
+
+
+class _CovEvalTest(BaseModel):
+    cpt_code: str = ""
+    test_type: str = ""
+    panel_size: Optional[int] = None
+
+
+class _CovEvalClinical(BaseModel):
+    icd10: str = ""
+    ordering_provider_specialty: str = ""
+
+
+class CoverageEvalIn(BaseModel):
+    eligibility_payload: Optional[_CovEvalEligibility] = None
+    test: _CovEvalTest
+    clinical: Optional[_CovEvalClinical] = None
+
+
+@router.post("/coverage-eval")
+def coverage_eval(body: CoverageEvalIn, hub_session: Optional[str] = Cookie(None)):
+    """Coverage decision for one test — LCD/NCD medical necessity + MolDX + PA.
+
+    IN  { eligibility_payload{eligibility_status,plan_type,payer_name},
+          test{cpt_code,test_type,panel_size},
+          clinical{icd10,ordering_provider_specialty} }
+    OUT { coverage_status, reason_codes[], actions[], decision_timestamp }
+
+    Pure policy logic — runs with ZERO credentials. coverage_status is one of:
+    APPROVED · PA_REQUIRED · MEDICAL_NECESSITY_HOLD · DENY_RISK · NOT_ELIGIBLE.
+    """
+    _require_user(hub_session)
+    try:
+        from eligibility_hybrid.policy import (check_medical_necessity,
+                                               get_policy, is_prior_auth_required,
+                                               is_traditional_medicare)
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(503, f"Coverage engine unavailable: {e}")
+
+    elig = body.eligibility_payload or _CovEvalEligibility()
+    test = body.test
+    clin = body.clinical or _CovEvalClinical()
+
+    cpt = (test.cpt_code or "").strip()
+    if not cpt:
+        raise HTTPException(400, "test.cpt_code is required")
+    payer_name = (elig.payer_name or "").strip()
+    icd10s = [c.strip() for c in re.split(r"[,\s]+", clin.icd10 or "") if c.strip()]
+    elig_status = (elig.eligibility_status or "").strip().upper()
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Gate 0: coverage must be active as of the date of service.
+    if elig_status and elig_status != "ACTIVE":
+        return {
+            "coverage_status": "NOT_ELIGIBLE",
+            "cpt_code": cpt,
+            "reason_codes": [f"Eligibility status is {elig_status.title()} — "
+                             f"coverage must be active as of the date of service."],
+            "actions": ["Re-verify eligibility as of DOS",
+                        "If confirmed inactive: self-pay estimate or ABN"],
+            "decision_timestamp": ts,
+        }
+
+    pol = get_policy(cpt)
+    mn = check_medical_necessity(cpt, icd10s, payer_name, dos=business_today_iso())
+    pa_required, pa_reason = is_prior_auth_required(cpt, payer_name)
+    moldx = bool(pol and pol.moldx_zcode) and (
+        is_traditional_medicare(payer_name) or _is_moldx_mac(payer_name))
+
+    reason_codes: list[str] = []
+    actions: list[str] = []
+
+    if not mn.necessary:
+        status = "MEDICAL_NECESSITY_HOLD"
+        reason_codes.append(mn.reason)
+        actions += ["Route to coverage_review_queue",
+                    "Query ordering provider for supporting Dx, or issue ABN"]
+    elif not mn.frequency_ok:
+        status = "DENY_RISK"
+        reason_codes.append(mn.reason)
+        actions += ["Route to coverage_review_queue",
+                    "Confirm the repeat is warranted; attach documentation"]
+    else:
+        reason_codes.append(mn.reason)
+        if moldx:
+            reason_codes.append(f"MolDX: DEX Z-code registration required for {cpt}")
+        if pa_required or moldx:
+            status = "PA_REQUIRED"
+            if pa_required:
+                reason_codes.append(pa_reason)
+            actions.append("Route to prior_auth_queue")
+            if moldx:
+                actions.append("Register the DEX Z-code with MolDX before billing")
+        else:
+            status = "APPROVED"
+            actions.append("Accession + run")
+
+    return {
+        "coverage_status": status,
+        "cpt_code": cpt,
+        "test_type": ((test.test_type or "").strip() or None),
+        "reason_codes": reason_codes,
+        "actions": actions,
+        "decision_timestamp": ts,
+    }
+
+
 @router.post("/eligibility/{rid}/file")
 async def upload_elig_file(
     rid: int,
