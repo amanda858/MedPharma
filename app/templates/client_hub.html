@@ -2643,6 +2643,7 @@
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥 Import Excel</button>
               <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="importExcel(this,'Eligibility')">
               <button class="btn btn-secondary btn-sm" onclick="runEligPrecheck()" title="Validate Medicare MBI format + required data on every record. Real check, no payer call.">🔎 Pre-check</button>
+              <button class="btn btn-secondary btn-sm" onclick="verifyAllElig()" title="Auto-verify EVERY patient now — real-time coverage, medical necessity, and ABN (NGS/PGx). Honest: says 'pending connection' if no live payer source, never fabricates.">⚡ Verify All</button>
               <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
             </div>
             <div id="eligPrecheckResult" style="display:none;margin-bottom:14px"></div>
@@ -4337,7 +4338,13 @@
         <div class="form-group"><label>Auth Number</label><input class="form-control" id="fEligAuthNum"></div>
       </div>
       <div class="form-grid">
-        <div class="form-group"><label>Verified By</label><input class="form-control" id="fEligVerifiedBy"></div>
+        <div class="form-group form-full">
+          <label>🧪 Requested Services / Tests Ordered</label>
+          <input class="form-control" id="fEligRequested"
+            placeholder="e.g. Solid tumor NGS panel 81445; MTHFR 81291; respiratory PCR 87631">
+          <div style="font-size:11px;color:#6b7280;margin-top:4px">Auto-verify reads these to check service coverage, medical necessity, and ABN (especially NGS &amp; PGx). Include CPT codes and/or the diagnosis for the sharpest read.</div>
+        </div>
+      </div>
         <div class="form-group"><label>Verified Date</label><input class="form-control" type="date"
             id="fEligVerifiedDate"></div>
       </div>
@@ -7392,7 +7399,16 @@
       const v = _billingViability(i);
       const color = { yes: '#059669', pending: '#2563eb', blocked: '#b45309', hold: '#b45309', no: '#dc2626' }[v.level] || '#64748b';
       const icon = { yes: '✅', pending: '•', blocked: '⚠', hold: '⏸', no: '⛔' }[v.level] || '';
-      return `<div style="font-size:11px;color:${color};margin-top:3px;max-width:200px;white-space:normal;line-height:1.3">${icon} ${esc(v.reason)}</div>`;
+      let html = `<div style="font-size:11px;color:${color};margin-top:3px;max-width:220px;white-space:normal;line-height:1.3">${icon} ${esc(v.reason)}</div>`;
+      // Plain-English auto-verify explanation (plan, active/lapsed, deductible,
+      // per-test coverage + medical necessity / ABN). Collapsible to keep rows tidy.
+      const vs = (i.VerificationSummary || '').trim();
+      if (vs) {
+        const pretty = esc(vs).replace(/ {2,}/g, '<br>');
+        html += `<details style="margin-top:3px;max-width:280px"><summary style="font-size:10.5px;color:#4338ca;cursor:pointer;font-weight:600">📋 Plan explanation</summary>`
+          + `<div style="font-size:10.5px;color:#475569;white-space:normal;line-height:1.45;margin-top:3px">${pretty}</div></details>`;
+      }
+      return html;
     }
 
     // True when the account in context does eligibility verification (its own
@@ -7678,6 +7694,7 @@
       set('fEligOOP', item?.OOPMax);
       set('fEligPriorAuth', item?.PriorAuthRequired || '');
       set('fEligAuthNum', item?.AuthNumber);
+      set('fEligRequested', item?.RequestedServices);
       set('fEligVerifiedBy', item?.VerifiedBy);
       set('fEligVerifiedDate', item?.VerifiedDate);
       set('fEligReverify', item?.NextReverifyDate);
@@ -7717,6 +7734,7 @@
         VerifiedBy: g('fEligVerifiedBy'), VerifiedDate: g('fEligVerifiedDate'),
         NextReverifyDate: g('fEligReverify'), Stage: g('fEligStage'),
         BillingReadiness: g('fEligBillable'), Notes: g('fEligNotes'),
+        RequestedServices: g('fEligRequested'),
       };
       try {
         let rid = editId;
@@ -7755,6 +7773,22 @@
         await fetch(`/hub/api/eligibility/${id}`, { method: 'DELETE' });
         loadEligibility(); toast('Deleted', 'success');
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ── One-click sweep: auto-verify every patient on the board ──
+    // Fires the real-time verify for the whole worklist. Honest: with no live
+    // payer source connected, each record gets a clear "pending connection"
+    // explanation (plus offline service/ABN policy) — nothing is fabricated.
+    async function verifyAllElig() {
+      if (!confirm('Auto-verify every patient on this board now?\n\nEach patient gets a plain-English plan explanation — active vs lapsed, deductible, whether the requested services are covered, and medical-necessity / ABN guidance for NGS & PGx.\n\nWith no live payer source connected, records get an honest “pending connection” note. Nothing is ever fabricated.')) return;
+      try {
+        const r = await fetch('/hub/api/eligibility/verify-all', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(res.detail || `Verify-all failed (${r.status})`, 'error'); return; }
+        toast(res.message || `Verifying ${res.queued || ''} patient(s)…`, 'info', 6000);
+        // Let the background sweep write summaries, then refresh the board.
+        setTimeout(() => { loadEligibility(); }, 4000);
+      } catch (e) { toast('Verify-all failed: ' + e.message, 'error'); }
     }
 
     // ── Real real-time coverage check (Stedi or direct-to-CMS HETS) ──

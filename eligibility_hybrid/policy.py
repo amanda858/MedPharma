@@ -60,6 +60,57 @@ POLICIES: dict[str, CptPolicy] = {
         ["C", "D", "Z15", "Z80"],
         prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=180.0,
         notes="MolDX: DEX Z-code registration required for Medicare / MolDX payers."),
+    # ── Pharmacogenomics (PGx): drug-metabolism gene analysis ──
+    # Medicare covers PGx only to guide a specific drug with a PGx-informed FDA
+    # label / CPIC guideline; multi-gene panels and MTHFR are routinely
+    # non-covered (→ ABN required to bill the patient).
+    "81225": CptPolicy(
+        "81225", "CYP2C19 (drug metabolism) gene analysis (PGx)",
+        ["Z79", "Z51.81", "F32", "F33", "F41", "I25", "I63"],
+        moldx_zcode="REQUIRED", cost_to_run=150.0,
+        notes="PGx single-gene: covered only when guiding a specific drug; else ABN."),
+    "81226": CptPolicy(
+        "81226", "CYP2D6 (drug metabolism) gene analysis (PGx)",
+        ["Z79", "Z51.81", "F32", "F33", "F41", "G89", "M79"],
+        moldx_zcode="REQUIRED", cost_to_run=150.0,
+        notes="PGx single-gene: necessity tied to a specific drug indication; else ABN."),
+    "81227": CptPolicy(
+        "81227", "CYP2C9 (drug metabolism) gene analysis (PGx)",
+        ["Z79.01", "Z79", "I48", "Z51.81"],
+        moldx_zcode="REQUIRED", cost_to_run=150.0,
+        notes="PGx single-gene (e.g., warfarin): tie to the drug or issue ABN."),
+    "81291": CptPolicy(
+        "81291", "MTHFR gene analysis (common variants)",
+        [], moldx_zcode="REQUIRED", cost_to_run=120.0,
+        notes="Medicare NON-COVERED as not reasonable & necessary — ABN required to bill patient."),
+    "81418": CptPolicy(
+        "81418", "Drug metabolism (PGx) genomic sequencing panel",
+        [], prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=350.0,
+        notes="PGx PANEL: routinely non-covered by Medicare — ABN required; commercial needs PA."),
+    # ── Next-Generation Sequencing (NGS): tumor / molecular profiling ──
+    # NCD 90.2: somatic NGS is covered for advanced cancer (Stage III/IV,
+    # recurrent, relapsed, refractory, or metastatic) with an FDA-approved
+    # companion diagnostic; MolDX DEX Z-code registration required.
+    "81445": CptPolicy(
+        "81445", "Solid tumor NGS panel, 5-50 genes",
+        ["C", "D0", "D3", "D4"],
+        prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=600.0,
+        notes="NCD 90.2: advanced-cancer Dx + FDA companion dx; MolDX Z-code required."),
+    "81449": CptPolicy(
+        "81449", "Solid tumor NGS panel (RNA), 5-50 genes",
+        ["C", "D0", "D3", "D4"],
+        prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=650.0,
+        notes="NCD 90.2 advanced-cancer criteria; MolDX Z-code required."),
+    "81455": CptPolicy(
+        "81455", "Solid tumor NGS panel, 51+ genes",
+        ["C", "D0", "D3", "D4"],
+        prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=900.0,
+        notes="NCD 90.2 advanced-cancer criteria; large panel — MolDX Z-code required."),
+    "81457": CptPolicy(
+        "81457", "Solid organ neoplasm genomic sequencing, DNA, 5-50 genes",
+        ["C", "D0", "D3", "D4"],
+        prior_auth_required=True, moldx_zcode="REQUIRED", cost_to_run=700.0,
+        notes="MolDX genomic profiling; advanced-cancer medical necessity."),
 }
 
 _MEDICARE_HINTS = ("medicare", "cms", "part b")
@@ -139,3 +190,139 @@ def is_prior_auth_required(cpt: str, payer_name: str, plan_name: str = "") -> tu
     if pol.prior_auth_required:
         return True, f"{payer_name or 'Payer'} requires PA for {cpt} ({pol.description})."
     return False, f"No PA required for {cpt} under {payer_name or 'payer'} policy."
+
+
+# ── Pharmacogenomics / NGS classification + ABN (Advance Beneficiary Notice) ──
+# The high-financial-risk molecular tests where Medicare medical necessity is
+# strict and a signed ABN (CMS-R-131) is frequently required before billing.
+_PGX_CPTS = {
+    "81225", "81226", "81227", "81230", "81231", "81232", "81291", "81328",
+    "81335", "81346", "81355", "81418", "81419",
+}
+_NGS_CPTS = {
+    "81445", "81449", "81450", "81455", "81456", "81457", "81458", "81459",
+    "81462", "81463", "81464", "81479",
+}
+# Generally NOT reasonable & necessary under Medicare → ABN almost always required.
+_MEDICARE_NONCOVERED_MOLECULAR = {"81291", "81418", "81419"}
+
+
+def is_pgx(cpt: str) -> bool:
+    """Pharmacogenomics (drug-metabolism) gene test."""
+    return (cpt or "").strip() in _PGX_CPTS
+
+
+def is_ngs(cpt: str) -> bool:
+    """Next-generation sequencing / large molecular panel."""
+    return (cpt or "").strip() in _NGS_CPTS
+
+
+def is_high_risk_molecular(cpt: str) -> bool:
+    """NGS, PGx, or unlisted molecular — Medicare necessity is strict and an ABN
+    is frequently required before the specimen is collected."""
+    c = (cpt or "").strip()
+    return c in _PGX_CPTS or c in _NGS_CPTS or c == "81479"
+
+
+@dataclass
+class AbnGuidance:
+    """Advance Beneficiary Notice (CMS-R-131) determination for one test."""
+    abn_required: bool           # signed ABN needed before collection to bill patient
+    applies: bool                # ABN mechanism applies (Original Medicare Part B)
+    modifier: str                # claim modifier: GA / GZ / GX / GY / ""
+    reason: str                  # plain-English why
+    entails: list[str] = field(default_factory=list)   # what the ABN entails (steps)
+
+
+def _abn_entails(cpt: str, desc: str) -> list[str]:
+    return [
+        "Deliver the ABN (form CMS-R-131) to the patient BEFORE specimen collection.",
+        f"State the test ({desc}, CPT {cpt}), the reason Medicare may deny "
+        "('not reasonable and necessary'), and a good-faith cost estimate.",
+        "Patient selects Option 1 (proceed, bill Medicare, accept financial "
+        "responsibility if denied) and signs & dates the notice.",
+        "Keep the signed ABN on file and append modifier GA to the claim line.",
+        "No signed ABN? You must use GZ — Medicare will deny and the lab writes "
+        "off the charge; the patient CANNOT be billed.",
+    ]
+
+
+def abn_recommendation(cpt: str, payer_name: str, necessary: bool,
+                       frequency_ok: bool = True, plan_type: str = "") -> AbnGuidance:
+    """Decide whether an ABN is required to bill a test, and what that entails.
+
+    ABN (CMS-R-131) applies to Original / Traditional Medicare Part B only — it
+    shifts financial liability to the patient when Medicare is expected to deny a
+    service as not reasonable & necessary. Medicare Advantage instead needs a
+    pre-service organization determination; commercial plans use their own
+    financial-responsibility waiver.
+    """
+    cpt = (cpt or "").strip()
+    pol = get_policy(cpt)
+    desc = pol.description if pol else f"CPT {cpt}"
+    p = (payer_name or "").lower()
+    trad_medicare = is_traditional_medicare(payer_name)
+    advantage = any(h in p for h in _ADVANTAGE_HINTS) or \
+        (plan_type or "").strip().lower() in ("medicare advantage", "advantage", "ma")
+
+    # Medicare Advantage — the CMS ABN does not apply.
+    if advantage:
+        return AbnGuidance(
+            False, False, "",
+            "Medicare Advantage — the CMS-R-131 ABN does not apply. Obtain a "
+            "pre-service organization determination / prior authorization from the "
+            "plan; use the plan's advance written notice to establish member liability.",
+            ["Request a pre-service organization determination / PA from the plan.",
+             "If the plan denies, give the member the plan's advance written notice "
+             "before service to transfer financial liability."])
+
+    # Non-Medicare payer — commercial waiver, not a CMS ABN.
+    if not trad_medicare:
+        return AbnGuidance(
+            False, False, "",
+            "Non-Medicare payer — the CMS ABN does not apply. If non-coverage is "
+            "expected, use your commercial financial-responsibility / waiver form and "
+            "confirm prior authorization first.",
+            ["Confirm prior authorization / medical policy with the commercial payer.",
+             "If non-coverage is expected, have the patient sign a commercial "
+             "financial-responsibility waiver before service."])
+
+    # ── Original / Traditional Medicare ──
+    if cpt in _MEDICARE_NONCOVERED_MOLECULAR:
+        return AbnGuidance(
+            True, True, "GA",
+            f"{desc} (CPT {cpt}) is generally non-covered by Medicare as not "
+            "reasonable & necessary. A signed ABN is required to bill the patient "
+            "(modifier GA); without it the charge is a write-off (GZ).",
+            _abn_entails(cpt, desc))
+
+    if not necessary:
+        return AbnGuidance(
+            True, True, "GA",
+            f"The documented diagnosis does not meet Medicare medical-necessity "
+            f"(LCD/NCD) criteria for {desc} (CPT {cpt}). Expect a denial — obtain a "
+            "signed ABN and append GA, or the patient cannot be billed (GZ).",
+            _abn_entails(cpt, desc))
+
+    if not frequency_ok:
+        return AbnGuidance(
+            True, True, "GA",
+            f"{desc} (CPT {cpt}) exceeds Medicare frequency limits for this patient — "
+            "expect a frequency denial. Obtain a signed ABN (GA) before collection.",
+            _abn_entails(cpt, desc))
+
+    if is_high_risk_molecular(cpt):
+        return AbnGuidance(
+            False, True, "",
+            f"{desc} (CPT {cpt}) meets medical necessity on the documented diagnosis, "
+            "but NGS/PGx are audit-sensitive under MolDX — keep clinical documentation "
+            "on file and register the DEX Z-code. If necessity is borderline, deliver a "
+            "protective ABN (GA) before collection.",
+            ["Confirm the qualifying Dx and ordering-provider documentation is on file.",
+             "Register the MolDX DEX Z-code before billing.",
+             "If necessity is borderline, deliver a protective ABN (GA) before collection."])
+
+    return AbnGuidance(
+        False, True, "",
+        f"{desc} (CPT {cpt}) meets Medicare medical necessity — no ABN needed.",
+        [])

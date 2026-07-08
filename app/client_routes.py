@@ -3372,6 +3372,332 @@ _ELIG_SOURCE_LABEL = {
 }
 
 
+# ── Auto-verify explainer: real 271 + policy → plain-English coverage story ────
+# Representative keyword → CPT map so a free-text order ("respiratory PCR",
+# "tumor NGS", "PGx panel", "MTHFR") resolves to a policy CPT for reasoning.
+_TEST_KEYWORD_CPTS = [
+    ("81455", ("comprehensive genomic", "large ngs", "51 gene", "foundation")),
+    ("81445", ("ngs", "next gen", "next-gen", "tumor panel", "solid tumor", "genomic profil")),
+    ("81418", ("pgx panel", "pharmacogenomic panel", "drug metabolism panel")),
+    ("81225", ("pgx", "pharmacogenom", "cyp2c19", "drug metabolism", "medication metabolism")),
+    ("81291", ("mthfr",)),
+    ("81479", ("molecular", "genetic", "genomic", "hereditary", "germline")),
+    ("87631", ("respiratory", "resp panel", "rpp", "upper respiratory")),
+    ("87507", ("gi panel", "gastro", "gastrointestinal", "stool patho")),
+    ("87798", ("uti", "urinary", "urogenital", "wound")),
+    ("87635", ("covid", "sars", "sars-cov-2", "coronavirus")),
+    ("80305", ("utox", "drug screen", "toxicology", "drug test")),
+    ("88305", ("pathology", "biopsy", "histolog", "surgical path")),
+    ("87631", ("pcr",)),   # generic PCR → representative respiratory panel
+]
+
+
+def _parse_cpts(text: str) -> list:
+    """Extract CPT codes from free-text requested-services; fall back to a
+    keyword → representative CPT map. De-duped, order-preserved."""
+    t = (text or "").strip()
+    if not t:
+        return []
+    seen: list = []
+    for c in re.findall(r"\b\d{5}\b", t):
+        if c not in seen:
+            seen.append(c)
+    if seen:
+        return seen
+    low = t.lower()
+    for cpt, kws in _TEST_KEYWORD_CPTS:
+        if any(k in low for k in kws) and cpt not in seen:
+            seen.append(cpt)
+    return seen
+
+
+def _parse_icd10s(text: str) -> list:
+    """Pull ICD-10-CM codes out of free text (e.g., an order note)."""
+    return re.findall(r"\b[A-TV-Z]\d{2}(?:\.\d{1,4})?\b", (text or "").upper())
+
+
+def _evaluate_coverage(cpt: str, payer_name: str, icd10s: list,
+                       elig_status: str = "", plan_type: str = "") -> dict:
+    """Pure per-CPT coverage decision — LCD/NCD medical necessity + MolDX + PA +
+    ABN. Zero credentials. Returns coverage_status, reason_codes, actions, and
+    ABN guidance (required?/modifier/reason/entails)."""
+    from eligibility_hybrid.policy import (
+        check_medical_necessity, get_policy, is_prior_auth_required,
+        is_traditional_medicare, abn_recommendation, is_high_risk_molecular)
+    cpt = (cpt or "").strip()
+    payer_name = (payer_name or "").strip()
+    icd10s = [c for c in (icd10s or []) if c]
+    elig_status = (elig_status or "").strip().upper()
+
+    if elig_status and elig_status != "ACTIVE":
+        return {"coverage_status": "NOT_ELIGIBLE",
+                "reason_codes": [f"Eligibility is {elig_status.title()} — coverage must "
+                                 "be active as of the date of service."],
+                "actions": ["Re-verify eligibility as of DOS",
+                            "If confirmed inactive: self-pay estimate or ABN"],
+                "abn_required": False, "abn_modifier": "", "abn_reason": "",
+                "abn_entails": [], "high_risk_molecular": is_high_risk_molecular(cpt)}
+
+    pol = get_policy(cpt)
+    mn = check_medical_necessity(cpt, icd10s, payer_name, dos=business_today_iso())
+    pa_required, pa_reason = is_prior_auth_required(cpt, payer_name)
+    moldx = bool(pol and pol.moldx_zcode) and (
+        is_traditional_medicare(payer_name) or _is_moldx_mac(payer_name))
+    abn = abn_recommendation(cpt, payer_name, mn.necessary, mn.frequency_ok, plan_type)
+
+    reason_codes: list = []
+    actions: list = []
+    if not mn.necessary:
+        status = "MEDICAL_NECESSITY_HOLD"
+        reason_codes.append(mn.reason)
+        actions += ["Route to coverage_review_queue",
+                    "Query ordering provider for supporting Dx, or issue ABN"]
+    elif not mn.frequency_ok:
+        status = "DENY_RISK"
+        reason_codes.append(mn.reason)
+        actions += ["Route to coverage_review_queue",
+                    "Confirm the repeat is warranted; attach documentation"]
+    else:
+        reason_codes.append(mn.reason)
+        if moldx:
+            reason_codes.append(f"MolDX: DEX Z-code registration required for {cpt}")
+        if pa_required or moldx:
+            status = "PA_REQUIRED"
+            if pa_required:
+                reason_codes.append(pa_reason)
+            actions.append("Route to prior_auth_queue")
+            if moldx:
+                actions.append("Register the DEX Z-code with MolDX before billing")
+        else:
+            status = "APPROVED"
+            actions.append("Accession + run")
+
+    if abn.abn_required:
+        reason_codes.append("ABN required: " + abn.reason)
+        actions.append(f"Issue ABN (CMS-R-131) before collection; bill with "
+                       f"{abn.modifier} modifier")
+    elif abn.applies and abn.reason and is_high_risk_molecular(cpt) and status == "APPROVED":
+        reason_codes.append(abn.reason)
+
+    return {"coverage_status": status, "reason_codes": reason_codes, "actions": actions,
+            "abn_required": abn.abn_required, "abn_modifier": abn.modifier,
+            "abn_reason": abn.reason, "abn_entails": abn.entails,
+            "high_risk_molecular": is_high_risk_molecular(cpt)}
+
+
+def _explain_coverage(result, cpts: list, payer_name: str, order_text: str = "") -> str:
+    """Plain-English, verifier-facing summary of a REAL eligibility result: the
+    plan, active vs lapsed (+ dates), patient cost, and — per requested test —
+    coverage / medical-necessity / ABN entailment (especially NGS & PGx)."""
+    status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
+    plan = (result.plan_name or result.payer_name or payer_name or "Plan").strip()
+    dx = _parse_icd10s(order_text)
+    lines: list = []
+
+    if status_val == "Active":
+        span = ""
+        if result.effective_date and result.term_date:
+            span = f" (effective {result.effective_date}, through {result.term_date})"
+        elif result.effective_date:
+            span = f" (effective {result.effective_date})"
+        elif result.term_date:
+            span = f" (term {result.term_date})"
+        lines.append(f"✅ {plan} — ACTIVE coverage{span}.")
+    elif status_val in ("Termed", "Inactive"):
+        when = f" as of {result.term_date}" if result.term_date else ""
+        lines.append(f"⛔ {plan} — coverage {status_val.upper()}{when}. "
+                     "NOT billable until re-verified active.")
+    elif status_val == "Pending":
+        lines.append(f"🕓 {plan} — coverage PENDING at the payer. Re-check before billing.")
+    else:
+        lines.append(f"❓ {plan} — payer returned UNKNOWN. Re-verify before billing.")
+
+    b = result.benefit
+    money = []
+    if b:
+        if b.deductible_total is not None:
+            rem = b.deductible_remaining
+            money.append(f"deductible ${b.deductible_total:g}" +
+                         (f" (${rem:g} left)" if rem is not None else ""))
+        if b.copay is not None:
+            money.append(f"copay ${b.copay:g}")
+        if b.coinsurance_pct is not None:
+            money.append(f"coinsurance {b.coinsurance_pct:g}%")
+        if b.oop_total is not None:
+            orem = b.oop_remaining
+            money.append(f"OOP max ${b.oop_total:g}" +
+                         (f" (${orem:g} left)" if orem is not None else ""))
+    if money:
+        lines.append("Patient cost: " + ", ".join(money) + ".")
+
+    if status_val != "Active":
+        return "  ".join(lines)
+
+    if not cpts:
+        lines.append("➡️ Plan active — add the ordered test(s) to auto-check coverage, "
+                     "medical necessity, and ABN.")
+        return "  ".join(lines)
+
+    blocked = False
+    for cpt in cpts:
+        ev = _evaluate_coverage(cpt, result.payer_name or payer_name, dx, "ACTIVE")
+        cs = ev["coverage_status"]
+        head = f"• {cpt}: "
+        if cs == "APPROVED":
+            head += "covered — medical necessity met."
+        elif cs == "PA_REQUIRED":
+            blocked = True
+            head += "prior auth / MolDX registration required before billing."
+        elif cs == "MEDICAL_NECESSITY_HOLD":
+            blocked = True
+            head += "medical necessity NOT met on the diagnosis provided."
+        elif cs == "DENY_RISK":
+            blocked = True
+            head += "frequency / denial risk — document before billing."
+        else:
+            head += cs.lower().replace("_", " ") + "."
+        lines.append(head)
+        if ev.get("abn_required"):
+            blocked = True
+            lines.append(f"   ↳ ABN: {ev['abn_reason']}")
+            if ev.get("abn_entails"):
+                lines.append("   ↳ What that entails: " + " ".join(ev["abn_entails"]))
+        elif ev.get("abn_reason") and ev.get("high_risk_molecular"):
+            lines.append(f"   ↳ {ev['abn_reason']}")
+
+    lines.append("➡️ Cleared to bill the requested services." if not blocked
+                 else "➡️ Active, but clear the flag(s)/ABN above before billing.")
+    return "  ".join(lines)
+
+
+def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
+                       actor_username: str = "") -> dict:
+    """Run a REAL eligibility check for one record and write the plain-English
+    VerificationSummary + coverage facts + audit evidence. Honest by design: with
+    no live payer source connected it writes a clear 'pending connection' summary
+    (plus offline service-policy / ABN flags) and fabricates NOTHING."""
+    rid = int(rec.get("id") or 0)
+    order_text = rec.get("RequestedServices") or ""
+    cpts = _parse_cpts(order_text)
+    payer_name = (rec.get("Payor") or "").strip()
+
+    try:
+        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+    except Exception as e:  # pragma: no cover
+        return {"ok": False, "configured": False, "changed": False,
+                "error": f"engine unavailable: {e}"}
+
+    provider = build_eligibility_provider()
+    first, last = _split_patient_name(rec.get("PatientName"))
+    req = PatientRequest(
+        first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
+        member_id=(rec.get("MemberID") or "").strip(),
+        payer_name=payer_name or "Medicare",
+        cpt_codes=cpts,
+        service_type_codes=["30", "5"],
+        provider_npi=os.getenv("HETS_PROVIDER_NPI") or os.getenv("STEDI_PROVIDER_NPI", ""),
+        provider_name=os.getenv("HETS_PROVIDER_NAME") or os.getenv("STEDI_PROVIDER_NAME", ""),
+    )
+
+    # ── No live payer source: honest 'pending' + offline service/ABN policy ──
+    if not provider.configured:
+        dx = _parse_icd10s(order_text)
+        bits = ["⏳ Live plan status pending — connect a payer source (CMS HETS for "
+                "straight Medicare, or a clearinghouse for Medicare Advantage / "
+                "commercial) to auto-verify active/inactive + benefits. Nothing "
+                "fabricated."]
+        for cpt in cpts:
+            ev = _evaluate_coverage(cpt, payer_name, dx, "")
+            bits.append(f"• {cpt}: {ev['coverage_status'].lower().replace('_',' ')} — "
+                        f"{'; '.join(ev['reason_codes'])}")
+            if ev.get("abn_required") and ev.get("abn_entails"):
+                bits.append("   ↳ What that entails: " + " ".join(ev["abn_entails"]))
+        summary = "  ".join(bits)
+        update_eligibility(rid, {"VerificationSummary": summary})
+        return {"ok": False, "configured": False, "changed": True, "summary": summary}
+
+    # ── Connected: real X12 270/271 ──
+    src = getattr(provider, "name", "eligibility")
+    src_label = _ELIG_SOURCE_LABEL.get(src, src)
+    try:
+        result = provider.verify(req)
+    except Exception as e:  # network / transport failure
+        record_eligibility_check({
+            "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+            "source": src, "status": "Error",
+            "checked_by": actor_username or actor_label,
+            "member_id": (rec.get("MemberID") or "").strip(),
+            "payer_name": payer_name, "errors": str(e)})
+        update_eligibility(rid, {"VerificationSummary":
+                                 f"⚠️ Verification error via {src_label}: {e}"})
+        return {"ok": False, "configured": True, "changed": True, "error": str(e)}
+
+    status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
+    errors_txt = "; ".join(result.errors or [])
+    raw_req = (result.raw or {}).get("x12_270") or (result.raw or {}).get("request_json") or ""
+    raw_resp = (result.raw or {}).get("x12_271") or ""
+    check_id = record_eligibility_check({
+        "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+        "source": src, "status": status_val,
+        "checked_by": actor_username or actor_label,
+        "member_id": result.member_id or (rec.get("MemberID") or "").strip(),
+        "payer_name": result.payer_name or payer_name,
+        "raw_request": raw_req, "raw_response": raw_resp,
+        "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
+        "errors": errors_txt})
+
+    board_status, readiness = _ELIG_STATUS_MAP.get(status_val, ("Needs Re-verify", ""))
+    today = datetime.now().strftime("%Y-%m-%d")
+    summary = _explain_coverage(result, cpts, payer_name, order_text)
+    changes: dict = {
+        "Status": board_status,
+        "VerifiedBy": f"{src_label} · {actor_username or actor_label}".strip(" ·"),
+        "VerifiedDate": today,
+        "VerificationSummary": summary}
+    if readiness:
+        changes["BillingReadiness"] = readiness
+    b = result.benefit
+    if b:
+        if b.copay is not None:
+            changes["Copay"] = f"${b.copay:g}"
+        if b.deductible_total is not None:
+            changes["Deductible"] = f"${b.deductible_total:g}"
+        if b.coinsurance_pct is not None:
+            changes["Coinsurance"] = f"{b.coinsurance_pct:g}%"
+        if b.oop_total is not None:
+            changes["OOPMax"] = f"${b.oop_total:g}"
+    if result.effective_date:
+        changes["EffectiveDate"] = result.effective_date
+    if result.term_date:
+        changes["TermDate"] = result.term_date
+    if result.prior_auth_required:
+        changes["PriorAuthRequired"] = "Yes"
+    if errors_txt:
+        prior = (rec.get("Notes") or "").strip()
+        stamp = f"[{today}] {src_label}: {errors_txt}"
+        changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
+    update_eligibility(rid, changes)
+    return {"ok": True, "configured": True, "changed": True, "source": src,
+            "status": status_val, "check_id": check_id, "summary": summary,
+            "billing_readiness": readiness, "errors": result.errors or [],
+            "benefit": {"copay": b.copay, "deductible": b.deductible_total,
+                        "coinsurance_pct": b.coinsurance_pct} if b else {},
+            "effective_date": result.effective_date, "term_date": result.term_date}
+
+
+def _auto_verify_async(rid: int) -> None:
+    """Fire-and-forget auto-verify so uploads stay instant. Real-time: every new
+    patient self-verifies (or gets an honest 'pending connection' summary)."""
+    def _work():
+        try:
+            rec = get_eligibility_one(rid)
+            if rec:
+                _verify_and_record(rec, actor_label="Auto-verify")
+        except Exception as e:  # pragma: no cover
+            log.warning("auto-verify failed for eligibility %s: %s", rid, e)
+    threading.Thread(target=_work, daemon=True).start()
+
+
 class EligIn(BaseModel):
     client_id: Optional[int] = None
     PatientName: Optional[str] = ""
@@ -3395,6 +3721,7 @@ class EligIn(BaseModel):
     BillingReadiness: Optional[str] = ""
     sub_profile: Optional[str] = ""
     Stage: Optional[str] = "Received"
+    RequestedServices: Optional[str] = ""
 
 
 class EligUpdate(BaseModel):
@@ -3425,6 +3752,8 @@ class EligUpdate(BaseModel):
     ReportFileName: Optional[str] = None
     CompletedBy: Optional[str] = None
     CompletedAt: Optional[str] = None
+    RequestedServices: Optional[str] = None
+    VerificationSummary: Optional[str] = None
 
 
 @router.get("/eligibility")
@@ -3456,6 +3785,10 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
                              data.get("VerifiedBy"), data.get("VerifiedDate"))
     data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
     eid = create_eligibility(data)
+    # Real-time: auto-verify the moment a patient lands on the board. Runs in a
+    # background thread so the upload returns instantly; writes the plain-English
+    # VerificationSummary (or an honest 'pending connection' note if no source).
+    _auto_verify_async(eid)
     notify_activity(user["username"], "created", "Eligibility",
                     f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
     return {"id": eid, "ok": True}
@@ -3506,113 +3839,54 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
         if int(rec.get("client_id") or 0) != _client_account_id(user):
             raise HTTPException(403, "Not authorized for this record")
 
-    # Lazy import so any package issue returns 503 instead of crashing the hub.
-    try:
-        from eligibility_hybrid import build_eligibility_provider, PatientRequest
-    except Exception as e:  # pragma: no cover
-        raise HTTPException(503, f"Eligibility engine unavailable: {e}")
-
-    provider = build_eligibility_provider()
-    first, last = _split_patient_name(rec.get("PatientName"))
-    req = PatientRequest(
-        first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
-        member_id=(rec.get("MemberID") or "").strip(),
-        payer_name=(rec.get("Payor") or "Medicare").strip(),
-        service_type_codes=["30"],
-        provider_npi=os.getenv("HETS_PROVIDER_NPI") or os.getenv("STEDI_PROVIDER_NPI", ""),
-        provider_name=os.getenv("HETS_PROVIDER_NAME") or os.getenv("STEDI_PROVIDER_NAME", ""),
-    )
-
-    if not provider.configured:
+    res = _verify_and_record(rec, actor_label="Manual",
+                             actor_username=user.get("username", ""))
+    if res.get("configured") is False:
+        # Not connected (or engine import failed) — coverage facts unchanged.
         return {
-            "ok": False, "configured": False, "changed": False,
+            "ok": False, "configured": False, "changed": res.get("changed", False),
             "message": "No real eligibility source is connected yet. Fastest path: "
                        "create a Stedi account, generate an API key, and set "
                        "STEDI_API_KEY + STEDI_PROVIDER_NPI in the server "
                        "environment — that turns on real-time Medicare & commercial "
                        "checks in minutes. Or go straight to CMS by completing HETS "
                        "submitter enrollment and setting HETS_ENDPOINT_URL + "
-                       "HETS_SUBMITTER_ID + credentials. Nothing was fabricated or "
-                       "changed.",
+                       "HETS_SUBMITTER_ID + credentials. Nothing was fabricated.",
+            "summary": res.get("summary", ""), "error": res.get("error"),
         }
+    if res.get("ok"):
+        notify_activity(user["username"], f"verified ({res.get('source')})",
+                        "Eligibility",
+                        f"{rec.get('PatientName','')} → {res.get('status')}")
+    return res
 
-    src = getattr(provider, "name", "eligibility")
-    src_label = _ELIG_SOURCE_LABEL.get(src, src)
 
-    try:
-        result = provider.verify(req)
-    except Exception as e:  # network / transport failure
-        record_eligibility_check({
-            "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
-            "source": src, "status": "Error",
-            "checked_by": user.get("username", ""),
-            "member_id": (rec.get("MemberID") or "").strip(),
-            "payer_name": (rec.get("Payor") or "").strip(),
-            "errors": str(e),
-        })
-        return {"ok": False, "configured": True, "changed": False, "error": str(e)}
+@router.post("/eligibility/verify-all")
+def verify_all_elig(client_id: Optional[int] = None,
+                    hub_session: Optional[str] = Cookie(None)):
+    """Auto-verify EVERY patient on the board in one real-time sweep, writing each
+    record's plain-English VerificationSummary. Honest: with no live payer source
+    connected, records get a clear 'pending connection' summary + offline service /
+    ABN policy — nothing fabricated. Runs in the background; refresh the board."""
+    user = _require_user(hub_session)
+    scope = client_id or _client_scope(user)
+    if user["role"] not in ("admin", "staff"):
+        scope = _client_account_id(user)
+    if not scope:
+        raise HTTPException(400, "client_id required")
+    recs = get_eligibility(scope)
 
-    status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
-    errors_txt = "; ".join(result.errors or [])
-
-    # Persist raw request + 271 as audit evidence (only real provider output here).
-    raw_req = (result.raw or {}).get("x12_270") or (result.raw or {}).get("request_json") or ""
-    raw_resp = (result.raw or {}).get("x12_271") or ""
-    check_id = record_eligibility_check({
-        "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
-        "source": src, "status": status_val,
-        "checked_by": user.get("username", ""),
-        "member_id": result.member_id or (rec.get("MemberID") or "").strip(),
-        "payer_name": result.payer_name or (rec.get("Payor") or "").strip(),
-        "raw_request": raw_req,
-        "raw_response": raw_resp,
-        "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
-        "errors": errors_txt,
-    })
-
-    # Map the real result back onto the board. Benefits only when present.
-    board_status, readiness = _ELIG_STATUS_MAP.get(status_val, ("Needs Re-verify", ""))
-    today = datetime.now().strftime("%Y-%m-%d")
-    changes: dict = {
-        "Status": board_status,
-        "VerifiedBy": f"{src_label} · {user.get('username','')}".strip(" ·"),
-        "VerifiedDate": today,
-    }
-    if readiness:
-        changes["BillingReadiness"] = readiness
-    b = result.benefit
-    if b:
-        if b.copay is not None:
-            changes["Copay"] = f"${b.copay:g}"
-        if b.deductible_total is not None:
-            changes["Deductible"] = f"${b.deductible_total:g}"
-        if b.coinsurance_pct is not None:
-            changes["Coinsurance"] = f"{b.coinsurance_pct:g}%"
-        if b.oop_total is not None:
-            changes["OOPMax"] = f"${b.oop_total:g}"
-    if result.effective_date:
-        changes["EffectiveDate"] = result.effective_date
-    if result.term_date:
-        changes["TermDate"] = result.term_date
-    if result.prior_auth_required:
-        changes["PriorAuthRequired"] = "Yes"
-    # Surface any payer rejection reason inline for the verifier.
-    if errors_txt:
-        prior = (rec.get("Notes") or "").strip()
-        stamp = f"[{today}] {src_label}: {errors_txt}"
-        changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
-
-    update_eligibility(rid, changes)
-    notify_activity(user["username"], f"verified ({src_label})", "Eligibility",
-                    f"{rec.get('PatientName','')} → {status_val}")
-    return {
-        "ok": True, "configured": True, "changed": True, "source": src,
-        "status": status_val, "check_id": check_id,
-        "billing_readiness": readiness, "errors": result.errors or [],
-        "benefit": {"copay": b.copay, "deductible": b.deductible_total,
-                    "coinsurance_pct": b.coinsurance_pct} if b else {},
-        "effective_date": result.effective_date, "term_date": result.term_date,
-    }
+    def _work():
+        for r in recs:
+            try:
+                _verify_and_record(r, actor_label="Auto-verify",
+                                   actor_username=user.get("username", ""))
+            except Exception as e:  # pragma: no cover
+                log.warning("verify-all failed for eligibility %s: %s", r.get("id"), e)
+    threading.Thread(target=_work, daemon=True).start()
+    return {"ok": True, "queued": len(recs), "client_id": scope,
+            "message": f"Verifying {len(recs)} patient(s) now — refresh in a moment "
+                       "to see each plan explanation."}
 
 
 @router.get("/eligibility/{rid}/checks")
@@ -3821,24 +4095,20 @@ class CoverageEvalIn(BaseModel):
 
 @router.post("/coverage-eval")
 def coverage_eval(body: CoverageEvalIn, hub_session: Optional[str] = Cookie(None)):
-    """Coverage decision for one test — LCD/NCD medical necessity + MolDX + PA.
+    """Coverage decision for one test — LCD/NCD medical necessity + MolDX + PA + ABN.
 
     IN  { eligibility_payload{eligibility_status,plan_type,payer_name},
           test{cpt_code,test_type,panel_size},
           clinical{icd10,ordering_provider_specialty} }
-    OUT { coverage_status, reason_codes[], actions[], decision_timestamp }
+    OUT { coverage_status, reason_codes[], actions[],
+          abn{required,modifier,reason,entails[]}, decision_timestamp }
 
     Pure policy logic — runs with ZERO credentials. coverage_status is one of:
     APPROVED · PA_REQUIRED · MEDICAL_NECESSITY_HOLD · DENY_RISK · NOT_ELIGIBLE.
+    For NGS/PGx under Medicare it also spells out the ABN (CMS-R-131) + GA/GZ
+    modifier consequence when medical necessity is not met.
     """
     _require_user(hub_session)
-    try:
-        from eligibility_hybrid.policy import (check_medical_necessity,
-                                               get_policy, is_prior_auth_required,
-                                               is_traditional_medicare)
-    except Exception as e:  # pragma: no cover
-        raise HTTPException(503, f"Coverage engine unavailable: {e}")
-
     elig = body.eligibility_payload or _CovEvalEligibility()
     test = body.test
     clin = body.clinical or _CovEvalClinical()
@@ -3846,64 +4116,28 @@ def coverage_eval(body: CoverageEvalIn, hub_session: Optional[str] = Cookie(None
     cpt = (test.cpt_code or "").strip()
     if not cpt:
         raise HTTPException(400, "test.cpt_code is required")
-    payer_name = (elig.payer_name or "").strip()
     icd10s = [c.strip() for c in re.split(r"[,\s]+", clin.icd10 or "") if c.strip()]
-    elig_status = (elig.eligibility_status or "").strip().upper()
-    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Gate 0: coverage must be active as of the date of service.
-    if elig_status and elig_status != "ACTIVE":
-        return {
-            "coverage_status": "NOT_ELIGIBLE",
-            "cpt_code": cpt,
-            "reason_codes": [f"Eligibility status is {elig_status.title()} — "
-                             f"coverage must be active as of the date of service."],
-            "actions": ["Re-verify eligibility as of DOS",
-                        "If confirmed inactive: self-pay estimate or ABN"],
-            "decision_timestamp": ts,
-        }
-
-    pol = get_policy(cpt)
-    mn = check_medical_necessity(cpt, icd10s, payer_name, dos=business_today_iso())
-    pa_required, pa_reason = is_prior_auth_required(cpt, payer_name)
-    moldx = bool(pol and pol.moldx_zcode) and (
-        is_traditional_medicare(payer_name) or _is_moldx_mac(payer_name))
-
-    reason_codes: list[str] = []
-    actions: list[str] = []
-
-    if not mn.necessary:
-        status = "MEDICAL_NECESSITY_HOLD"
-        reason_codes.append(mn.reason)
-        actions += ["Route to coverage_review_queue",
-                    "Query ordering provider for supporting Dx, or issue ABN"]
-    elif not mn.frequency_ok:
-        status = "DENY_RISK"
-        reason_codes.append(mn.reason)
-        actions += ["Route to coverage_review_queue",
-                    "Confirm the repeat is warranted; attach documentation"]
-    else:
-        reason_codes.append(mn.reason)
-        if moldx:
-            reason_codes.append(f"MolDX: DEX Z-code registration required for {cpt}")
-        if pa_required or moldx:
-            status = "PA_REQUIRED"
-            if pa_required:
-                reason_codes.append(pa_reason)
-            actions.append("Route to prior_auth_queue")
-            if moldx:
-                actions.append("Register the DEX Z-code with MolDX before billing")
-        else:
-            status = "APPROVED"
-            actions.append("Accession + run")
+    try:
+        out = _evaluate_coverage(cpt, elig.payer_name or "", icd10s,
+                                 elig.eligibility_status or "", elig.plan_type or "")
+    except HTTPException:
+        raise
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(503, f"Coverage engine unavailable: {e}")
 
     return {
-        "coverage_status": status,
+        "coverage_status": out["coverage_status"],
         "cpt_code": cpt,
         "test_type": ((test.test_type or "").strip() or None),
-        "reason_codes": reason_codes,
-        "actions": actions,
-        "decision_timestamp": ts,
+        "reason_codes": out["reason_codes"],
+        "actions": out["actions"],
+        "abn": {
+            "required": out.get("abn_required", False),
+            "modifier": out.get("abn_modifier", ""),
+            "reason": out.get("abn_reason", ""),
+            "entails": out.get("abn_entails", []),
+        },
+        "decision_timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 

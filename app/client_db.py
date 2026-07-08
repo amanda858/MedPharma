@@ -929,6 +929,9 @@ def init_client_hub_db():
             -- Verifier verdict: is this patient good to bill services? Human-set
             -- after a real coverage check. '' = Pending Verification (not yet checked).
             BillingReadiness    TEXT DEFAULT '',         -- Clear to Bill / On Hold / Not Billable / '' = Pending Verification
+            -- Auto-verify: plain-English coverage explanation + the tests/CPTs requested
+            VerificationSummary TEXT DEFAULT '',          -- human-readable: plan, active/lapsed, cleared-to-bill, deductible, service coverage
+            RequestedServices   TEXT DEFAULT '',          -- free text / CPTs of the ordered test(s), e.g. "87631 respiratory PCR; 81479 NGS"
             -- intake → completed-reporting workflow (PCR eligibility)
             Stage               TEXT DEFAULT 'Received',  -- Received, In Progress, Completed
             IntakeFileId        INTEGER,                  -- client-uploaded intake document (client_files.id)
@@ -1430,6 +1433,8 @@ def init_client_hub_db():
         ("CompletedBy", "TEXT DEFAULT ''"),
         ("CompletedAt", "TEXT DEFAULT ''"),
         ("BillingReadiness", "TEXT DEFAULT ''"),
+        ("VerificationSummary", "TEXT DEFAULT ''"),
+        ("RequestedServices", "TEXT DEFAULT ''"),
     ):
         if col not in elig_cols:
             cur.execute(f"ALTER TABLE eligibility ADD COLUMN {col} {col_def}")
@@ -3434,6 +3439,8 @@ _ELIGIBILITY_FIELDS = [
     # intake → completed-reporting workflow
     "Stage", "IntakeFileId", "IntakeFileName", "ReportFileId", "ReportFileName",
     "CompletedBy", "CompletedAt",
+    # auto-verify outputs
+    "VerificationSummary", "RequestedServices",
 ]
 
 
@@ -3464,15 +3471,15 @@ def create_eligibility(data: dict) -> int:
         cur.execute("""INSERT INTO eligibility
             (client_id,PatientName,DOB,Payor,MemberID,PlanGroup,Status,EffectiveDate,TermDate,
              Copay,Deductible,Coinsurance,OOPMax,PriorAuthRequired,AuthNumber,
-             VerifiedBy,VerifiedDate,NextReverifyDate,Notes,BillingReadiness,sub_profile,uploaded_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             VerifiedBy,VerifiedDate,NextReverifyDate,Notes,BillingReadiness,sub_profile,uploaded_by,RequestedServices)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data["client_id"], data.get("PatientName", ""), data.get("DOB", ""),
              data.get("Payor", ""), data.get("MemberID", ""), data.get("PlanGroup", ""),
              data.get("Status", "Pending"), data.get("EffectiveDate", ""), data.get("TermDate", ""),
              data.get("Copay", ""), data.get("Deductible", ""), data.get("Coinsurance", ""),
              data.get("OOPMax", ""), data.get("PriorAuthRequired", ""), data.get("AuthNumber", ""),
              data.get("VerifiedBy", ""), data.get("VerifiedDate", ""), data.get("NextReverifyDate", ""),
-             data.get("Notes", ""), data.get("BillingReadiness", ""), data.get("sub_profile", ""), data.get("uploaded_by", "")))
+             data.get("Notes", ""), data.get("BillingReadiness", ""), data.get("sub_profile", ""), data.get("uploaded_by", ""), data.get("RequestedServices", "")))
         conn.commit()
         eid = cur.lastrowid
     finally:
