@@ -6064,7 +6064,14 @@ def _extract_text_lines(content: bytes, ext: str) -> list:
         import io as _io
         reader = PdfReader(_io.BytesIO(content))
         for page in reader.pages:
-            for raw in (page.extract_text() or "").splitlines():
+            # Layout mode preserves column spacing so the header row and each
+            # detail row stay intact and in reading order; fall back on older
+            # pypdf that doesn't support the kwarg.
+            try:
+                txt = page.extract_text(extraction_mode="layout") or ""
+            except TypeError:
+                txt = page.extract_text() or ""
+            for raw in txt.splitlines():
                 s = re.sub(r"\s+", " ", str(raw or "")).strip()
                 if s:
                     lines.append(s)
@@ -6089,29 +6096,61 @@ def _extract_text_lines(content: bytes, ext: str) -> list:
     return lines
 
 
+def _pp_column_order(lines: list):
+    """From the report's header row, return the money-column ordinals for
+    (charge, payment, adjust) — their left-to-right position AMONG the three
+    dollar columns. This is what lets us sum the column the report itself labels
+    'Payment' regardless of whether the layout is Charge/Payment/Adjust or
+    Charge/Adjust/Payment. Returns None when no header is found (caller then
+    falls back to the conventional Charge, Payment, Adjust order)."""
+    for line in lines:
+        low = line.lower()
+        if "$" in line:
+            continue  # detail / grand-total rows carry money; the header does not
+        if "charge" in low and "payment" in low and "adjust" in low:
+            pos = sorted(
+                [("charge", low.find("charge")),
+                 ("payment", low.find("payment")),
+                 ("adjust", low.find("adjust"))],
+                key=lambda kv: kv[1],
+            )
+            ordinal = {name: i for i, (name, _) in enumerate(pos)}
+            return ordinal["charge"], ordinal["payment"], ordinal["adjust"]
+    return None
+
+
 def _parse_payment_posting_lines(lines: list) -> list:
     """Parse a 'Posting Payments' style register into payment rows.
 
-    A detail line carries, in order: Acct#, Patient, DOS, Charge, Payment,
-    Adjustment, Check#, Check date, Posting date, ... . We take the *Payment*
-    column (the 2nd dollar amount) and the service date (DOS, the 1st date).
-    Header / title / grand-total lines carry no service date (or no money) and
-    are skipped. Reversals appear in (parentheses) and count as negatives so the
-    total nets to the report's own payment grand total. Patient-name wrapping is
-    harmless: the wrapped line has no money and is ignored; the numeric line is
-    what we key on.
+    The Charge / Payment / Adjustment dollar columns are mapped by the report's
+    OWN header order (see _pp_column_order), so we always sum the column the
+    report labels 'Payment' — never a fixed guess. A detail line also carries DOS
+    (1st date) and posting date (last date). Header / title / grand-total lines
+    carry no service date (or no money) and are skipped; a $0 / blank Payment row
+    doesn't move collections. Reversals appear in (parentheses) and count as
+    negatives so the total nets to the report's own Payment grand total.
+
+    Zero values in the last dollar column render blank while middle columns show
+    $0.00, so a row with only two dollar amounts means the right-most dollar
+    column was empty — handled by indexing each column by its header ordinal
+    (an ordinal beyond the tokens present resolves to 0). Patient-name wrapping is
+    harmless: the wrapped line has no money and is ignored.
     """
+    order = _pp_column_order(lines)
+    charge_i, payment_i, adjust_i = order if order else (0, 1, 2)
     rows = []
     for line in lines:
         monies = list(_PP_MONEY_RE.finditer(line))
         dates = _PP_DATE_RE.findall(line)
         if len(monies) < 2 or not dates:
             continue
-        payment = _pp_money(monies[1].group(2), bool(monies[1].group(1)))
+        vals = [_pp_money(m.group(2), bool(m.group(1))) for m in monies[:3]]
+        k = len(vals)
+        payment = vals[payment_i] if payment_i < k else 0.0
         if payment == 0:
-            continue  # $0.00 payment rows (adjustment-only) don't move collections
-        charge = _pp_money(monies[0].group(2), bool(monies[0].group(1)))
-        adjust = _pp_money(monies[2].group(2), bool(monies[2].group(1))) if len(monies) >= 3 else 0.0
+            continue  # $0.00 / blank Payment rows (adjustment-only) don't collect
+        charge = vals[charge_i] if charge_i < k else 0.0
+        adjust = vals[adjust_i] if adjust_i < k else 0.0
         dos = _pp_iso_date(dates[0])
         postdate = _pp_iso_date(dates[-1])
         # Best-effort check / trace number — first non-date, non-money token after

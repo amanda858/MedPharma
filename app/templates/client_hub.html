@@ -6250,22 +6250,19 @@
   `).join('');
 
       // Claims Out — the billing view: Billed Out (what the team sent out the
-      // door) and Paid/Posted (collected money — payments recorded on claims +
-      // deposits posted). No denial/rework bucket: this is a billing production
-      // view, not AR/denial management.
+      // door) and Posted (collected money). No denial/rework bucket: this is a
+      // billing production view, not AR/denial management.
       const cb = d.claim_buckets || {};
-      // Paid and Posted are the same collected money (payer payments recorded on
-      // claims + deposits posted), so they're shown as ONE honest "Paid/Posted"
-      // tile rather than two columns that read like double the collections.
-      const _paidB = cb.paid || { count: 0, amount: 0 };
+      // Collected money is authoritative from the Payment Posting tab ONLY (the
+      // payments table — deposits / ERA actually posted). Claim-line "paid"
+      // amounts are deliberately NOT surfaced: the Payment Posting tab is the
+      // single source of truth for money collected, so this tile mirrors it and
+      // never blends claim-side paid (which would reference an unauthorized
+      // second payments source).
       const _postedB = cb.posted || { count: 0, amount: 0 };
-      const _paidPosted = {
-        count: Math.max(_paidB.count || 0, _postedB.count || 0),
-        amount: Math.max(_paidB.amount || 0, _postedB.amount || 0),
-      };
       const cbCards = [
         { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
-        { label: 'Paid/Posted', color: 'var(--success)', hint: 'Payments paid & posted', v: _paidPosted },
+        { label: 'Posted', color: 'var(--success)', hint: 'Collected — Payment Posting tab', v: _postedB },
       ];
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
