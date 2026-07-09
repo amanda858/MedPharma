@@ -737,7 +737,8 @@ def init_client_hub_db():
             module_labels    TEXT DEFAULT '',
             custom_modules   TEXT DEFAULT '',
             daily_report_optin INTEGER DEFAULT 1,
-            report_recipients TEXT DEFAULT ''
+            report_recipients TEXT DEFAULT '',
+            billing_cycle_start TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -1346,6 +1347,7 @@ def init_client_hub_db():
         ("custom_modules", "TEXT DEFAULT ''"),
         ("daily_report_optin", "INTEGER DEFAULT 1"),
         ("report_recipients", "TEXT DEFAULT ''"),
+        ("billing_cycle_start", "TEXT DEFAULT ''"),
     ]
     cur.execute("PRAGMA table_info(clients)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -1981,7 +1983,8 @@ def update_client(cid: int, data: dict):
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
                    "address", "specialty", "notes", "doc_tab_names", "practice_type",
                    "report_tab_names", "enabled_modules", "module_labels",
-                   "custom_modules", "daily_report_optin", "report_recipients"]
+                   "custom_modules", "daily_report_optin", "report_recipients",
+                   "billing_cycle_start"]
         parts, params = [], []
         for f in allowed:
             if f in data and data[f] is not None:
@@ -2192,7 +2195,8 @@ def update_profile(client_id: int, data: dict):
     allowed = ["company", "contact_name", "email", "phone", "tax_id", "group_npi",
                "individual_npi", "ptan_group", "ptan_individual", "address", "specialty", "notes",
                "doc_tab_names", "practice_type", "report_tab_names", "enabled_modules",
-               "module_labels", "custom_modules", "daily_report_optin", "report_recipients"]
+               "module_labels", "custom_modules", "daily_report_optin", "report_recipients",
+               "billing_cycle_start"]
     payload = {}
     for k, v in (data or {}).items():
         if k not in allowed:
@@ -3703,6 +3707,39 @@ def reconcile_dashboard(d: dict) -> dict:
     return {"ok": all(c["ok"] for c in checks), "checks": checks}
 
 
+def _add_one_month(d):
+    """Advance a date by one calendar month, clamping the day to the last valid
+    day of the target month (Jan 31 -> Feb 28/29)."""
+    import calendar
+    y = d.year + (1 if d.month == 12 else 0)
+    m = 1 if d.month == 12 else d.month + 1
+    last = calendar.monthrange(y, m)[1]
+    return d.replace(year=y, month=m, day=min(d.day, last))
+
+
+def billing_cycle_window(anchor_iso, today):
+    """Return (start_iso, end_iso, label) for the billing cycle containing
+    ``today``, given the account's billing-cycle anchor (the ISO date it started
+    billing with us). Cycles roll monthly: cycle 1 = anchor .. anchor+1 month;
+    each later cycle begins the day after the previous ends and runs one more
+    month (6/15..7/15, then 7/16..8/16, ...). Returns None when no valid anchor."""
+    import datetime as _dt
+    if not anchor_iso:
+        return None
+    try:
+        start = _dt.date.fromisoformat(str(anchor_iso)[:10])
+    except Exception:
+        return None
+    end = _add_one_month(start)
+    guard = 0
+    while today > end and guard < 600:
+        start = end + _dt.timedelta(days=1)
+        end = _add_one_month(start)
+        guard += 1
+    label = f"{start.month}/{start.day}\u2013{end.month}/{end.day}/{str(end.year)[2:]}"
+    return start.isoformat(), end.isoformat(), label
+
+
 def get_dashboard(client_id: int = None, sub_profile: str = None,
                   date_from: str = None, date_to: str = None,
                   member_idents: list = None):
@@ -3763,8 +3800,29 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         pay_cond = ("WHERE " + " AND ".join(pay_conditions)) if pay_conditions else ""
 
         today = business_today()
-        mtd_start = today.replace(day=1).isoformat()
         ytd_start = today.replace(month=1, day=1).isoformat()
+
+        # "This Month" window. If this single account has a billing-cycle anchor
+        # (the date it started billing with us), the "month" IS that billing cycle
+        # — e.g. 6/15..7/15, then 7/16..8/16 — not the calendar month. Falls back
+        # to the calendar month for accounts with no anchor and for the all-client
+        # admin view (client_id is None). mtd_end is the cycle's inclusive close;
+        # it's None for the open-ended calendar month.
+        _cycle = None
+        if client_id is not None:
+            try:
+                cur.execute("SELECT billing_cycle_start FROM clients WHERE id=?", [client_id])
+                _crow = cur.fetchone()
+                _anchor = (_crow[0] if _crow else "") or ""
+            except Exception:
+                _anchor = ""
+            _cycle = billing_cycle_window(_anchor, today)
+        if _cycle:
+            mtd_start, mtd_end, cycle_label = _cycle
+        else:
+            mtd_start = today.replace(day=1).isoformat()
+            mtd_end = None
+            cycle_label = None
 
         def q1(sql, params=None):
             cur.execute(sql, params or [])
@@ -3787,15 +3845,23 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         active_p = p + ["Paid", "Closed"]
         active = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus NOT IN (?,?)", active_p)
 
-        # Submitted MTD
-        submitted_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate >= ?",
-                           p + [mtd_start])
+        # Submitted MTD (this billing month / cycle)
+        if mtd_end:
+            submitted_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate >= ? AND BillDate <= ?",
+                               p + [mtd_start, mtd_end])
+        else:
+            submitted_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate >= ?",
+                               p + [mtd_start])
         submitted_ytd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} BillDate >= ?",
                            p + [ytd_start])
 
-        # Denials MTD
-        denied_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate >= ?",
-                        p + [mtd_start])
+        # Denials MTD (this billing month / cycle)
+        if mtd_end:
+            denied_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate >= ? AND DeniedDate <= ?",
+                            p + [mtd_start, mtd_end])
+        else:
+            denied_mtd = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} DeniedDate >= ?",
+                            p + [mtd_start])
         denied_all = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} ClaimStatus IN ('Denied','Appeals')", p)
 
         # Payments MTD (payments table has no DOS column — use pay_cond). Payments
@@ -3804,8 +3870,12 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         if member_scoped:
             pay_mtd = pay_ytd = 0
         else:
-            pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ?",
-                         pay_p + [mtd_start])
+            if mtd_end:
+                pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ? AND PostDate <= ?",
+                             pay_p + [mtd_start, mtd_end])
+            else:
+                pay_mtd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ?",
+                             pay_p + [mtd_start])
             pay_ytd = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} {'AND' if pay_cond else 'WHERE'} PostDate >= ?",
                          pay_p + [ytd_start])
 
@@ -4080,6 +4150,8 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "denied_all": denied_all,
             "payments_mtd": round(pay_mtd, 2),
             "payments_ytd": round(pay_ytd, 2),
+            "billing_cycle": ({"start": mtd_start, "end": mtd_end, "label": cycle_label}
+                              if cycle_label else None),
             "clean_claim_rate": clean_rate,
             "denial_rate": denial_rate,
             "avg_days_to_pay": avg_days_to_pay,

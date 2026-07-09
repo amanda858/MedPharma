@@ -1212,6 +1212,7 @@ class ProfileUpdate(BaseModel):
     custom_modules: Optional[list] = None
     daily_report_optin: Optional[bool] = None
     report_recipients: Optional[list[str]] = None
+    billing_cycle_start: Optional[str] = None
 
 
 class PracticeProfileUpdate(BaseModel):
