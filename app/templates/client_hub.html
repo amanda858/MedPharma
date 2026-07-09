@@ -2823,7 +2823,6 @@
             decision per test — eligibility + coverage discovery + medical necessity (LCD/NCD) + prior-auth, plus a
             <strong>claim-integrity intercept</strong> (NCCI bundling, MUE units, QW, MolDX, as-of-DOS termination) that
             catches what “is-the-member-active” checks miss. Independently built on public standards (X12, FHIR, CMS/NCCI/MUE); every finding cites its source.
-            Running in <strong>sandbox</strong>: no live payer calls and no PHI leaves the server until vendor credentials are added.
           </div>
 
           <div id="pgReadiness"></div>
@@ -5851,11 +5850,9 @@
           + `✅ <strong>Real-time verification is LIVE.</strong> The board's Verify button returns real 270/271 results from ${_pgEsc(src)} — not sandbox.</div>`;
         return;
       }
-      const items = (c.missing || []).map(m => `<li style="margin:3px 0">${_pgEsc(m)}</li>`).join('');
-      const step = c.next_step ? `<div style="margin-top:8px"><strong>Fastest path:</strong> ${_pgEsc(c.next_step)}</div>` : '';
-      el.innerHTML = `<div class="card" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;font-size:12.5px;padding:12px 16px;margin-bottom:16px">`
-        + `<strong>⚠️ Real-time verification is OFF.</strong> The board's Verify button stays honest — it will not fabricate a result until a real payer source is connected. `
-        + `To turn on real 270/271 verification:<ul style="margin:8px 0 0 18px;padding:0">${items}</ul>${step}</div>`;
+      // OFF state intentionally renders nothing on the board — no internal setup
+      // verbiage is shown. The Verify button still stays honest and never fabricates.
+      el.innerHTML = '';
     }
 
     function paGateFillSample(){

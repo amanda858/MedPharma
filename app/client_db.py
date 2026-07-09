@@ -1982,7 +1982,8 @@ def update_client(cid: int, data: dict):
                    "tax_id", "group_npi", "individual_npi", "ptan_group", "ptan_individual",
                    "address", "specialty", "notes", "doc_tab_names", "practice_type",
                    "report_tab_names", "enabled_modules", "module_labels",
-                   "custom_modules", "daily_report_optin", "report_recipients"]
+                   "custom_modules", "daily_report_optin", "report_recipients",
+                   "billing_cycle_start"]
         parts, params = [], []
         for f in allowed:
             if f in data and data[f] is not None:
