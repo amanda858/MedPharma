@@ -6281,12 +6281,15 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
         by_month[mk] = round(by_month.get(mk, 0.0) + pr["PaymentAmount"], 2)
 
     # New vs past-dated work: the team bills a different fee percentage on legacy
-    # (pre-cutoff DOS) work, so split the collected total by service date. Rows
-    # with no DOS (deposit sheets) fall into past/legacy.
+    # work, so split the collected total by service date. The cutoff is the
+    # billing-cycle start and is INCLUSIVE — a DOS on or after it is "Daily"
+    # (current-cycle) work; a DOS strictly before it (or no DOS, e.g. a deposit
+    # sheet) is past/legacy rolling AR. Mirrors the Payment Posting segmentation
+    # (Daily Claims = DOS 6/15 through today, inclusive).
     _NEW_CUTOFF = "2026-06-15"
-    new_cnt = sum(1 for pr in payment_rows if (pr.get("Dos") or "")[:10] > _NEW_CUTOFF)
+    new_cnt = sum(1 for pr in payment_rows if (pr.get("Dos") or "")[:10] >= _NEW_CUTOFF)
     new_amt = round(sum(pr["PaymentAmount"] for pr in payment_rows
-                        if (pr.get("Dos") or "")[:10] > _NEW_CUTOFF), 2)
+                        if (pr.get("Dos") or "")[:10] >= _NEW_CUTOFF), 2)
     split = {
         "cutoff": _NEW_CUTOFF,
         "total": total_amount,
@@ -6308,17 +6311,15 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
         cur.execute("DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PMT|%'",
                     (client_id,))
         if ppr_mode:
-            # A posting-payments report is authoritative for its posting-date
-            # range. Clear any prior report rows (PPR|...) whose PostDate falls in
-            # this upload's range so re-uploading the same report replaces rather
-            # than stacks, while a different period's report coexists untouched.
-            _pd = sorted(d for d in (pr["PostDate"] for pr in payment_rows) if d)
-            if _pd:
-                cur.execute(
-                    "DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PPR|%' "
-                    "AND PostDate BETWEEN ? AND ?",
-                    (client_id, _pd[0], _pd[-1]),
-                )
+            # A rendered "Posting Payments" register is the AUTHORITATIVE, complete
+            # posting record for the account — the Payment Posting tab is the single
+            # source of truth. Replace ALL prior payment rows for this client so the
+            # report's own grand total stands alone: an earlier deposit register
+            # (e.g. an ERA/STEDI deposit sheet with no per-line service date) or a
+            # prior report can't linger and double-count. Guarded by the
+            # `if not payment_rows: return` above, so a non-report PDF never wipes
+            # data. Re-uploading the same report is therefore idempotent.
+            cur.execute("DELETE FROM payments WHERE client_id=?", (client_id,))
         cur.executemany(
             "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
             [(client_id, k) for k in keys],

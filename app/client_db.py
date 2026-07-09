@@ -4082,14 +4082,16 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         for _bk in claim_buckets:
             claim_buckets[_bk]["amount"] = round(claim_buckets[_bk]["amount"], 2)
 
-        # New-claim vs rolling-AR split. A claim whose DATE OF SERVICE is AFTER
-        # this cutoff is fresh production ("new claim"); a service date on/before
-        # it — or no usable service date at all (undated backlog) — is prior
-        # accounts-receivable the team is billing/working ("rolling AR"). Compare
-        # only the date portion so ISO datetimes ('2026-06-17T00:00:00') and the
-        # boundary day itself (6/15 counts as prior) classify correctly.
+        # New-claim vs rolling-AR split. A claim whose DATE OF SERVICE is ON OR
+        # AFTER this cutoff (the billing-cycle start) is fresh production
+        # ("Daily Claims" / new); a service date strictly before it — or no usable
+        # service date at all (undated backlog) — is prior accounts-receivable the
+        # team is billing/working ("rolling AR"). Compare only the date portion so
+        # ISO datetimes ('2026-06-17T00:00:00') and the boundary day itself (6/15
+        # counts as Daily/new, matching the Payment Posting segmentation) classify
+        # correctly.
         NEW_CLAIM_DOS_CUTOFF = "2026-06-15"
-        _new_case = "substr(COALESCE(DOS,''),1,10) > ?"
+        _new_case = "substr(COALESCE(DOS,''),1,10) >= ?"
 
         # Billed Out per team member. Every billed claim line is credited to the
         # hub user who uploaded it (uploaded_by), under the SAME client/sub-profile
@@ -4151,10 +4153,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             }
         else:
             _pay_new = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} "
-                          f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) > ?",
+                          f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) >= ?",
                           pay_p + [NEW_CLAIM_DOS_CUTOFF])
             _pay_new_cnt = q1(f"SELECT COUNT(*) FROM payments {pay_cond} "
-                              f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) > ?",
+                              f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) >= ?",
                               pay_p + [NEW_CLAIM_DOS_CUTOFF])
             _pay_all = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
             _pay_all_cnt = q1(f"SELECT COUNT(*) FROM payments {pay_cond}", pay_p)
