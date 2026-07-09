@@ -811,6 +811,7 @@ def init_client_hub_db():
             client_id       INTEGER NOT NULL,
             ClaimKey        TEXT NOT NULL,
             PostDate        TEXT DEFAULT '',
+            Dos             TEXT DEFAULT '',   -- date of service (for new vs past-work split)
             PaymentAmount   REAL DEFAULT 0,
             AdjustmentAmount REAL DEFAULT 0,
             PayerType       TEXT DEFAULT '',   -- Primary, Secondary, Patient
@@ -1384,6 +1385,8 @@ def init_client_hub_db():
     pay_cols = {row[1] for row in cur.fetchall()}
     if "PostedBy" not in pay_cols:
         cur.execute("ALTER TABLE payments ADD COLUMN PostedBy TEXT DEFAULT ''")
+    if "Dos" not in pay_cols:
+        cur.execute("ALTER TABLE payments ADD COLUMN Dos TEXT DEFAULT ''")
     conn.commit()
 
     # ── Migrate existing DBs: 1:1 direct-message chat rooms ──────────────
@@ -4129,6 +4132,35 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                            "amount": round(_billed_amt - float(_new_amt or 0), 2)},
         }
 
+        # Collections split the SAME way as billed: new work (DOS after the cutoff)
+        # vs past-dated legacy work, because the fee percentage the team earns
+        # differs between the two. Payments now carry the service date (Dos) from
+        # the Payment Posting report; rows with no DOS (older uploads) count as
+        # past/legacy. Member-scoped self-views show zero (payments carry no
+        # uploaded_by, so they can't be attributed to one biller).
+        if member_scoped:
+            payments_split = {
+                "cutoff": NEW_CLAIM_DOS_CUTOFF, "total": 0.0,
+                "new": {"count": 0, "amount": 0.0},
+                "past": {"count": 0, "amount": 0.0},
+            }
+        else:
+            _pay_new = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond} "
+                          f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) > ?",
+                          pay_p + [NEW_CLAIM_DOS_CUTOFF])
+            _pay_new_cnt = q1(f"SELECT COUNT(*) FROM payments {pay_cond} "
+                              f"{'AND' if pay_cond else 'WHERE'} substr(COALESCE(Dos,''),1,10) > ?",
+                              pay_p + [NEW_CLAIM_DOS_CUTOFF])
+            _pay_all = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
+            _pay_all_cnt = q1(f"SELECT COUNT(*) FROM payments {pay_cond}", pay_p)
+            payments_split = {
+                "cutoff": NEW_CLAIM_DOS_CUTOFF,
+                "total": round(float(_pay_all or 0), 2),
+                "new": {"count": int(_pay_new_cnt or 0), "amount": round(float(_pay_new or 0), 2)},
+                "past": {"count": int(_pay_all_cnt or 0) - int(_pay_new_cnt or 0),
+                         "amount": round(float(_pay_all or 0) - float(_pay_new or 0), 2)},
+            }
+
         # Rolling A/R since the team's first data-entry day (6/18). Outstanding
         # balance on claims billed on/after the start date — the live A/R the team
         # has actually generated (vs. legacy balances carried in from before 6/18).
@@ -4176,6 +4208,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "claim_buckets": claim_buckets,
             "billed_by_member": billed_by_member,
             "billed_split": billed_split,
+            "payments_split": payments_split,
             "rolling_ar": round(rolling_ar, 2),
             "rolling_ar_start": ROLLING_AR_START,
             "status_distribution": status_dist,

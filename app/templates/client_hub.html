@@ -2271,12 +2271,13 @@
             </div>
             <div style="padding:16px">
               <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px;max-width:660px">
-                Drop your ERA / remittance deposit sheet (Excel or CSV). Columns are auto-detected — e.g.
-                <b>Amount</b>, <b>Payer</b>, <b>Deposit Date</b>, <b>EFT #</b> (a <b>Claim #</b> column is used when present).
-                Only the payment totals are recorded — no claims are created or changed, and re-uploading the same file won’t double-count.
+                Drop your <b>Posting Payments</b> report (PDF or Word) or an ERA / remittance deposit sheet (Excel/CSV).
+                The <b>Payment</b> amount, <b>service date</b> and <b>posting date</b> are auto-detected, and collections are
+                split into <b>new work</b> vs <b>past-dated work</b> by service date (you bill those at different percentages).
+                This tab is the only place payments are counted — no claims are created or changed, and re-uploading the same report won’t double-count.
               </div>
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <input type="file" id="paymentsPostedInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="uploadPaymentsPosted(this)">
+                <input type="file" id="paymentsPostedInput" accept=".pdf,.doc,.docx,.xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="uploadPaymentsPosted(this)">
                 <button class="btn btn-primary btn-sm" onclick="document.getElementById('paymentsPostedInput').click()">⬆ Upload Payments Posted</button>
                 <span id="paymentsPostedStatus" style="font-size:12px;color:var(--gray-500)"></span>
               </div>
@@ -6059,16 +6060,33 @@
         statusEl.textContent = '';
         const months = Object.entries(j.by_month || {}).sort().map(([m, v]) =>
           `<div style="display:flex;justify-content:space-between;max-width:280px"><span>${m}</span><b>$${fmt(v)}</b></div>`).join('');
+        const sp = j.split || {};
+        const spNew = sp.new || { amount: 0, count: 0 };
+        const spPast = sp.past || { amount: 0, count: 0 };
+        const splitHtml = (sp.total !== undefined) ? `
+              <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">
+                <div style="flex:1;min-width:170px;background:#fff;border:1px solid #86efac;border-radius:6px;padding:8px 10px">
+                  <div style="font-size:11px;color:var(--gray-500)">New work &nbsp;<span style="color:var(--gray-400)">(service date after ${sp.cutoff || ''})</span></div>
+                  <div style="font-weight:700;color:#15803d">$${fmt(spNew.amount || 0)}</div>
+                  <div style="font-size:11px;color:var(--gray-500)">${spNew.count || 0} payment${(spNew.count === 1) ? '' : 's'}</div>
+                </div>
+                <div style="flex:1;min-width:170px;background:#fff;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px">
+                  <div style="font-size:11px;color:var(--gray-500)">Past-dated work &nbsp;<span style="color:var(--gray-400)">(legacy %)</span></div>
+                  <div style="font-weight:700;color:#b45309">$${fmt(spPast.amount || 0)}</div>
+                  <div style="font-size:11px;color:var(--gray-500)">${spPast.count || 0} payment${(spPast.count === 1) ? '' : 's'}</div>
+                </div>
+              </div>` : '';
         if (j.posted > 0) {
           resultEl.innerHTML = `
             <div style="background:var(--success-light);border:1px solid #86efac;border-radius:8px;padding:12px 14px">
               <div style="font-weight:700;color:#15803d;margin-bottom:6px">✅ Posted ${j.posted} payment${j.posted === 1 ? '' : 's'} — $${fmt(j.posted_amount)}</div>
-              ${months ? '<div style="font-size:12px;color:var(--gray-600);margin-top:6px">By deposit month:' + months + '</div>' : ''}
+              ${splitHtml}
+              ${months ? '<div style="font-size:12px;color:var(--gray-600);margin-top:6px">By posting month:' + months + '</div>' : ''}
               ${(j.errors && j.errors.length) ? '<div style="font-size:12px;color:#b45309;margin-top:6px">' + j.errors.length + ' row issue(s) skipped</div>' : ''}
             </div>`;
           if (typeof loadDashboard === 'function') loadDashboard();
         } else {
-          resultEl.innerHTML = `<div style="color:#b45309;font-size:13px">No posted payments found in that file. Make sure it has an <b>Amount</b> (or Paid Amount) column with positive values.${(j.errors && j.errors.length) ? ' — ' + j.errors[0] : ''}</div>`;
+          resultEl.innerHTML = `<div style="color:#b45309;font-size:13px">No posted payments found in that file. Upload a <b>Posting Payments</b> report (PDF/Word) or a deposit sheet with a <b>Payment</b> (or Amount) column.${(j.errors && j.errors.length) ? ' — ' + j.errors[0] : ''}</div>`;
         }
       } catch (e) {
         statusEl.textContent = '';

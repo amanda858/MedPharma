@@ -5971,8 +5971,8 @@ async def import_payments_posted_route(
         else _single_client_account_or(user["id"]))
 
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
-        raise HTTPException(400, "Only .xlsx, .xls, .csv, .ods, .odf files are supported for payments import")
+    if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf", ".pdf", ".doc", ".docx"):
+        raise HTTPException(400, "Upload a payments report as PDF, Word (.doc/.docx), or Excel/CSV (.xlsx/.xls/.csv/.ods)")
 
     content = await file.read()
 
@@ -5980,15 +5980,16 @@ async def import_payments_posted_route(
     unique_name = f"{uuid.uuid4().hex}{ext}"
     with open(os.path.join(UPLOAD_DIR, unique_name), "wb") as f:
         f.write(content)
+    _ftype = "pdf" if ext == ".pdf" else ("word" if ext in (".doc", ".docx") else "excel")
     add_file(
         client_id=scope, filename=unique_name, original_name=file.filename or "file",
-        file_type="excel", file_size=len(content), category="Payments",
+        file_type=_ftype, file_size=len(content), category="Payments",
         description=f"Payments posted — {file.filename}",
         row_count=0, uploaded_by=user["username"],
     )
 
     try:
-        posted, posted_amount, by_month, errors = _import_payments_posted(
+        posted, posted_amount, by_month, errors, split = _import_payments_posted(
             content, ext, scope, uploaded_by=user["username"])
     except HTTPException:
         raise
@@ -6003,9 +6004,131 @@ async def import_payments_posted_route(
         "posted": posted,
         "posted_amount": posted_amount,
         "by_month": by_month,
+        "split": split,
         "errors": errors[:10],
         "original_name": file.filename,
     }
+
+
+# ── Payment-posting report parser (PDF / Word "Posting Payments" register) ──
+# The Payment Posting tab is the single authoritative source of collected money.
+# Clients hand us a rendered "Posting Payments" report (PDF, sometimes Word) whose
+# detail rows read, in order: Acct#, Patient, DOS, Charge, Payment, Adjustment,
+# Check#, Check date, Posting date, Provider, Insurance, Facility. We key off the
+# Payment column and the service date so collections can be split into new work
+# vs past-dated (legacy) work, which the team bills at different fee percentages.
+_PP_DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b")
+_PP_MONEY_RE = re.compile(r"(\()?\s*\$\s*([\d,]+\.\d{2})\s*(\))?")
+
+
+def _pp_iso_date(mdy: str) -> str:
+    """Normalize a M/D/Y(YYY) date to ISO (YYYY-MM-DD); 2-digit years -> 20YY."""
+    try:
+        mm, dd, yy = mdy.split("/")
+        y = int(yy)
+        if y < 100:
+            y += 2000
+        return f"{y:04d}-{int(mm):02d}-{int(dd):02d}"
+    except Exception:
+        return ""
+
+
+def _pp_money(num: str, is_paren: bool) -> float:
+    """Parse a money token; parentheses denote a reversal (negative)."""
+    try:
+        v = float(str(num).replace(",", ""))
+    except Exception:
+        return 0.0
+    return -v if is_paren else v
+
+
+def _iso_any(raw) -> str:
+    """Normalize any cell/string date to ISO (YYYY-MM-DD). Handles datetimes,
+    already-ISO strings, and M/D/Y(YYY) strings from CSV exports. Needed so the
+    new-vs-past split compares dates chronologically, not lexically (e.g.
+    '6/1/2026' must become '2026-06-01', otherwise it sorts after '2026-06-15')."""
+    s = (_cell_iso_date(raw) if raw is not None else "") or ""
+    if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
+        return _pp_iso_date(s)
+    return s
+
+
+def _extract_text_lines(content: bytes, ext: str) -> list:
+    """Return normalized, non-empty text lines from a PDF or Word document."""
+    lines = []
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except Exception as exc:
+            raise ValueError("PDF parsing dependency missing. Install 'pypdf'.") from exc
+        import io as _io
+        reader = PdfReader(_io.BytesIO(content))
+        for page in reader.pages:
+            for raw in (page.extract_text() or "").splitlines():
+                s = re.sub(r"\s+", " ", str(raw or "")).strip()
+                if s:
+                    lines.append(s)
+    elif ext in (".doc", ".docx"):
+        try:
+            from docx import Document
+        except Exception as exc:
+            raise ValueError("Word parsing dependency missing. Install 'python-docx'.") from exc
+        import io as _io
+        doc = Document(_io.BytesIO(content))
+        for p in doc.paragraphs:
+            s = re.sub(r"\s+", " ", str(p.text or "")).strip()
+            if s:
+                lines.append(s)
+        # Flatten any Word tables to text lines too — the detail parser keys off
+        # $-amounts + dates, so tabular exports read the same as paragraph text.
+        for table in doc.tables:
+            for tr in table.rows:
+                s = re.sub(r"\s+", " ", " ".join(c.text for c in tr.cells)).strip()
+                if s:
+                    lines.append(s)
+    return lines
+
+
+def _parse_payment_posting_lines(lines: list) -> list:
+    """Parse a 'Posting Payments' style register into payment rows.
+
+    A detail line carries, in order: Acct#, Patient, DOS, Charge, Payment,
+    Adjustment, Check#, Check date, Posting date, ... . We take the *Payment*
+    column (the 2nd dollar amount) and the service date (DOS, the 1st date).
+    Header / title / grand-total lines carry no service date (or no money) and
+    are skipped. Reversals appear in (parentheses) and count as negatives so the
+    total nets to the report's own payment grand total. Patient-name wrapping is
+    harmless: the wrapped line has no money and is ignored; the numeric line is
+    what we key on.
+    """
+    rows = []
+    for line in lines:
+        monies = list(_PP_MONEY_RE.finditer(line))
+        dates = _PP_DATE_RE.findall(line)
+        if len(monies) < 2 or not dates:
+            continue
+        payment = _pp_money(monies[1].group(2), bool(monies[1].group(1)))
+        if payment == 0:
+            continue  # $0.00 payment rows (adjustment-only) don't move collections
+        charge = _pp_money(monies[0].group(2), bool(monies[0].group(1)))
+        adjust = _pp_money(monies[2].group(2), bool(monies[2].group(1))) if len(monies) >= 3 else 0.0
+        dos = _pp_iso_date(dates[0])
+        postdate = _pp_iso_date(dates[-1])
+        # Best-effort check / trace number — first non-date, non-money token after
+        # the last dollar amount; strengthens the row key, not load-bearing.
+        eft = ""
+        for tok in line[monies[-1].end():].split():
+            if _PP_DATE_RE.fullmatch(tok) or _PP_MONEY_RE.fullmatch(tok):
+                continue
+            if re.fullmatch(r"[A-Za-z0-9\-]{5,}", tok):
+                eft = tok
+                break
+        rows.append({
+            "Dos": dos, "PostDate": postdate,
+            "Charge": round(charge, 2), "Payment": round(payment, 2),
+            "Adjust": round(adjust, 2), "CheckNumber": eft,
+        })
+    return rows
 
 
 def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_by: str = ""):
@@ -6023,6 +6146,7 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
 
     payment_rows = []
     errors = []
+    ppr_mode = False  # rendered "Posting Payments" register (PDF/Word) upload
 
     def _to_amount(v):
         try:
@@ -6030,9 +6154,22 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
         except Exception:
             return 0.0
 
+    # 0) Rendered "Posting Payments" register (PDF / Word). Detail rows are keyed
+    #    off the Payment column + service date so collections split new vs past.
+    if ext in (".pdf", ".doc", ".docx"):
+        ppr_mode = True
+        for i, r in enumerate(_parse_payment_posting_lines(_extract_text_lines(content, ext))):
+            payment_rows.append({
+                "ClaimKey": f"PPR|{r['PostDate']}|{r.get('CheckNumber','')}|{r['Charge']}|{r['Payment']}|{i}",
+                "PostDate": r["PostDate"],
+                "Dos": r["Dos"],
+                "PaymentAmount": r["Payment"],
+                "AdjustmentAmount": r["Adjust"],
+                "PayerType": "Primary",
+                "CheckNumber": r.get("CheckNumber", ""),
+            })
     # 1) Proven template path for SV's ERA workbook (xlsx only).
-    tpl = _extract_templated_claim_rows(content, ext)
-    if tpl and tpl[0] == "lims_payments":
+    elif (tpl := _extract_templated_claim_rows(content, ext)) and tpl[0] == "lims_payments":
         for r in tpl[1]:
             amt = _to_amount(r.get("Paid Amount"))
             if amt <= 0:
@@ -6043,7 +6180,9 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
             payment_rows.append({
                 "ClaimKey": key or f"PMT-{r.get('Payor','')}-{pdate}-{amt}",
                 "PostDate": pdate,
+                "Dos": "",
                 "PaymentAmount": amt,
+                "AdjustmentAmount": 0.0,
                 "PayerType": "Primary",
                 "CheckNumber": eft,
             })
@@ -6051,7 +6190,7 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
         # 2) Generic column-detected path (xlsx or csv).
         rows = _parse_excel_rows(content, ext)
         if not rows:
-            return 0, 0.0, {}, ["No rows found in the file"]
+            return 0, 0.0, {}, ["No rows found in the file"], {}
 
         def _pick(d, *needles):
             # Match needles in priority order (most specific first) so e.g. the
@@ -6073,7 +6212,10 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
             eft = str(_pick(r, "eft", "checknumber", "check", "trace") or "").split(".")[0].strip()
             claim_no = str(_pick(r, "claimnumber", "claim", "accession", "patientaccount") or "").strip()
             pdate_raw = _pick(r, "depositdate", "paiddate", "postdate", "date")
-            pdate = (_cell_iso_date(pdate_raw) if pdate_raw is not None else "") or ""
+            pdate = _iso_any(pdate_raw)
+            dos_raw = _pick(r, "dateofservice", "servicedate", "dos")
+            dos = _iso_any(dos_raw)
+            adj = _to_amount(_pick(r, "adjustment", "writeoff"))
             if claim_no and not claim_no.upper().startswith("PMT-"):
                 key = claim_no
             elif eft:
@@ -6083,19 +6225,37 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
             payment_rows.append({
                 "ClaimKey": key,
                 "PostDate": pdate,
+                "Dos": dos,
                 "PaymentAmount": amt,
+                "AdjustmentAmount": adj,
                 "PayerType": "Primary",
                 "CheckNumber": eft,
             })
 
     if not payment_rows:
-        return 0, 0.0, {}, (errors or ["No posted payments found — need rows with a positive Amount / Paid Amount"])
+        return 0, 0.0, {}, (errors or ["No posted payments found — need rows with a Payment amount (and a service date on a posting report)"]), {}
 
     total_amount = round(sum(pr["PaymentAmount"] for pr in payment_rows), 2)
     by_month = {}
     for pr in payment_rows:
         mk = (pr["PostDate"] or "")[:7] or "undated"
         by_month[mk] = round(by_month.get(mk, 0.0) + pr["PaymentAmount"], 2)
+
+    # New vs past-dated work: the team bills a different fee percentage on legacy
+    # (pre-cutoff DOS) work, so split the collected total by service date. Rows
+    # with no DOS (deposit sheets) fall into past/legacy.
+    _NEW_CUTOFF = "2026-06-15"
+    new_cnt = sum(1 for pr in payment_rows if (pr.get("Dos") or "")[:10] > _NEW_CUTOFF)
+    new_amt = round(sum(pr["PaymentAmount"] for pr in payment_rows
+                        if (pr.get("Dos") or "")[:10] > _NEW_CUTOFF), 2)
+    split = {
+        "cutoff": _NEW_CUTOFF,
+        "total": total_amount,
+        "is_posting_report": ppr_mode,
+        "new": {"count": new_cnt, "amount": new_amt},
+        "past": {"count": len(payment_rows) - new_cnt,
+                 "amount": round(total_amount - new_amt, 2)},
+    }
 
     keys = list({pr["ClaimKey"] for pr in payment_rows})
     conn = get_db()
@@ -6108,16 +6268,29 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
         # numbers — never a pipe — so this only removes retired sweep phantoms.
         cur.execute("DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PMT|%'",
                     (client_id,))
+        if ppr_mode:
+            # A posting-payments report is authoritative for its posting-date
+            # range. Clear any prior report rows (PPR|...) whose PostDate falls in
+            # this upload's range so re-uploading the same report replaces rather
+            # than stacks, while a different period's report coexists untouched.
+            _pd = sorted(d for d in (pr["PostDate"] for pr in payment_rows) if d)
+            if _pd:
+                cur.execute(
+                    "DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PPR|%' "
+                    "AND PostDate BETWEEN ? AND ?",
+                    (client_id, _pd[0], _pd[-1]),
+                )
         cur.executemany(
             "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
             [(client_id, k) for k in keys],
         )
         cur.executemany(
             """INSERT INTO payments
-               (client_id, ClaimKey, PostDate, PaymentAmount, PayerType,
-                CheckNumber, PostedBy, sub_profile)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            [(client_id, pr["ClaimKey"], pr["PostDate"], pr["PaymentAmount"],
+               (client_id, ClaimKey, PostDate, Dos, PaymentAmount, AdjustmentAmount,
+                PayerType, CheckNumber, PostedBy, sub_profile)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            [(client_id, pr["ClaimKey"], pr["PostDate"], pr.get("Dos", ""),
+              pr["PaymentAmount"], pr.get("AdjustmentAmount", 0.0),
               pr["PayerType"], pr["CheckNumber"], str(uploaded_by or ""), "")
              for pr in payment_rows],
         )
@@ -6125,7 +6298,7 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
     finally:
         conn.close()
 
-    return len(payment_rows), total_amount, by_month, errors
+    return len(payment_rows), total_amount, by_month, errors, split
 
 
 def _parse_excel_rows(content: bytes, ext: str, combine_sheets: bool = True):
