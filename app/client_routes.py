@@ -55,6 +55,7 @@ from app.client_db import (
     list_rooms_for_user, get_room, create_room, update_room, delete_room,
     list_room_members, add_room_member, remove_room_member,
     user_can_access_room, add_room_message, list_room_messages,
+    chat_attachment_in_room, mark_room_notifications_read,
     mark_room_read, chat_unread_total, list_chat_eligible_users,
     get_or_create_dm_room,
     list_room_read_state,
@@ -8023,6 +8024,37 @@ def download_file(file_id: int, hub_session: Optional[str] = Cookie(None)):
     )
 
 
+class FileRenameIn(BaseModel):
+    name: str
+
+
+@router.post("/files/{file_id}/rename")
+def rename_file(file_id: int, body: FileRenameIn,
+                hub_session: Optional[str] = Cookie(None)):
+    """Rename a document (its display name). The stored-on-disk filename and the
+    extension are preserved so the file still opens correctly."""
+    user = _require_user(hub_session)
+    new_name = (body.name or "").strip()
+    if not new_name:
+        raise HTTPException(400, "A name is required")
+    if user.get("role") in ("admin", "staff"):
+        rec = get_file_record(file_id, _client_scope(user))
+    else:
+        rec = get_file_record(file_id, None)
+        if rec and int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            rec = None
+    if not rec:
+        raise HTTPException(404, "File not found")
+    # Preserve the original extension so the file still opens correctly.
+    old_ext = os.path.splitext(rec.get("original_name") or "")[1]
+    if old_ext and not new_name.lower().endswith(old_ext.lower()):
+        new_name = new_name + old_ext
+    new_name = new_name[:255]
+    update_file_record(file_id, {"original_name": new_name},
+                       int(rec.get("client_id") or 0) or None)
+    return {"ok": True, "name": new_name}
+
+
 @router.post("/files/{file_id}/replace")
 async def replace_file(
     file_id: int,
@@ -9370,7 +9402,9 @@ def remove_sharefile_link(link_id: int, client_id: Optional[int] = None, hub_ses
 # ─── Chat: Admin-managed rooms with member management ───────────────────────
 
 class ChatMessageIn(BaseModel):
-    body: str
+    body: Optional[str] = ""
+    attachment_file_id: Optional[int] = None
+    attachment_name: Optional[str] = None
 
 
 class ChatRoomCreate(BaseModel):
@@ -9614,6 +9648,13 @@ def chat_get_messages(room_id: int, limit: int = 200,
     last_read = 0
     if mark_read and not before_id:
         last_read = mark_room_read(room_id, int(user["id"]))
+        # Opening a room clears its chat alerts — a message you've actually
+        # seen shouldn't keep nagging you in the notification bell. Unread
+        # rooms you never open keep their alert.
+        try:
+            mark_room_notifications_read(int(user["id"]), room_id)
+        except Exception:
+            log.exception("clear chat alerts failed for room %s", room_id)
     return {
         "room_id": room_id,
         "messages": msgs,
@@ -9622,13 +9663,104 @@ def chat_get_messages(room_id: int, limit: int = 200,
     }
 
 
+@router.post("/chat/rooms/{room_id}/attachment")
+async def chat_upload_attachment(
+    room_id: int,
+    file: UploadFile = FastAPIFile(...),
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Upload a file to attach to a chat message. Stored in client_files under a
+    sentinel category so it reuses the same storage but never shows up in any
+    Documents / eligibility listing, and is downloadable only by members of the
+    room it's posted to."""
+    user = _require_user(hub_session)
+    room = _require_room_access(user, room_id)
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    ALLOWED_CHAT_EXTS = (
+        ".xlsx", ".xls", ".csv", ".ods", ".odf", ".odt", ".odp",
+        ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".txt", ".rtf",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    )
+    if ext not in ALLOWED_CHAT_EXTS:
+        raise HTTPException(400, "Unsupported file type")
+    content = await file.read()
+    file_size = len(content)
+    if file_size > 25 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum is 25MB")
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    with open(os.path.join(UPLOAD_DIR, unique_name), "wb") as fh:
+        fh.write(content)
+    if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        ftype = "image"
+    elif ext == ".pdf":
+        ftype = "pdf"
+    else:
+        ftype = "document"
+    original = os.path.basename(file.filename or unique_name)[:255]
+    file_id = add_file(
+        client_id=int(room.get("client_id") or 0) or int(user.get("id") or 0),
+        filename=unique_name,
+        original_name=original,
+        file_type=ftype,
+        file_size=file_size,
+        category="__chat__",
+        description="",
+        row_count=0,
+        uploaded_by=user.get("username", ""),
+    )
+    return {"ok": True, "file_id": file_id, "name": original,
+            "file_type": ftype, "is_image": ftype == "image"}
+
+
+@router.get("/chat/rooms/{room_id}/attachment/{file_id}")
+def chat_download_attachment(room_id: int, file_id: int,
+                             hub_session: Optional[str] = Cookie(None)):
+    """Stream a chat attachment. Gated on room membership AND on the file
+    actually being attached to a message in THAT room, so access to one room
+    can never be used to pull another room's files."""
+    user = _require_user(hub_session)
+    _require_room_access(user, room_id)
+    if not chat_attachment_in_room(room_id, file_id):
+        raise HTTPException(404, "Attachment not found")
+    rec = get_file_record(file_id)
+    if not rec or (rec.get("category") or "") != "__chat__":
+        raise HTTPException(404, "Attachment not found")
+    path = os.path.join(UPLOAD_DIR, rec["filename"])
+    if not os.path.isfile(path):
+        raise HTTPException(410, "This attachment is no longer available in storage.")
+    from fastapi.responses import FileResponse
+    _INLINE_MEDIA = {
+        ".pdf": "application/pdf",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".gif": "image/gif", ".webp": "image/webp", ".txt": "text/plain",
+    }
+    _ext = os.path.splitext(rec.get("original_name") or rec.get("filename") or "")[1].lower()
+    _media = _INLINE_MEDIA.get(_ext, "application/octet-stream")
+    _disp = "inline" if _ext in _INLINE_MEDIA else "attachment"
+    return FileResponse(path, filename=rec["original_name"], media_type=_media,
+                        content_disposition_type=_disp)
+
+
 @router.post("/chat/rooms/{room_id}/messages")
 def chat_post_message(room_id: int, body: ChatMessageIn,
                       hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
     room = _require_room_access(user, room_id)
     text = (body.body or "").strip()
-    if not text:
+    att_id = None
+    att_name = ""
+    if body.attachment_file_id:
+        # You can only attach a chat file YOU just uploaded (sentinel category,
+        # same username) — this prevents pointing a message at someone else's
+        # document. Downloads are separately gated by room membership.
+        rec = get_file_record(int(body.attachment_file_id))
+        if not rec or (rec.get("category") or "") != "__chat__" \
+                or (rec.get("uploaded_by") or "") != user.get("username", ""):
+            raise HTTPException(400, "Attachment not found")
+        att_id = int(body.attachment_file_id)
+        att_name = (body.attachment_name or rec.get("original_name") or "attachment")[:255]
+    if not text and not att_id:
         raise HTTPException(400, "Message body is required")
     if len(text) > 4000:
         raise HTTPException(400, "Message too long (max 4000 characters)")
@@ -9639,6 +9771,8 @@ def chat_post_message(room_id: int, body: ChatMessageIn,
             sender_name=user.get("username", ""),
             sender_role=user.get("role", "member"),
             body=text,
+            attachment_file_id=att_id,
+            attachment_name=att_name,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -9647,9 +9781,11 @@ def chat_post_message(room_id: int, body: ChatMessageIn,
     # only thing we record outside that table is a length-only marker.
     try:
         from app.security import phi_safe_preview
-        body_marker = phi_safe_preview(text)
+        body_marker = phi_safe_preview(text) if text else ""
     except Exception:
         body_marker = f"[chat message • {len(text)} chars]"
+    if att_id:
+        body_marker = "\U0001F4CE attachment" if not body_marker else f"{body_marker} \U0001F4CE"
     log_audit(room.get("client_id"), user.get("username", ""), "chat_message",
               "chat_rooms", room_id, body_marker)
     # In-app notification fanout to every other room member. PHI-safe:
@@ -9693,6 +9829,10 @@ def chat_mark_read_endpoint(room_id: int, hub_session: Optional[str] = Cookie(No
     user = _require_user(hub_session)
     _require_room_access(user, room_id)
     last_id = mark_room_read(room_id, int(user["id"]))
+    try:
+        mark_room_notifications_read(int(user["id"]), room_id)
+    except Exception:
+        log.exception("clear chat alerts failed for room %s", room_id)
     return {"ok": True, "last_read_message_id": last_id}
 
 

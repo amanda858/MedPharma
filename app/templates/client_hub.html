@@ -2915,14 +2915,20 @@
                   </div>
                 </div>
                 <div id="chatComposer" style="padding:12px;border-top:1px solid var(--gray-200);background:#fff;display:none">
+                  <div id="chatPendingAttach" style="display:none;margin-bottom:8px"></div>
                   <div style="display:flex;gap:8px;align-items:flex-end">
+                    <input type="file" id="chatFileInput" style="display:none"
+                      accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xlsx,.xls,.csv,.ods,.odf,.doc,.docx,.ppt,.pptx,.txt,.rtf"
+                      onchange="chatPickAttachment(this)">
+                    <button class="btn btn-secondary" id="chatAttachBtn" title="Attach a file"
+                      onclick="document.getElementById('chatFileInput').click()" style="padding:10px 12px">📎</button>
                     <textarea id="chatInput" rows="2" placeholder="Type a message and press Enter to send…"
                       style="flex:1;padding:10px 12px;border:1px solid var(--gray-300);border-radius:8px;resize:vertical;font:inherit"
                       onkeydown="chatHandleKey(event)"></textarea>
                     <button class="btn btn-primary" id="chatSendBtn" onclick="chatSendMessage()">Send</button>
                   </div>
                   <div id="chatSendHint" style="font-size:11px;color:var(--gray-500);margin-top:4px">
-                    Enter to send · Shift+Enter for newline
+                    Enter to send · Shift+Enter for newline · 📎 to attach a file
                   </div>
                 </div>
               </div>
@@ -10084,6 +10090,7 @@
           <td style="white-space:nowrap;display:flex;gap:4px;align-items:center">
             <a href="/hub/api/files/${f.id}/download" class="btn btn-sm" style="color:var(--info);background:var(--info-light);border:none;text-decoration:none;font-size:12px" title="Open / download" target="_blank" rel="noopener">⬇ Download</a>
             ${isPendingImport(f) ? `<button class="btn btn-sm" style="color:#fff;background:#d97706;border:none;font-size:12px;font-weight:600" onclick="importFileToClaims(${f.id})" title="Import this spreadsheet into claims">⬆ Import to Claims</button>` : ''}
+            <button class="btn btn-sm" style="color:#0369a1;background:#e0f2fe;border:none;font-size:12px" onclick="renameFile(${f.id})" title="Rename this file">✏️ Rename</button>
             <button class="btn btn-sm" style="color:#7c3aed;background:#f5f3ff;border:none;font-size:12px" onclick="replaceFile(${f.id})" title="Replace with new version">🔄 Replace</button>
             <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:none;font-size:12px" onclick="deleteFile(${f.id})" title="Delete">🗑 Delete</button>
           </td>
@@ -10386,6 +10393,26 @@
         const r = await fetch(`/hub/api/files/${id}`, { method: 'DELETE' });
         if (!r.ok) throw new Error('Failed');
         toast('File deleted', 'success'); loadDocuments();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function renameFile(id) {
+      const cur = (allDocFiles.find(f => f.id === id) || {}).original_name || '';
+      const name = prompt('Rename this document to:', cur);
+      if (name === null) return;
+      const clean = (name || '').trim();
+      if (!clean) { toast('Name cannot be empty', 'error'); return; }
+      if (clean === cur) return;
+      try {
+        const r = await fetch(`/hub/api/files/${id}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: clean })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Rename failed');
+        toast('Renamed', 'success');
+        loadDocuments();
       } catch (e) { toast(e.message, 'error'); }
     }
 
@@ -12697,6 +12724,8 @@
     async function selectChatRoom(roomId, opts = {}) {
       CHAT.activeRoomId = roomId;
       CHAT.activeRoom = CHAT.rooms.find(r => r.id === roomId) || null;
+      CHAT._pendingAttach = null;
+      renderChatPendingAttach();
       renderChatRoomsList();
       if (!opts.silent) {
         document.getElementById('chatMessages').innerHTML =
@@ -12723,6 +12752,10 @@
         `;
       }
       await loadChatMessages();
+      // Opening a room clears its chat alerts on the server; refresh the bell
+      // so a message I've now seen stops showing as an alert. Rooms I never
+      // open keep their alert.
+      try { if (typeof loadAlerts === 'function') loadAlerts(); } catch (_) {}
       _startChatPoll();
     }
 
@@ -12844,13 +12877,24 @@
             receipt = `<div style="font-size:10px;color:#94a3b8;text-align:right;margin-top:3px" title="Waiting on: ${unread.map(u => esc(u.name)).join(', ')}">Sent · not read yet</div>`;
           }
         }
+        let attach = '';
+        if (m.attachment_file_id) {
+          const aUrl = `/hub/api/chat/rooms/${CHAT.activeRoomId}/attachment/${m.attachment_file_id}`;
+          const aName = esc(m.attachment_name || 'attachment');
+          if (/\.(png|jpe?g|gif|webp)$/i.test(m.attachment_name || '')) {
+            attach = `<div style="margin-top:6px"><a href="${aUrl}" target="_blank" rel="noopener"><img src="${aUrl}" alt="${aName}" style="max-width:220px;max-height:220px;border-radius:8px;border:1px solid #e5e7eb;display:block"></a></div>`;
+          } else {
+            attach = `<div style="margin-top:6px"><a href="${aUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#2563eb;font-weight:600;text-decoration:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px">📎 ${aName}</a></div>`;
+          }
+        }
         return `<div style="display:flex;justify-content:${align};margin-bottom:10px">
           <div style="max-width:78%;padding:8px 12px;border:1px solid ${border};background:${bg};border-radius:12px">
             <div style="font-size:11px;color:#64748b;margin-bottom:2px">
               <b style="color:#1f2937">${esc(m.sender_name || 'unknown')}</b>${roleBadge}
               <span style="margin-left:6px;color:#94a3b8">${ts}</span>
             </div>
-            <div style="font-size:13px;color:#111827;white-space:pre-wrap;word-break:break-word">${esc(m.body || '')}</div>
+            ${m.body ? `<div style="font-size:13px;color:#111827;white-space:pre-wrap;word-break:break-word">${esc(m.body)}</div>` : ''}
+            ${attach}
             ${receipt}
           </div>
         </div>`;
@@ -12864,20 +12908,75 @@
     async function chatSendMessage() {
       const input = document.getElementById('chatInput');
       const text = (input.value || '').trim();
-      if (!text || !CHAT.activeRoomId) return;
+      const att = CHAT._pendingAttach;
+      if ((!text && !att) || !CHAT.activeRoomId) return;
       const btn = document.getElementById('chatSendBtn');
       btn.disabled = true;
       try {
+        const payload = { body: text };
+        if (att) { payload.attachment_file_id = att.file_id; payload.attachment_name = att.name; }
         const r = await fetch(`/hub/api/chat/rooms/${CHAT.activeRoomId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ body: text })
+          body: JSON.stringify(payload)
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Failed');
         input.value = '';
+        CHAT._pendingAttach = null;
+        renderChatPendingAttach();
         await loadChatMessages();
       } catch (e) { toast(e.message, 'error'); }
       finally { btn.disabled = false; input.focus(); }
+    }
+
+    // ── Chat attachments ──
+    // Pick a file, upload it to this room right away, then show a removable /
+    // renamable chip. The message is posted (with the file_id) on Send.
+    async function chatPickAttachment(inputEl) {
+      const file = inputEl.files && inputEl.files[0];
+      inputEl.value = '';
+      if (!file || !CHAT.activeRoomId) return;
+      if (file.size > 25 * 1024 * 1024) { toast('File too large (max 25MB)', 'error'); return; }
+      const chip = document.getElementById('chatPendingAttach');
+      if (chip) {
+        chip.style.display = '';
+        chip.innerHTML = `<div style="font-size:12px;color:#64748b;padding:6px 10px;background:#f1f5f9;border-radius:8px;display:inline-flex;align-items:center;gap:8px">⏳ Uploading ${esc(file.name)}…</div>`;
+      }
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch(`/hub/api/chat/rooms/${CHAT.activeRoomId}/attachment`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'Upload failed');
+        CHAT._pendingAttach = { file_id: d.file_id, name: d.name, file_type: d.file_type, is_image: d.is_image };
+        renderChatPendingAttach();
+      } catch (e) {
+        CHAT._pendingAttach = null;
+        renderChatPendingAttach();
+        toast(e.message, 'error');
+      }
+    }
+
+    function renderChatPendingAttach() {
+      const chip = document.getElementById('chatPendingAttach');
+      if (!chip) return;
+      const a = CHAT._pendingAttach;
+      if (!a) { chip.style.display = 'none'; chip.innerHTML = ''; return; }
+      const icon = a.is_image ? '🖼️' : (a.file_type === 'pdf' ? '📄' : '📎');
+      chip.style.display = '';
+      chip.innerHTML = `<div style="font-size:12px;color:#0f172a;padding:6px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;display:inline-flex;align-items:center;gap:8px">
+        <span>${icon}</span>
+        <input id="chatAttachName" value="${esc(a.name)}" title="Rename this attachment before sending"
+          style="border:none;background:transparent;font:inherit;font-size:12px;color:#0f172a;max-width:240px;outline:none"
+          onchange="if(CHAT._pendingAttach)CHAT._pendingAttach.name=(this.value||'').trim()||CHAT._pendingAttach.name">
+        <span onclick="chatClearAttachment()" title="Remove attachment"
+          style="cursor:pointer;color:#ef4444;font-weight:700">✕</span>
+      </div>`;
+    }
+
+    function chatClearAttachment() {
+      CHAT._pendingAttach = null;
+      renderChatPendingAttach();
     }
 
     function _startChatPoll() {

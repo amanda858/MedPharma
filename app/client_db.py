@@ -1159,6 +1159,8 @@ def init_client_hub_db():
             sender_name TEXT DEFAULT '',
             sender_role TEXT DEFAULT 'member',
             body        TEXT NOT NULL,
+            attachment_file_id INTEGER,
+            attachment_name    TEXT DEFAULT '',
             created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE
         );
@@ -1364,6 +1366,17 @@ def init_client_hub_db():
     ):
         if col not in tp_cols:
             cur.execute(f"ALTER TABLE team_production ADD COLUMN {col} {col_def}")
+    conn.commit()
+
+    # ── Migrate existing DBs: chat message attachments ───────────────────
+    cur.execute("PRAGMA table_info(chat_messages)")
+    cm_cols = {row[1] for row in cur.fetchall()}
+    for col, col_def in (
+        ("attachment_file_id", "INTEGER"),
+        ("attachment_name", "TEXT DEFAULT ''"),
+    ):
+        if col not in cm_cols:
+            cur.execute(f"ALTER TABLE chat_messages ADD COLUMN {col} {col_def}")
     conn.commit()
 
     # ── Migrate existing DBs: payment posting attribution ────────────────
@@ -4507,6 +4520,27 @@ def mark_notification_read(user_id: int, notification_id: int) -> bool:
         )
         conn.commit()
         return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def mark_room_notifications_read(user_id: int, room_id: int) -> int:
+    """Clear a user's chat-message alerts for one room. Called when the user
+    opens/reads that room, so a message they've actually seen stops nagging
+    them in the notification bell while unread rooms keep their alert."""
+    if not user_id or not room_id:
+        return 0
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE notifications SET is_read=1, read_at=CURRENT_TIMESTAMP "
+            "WHERE user_id=? AND is_read=0 AND kind='chat_message' "
+            "AND related_type='chat_room' AND related_id=?",
+            (int(user_id), int(room_id)),
+        )
+        conn.commit()
+        return cur.rowcount or 0
     finally:
         conn.close()
 
@@ -7754,6 +7788,10 @@ def list_files(client_id=None):
         rows = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
+    # Chat attachments are stored in client_files under a sentinel category so
+    # they reuse the same storage + download plumbing, but they must never
+    # surface in any Documents / eligibility listing.
+    rows = [r for r in rows if (r.get("category") or "") != "__chat__"]
     return rows
 
 
@@ -8209,26 +8247,36 @@ def user_can_access_room(room_id: int, user_id: int, is_admin: bool = False) -> 
 
 
 def add_room_message(room_id: int, sender_id: int, sender_name: str,
-                     sender_role: str, body: str) -> int:
+                     sender_role: str, body: str,
+                     attachment_file_id: int | None = None,
+                     attachment_name: str = "") -> int:
     body = (body or "").strip()
-    if not body:
+    has_attachment = bool(attachment_file_id)
+    if not body and not has_attachment:
         raise ValueError("Message body is required")
     role = (sender_role or "member").lower()
     # HIPAA: encrypt the body at rest. Schema is unchanged — we store the
-    # ciphertext (or legacy plaintext) in the same TEXT column.
-    try:
-        from app.security import encrypt_message
-        stored_body = encrypt_message(body)
-    except Exception:
-        log.exception("chat encryption failed; falling back to plaintext")
-        stored_body = body
+    # ciphertext (or legacy plaintext) in the same TEXT column. An
+    # attachment-only message stores an empty body.
+    if body:
+        try:
+            from app.security import encrypt_message
+            stored_body = encrypt_message(body)
+        except Exception:
+            log.exception("chat encryption failed; falling back to plaintext")
+            stored_body = body
+    else:
+        stored_body = ""
     conn = get_db()
     try:
         cur = conn.execute(
             """INSERT INTO chat_messages
-               (room_id, sender_id, sender_name, sender_role, body)
-               VALUES (?,?,?,?,?)""",
-            (room_id, sender_id, sender_name, role, stored_body),
+               (room_id, sender_id, sender_name, sender_role, body,
+                attachment_file_id, attachment_name)
+               VALUES (?,?,?,?,?,?,?)""",
+            (room_id, sender_id, sender_name, role, stored_body,
+             int(attachment_file_id) if has_attachment else None,
+             (attachment_name or "")[:255]),
         )
         # Sender has implicitly read their own message
         conn.execute(
@@ -8251,7 +8299,8 @@ def list_room_messages(room_id: int, limit: int = 200,
     try:
         if before_id:
             rows = conn.execute(
-                """SELECT id, room_id, sender_id, sender_name, sender_role, body, created_at
+                """SELECT id, room_id, sender_id, sender_name, sender_role, body,
+                          attachment_file_id, attachment_name, created_at
                    FROM chat_messages
                    WHERE room_id=? AND id<?
                    ORDER BY id DESC LIMIT ?""",
@@ -8259,7 +8308,8 @@ def list_room_messages(room_id: int, limit: int = 200,
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT id, room_id, sender_id, sender_name, sender_role, body, created_at
+                """SELECT id, room_id, sender_id, sender_name, sender_role, body,
+                          attachment_file_id, attachment_name, created_at
                    FROM chat_messages
                    WHERE room_id=?
                    ORDER BY id DESC LIMIT ?""",
@@ -8273,9 +8323,24 @@ def list_room_messages(room_id: int, limit: int = 200,
         out = []
         for r in reversed(rows):
             d = dict(r)
-            d["body"] = decrypt_message(d.get("body"))
+            d["body"] = decrypt_message(d.get("body")) if d.get("body") else ""
             out.append(d)
         return out
+    finally:
+        conn.close()
+
+
+def chat_attachment_in_room(room_id: int, file_id: int) -> bool:
+    """True if ``file_id`` is attached to at least one message in ``room_id``.
+    Used to gate attachment downloads by the room the file actually lives in,
+    so belonging to one room can't be used to fetch another room's files."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM chat_messages WHERE room_id=? AND attachment_file_id=? LIMIT 1",
+            (int(room_id), int(file_id)),
+        ).fetchone()
+        return row is not None
     finally:
         conn.close()
 
