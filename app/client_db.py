@@ -3918,7 +3918,12 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # book). There is no intake carve-out: a claim is billed the moment it is
         # loaded, so the whole charged value is the headline Billed Out figure.
         total_charge = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {cond} {'AND' if cond else 'WHERE'} {_billed_expr}", p + _prebill_params)
-        total_paid = q1(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {cond}", p)
+        # Collected money is the Payment Posting tab (payments table) ONLY — the
+        # single source of truth. Claim-line PaidAmount is NOT treated as money
+        # collected here, so the dashboard's Paid / net-collection figures can
+        # never disagree with the tab. A per-member view can't attribute posted
+        # deposits to one biller, so it collects 0.
+        total_paid = 0.0 if member_scoped else q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {pay_cond}", pay_p)
         net_coll_rate = round(total_paid / max(total_charge, 1) * 100, 1)
 
         # AR Aging buckets — age from the date of service first (mirrors the AR
