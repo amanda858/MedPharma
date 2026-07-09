@@ -3910,6 +3910,27 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # rows the average above is computed from. When this is 0 the average is
         # not "0 days", it's "no data yet"; the UI shows "—" instead of a fake 0.
         paid_dated_count = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} PaidDate != '' AND DOS != ''", p)
+        # Fallback turnaround from the Payment Posting register. Accounts like SVD
+        # collect via the Payment Posting tab (payments table) rather than posting
+        # a PaidDate back onto each claim line, so the claim-based average above is
+        # empty and the tile would read "—". When there's no dated claim-level pay
+        # data, derive the same metric from the posting rows themselves — days from
+        # service date (Dos) to posting date (PostDate). Only non-negative spans
+        # count (a posting can't predate service). Not shown on a member-scoped
+        # dashboard (payments carry no uploaded_by, so it isn't that user's work).
+        if not paid_dated_count and not member_scoped:
+            cur.execute(
+                f"""SELECT AVG(CAST(julianday(substr(PostDate,1,10)) - julianday(substr(Dos,1,10)) AS REAL)),
+                           COUNT(*)
+                    FROM payments {pay_cond}
+                    {'AND' if pay_cond else 'WHERE'} COALESCE(Dos,'') != '' AND COALESCE(PostDate,'') != ''
+                      AND julianday(substr(PostDate,1,10)) >= julianday(substr(Dos,1,10))""",
+                pay_p,
+            )
+            prow = cur.fetchone()
+            if prow and prow[1]:
+                avg_days_to_pay = round(prow[0] or 0, 1)
+                paid_dated_count = prow[1]
 
         # SLA breaches
         sla_breaches = q1(f"SELECT COUNT(*) FROM claims_master {cond} {'AND' if cond else 'WHERE'} SLABreached=1", p)
