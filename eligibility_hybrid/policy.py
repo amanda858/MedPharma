@@ -114,7 +114,37 @@ POLICIES: dict[str, CptPolicy] = {
 }
 
 _MEDICARE_HINTS = ("medicare", "cms", "part b")
-_ADVANTAGE_HINTS = ("advantage", "medicare advantage")
+# Common data-entry misspellings of "medicare" seen in real payer feeds.
+_MEDICARE_MISSPELLINGS = ("medicre", "medcare", "medicar", "mdicare", "medciare", "medacare")
+
+# Commercial carrier brands. Original / Traditional Medicare is administered by
+# CMS and is NEVER carrier-branded, so a carrier brand alongside any Medicare or
+# managed-plan signal identifies a Medicare Advantage (Part C) product.
+_MA_CARRIER_BRANDS = (
+    "humana", "aetna", "cigna", "united", "uhc", "unitedhealth", "optum",
+    "wellcare", "wellmed", "anthem", "bcbs", "blue cross", "blue shield",
+    "kaiser", "molina", "centene", "elevance", "devoted", "clover", "oscar",
+    "scan health", "healthspring", "coventry", "amerigroup", "alignment",
+    "brand new day", "essence", "peoples health",
+)
+# Managed-plan type markers — meaningful when Medicare is also indicated, since
+# Original Medicare is straight fee-for-service (never PPO/HMO/PFFS/SNP).
+_PLAN_TYPE_MARKERS = ("ppo", "hmo", "pffs", "snp", "part c", "advantage")
+# Product markers that signal Medicare Advantage even without the word "medicare"
+# (e.g. "Humana Gold Plus", "UHC Medicare Complete", "… Choice/Solutions").
+_MA_PRODUCT_MARKERS = (
+    "advantage", "part c", "gold", "choice", "complete", "solutions",
+    "medicareblue", "medicare blue", "gold plus",
+)
+# Known Medicare Advantage product names that may omit "medicare" entirely.
+_MA_PRODUCT_NAMES = ("wellcare", "humana gold", "medicare complete")
+
+
+def _mentions_medicare(p: str) -> bool:
+    """True if the (lowercased) payer text references Medicare, tolerating the
+    common misspellings found in uploaded payer data."""
+    return (any(h in p for h in _MEDICARE_HINTS)
+            or any(m in p for m in _MEDICARE_MISSPELLINGS))
 
 
 @dataclass
@@ -131,9 +161,44 @@ def get_policy(cpt: str) -> Optional[CptPolicy]:
     return POLICIES.get((cpt or "").strip())
 
 
+def is_medicare_advantage(payer_name: str) -> bool:
+    """True when the payer is a Medicare Advantage (Part C) plan rather than
+    Original / Traditional Medicare.
+
+    Real-world MA names are branded by the managed-care carrier (Humana, Aetna,
+    UHC, …) and/or carry a plan-type marker (PPO, HMO, Complete, Gold, Choice,
+    Solutions, …); they seldom contain the literal words "Medicare Advantage".
+    Misclassifying MA as Original Medicare routes the 270 to CMS HETS — which
+    only answers for fee-for-service Medicare — and applies the wrong financial-
+    liability rules (CMS ABN instead of a plan organization determination)."""
+    p = (payer_name or "").lower().strip()
+    if not p:
+        return False
+    brand = any(b in p for b in _MA_CARRIER_BRANDS)
+    # Branded or managed "Medicare …" product → Advantage (Original Medicare is
+    # never branded and is straight FFS, so it never trips these signals).
+    if _mentions_medicare(p) and (brand or any(m in p for m in _PLAN_TYPE_MARKERS)):
+        return True
+    # Carrier brand + an MA product marker, even without the word "medicare".
+    if brand and any(m in p for m in _MA_PRODUCT_MARKERS):
+        return True
+    # Known MA-only product names.
+    if any(n in p for n in _MA_PRODUCT_NAMES):
+        return True
+    # Explicit Advantage / Part C wording.
+    return "advantage" in p or "part c" in p
+
+
 def is_traditional_medicare(payer_name: str) -> bool:
+    """True only for Original / Traditional Medicare (fee-for-service Part A/B) —
+    the payer CMS HETS answers for. Carrier-branded Medicare products (Medicare
+    Advantage / Part C) and non-Medicare payers return False. Railroad Medicare
+    remains Original Medicare (FFS), though it is administered by the RRB
+    Specialty MAC (Palmetto GBA) and needs that payer ID when routing a 270."""
     p = (payer_name or "").lower()
-    return any(h in p for h in _MEDICARE_HINTS) and not any(h in p for h in _ADVANTAGE_HINTS)
+    if not p or is_medicare_advantage(payer_name):
+        return False
+    return _mentions_medicare(p)
 
 
 def _norm(code: str) -> str:
@@ -260,9 +325,8 @@ def abn_recommendation(cpt: str, payer_name: str, necessary: bool,
     cpt = (cpt or "").strip()
     pol = get_policy(cpt)
     desc = pol.description if pol else f"CPT {cpt}"
-    p = (payer_name or "").lower()
     trad_medicare = is_traditional_medicare(payer_name)
-    advantage = any(h in p for h in _ADVANTAGE_HINTS) or \
+    advantage = is_medicare_advantage(payer_name) or \
         (plan_type or "").strip().lower() in ("medicare advantage", "advantage", "ma")
 
     # Medicare Advantage — the CMS ABN does not apply.
