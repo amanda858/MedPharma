@@ -7252,6 +7252,16 @@
       if (!_eligViewInit) {
         _eligViewInit = true;
         activeEligView = staff ? 'reporting' : 'intake';
+        // "Completed Reporting" honors its name: a record is only "completed"
+        // once its eligibility has actually been RUN (Stage becomes Completed
+        // when the verified report is filed). Default the worklist to Completed
+        // so pending / received work no longer shows there as if it were done.
+        // Staff can still pick another stage from the filter to work the pipeline.
+        if (staff) {
+          activeEligFilter = 'Completed';
+          const _ef = document.getElementById('eligFilter');
+          if (_ef) _ef.value = 'Completed';
+        }
       }
       if (!staff && activeEligView === 'reporting') activeEligView = 'intake';
       switchEligView(activeEligView);
@@ -7659,7 +7669,10 @@
       const tbody = document.getElementById('eligTbody');
       if (!tbody) return;
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="19"><div class="empty-state"><div class="es-icon">🩺</div><p>No eligibility records yet</p></div></td></tr>`;
+        const _msg = f
+          ? `No records match “${esc(activeEligFilter)}.” A record shows here as Completed only once its eligibility has been run.`
+          : 'No eligibility records yet';
+        tbody.innerHTML = `<tr><td colspan="19"><div class="empty-state"><div class="es-icon">🩺</div><p>${_msg}</p></div></td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(i => {
