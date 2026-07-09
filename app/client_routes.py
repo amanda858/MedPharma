@@ -89,6 +89,13 @@ router = APIRouter(prefix="/hub/api")
 
 DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
 
+# Payments are posted ONLY through the 💰 Payment Posting tab (/payments/import),
+# which is the single source of truth for collected money. On/after this business
+# date, a deposit / ERA / posted-payments register dropped into a general Documents
+# upload is refused and the user is redirected to the tab. Before it, uploads pass
+# through untouched (grace period) so nothing breaks mid-day.
+PAYMENT_TAB_MANDATORY_DATE = "2026-07-10"
+
 
 def _send_direct_email(to_email: str, subject: str, text_body: str, html_body: str = "") -> tuple[bool, str]:
     """Send a direct email to a single recipient using SendGrid or SMTP.
@@ -5441,6 +5448,27 @@ async def upload_file(
     if file_size > MAX_UPLOAD_SIZE:
         raise HTTPException(413, f"File too large. Maximum is {MAX_UPLOAD_SIZE // (1024*1024)}MB")
 
+    # ── Payment Posting tab is the ONLY source of truth for payments ──
+    # A deposit / ERA / posted-payments register must be uploaded on the
+    # 💰 Payment Posting tab (/payments/import) so it is recorded as collected
+    # money — never through a general Documents/report upload, where it used to
+    # leak in and double-source the numbers. On/after PAYMENT_TAB_MANDATORY_DATE
+    # we detect such a register here and refuse it, pointing the user to the tab.
+    # Detection requires payment-specific columns (payer + amount + EFT/check/
+    # trace or batch/deposit), so ordinary claim worklists are never caught.
+    if file_type == "excel" and business_today_iso() >= PAYMENT_TAB_MANDATORY_DATE:
+        try:
+            _deposit_register = _extract_deposit_register(content, ext)
+        except Exception:
+            _deposit_register = None
+        if _deposit_register:
+            raise HTTPException(
+                400,
+                "This file has payments on it (a deposit / ERA register). Payments "
+                "must be uploaded on the 💰 Payment Posting tab so they’re recorded "
+                "as collected money — please re-upload it there instead of here.",
+            )
+
     with open(dest, "wb") as f:
         f.write(content)
 
@@ -6071,6 +6099,13 @@ def _import_payments_posted(content: bytes, ext: str, client_id: int, uploaded_b
     conn = get_db()
     try:
         cur = conn.cursor()
+        # The Payment Posting tab is the single source of truth. Clear any rows
+        # left behind by the retired auto-sweep (posted under pipe-delimited
+        # 'PMT|...' keys) for this account before upserting, so the two key styles
+        # can never coexist and double-count. Tab rows use 'PMT-<eft>' / real claim
+        # numbers — never a pipe — so this only removes retired sweep phantoms.
+        cur.execute("DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PMT|%'",
+                    (client_id,))
         cur.executemany(
             "DELETE FROM payments WHERE client_id=? AND ClaimKey=?",
             [(client_id, k) for k in keys],
@@ -8326,94 +8361,20 @@ def _extract_deposit_register(content: bytes, ext: str):
 
 
 def auto_import_pending_payment_files(client_id: Optional[int] = None) -> dict:
-    """Post ERA / deposit registers into the payments table so the dashboard's
-    Paid/Posted reflects money actually collected. The payments counterpart of
-    auto_import_pending_claim_files.
+    """DISABLED — payments now enter the system ONLY through the 💰 Payment
+    Posting tab (/payments/import), which is the single source of truth for
+    collected money.
 
-    For each account we scan every uploaded spreadsheet, read the best deposit
-    register out of each (see _extract_deposit_register), and post the SINGLE
-    richest register as the authoritative collected total. Uploaded payment files
-    routinely OVERLAP — a per-remittance export, a per-deposit list and a per-
-    batch posting register all describe the same money at different grains — so
-    summing them would inflate collections; taking the most complete single
-    register is the honest, non-double-counted figure.
+    This used to scan every uploaded spreadsheet for a deposit / ERA register and
+    auto-post the richest one. That let payment money leak in through ordinary
+    report uploads and double-source the dashboard — exactly the confusion we're
+    removing — so the sweep is intentionally a no-op. The detection helpers
+    (_extract_deposit_register / _read_deposit_sheet) are kept because the upload
+    endpoint reuses them to refuse payment files dropped outside the tab.
 
-    Idempotent and safe: it deletes only the auto-imported deposit rows
-    (ClaimKey LIKE 'PMT%') for the account and re-inserts the current register,
-    so manual per-claim payments (keyed on the real claim number) are never
-    touched. When no register is found for an account its existing rows are left
-    as-is. Returns {"files": n, "rows": n, "amount": total}."""
-    from .client_db import get_db as _get_db
-    conn = _get_db()
-    try:
-        cur = conn.cursor()
-        if client_id is not None:
-            client_ids = [int(client_id)]
-        else:
-            client_ids = [r[0] for r in cur.execute(
-                "SELECT DISTINCT client_id FROM client_files WHERE file_type='excel'").fetchall()]
-        file_rows = {}
-        for cid in client_ids:
-            file_rows[cid] = cur.execute(
-                "SELECT id, filename, original_name, uploaded_by FROM client_files "
-                "WHERE file_type='excel' AND client_id=?", (cid,)).fetchall()
-    finally:
-        conn.close()
-
-    total_files = 0
-    total_rows = 0
-    grand_amount = 0.0
-    for cid in client_ids:
-        best_rows = None
-        best_amount = None
-        best_by = ""
-        for fr in file_rows.get(cid, []):
-            path = os.path.join(UPLOAD_DIR, fr["filename"])
-            if not os.path.isfile(path):
-                continue
-            ext = os.path.splitext(fr["original_name"] or "")[1].lower()
-            if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
-                ext = os.path.splitext(fr["filename"])[1].lower()
-            if ext not in (".xlsx", ".xls", ".csv", ".ods", ".odf"):
-                continue
-            try:
-                with open(path, "rb") as fh:
-                    content = fh.read()
-                reg = _extract_deposit_register(content, ext)
-            except Exception as e:
-                log.warning("payment sweep: file %s failed: %s", fr["id"], e)
-                continue
-            if not reg:
-                continue
-            _label, drows = reg
-            amount = round(sum(x["amount"] for x in drows), 2)
-            if best_amount is None or amount > best_amount:
-                best_amount, best_rows, best_by = amount, drows, str(fr["uploaded_by"] or "")
-        if best_rows is None:
-            continue  # no register for this account — leave existing rows untouched
-        conn = _get_db()
-        try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM payments WHERE client_id=? AND ClaimKey LIKE 'PMT%'", (cid,))
-            cur.executemany(
-                """INSERT INTO payments
-                   (client_id, ClaimKey, PostDate, PaymentAmount, PayerType,
-                    CheckNumber, PostedBy, sub_profile)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                [(cid,
-                  "PMT|%s|%s|%s|%s" % ((x["payer"] or "").lower(), x["date"], x["amount"], x["eft"]),
-                  x["date"], x["amount"], "Primary", x["eft"], best_by, "")
-                 for x in best_rows])
-            conn.commit()
-        finally:
-            conn.close()
-        total_files += 1
-        total_rows += len(best_rows)
-        grand_amount += best_amount or 0.0
-    if total_rows:
-        log.info("Payment sweep posted %s deposit row(s) totaling %.2f across %s account(s)",
-                 total_rows, round(grand_amount, 2), total_files)
-    return {"files": total_files, "rows": total_rows, "amount": round(grand_amount, 2)}
+    Existing rows are left untouched: any figures a prior sweep posted stay put
+    until the account's next Payment Posting tab upload replaces them cleanly."""
+    return {"files": 0, "rows": 0, "amount": 0.0}
 
 
 @router.post("/files/{file_id}/import-claims")
