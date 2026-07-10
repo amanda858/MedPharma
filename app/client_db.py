@@ -3755,6 +3755,44 @@ def billing_cycle_window(anchor_iso, today):
     return start.isoformat(), end.isoformat(), label
 
 
+# Default billing-cycle anchor day-of-month for accounts without their own
+# billing_cycle_start. The team runs a 15th-to-15th cycle (matching the 6/15
+# New-vs-Rolling cutoff), so every dashboard reports on that period, not the
+# calendar month. Override with the BILLING_CYCLE_ANCHOR_DAY env var if needed.
+DEFAULT_BILLING_CYCLE_ANCHOR_DAY = int(os.getenv("BILLING_CYCLE_ANCHOR_DAY", "15") or 15)
+
+
+def default_cycle_window(today, anchor_day: int = None):
+    """The standard monthly billing cycle that contains ``today``, anchored to a
+    fixed day-of-month (default the 15th). Returns (start_iso, end_iso, label)
+    as a clean month-to-month window — e.g. today 7/10 -> 6/15–7/15. Used for the
+    admin portfolio roll-up and any account without its own billing_cycle_start,
+    so "this month" figures follow the 6/15 billing cutoff, not the calendar
+    month."""
+    import datetime as _dt, calendar as _cal
+    day = anchor_day if anchor_day is not None else DEFAULT_BILLING_CYCLE_ANCHOR_DAY
+    try:
+        day = min(max(int(day), 1), 28)  # stay valid in every month (Feb-safe)
+    except Exception:
+        day = 15
+    if isinstance(today, _dt.datetime):
+        today = today.date()
+
+    def _clamp(y, m):
+        return _dt.date(y, m, min(day, _cal.monthrange(y, m)[1]))
+
+    if today.day >= day:
+        start = _clamp(today.year, today.month)
+        ey, em = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+        end = _clamp(ey, em)
+    else:
+        end = _clamp(today.year, today.month)
+        sy, sm = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
+        start = _clamp(sy, sm)
+    label = f"{start.month}/{start.day}\u2013{end.month}/{end.day}/{str(end.year)[2:]}"
+    return start.isoformat(), end.isoformat(), label
+
+
 def get_dashboard(client_id: int = None, sub_profile: str = None,
                   date_from: str = None, date_to: str = None,
                   member_idents: list = None):
@@ -3823,6 +3861,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         # period — not the calendar month. Otherwise fall back to the calendar
         # month. cycle_* are surfaced in the payload so the UI can label the range.
         cycle_start = cycle_end = cycle_label = None
+        _anchor = ""
         if client_id is not None:
             try:
                 cur.execute("SELECT billing_cycle_start FROM clients WHERE id=?", [client_id])
@@ -3830,9 +3869,16 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                 _anchor = (_arow[0] if _arow else "") or ""
             except Exception:
                 _anchor = ""
-            _win = billing_cycle_window(_anchor, today) if _anchor else None
-            if _win:
-                cycle_start, cycle_end, cycle_label = _win
+        # An account with its own explicit anchor keeps its drifting cycle; every
+        # other dashboard — including the admin portfolio roll-up (client_id=None)
+        # — reports on the standard monthly billing cycle anchored to the 15th
+        # (6/15–7/15, 7/15–8/15 …), matching the New-vs-Rolling 6/15 cutoff. The
+        # calendar month is no longer used, so "this month" figures always follow
+        # the real billing period the team runs on.
+        _win = (billing_cycle_window(_anchor, today) if _anchor else None) \
+            or default_cycle_window(today)
+        if _win:
+            cycle_start, cycle_end, cycle_label = _win
         if cycle_start:
             mtd_start, mtd_end = cycle_start, cycle_end
         else:
