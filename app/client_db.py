@@ -4259,10 +4259,12 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
 
 # ─── Daily Account Summary (for 6 PM scheduled report) ────────────────────
 
-def get_daily_account_summary():
+def get_daily_account_summary(client_id: int | None = None):
     """
-    Aggregate snapshot across ALL clients for the overall daily account summary.
-    Returns high-level KPIs suitable for the Team Lead / Manager report.
+    Snapshot of daily account KPIs. When client_id is None the numbers span
+    ALL clients (portfolio roll-up); when set, every query is scoped to that
+    one client so the daily report can be broken out per-client instead of
+    one lumped total.
     """
     conn = get_db()
     try:
@@ -4272,50 +4274,63 @@ def get_daily_account_summary():
         mtd_start = today.replace(day=1).isoformat()
         ytd_start = today.replace(month=1, day=1).isoformat()
 
+        def cond(base: str = ""):
+            """Compose a WHERE clause + params, scoped to client_id when set."""
+            parts, params = [], []
+            if client_id is not None:
+                parts.append("client_id=?")
+                params.append(client_id)
+            if base:
+                parts.append(base)
+            where = ("WHERE " + " AND ".join(parts)) if parts else ""
+            return where, params
+
         def q1(sql, params=None):
             cur.execute(sql, params or [])
             row = cur.fetchone()
             return row[0] if row else 0
 
-        # ── Claims KPIs ──
-        total_claims       = q1("SELECT COUNT(*) FROM claims_master")
-        total_ar           = q1("SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master")
-        active_claims      = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed')")
-        claims_paid        = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid'")
-        claims_denied      = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus IN ('Denied','Appeals')")
-        claims_submitted   = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate != ''")
-        submitted_today    = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate=?", [today_str])
-        paid_today         = q1("SELECT COUNT(*) FROM claims_master WHERE PaidDate=?", [today_str])
-        denied_today       = q1("SELECT COUNT(*) FROM claims_master WHERE DeniedDate=?", [today_str])
-        submitted_mtd      = q1("SELECT COUNT(*) FROM claims_master WHERE BillDate>=?", [mtd_start])
-        paid_mtd           = q1("SELECT COUNT(*) FROM claims_master WHERE PaidDate>=?", [mtd_start])
-        denied_mtd         = q1("SELECT COUNT(*) FROM claims_master WHERE DeniedDate>=?", [mtd_start])
+        # ── Claims KPIs (scoped to client_id when set) ──
+        w, p = cond();                                       total_claims     = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
+        w, p = cond();                                       total_ar         = q1(f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master {w}", p)
+        w, p = cond("ClaimStatus NOT IN ('Paid','Closed')");  active_claims    = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
+        w, p = cond("ClaimStatus='Paid'");                   claims_paid      = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
+        w, p = cond("ClaimStatus IN ('Denied','Appeals')");  claims_denied    = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
+        w, p = cond("BillDate != ''");                       claims_submitted = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
+        w, p = cond("BillDate=?");                            submitted_today  = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [today_str])
+        w, p = cond("PaidDate=?");                            paid_today       = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [today_str])
+        w, p = cond("DeniedDate=?");                          denied_today     = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [today_str])
+        w, p = cond("BillDate>=?");                           submitted_mtd    = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [mtd_start])
+        w, p = cond("PaidDate>=?");                           paid_mtd         = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [mtd_start])
+        w, p = cond("DeniedDate>=?");                         denied_mtd       = q1(f"SELECT COUNT(*) FROM claims_master {w}", p + [mtd_start])
 
-        total_charge       = q1("SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master")
-        total_paid_amt     = q1("SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master")
+        w, p = cond();                                       total_charge     = q1(f"SELECT COALESCE(SUM(ChargeAmount),0) FROM claims_master {w}", p)
+        w, p = cond();                                       total_paid_amt   = q1(f"SELECT COALESCE(SUM(PaidAmount),0) FROM claims_master {w}", p)
         net_coll_rate      = round(total_paid_amt / max(total_charge, 1) * 100, 1)
 
-        clean_claims       = q1("SELECT COUNT(*) FROM claims_master WHERE ClaimStatus='Paid' AND DenialReason=''")
+        w, p = cond("ClaimStatus='Paid' AND DenialReason=''"); clean_claims   = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
         clean_rate         = round(clean_claims / max(claims_submitted, 1) * 100, 1)
         denial_rate        = round(claims_denied / max(claims_submitted, 1) * 100, 1)
 
-        sla_breaches       = q1("SELECT COUNT(*) FROM claims_master WHERE SLABreached=1")
+        w, p = cond("SLABreached=1");                         sla_breaches     = q1(f"SELECT COUNT(*) FROM claims_master {w}", p)
 
         # Avg days to pay
-        cur.execute("SELECT AVG(CAST(julianday(PaidDate) - julianday(DOS) AS REAL)) FROM claims_master WHERE PaidDate != '' AND DOS != ''")
+        w, p = cond("PaidDate != '' AND DOS != ''")
+        cur.execute(f"SELECT AVG(CAST(julianday(PaidDate) - julianday(DOS) AS REAL)) FROM claims_master {w}", p)
         row = cur.fetchone()
         avg_days_to_pay = round(row[0] or 0, 1)
 
         # Payments
-        payments_today     = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate=?", [today_str])
-        payments_mtd       = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [mtd_start])
-        payments_ytd       = q1("SELECT COALESCE(SUM(PaymentAmount),0) FROM payments WHERE PostDate>=?", [ytd_start])
+        w, p = cond("PostDate=?");                            payments_today   = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {w}", p + [today_str])
+        w, p = cond("PostDate>=?");                           payments_mtd     = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {w}", p + [mtd_start])
+        w, p = cond("PostDate>=?");                           payments_ytd     = q1(f"SELECT COALESCE(SUM(PaymentAmount),0) FROM payments {w}", p + [ytd_start])
 
         # AR Aging
         aging = {"current": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
-        cur.execute("""SELECT BalanceRemaining,
+        w, p = cond("ClaimStatus NOT IN ('Paid','Closed') AND BalanceRemaining > 0")
+        cur.execute(f"""SELECT BalanceRemaining,
                        CAST(julianday('now') - julianday(COALESCE(NULLIF(BillDate,''), DOS, updated_at)) AS INTEGER) as age
-                       FROM claims_master WHERE ClaimStatus NOT IN ('Paid','Closed') AND BalanceRemaining > 0""")
+                       FROM claims_master {w}""", p)
         for row in cur.fetchall():
             bal, age_days = row
             age_days = age_days or 0
@@ -4326,15 +4341,18 @@ def get_daily_account_summary():
         aging = {k: round(v, 2) for k, v in aging.items()}
 
         # Status distribution
-        cur.execute("SELECT ClaimStatus, COUNT(*) FROM claims_master GROUP BY ClaimStatus ORDER BY COUNT(*) DESC")
+        w, p = cond()
+        cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {w} GROUP BY ClaimStatus ORDER BY COUNT(*) DESC", p)
         status_dist = {r[0]: r[1] for r in cur.fetchall()}
 
         # Top payors
-        cur.execute("SELECT Payor, COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master WHERE Payor != '' GROUP BY Payor ORDER BY COUNT(*) DESC LIMIT 10")
+        w, p = cond("Payor != ''")
+        cur.execute(f"SELECT Payor, COUNT(*), COALESCE(SUM(ChargeAmount),0) FROM claims_master {w} GROUP BY Payor ORDER BY COUNT(*) DESC LIMIT 10", p)
         top_payors = [{"payor": r[0], "count": r[1], "charges": round(r[2], 2)} for r in cur.fetchall()]
 
         # ── Credentialing KPIs ──
-        cur.execute("SELECT Status, COUNT(*) FROM credentialing GROUP BY Status")
+        w, p = cond()
+        cur.execute(f"SELECT Status, COUNT(*) FROM credentialing {w} GROUP BY Status", p)
         cred_stats = {r[0]: r[1] for r in cur.fetchall()}
         cred_total          = sum(cred_stats.values())
         cred_approved       = cred_stats.get("Approved", 0) + cred_stats.get("Active", 0)
@@ -4342,23 +4360,26 @@ def get_daily_account_summary():
         cred_not_started    = cred_stats.get("Not Started", 0)
 
         # ── Enrollment KPIs ──
-        cur.execute("SELECT Status, COUNT(*) FROM enrollment GROUP BY Status")
+        w, p = cond()
+        cur.execute(f"SELECT Status, COUNT(*) FROM enrollment {w} GROUP BY Status", p)
         enroll_stats = {r[0]: r[1] for r in cur.fetchall()}
         enroll_total     = sum(enroll_stats.values())
         enroll_approved  = enroll_stats.get("Approved", 0) + enroll_stats.get("Active", 0) + enroll_stats.get("Enrolled", 0)
         enroll_pending   = enroll_stats.get("Pending", 0) + enroll_stats.get("In Progress", 0) + enroll_stats.get("Submitted", 0)
 
         # ── EDI KPIs ──
-        cur.execute("SELECT EDIStatus, COUNT(*) FROM edi_setup GROUP BY EDIStatus")
+        w, p = cond()
+        cur.execute(f"SELECT EDIStatus, COUNT(*) FROM edi_setup {w} GROUP BY EDIStatus", p)
         edi_stats = {r[0]: r[1] for r in cur.fetchall()}
         edi_total = sum(edi_stats.values())
         edi_live  = edi_stats.get("Live", 0) + edi_stats.get("Active", 0) + edi_stats.get("Complete", 0)
 
         # ── Clients ──
-        total_clients = q1("SELECT COUNT(*) FROM clients WHERE role='client'")
+        total_clients = 1 if client_id is not None else q1("SELECT COUNT(*) FROM clients WHERE role='client'")
 
         # ── Today's audit activity ──
-        today_actions = q1("SELECT COUNT(*) FROM audit_log WHERE created_at >= ?", [today_str])
+        w, p = cond("created_at >= ?")
+        today_actions = q1(f"SELECT COUNT(*) FROM audit_log {w}", p + [today_str])
 
         return {
             # Claims
@@ -4411,6 +4432,39 @@ def get_daily_account_summary():
         }
     finally:
         conn.close()
+
+
+def get_per_client_daily_summaries() -> list[dict]:
+    """Per-client breakdown of the daily account summary.
+
+    Returns one dict per active client (same shape as
+    get_daily_account_summary) with 'client_id', 'company' and
+    'contact_name' attached. Clients with no claims AND no payments on record
+    are skipped so the report only shows accounts that have real activity.
+    Sorted by total AR descending so the biggest books lead the report.
+    """
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, company, contact_name FROM clients "
+            "WHERE role='client' AND COALESCE(is_active,1)=1 ORDER BY company"
+        )
+        clients = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    out = []
+    for c in clients:
+        summ = get_daily_account_summary(c["id"])
+        if not summ.get("total_claims") and not summ.get("payments_ytd"):
+            continue
+        summ["client_id"]    = c["id"]
+        summ["company"]      = c.get("company") or f"Client #{c['id']}"
+        summ["contact_name"] = c.get("contact_name") or ""
+        out.append(summ)
+    out.sort(key=lambda s: s.get("total_ar", 0), reverse=True)
+    return out
 
 
 # ─── Audit Trail ──────────────────────────────────────────────────────────
