@@ -8268,6 +8268,34 @@ def rename_file(file_id: int, body: FileRenameIn,
     return {"ok": True, "name": new_name}
 
 
+class FileCategoryIn(BaseModel):
+    category: str
+
+
+@router.post("/files/{file_id}/category")
+def set_file_category(file_id: int, body: FileCategoryIn,
+                      hub_session: Optional[str] = Cookie(None)):
+    """Move a document into a different section/folder by changing its category
+    (e.g. a custom sidebar section 'cm:<key>' or a named documents folder).
+    MedPharma staff only. The file on disk and any per-record link that points at
+    it by id — a patient's eligibility intake doc, etc. — are untouched; only
+    where the file is *grouped* in the Documents / section views changes, so this
+    is fully reversible by moving it back."""
+    user = _require_user(hub_session)
+    if user.get("role") not in ("admin", "staff"):
+        raise HTTPException(403, "Only MedPharma staff can move a file between sections")
+    new_cat = (body.category or "").strip()[:120]
+    if not new_cat:
+        raise HTTPException(400, "A section/category is required")
+    rec = get_file_record(file_id, _client_scope(user))
+    if not rec:
+        raise HTTPException(404, "File not found")
+    update_file_record(file_id, {"category": new_cat},
+                       int(rec.get("client_id") or 0) or None)
+    return {"ok": True, "file_id": file_id, "category": new_cat,
+            "previous": rec.get("category")}
+
+
 @router.post("/files/{file_id}/replace")
 async def replace_file(
     file_id: int,
