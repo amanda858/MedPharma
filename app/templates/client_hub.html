@@ -2644,6 +2644,25 @@
 
           <!-- ── DASHBOARD ─────────────────────────────────────────── -->
           <div id="eligView-dashboard" class="elig-view" style="display:none">
+            <div id="eligConnCard" class="card" style="display:none;margin-bottom:16px">
+              <div class="card-header"><span class="card-title">◆ Real-time payer connection</span></div>
+              <div style="font-size:12px;color:#64748b;margin:6px 0 10px">Proof, not promises: this sends one real X12 270 to the payer and shows exactly what came back — never a fabricated result.</div>
+              <div id="eligConnStatus" style="font-size:12.5px;color:#475569;margin:8px 0 12px">Checking connection…</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-primary btn-sm" onclick="runEligSelfTest()">🔌 Test real-time connection</button>
+                <button class="btn btn-secondary btn-sm" onclick="toggleEligSelfTestForm()">Enter a test patient ▾</button>
+              </div>
+              <div id="eligSelfTestForm" style="display:none;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:flex-end">
+                <label style="font-size:11px;color:#475569">First<br><input id="estFirst" class="input" style="width:120px" placeholder="First name"></label>
+                <label style="font-size:11px;color:#475569">Last<br><input id="estLast" class="input" style="width:120px" placeholder="Last name"></label>
+                <label style="font-size:11px;color:#475569">DOB<br><input id="estDob" type="date" class="input" style="width:150px"></label>
+                <label style="font-size:11px;color:#475569">Payer<br><input id="estPayer" class="input" style="width:160px" placeholder="e.g. Medicare"></label>
+                <label style="font-size:11px;color:#475569">Member ID<br><input id="estMember" class="input" style="width:150px" placeholder="MBI / member id"></label>
+                <label style="font-size:11px;color:#475569">Provider NPI<br><input id="estNpi" class="input" style="width:130px" placeholder="optional"></label>
+                <div style="font-size:11px;color:#94a3b8;flex-basis:100%;margin-top:2px">Tip: paste a Stedi <b>test member</b> (from portal.stedi.com) to prove the pipe with no PHI. A real 271 — active, inactive, or even a payer rejection — proves the live connection.</div>
+              </div>
+              <div id="eligSelfTestResult" style="margin-top:12px"></div>
+            </div>
             <div id="eligTiles" class="elig-tiles" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
             <div class="card" style="margin-bottom:16px">
               <div class="card-header"><span class="card-title">◆ Intake Pipeline</span></div>
@@ -7214,6 +7233,87 @@
         if (panel) panel.style.display = (v === view) ? '' : 'none';
         if (btn) btn.classList.toggle('active', v === view);
       });
+      if (view === 'dashboard') loadEligConnStatus();
+    }
+
+    // ── Real-time payer connection proof (admin-only) ──
+    // "How do we prove eligibility is working?" — this reads the honest connection
+    // status and can fire a single live 270/271 so an admin sees the payer's real
+    // 271 on screen. Fabricates nothing: with no payer key it says so plainly.
+    function _eligConnAdmin() { return typeof isFullAdmin === 'function' && isFullAdmin(); }
+
+    async function loadEligConnStatus() {
+      const card = document.getElementById('eligConnCard');
+      if (!card) return;
+      if (!_eligConnAdmin()) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      const el = document.getElementById('eligConnStatus');
+      try {
+        const r = await fetch('/hub/api/admin/eligibility/config');
+        const c = r.ok ? await r.json() : null;
+        if (!c) { if (el) el.textContent = 'Could not read connection status.'; return; }
+        if (c.live) {
+          const src = c.verify_source === 'hets' ? 'CMS HETS (direct Medicare)'
+                    : c.verify_source === 'stedi' ? 'Stedi real-time clearinghouse'
+                    : 'your clearinghouse';
+          el.innerHTML = `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#dcfce7;border:1px solid #86efac;color:#166534;font-weight:700">● LIVE</span> Real-time verification is connected via <b>${esc(src)}</b>. Every Verify sends a real 270 and stores the payer's 271 as evidence.`;
+        } else {
+          el.innerHTML = `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;font-weight:700">● NOT CONNECTED</span> No live payer source yet — the engine stays honest and never fabricates.${c.next_step ? '<div style="margin-top:6px;color:#475569">' + esc(c.next_step) + '</div>' : ''}`;
+        }
+      } catch (e) { if (el) el.textContent = 'Could not read connection status.'; }
+    }
+
+    function toggleEligSelfTestForm() {
+      const f = document.getElementById('eligSelfTestForm');
+      if (f) f.style.display = (!f.style.display || f.style.display === 'none') ? 'flex' : 'none';
+    }
+
+    async function runEligSelfTest() {
+      const out = document.getElementById('eligSelfTestResult');
+      const val = id => { const e = document.getElementById(id); return e ? e.value.trim() : ''; };
+      const body = {
+        first_name: val('estFirst'), last_name: val('estLast'), dob: val('estDob'),
+        member_id: val('estMember'), payer_name: val('estPayer'), npi: val('estNpi')
+      };
+      if (out) out.innerHTML = '<span style="color:#64748b">Sending a live eligibility check…</span>';
+      try {
+        const r = await fetch('/hub/api/admin/eligibility/self-test', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (out) out.innerHTML = _renderSelfTest(d);
+        loadEligConnStatus();
+      } catch (e) { if (out) out.innerHTML = `<div style="color:#b91c1c">Request failed: ${esc(String(e))}</div>`; }
+    }
+
+    function _renderSelfTest(d) {
+      if (!d) return '<div style="color:#b91c1c">No response.</div>';
+      if (d.live === false) {
+        return `<div class="card" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:12px 14px"><b>Not connected — nothing fabricated.</b><div style="margin-top:6px;font-size:12.5px">${esc(d.message || '')}</div></div>`;
+      }
+      if (d.error) {
+        return `<div class="card" style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:12px 14px"><b>Reached the payer pipe but it returned an error:</b><div style="margin-top:6px;font-size:12.5px">${esc(d.error)}</div></div>`;
+      }
+      const st = d.status || 'Unknown';
+      const c = st === 'Active' ? { bg: '#dcfce7', bd: '#86efac', tx: '#166534' }
+              : (st === 'Inactive' || st === 'Termed') ? { bg: '#fef2f2', bd: '#fecaca', tx: '#991b1b' }
+              : { bg: '#eff6ff', bd: '#bfdbfe', tx: '#1e40af' };
+      const b = d.benefit || {};
+      const money = v => (v === null || v === undefined || v === '') ? '—' : ('$' + Number(v).toLocaleString());
+      let h = `<div class="card" style="border:1px solid #e2e8f0;padding:12px 14px">`
+        + `<div style="font-weight:700;color:#0f172a;margin-bottom:8px">✅ Live 271 received from ${esc(d.source || 'payer')} — first-party proof</div>`
+        + `<div style="display:inline-block;padding:4px 12px;border-radius:999px;background:${c.bg};border:1px solid ${c.bd};color:${c.tx};font-weight:700;margin-bottom:10px">Coverage: ${esc(st)}</div>`
+        + `<div style="font-size:12.5px;color:#334155;line-height:1.7">`
+        + `<div><b>Payer:</b> ${esc(d.payer_name || '—')} ${d.payer_id ? ('(' + esc(d.payer_id) + ')') : ''}</div>`
+        + `<div><b>Member:</b> ${esc(d.member_id || '—')} &nbsp; <b>Plan:</b> ${esc(d.plan_name || '—')}</div>`
+        + `<div><b>Effective:</b> ${esc(d.effective_date || '—')} &nbsp; <b>Term:</b> ${esc(d.term_date || '—')}</div>`
+        + `<div><b>Copay:</b> ${money(b.copay)} &nbsp; <b>Deductible:</b> ${money(b.deductible_total)} &nbsp; <b>Coins:</b> ${b.coinsurance_pct != null ? (b.coinsurance_pct + '%') : '—'}</div>`
+        + `</div>`;
+      if (d.errors && d.errors.length) h += `<div style="margin-top:8px;font-size:12px;color:#b45309"><b>Payer notes:</b> ${esc(d.errors.join('; '))}</div>`;
+      if (d.raw_271) h += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:#4338ca">View raw X12 271 (audit evidence)</summary><pre style="white-space:pre-wrap;font-size:11px;background:#0f172a;color:#e2e8f0;padding:10px;border-radius:6px;overflow:auto;max-height:280px">${esc(d.raw_271)}</pre></details>`;
+      h += '</div>';
+      return h;
     }
 
     // ── Client (account) picker for the eligibility workspace ──

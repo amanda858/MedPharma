@@ -10476,6 +10476,91 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
     }
 
 
+class EligSelfTestIn(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    dob: str = ""
+    member_id: str = ""
+    payer_name: str = ""
+    payer_id: str = ""
+    npi: str = ""
+    provider_name: str = ""
+
+
+@router.post("/admin/eligibility/self-test")
+def admin_eligibility_self_test(body: EligSelfTestIn,
+                                hub_session: Optional[str] = Cookie(None)):
+    """Admin-only LIVE proof that the real-time eligibility pipe works.
+
+    Sends ONE real X12 270 to the configured payer/clearinghouse (Stedi or the
+    direct CMS HETS pipe) and returns exactly what the payer replied — the parsed
+    status plus the raw 271 as first-party evidence. If no live source is wired it
+    says so honestly and gives the one step to switch it on. It NEVER fabricates a
+    result.
+    """
+    _require_full_admin(hub_session)
+    try:
+        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+    except Exception as e:  # pragma: no cover
+        return {"ok": False, "live": False, "error": f"engine unavailable: {e}"}
+
+    provider = build_eligibility_provider()
+    src = getattr(provider, "name", "eligibility")
+    if not provider.configured:
+        return {
+            "ok": True, "live": False, "configured": False, "source": src,
+            "message": ("No real-time payer source is connected yet, so there is "
+                        "nothing to fabricate. Add STEDI_API_KEY + "
+                        "STEDI_PROVIDER_NPI (+ STEDI_PROVIDER_NAME) to the server "
+                        "environment — self-serve at portal.stedi.com in minutes — "
+                        "then run this test again for a real 271."),
+            "next_step": ("Set STEDI_API_KEY, STEDI_PROVIDER_NPI and "
+                          "STEDI_PROVIDER_NAME in the Render environment, redeploy, "
+                          "then click Test connection again."),
+        }
+
+    req = PatientRequest(
+        first_name=(body.first_name or "").strip(),
+        last_name=(body.last_name or "").strip(),
+        dob=(body.dob or "").strip(),
+        member_id=(body.member_id or "").strip() or None,
+        payer_name=(body.payer_name or "").strip() or None,
+        payer_id=(body.payer_id or "").strip() or None,
+        service_type_codes=["30"],
+        provider_npi=((body.npi or "").strip()
+                      or os.getenv("STEDI_PROVIDER_NPI")
+                      or os.getenv("HETS_PROVIDER_NPI", "")),
+        provider_name=((body.provider_name or "").strip()
+                       or os.getenv("STEDI_PROVIDER_NAME")
+                       or os.getenv("HETS_PROVIDER_NAME", "")),
+    )
+    try:
+        result = provider.verify(req)
+    except Exception as e:  # transport / network failure reaching the payer
+        return {"ok": False, "live": True, "configured": True, "source": src,
+                "error": f"{src} transport error: {e}"}
+
+    raw = result.raw or {}
+    rd = result.to_dict() if hasattr(result, "to_dict") else {}
+    status_val = (result.status.value if hasattr(result.status, "value")
+                  else str(result.status))
+    return {
+        "ok": True, "live": True, "configured": True, "source": src,
+        "status": status_val,
+        "payer_name": result.payer_name or "",
+        "payer_id": result.payer_id or (raw.get("tradingPartnerServiceId") or ""),
+        "member_id": result.member_id or "",
+        "plan_name": result.plan_name or "",
+        "effective_date": result.effective_date or "",
+        "term_date": result.term_date or "",
+        "errors": result.errors or [],
+        "trace": result.trace or [],
+        "benefit": rd.get("benefit") or {},
+        "raw_request": raw.get("x12_270") or raw.get("request_json") or "",
+        "raw_271": raw.get("x12_271") or "",
+    }
+
+
 def _elig_num(v) -> float:
     try:
         return float(v)
