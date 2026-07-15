@@ -7879,10 +7879,10 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             else:
                 avg_hrs = 0
             u["avg_hours_per_day"] = avg_hrs
-            if u["days_worked"] > 0 and avg_hrs < 6:
-                flags.append({"username": u["username"], "avg_hours_per_day": avg_hrs,
-                              "days_worked": u["days_worked"],
-                              "recommendation": "Below 6hr/day average — review time management"})
+            # "Below 6hr/day" time-management alerts removed per admin: manually
+            # logged production-tab hours are not a trusted measure of real output
+            # (only billed-out and paid are), so no hours-based recommendation is
+            # generated. time_management_flags stays empty.
 
         for _s in denial_recovery_sender.values():
             _s["amount"] = round(_s["amount"], 2)

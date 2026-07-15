@@ -328,12 +328,12 @@ def _rule_based_summary(username: str, session_hrs: float,
     elif overall_pct >= 75:
         rating = "met most daily production expectations"
     elif overall_pct >= 50:
-        rating = "fell below expected daily production volume"
+        rating = "came in below the day's production targets"
     else:
-        rating = "significantly underperformed against industry benchmarks"
+        rating = "was well below the day's production targets"
 
     summary = (
-        f"{username} {rating} with an overall productivity score of {overall_pct:.0f}% "
+        f"{username} {rating} with an overall production score of {overall_pct:.0f}% "
         f"across a {session_hrs:.1f}-hour session. "
     )
     if best["pct"] > 0:
@@ -343,16 +343,15 @@ def _rule_based_summary(username: str, session_hrs: float,
         )
     if worst["section"] != best["section"] and worst["pct"] < 80:
         summary += (
-            f"{worst['section']} needs attention — only {worst['pct']:.0f}% of the daily benchmark was reached. "
+            f"{worst['section']} needs attention — only {worst['pct']:.0f}% of the daily target was reached. "
         )
 
-    if session_hrs < 6:
-        summary += (
-            f"The session duration of {session_hrs:.1f} hours is below the standard 7.5-8 hour workday, "
-            f"which likely contributed to lower output. Consider reviewing time management."
-        )
-    elif overall_pct < 75:
-        summary += "Recommend reviewing workflow efficiency and reducing non-productive time."
+    # Hours-based "review time management" recommendation removed per admin:
+    # manually-clocked session hours are not a trusted measure of real output
+    # (only billed-out and paid are), so the summary stays factual and
+    # workflow-focused rather than judging the person on logged hours.
+    if overall_pct < 75:
+        summary += "Recommend reviewing workflow efficiency on the lowest sections."
     else:
         summary += "Keep up the consistent work."
 
