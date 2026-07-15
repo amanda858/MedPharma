@@ -1338,16 +1338,15 @@ def _rule_based_account_summary(d: dict) -> str:
 
 
 def _render_account_client_card(d: dict, date_str_long: str) -> str:
-    """Render ONE client's financial section for the daily account summary.
+    """Render ONE client's section for the daily account summary.
 
-    Takes a per-client summary dict (from get_per_client_daily_summaries) and
-    returns a self-contained HTML card: header, its own AI one-liner, financial
-    + claims KPIs, today's activity, AR aging, status mix and top payors. This
-    is what replaces the old single lumped total — every client gets its own.
+    Simple and true: only money that actually moved — claims billed out and
+    payments posted. AR estimates, collection/denial percentages, payor mix and
+    aging buckets were removed as unreliable.
     """
     company = _esc_html(d.get("company") or "Client")
     contact = _esc_html(d.get("contact_name") or "")
-    ai_summary = _generate_account_ai_summary(d, date_str_long)
+    contact_line = f" &middot; {contact}" if contact else ""
 
     def _kpi(bg, border, color, value, label):
         return (
@@ -1365,94 +1364,23 @@ def _render_account_client_card(d: dict, date_str_long: str) -> str:
             f'<div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase">{label}</div></div>'
         )
 
-    # status distribution rows
-    status_rows_html = ""
-    for status, count in sorted(d.get("status_distribution", {}).items(), key=lambda x: -x[1])[:8]:
-        if status == "Paid":
-            sc = "#22c55e"
-        elif status in ("Denied", "Appeals"):
-            sc = "#ef4444"
-        elif status in ("Submitted", "In Progress"):
-            sc = "#3b82f6"
-        else:
-            sc = "#64748b"
-        status_rows_html += (
-            f'<tr><td style="padding:5px 12px;border-bottom:1px solid #f1f5f9;font-size:12px">{_esc_html(status)}</td>'
-            f'<td style="padding:5px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;font-size:12px;color:{sc}">{count:,}</td></tr>'
-        )
-    payor_rows_html = ""
-    for p in d.get("top_payors", [])[:6]:
-        payor_rows_html += (
-            f'<tr><td style="padding:5px 12px;border-bottom:1px solid #f1f5f9;font-size:12px">{_esc_html(p["payor"])}</td>'
-            f'<td style="padding:5px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px">{p["count"]:,}</td>'
-            f'<td style="padding:5px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:12px">{_fmt_money(p["charges"])}</td></tr>'
-        )
-
-    aging = d.get("ar_aging", {})
-    total_aging = sum(aging.values()) or 1
-    contact_line = f" &middot; {contact}" if contact else ""
-    sla = d.get("sla_breaches", 0)
-
     return f"""
         <div style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin-bottom:22px;">
             <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:14px 20px;">
                 <div style="color:#fff;font-size:17px;font-weight:800;letter-spacing:.3px;">{company}</div>
                 <div style="color:rgba(255,255,255,0.82);font-size:12px;margin-top:2px;">
-                    AR {_fmt_money(d.get('total_ar',0))} &middot; {d.get('active_claims',0):,} active claims{contact_line}
+                    {_fmt_money(d.get('payments_mtd',0))} collected this month{contact_line}
                 </div>
             </div>
             <div style="padding:18px 20px;">
-                <div style="background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-left:4px solid #6366f1;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;line-height:1.6;color:#1e293b;">{ai_summary}</div>
-
                 <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
-                    {_kpi('#f0fdf4','#bbf7d0','#15803d',_fmt_money(d.get('total_ar',0)),'Total AR')}
-                    {_kpi('#eff6ff','#bfdbfe','#2563eb',_fmt_money(d.get('payments_mtd',0)),'Payments MTD')}
-                    {_kpi('#fefce8','#fde68a','#ca8a04',str(d.get('net_collection_rate',0))+'%','Net Collection')}
-                    {_kpi('#fef2f2','#fecaca','#dc2626',str(d.get('denial_rate',0))+'%','Denial Rate')}
+                    {_kpi('#eff6ff','#bfdbfe','#2563eb',_fmt_money(d.get('payments_mtd',0)),'Paid (Month)')}
+                    {_kpi('#f0fdf4','#bbf7d0','#15803d',_fmt_money(d.get('payments_today',0)),'Paid (Today)')}
                 </div>
-
-                <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+                <div style="display:flex;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
                     {_stat('#1e293b',f"{d.get('total_claims',0):,}",'Total Claims')}
-                    {_stat('#2563eb',f"{d.get('active_claims',0):,}",'Active')}
-                    {_stat('#22c55e',f"{d.get('claims_paid',0):,}",'Paid')}
-                    {_stat('#ef4444',f"{d.get('claims_denied',0):,}",'Denied')}
-                </div>
-
-                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;">
-                    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Today &middot; {date_str_long}</div>
-                    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;">
-                        <div><span style="font-weight:800;color:#2563eb;font-size:16px">{d.get('submitted_today',0)}</span> Submitted</div>
-                        <div><span style="font-weight:800;color:#22c55e;font-size:16px">{d.get('paid_today',0)}</span> Paid</div>
-                        <div><span style="font-weight:800;color:#ef4444;font-size:16px">{d.get('denied_today',0)}</span> Denied</div>
-                        <div><span style="font-weight:800;color:#16a34a;font-size:16px">{_fmt_money(d.get('payments_today',0))}</span> Payments</div>
-                        <div><span style="font-weight:800;color:#0f172a;font-size:16px">{d.get('avg_days_to_pay',0)}</span> Avg Days to Pay</div>
-                        <div><span style="font-weight:800;color:{'#dc2626' if sla else '#0f172a'};font-size:16px">{sla}</span> SLA Breaches</div>
-                    </div>
-                </div>
-
-                <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin:14px 0 6px;">AR Aging</div>
-                <div style="display:flex;gap:0;margin-bottom:6px;">
-                    <div style="flex:{aging.get('current',0)/total_aging};background:#22c55e;height:12px;border-radius:4px 0 0 4px"></div>
-                    <div style="flex:{aging.get('31_60',0)/total_aging};background:#f59e0b;height:12px"></div>
-                    <div style="flex:{aging.get('61_90',0)/total_aging};background:#f97316;height:12px"></div>
-                    <div style="flex:{aging.get('90_plus',0)/total_aging};background:#ef4444;height:12px;border-radius:0 4px 4px 0"></div>
-                </div>
-                <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;font-size:11px;color:#475569;">
-                    <div><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Current {_fmt_money(aging.get('current',0))}</div>
-                    <div><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;margin-right:4px"></span>31-60 {_fmt_money(aging.get('31_60',0))}</div>
-                    <div><span style="display:inline-block;width:9px;height:9px;background:#f97316;border-radius:2px;margin-right:4px"></span>61-90 {_fmt_money(aging.get('61_90',0))}</div>
-                    <div><span style="display:inline-block;width:9px;height:9px;background:#ef4444;border-radius:2px;margin-right:4px"></span>90+ {_fmt_money(aging.get('90_plus',0))}</div>
-                </div>
-
-                <div style="display:flex;gap:16px;flex-wrap:wrap;">
-                    <div style="flex:1;min-width:200px">
-                        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Claim Status</div>
-                        <table style="width:100%;border-collapse:collapse">{status_rows_html or '<tr><td style="font-size:12px;color:#94a3b8;padding:6px 12px">No claims</td></tr>'}</table>
-                    </div>
-                    <div style="flex:1;min-width:200px">
-                        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Top Payors</div>
-                        <table style="width:100%;border-collapse:collapse">{payor_rows_html or '<tr><td style="font-size:12px;color:#94a3b8;padding:6px 12px">No payors</td></tr>'}</table>
-                    </div>
+                    {_stat('#2563eb',f"{d.get('submitted_today',0):,}",'Billed Today')}
+                    {_stat('#22c55e',f"{d.get('claims_paid',0):,}",'Claims Paid')}
                 </div>
             </div>
         </div>"""
@@ -1476,8 +1404,12 @@ def send_daily_account_summary():
     date_str_long = now.strftime("%B %d, %Y")
     day_of_week = now.strftime("%A")
 
-    # Portfolio-level AI summary (the headline across all books)
-    ai_summary = _generate_account_ai_summary(d, date_str_long)
+    # Portfolio headline — simple and true: money actually collected, no estimates.
+    ai_summary = (
+        f"{_fmt_money(d.get('payments_mtd', 0))} collected month-to-date across "
+        f"{d.get('total_clients', 0)} client{'s' if d.get('total_clients', 0) != 1 else ''}, "
+        f"with {_fmt_money(d.get('payments_today', 0))} posted today."
+    )
 
     # ── Per-client breakdown — one card per active client ──
     try:
@@ -1497,10 +1429,6 @@ def send_daily_account_summary():
         )
     client_count = len(per_client)
 
-    # ── AR Aging bar (portfolio roll-up) ──
-    aging = d.get("ar_aging", {})
-    total_aging = sum(aging.values()) or 1
-
     html_body = f"""
     <html>
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
@@ -1515,35 +1443,26 @@ def send_daily_account_summary():
 
             <div style="padding: 28px 32px;">
 
-                <!-- AI EXECUTIVE SUMMARY -->
-                <div style="background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-left:4px solid #6366f1;border-radius:8px;padding:18px 20px;margin-bottom:28px;">
-                    <div style="font-size:12px;font-weight:800;text-transform:uppercase;color:#4338ca;letter-spacing:1px;margin-bottom:8px;">🤖 AI Executive Summary</div>
+                <!-- SUMMARY -->
+                <div style="background:#eff6ff;border-left:4px solid #2563eb;border-radius:8px;padding:18px 20px;margin-bottom:28px;">
                     <div style="font-size:13px;line-height:1.7;color:#1e293b;">{ai_summary}</div>
                 </div>
 
                 <!-- PORTFOLIO ROLL-UP -->
                 <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
-                    💰 Portfolio Roll-Up — {client_count} Client{'s' if client_count != 1 else ''}
+                    💰 Payments Posted — {client_count} Client{'s' if client_count != 1 else ''}
                 </div>
                 <div style="display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
-                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
-                        <div style="font-size:22px;font-weight:800;color:#15803d">{_fmt_money(d['total_ar'])}</div>
-                        <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase">Total AR</div>
-                    </div>
                     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
                         <div style="font-size:22px;font-weight:800;color:#2563eb">{_fmt_money(d['payments_mtd'])}</div>
-                        <div style="font-size:10px;font-weight:700;color:#3b82f6;text-transform:uppercase">Payments MTD</div>
+                        <div style="font-size:10px;font-weight:700;color:#3b82f6;text-transform:uppercase">Paid (Month)</div>
                     </div>
-                    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
-                        <div style="font-size:22px;font-weight:800;color:#ca8a04">{d['net_collection_rate']}%</div>
-                        <div style="font-size:10px;font-weight:700;color:#d97706;text-transform:uppercase">Net Collection</div>
-                    </div>
-                    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
-                        <div style="font-size:22px;font-weight:800;color:#dc2626">{d['denial_rate']}%</div>
-                        <div style="font-size:10px;font-weight:700;color:#ef4444;text-transform:uppercase">Denial Rate</div>
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
+                        <div style="font-size:22px;font-weight:800;color:#15803d">{_fmt_money(d.get('payments_today', 0))}</div>
+                        <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase">Paid (Today)</div>
                     </div>
                 </div>
-                <div style="font-size:11px;color:#94a3b8;margin-bottom:26px;">Portfolio total across all client books — full detail is broken out per client below.</div>
+                <div style="font-size:11px;color:#94a3b8;margin-bottom:26px;">Real money posted across all client books — full detail is broken out per client below.</div>
 
                 <!-- PER-CLIENT BREAKDOWN -->
                 <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:18px;">
@@ -1567,39 +1486,31 @@ def send_daily_account_summary():
         f"     {day_of_week}, {date_str}",
         "═══════════════════════════════════════════",
         "",
-        "AI EXECUTIVE SUMMARY:",
+        "SUMMARY:",
         ai_summary,
         "",
-        f"───── PORTFOLIO ROLL-UP ({client_count} client{'s' if client_count != 1 else ''}) ─────",
-        f"  Total AR:        {_fmt_money(d['total_ar'])}",
-        f"  Payments MTD:    {_fmt_money(d['payments_mtd'])}",
-        f"  Net Collection:  {d['net_collection_rate']}%",
-        f"  Denial Rate:     {d['denial_rate']}%",
+        f"───── PAYMENTS POSTED ({client_count} client{'s' if client_count != 1 else ''}) ─────",
+        f"  Paid (Month):    {_fmt_money(d['payments_mtd'])}",
+        f"  Paid (Today):    {_fmt_money(d.get('payments_today', 0))}",
         "",
         "═══════════ PER-CLIENT BREAKDOWN ════════════",
     ]
     for c in per_client:
-        ag = c.get("ar_aging", {}) or {}
         body_lines += [
             "",
             f"── {c.get('company','Client')} ──",
-            f"  AR {_fmt_money(c.get('total_ar',0))}  |  Payments MTD {_fmt_money(c.get('payments_mtd',0))}  |  "
-            f"Net Coll {c.get('net_collection_rate',0)}%  |  Denial {c.get('denial_rate',0)}%",
-            f"  Claims: {c.get('total_claims',0):,} total, {c.get('active_claims',0):,} active, "
-            f"{c.get('claims_paid',0):,} paid, {c.get('claims_denied',0):,} denied",
-            f"  Today: {c.get('submitted_today',0)} submitted, {c.get('paid_today',0)} paid, "
-            f"{c.get('denied_today',0)} denied, {_fmt_money(c.get('payments_today',0))} payments",
-            f"  AR Aging: Current {_fmt_money(ag.get('current',0))} | 31-60 {_fmt_money(ag.get('31_60',0))} | "
-            f"61-90 {_fmt_money(ag.get('61_90',0))} | 90+ {_fmt_money(ag.get('90_plus',0))}",
+            f"  Paid (Month) {_fmt_money(c.get('payments_mtd',0))}  |  Paid (Today) {_fmt_money(c.get('payments_today',0))}",
+            f"  Claims: {c.get('total_claims',0):,} total, {c.get('submitted_today',0):,} billed today, "
+            f"{c.get('claims_paid',0):,} paid",
         ]
     if not per_client:
         body_lines.append("  (no client activity on record yet)")
     body = "\n".join(body_lines)
 
-    subject = f"MedPharma Daily Report — {date_str} — {client_count} client{'s' if client_count != 1 else ''} — AR {_fmt_money(d['total_ar'])}"
+    subject = f"MedPharma Daily Report — {date_str} — {client_count} client{'s' if client_count != 1 else ''} — {_fmt_money(d['payments_mtd'])} collected MTD"
 
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
-    log.info(f"MedPharma Daily Report email queued: {date_str}, AR {_fmt_money(d['total_ar'])}, "
+    log.info(f"MedPharma Daily Report email queued: {date_str}, {_fmt_money(d['payments_mtd'])} MTD, "
              f"{d['total_claims']} claims")
 
 

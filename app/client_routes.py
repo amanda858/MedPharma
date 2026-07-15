@@ -3608,22 +3608,80 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         provider_name=os.getenv("HETS_PROVIDER_NAME") or os.getenv("STEDI_PROVIDER_NAME", ""),
     )
 
-    # ── No live payer source: honest 'pending' + offline service/ABN policy ──
+    # ── No live payer source: run the MedPharma rule-intercept coverage review ──
+    # A COMPLETE, honest determination that needs ZERO payer credentials. It decides
+    # the coding/coverage-policy viability of every requested test — LCD/NCD medical
+    # necessity, MolDX Z-code, prior auth, and ABN. The one thing it can't know
+    # without a live 271 is the member's active/inactive enrollment, so it NEVER
+    # marks "Clear to Bill": clean records wait on that final active check, and
+    # anything needing PA / ABN / records is advanced to "On Hold" with the exact
+    # reason + next action. Nothing is fabricated.
     if not provider.configured:
         dx = _parse_icd10s(order_text)
-        bits = ["⏳ Live plan status pending — connect a payer source (CMS HETS for "
-                "straight Medicare, or a clearinghouse for Medicare Advantage / "
-                "commercial) to auto-verify active/inactive + benefits. Nothing "
-                "fabricated."]
+        today = datetime.now().strftime("%Y-%m-%d")
+        actor = actor_username or actor_label
+        cpt_lines: list = []
+        hold_reasons: list = []
+        pa_needed = abn_needed = blocked = False
         for cpt in cpts:
             ev = _evaluate_coverage(cpt, payer_name, dx, "")
-            bits.append(f"• {cpt}: {ev['coverage_status'].lower().replace('_',' ')} — "
-                        f"{'; '.join(ev['reason_codes'])}")
+            cs = ev["coverage_status"]
+            cpt_lines.append(f"• {cpt}: {cs.lower().replace('_', ' ')} — "
+                             f"{'; '.join(ev['reason_codes'])}")
             if ev.get("abn_required") and ev.get("abn_entails"):
-                bits.append("   ↳ What that entails: " + " ".join(ev["abn_entails"]))
-        summary = "  ".join(bits)
-        update_eligibility(rid, {"VerificationSummary": summary})
-        return {"ok": False, "configured": False, "changed": True, "summary": summary}
+                cpt_lines.append("   ↳ What that entails: " + " ".join(ev["abn_entails"]))
+            if cs in ("MEDICAL_NECESSITY_HOLD", "DENY_RISK", "NOT_ELIGIBLE"):
+                blocked = True
+                hold_reasons.append(f"{cpt}: {cs.lower().replace('_', ' ')}")
+            if cs == "PA_REQUIRED":
+                pa_needed = True
+                hold_reasons.append(f"{cpt}: prior auth / MolDX registration required")
+            if ev.get("abn_required"):
+                abn_needed = True
+                hold_reasons.append(f"{cpt}: ABN {ev.get('abn_modifier') or 'CMS-R-131'}")
+        needs_action = blocked or pa_needed or abn_needed
+
+        if not cpts:
+            head = ("🧭 Add the ordered test(s) under Requested Services so the rule-"
+                    "intercept review can check medical necessity, prior auth and ABN.")
+        elif needs_action:
+            head = ("🧭 Coverage policy reviewed (MedPharma rule intercept). Action "
+                    "needed before billing — clear the flag(s) below.")
+        else:
+            head = ("🧭 Coverage policy reviewed (MedPharma rule intercept). No coding "
+                    "blockers: medical necessity met, no prior auth, no ABN required.")
+        tail = ("⏳ Only the live active/inactive check remains — connect a payer source "
+                "(CMS HETS for straight Medicare, or a clearinghouse for Medicare "
+                "Advantage / commercial) to confirm enrollment. Nothing fabricated.")
+        summary = "  ".join([head] + cpt_lines + [tail])
+
+        changes = {"VerificationSummary": summary,
+                   "VerifiedBy": f"Rule Intercept · {actor}".strip(" ·"),
+                   "VerifiedDate": today}
+        if pa_needed:
+            changes["PriorAuthRequired"] = "Yes"
+        if needs_action:
+            changes["BillingReadiness"] = "On Hold"
+            stamp = f"[{today}] Rule intercept: " + "; ".join(hold_reasons)
+            prior = (rec.get("Notes") or "").strip()
+            changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
+        update_eligibility(rid, changes)
+        try:
+            record_eligibility_check({
+                "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+                "source": "rule-intercept",
+                "status": "On Hold" if needs_action else "Policy Clear",
+                "checked_by": actor,
+                "member_id": (rec.get("MemberID") or "").strip(),
+                "payer_name": payer_name,
+                "result_json": _json.dumps({"cpts": cpts, "needs_action": needs_action,
+                                            "summary": summary}, default=str)[:200000]})
+        except Exception:
+            pass
+        return {"ok": True, "configured": False, "offline": True, "changed": True,
+                "source": "rule-intercept",
+                "billing_readiness": changes.get("BillingReadiness", ""),
+                "needs_action": needs_action, "summary": summary}
 
     # ── Connected: real X12 270/271 ──
     src = getattr(provider, "name", "eligibility")
@@ -3854,23 +3912,21 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
 
     res = _verify_and_record(rec, actor_label="Manual",
                              actor_username=user.get("username", ""))
-    if res.get("configured") is False:
-        # Not connected (or engine import failed) — coverage facts unchanged.
+    if res.get("configured") is False and not res.get("offline"):
+        # Engine genuinely unavailable — coverage facts unchanged, nothing faked.
         return {
             "ok": False, "configured": False, "changed": res.get("changed", False),
-            "message": "No real eligibility source is connected yet. Fastest path: "
-                       "create a Stedi account, generate an API key, and set "
-                       "STEDI_API_KEY + STEDI_PROVIDER_NPI in the server "
-                       "environment — that turns on real-time Medicare & commercial "
-                       "checks in minutes. Or go straight to CMS by completing HETS "
-                       "submitter enrollment and setting HETS_ENDPOINT_URL + "
-                       "HETS_SUBMITTER_ID + credentials. Nothing was fabricated.",
+            "message": "The eligibility engine is unavailable right now. Nothing was "
+                       "changed or fabricated. (Live active/inactive status also needs "
+                       "a payer source — set STEDI_API_KEY + STEDI_PROVIDER_NPI, or "
+                       "complete CMS HETS enrollment.)",
             "summary": res.get("summary", ""), "error": res.get("error"),
         }
     if res.get("ok"):
+        _label = res.get("status") or res.get("billing_readiness") or "policy reviewed"
         notify_activity(user["username"], f"verified ({res.get('source')})",
                         "Eligibility",
-                        f"{rec.get('PatientName','')} → {res.get('status')}")
+                        f"{rec.get('PatientName','')} → {_label}")
     return res
 
 

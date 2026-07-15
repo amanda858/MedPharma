@@ -2277,8 +2277,7 @@
             <div style="padding:16px">
               <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px;max-width:660px">
                 Drop your <b>Posting Payments</b> report (PDF or Word) or an ERA / remittance deposit sheet (Excel/CSV).
-                The <b>Payment</b> amount, <b>service date</b> and <b>posting date</b> are auto-detected, and collections are
-                split into <b>new work</b> vs <b>past-dated work</b> by service date (you bill those at different percentages).
+                The <b>Payment</b> amount and <b>posting date</b> are auto-detected.
                 This tab is the only place payments are counted — no claims are created or changed, and re-uploading the same report won’t double-count.
               </div>
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -6049,22 +6048,7 @@
         statusEl.textContent = '';
         const months = Object.entries(j.by_month || {}).sort().map(([m, v]) =>
           `<div style="display:flex;justify-content:space-between;max-width:280px"><span>${m}</span><b>$${fmt(v)}</b></div>`).join('');
-        const sp = j.split || {};
-        const spNew = sp.new || { amount: 0, count: 0 };
-        const spPast = sp.past || { amount: 0, count: 0 };
-        const splitHtml = (sp.total !== undefined) ? `
-              <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">
-                <div style="flex:1;min-width:170px;background:#fff;border:1px solid #86efac;border-radius:6px;padding:8px 10px">
-                  <div style="font-size:11px;color:var(--gray-500)">New work &nbsp;<span style="color:var(--gray-400)">(service date after ${sp.cutoff || ''})</span></div>
-                  <div style="font-weight:700;color:#15803d">$${fmt(spNew.amount || 0)}</div>
-                  <div style="font-size:11px;color:var(--gray-500)">${spNew.count || 0} payment${(spNew.count === 1) ? '' : 's'}</div>
-                </div>
-                <div style="flex:1;min-width:170px;background:#fff;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px">
-                  <div style="font-size:11px;color:var(--gray-500)">Past-dated work &nbsp;<span style="color:var(--gray-400)">(legacy %)</span></div>
-                  <div style="font-weight:700;color:#b45309">$${fmt(spPast.amount || 0)}</div>
-                  <div style="font-size:11px;color:var(--gray-500)">${spPast.count || 0} payment${(spPast.count === 1) ? '' : 's'}</div>
-                </div>
-              </div>` : '';
+        const splitHtml = '';
         if (j.posted > 0) {
           resultEl.innerHTML = `
             <div style="background:var(--success-light);border:1px solid #86efac;border-radius:8px;padding:12px 14px">
@@ -7376,6 +7360,8 @@
         return { level: 'blocked', reason: 'Cannot bill yet — ' + issues.join(' · ') };
       if (/inactive|termed|ineligible|not\s*covered|denied/.test(status))
         return { level: 'no', reason: 'Coverage came back ' + (i.Status || 'inactive') };
+      if (/rule intercept/i.test(i.VerifiedBy || ''))
+        return { level: 'pending', reason: 'Coverage policy clear (rule intercept) — awaiting live active-status check' };
       return { level: 'pending', reason: 'Data complete — needs coverage verification (run Verify)' };
     }
     function _viabilityHtml(i) {
@@ -7771,7 +7757,7 @@
     // explanation (plus offline service/ABN policy) — nothing is fabricated.
     async function verifyAllElig() {
       if (!_canRunEligibility()) { toast('Eligibility checks are run by the billing team (admin, Eric or a biller). You can upload records — a biller will run the check.', 'warning', 7000); return; }
-      if (!confirm('Auto-verify every patient on this board now?\n\nEach patient gets a plain-English plan explanation — active vs lapsed, deductible, whether the requested services are covered, and medical-necessity / ABN guidance for NGS & PGx.\n\nWith no live payer source connected, records get an honest “pending connection” note. Nothing is ever fabricated.')) return;
+      if (!confirm('Run the coverage review on every patient now?\n\nThe MedPharma rule-intercept engine checks each patient’s requested tests for medical necessity, prior auth / MolDX, and ABN — and flags anything that needs action as “On Hold” with the reason. This needs no payer credential.\n\nThe only step it can’t do offline is confirm live active/inactive enrollment (that needs a payer source). Nothing is ever fabricated.')) return;
       try {
         const r = await fetch('/hub/api/eligibility/verify-all', { method: 'POST' });
         const res = await r.json().catch(() => ({}));
@@ -7797,9 +7783,19 @@
         res = await r.json().catch(() => ({}));
         if (!r.ok) { toast(res.detail || `Verify failed (${r.status})`, 'error'); return; }
       } catch (e) { toast('Verify failed: ' + e.message, 'error'); return; }
+      if (res.offline) {
+        // Rule-intercept coverage review completed — no payer credential needed.
+        const rd = res.billing_readiness ? ' → ' + res.billing_readiness : ' → policy clear';
+        toast(`🧭 Coverage policy reviewed (rule intercept)${rd}. ` + (res.needs_action
+          ? 'Action flagged before billing — open the row’s 📋 Plan explanation.'
+          : 'No coding blockers; only the live active-status check remains.'),
+          res.needs_action ? 'warning' : 'success', 8000);
+        loadEligibility();
+        return;
+      }
       if (res.configured === false) {
-        // Honest, non-fabricated state — the whole point of this build.
-        toast(res.message || 'No real eligibility source is connected yet. Nothing was changed or faked. Set STEDI_API_KEY (fastest) or complete CMS HETS enrollment to go live.', 'warning', 10000);
+        // Engine unavailable — nothing changed or faked.
+        toast(res.message || 'The eligibility engine is unavailable right now. Nothing was changed or faked.', 'warning', 9000);
         return;
       }
       if (res.error) { toast('Transport error: ' + res.error + ' (recorded to the audit trail; nothing fabricated)', 'error', 8000); loadEligibility(); return; }
