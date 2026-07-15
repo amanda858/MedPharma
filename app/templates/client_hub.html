@@ -7887,7 +7887,7 @@
     <td>${_eligFileLink(i.IntakeFileId, i.IntakeFileName, false)}</td>
     <td>${_eligFileLink(i.ReportFileId, i.ReportFileName, true)}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td style="white-space:nowrap">${_canRunEligibility() ? `<button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> ` : ''}<button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
+    <td style="white-space:nowrap">${_canRunEligibility() ? `<button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> ` : ''}<button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-sm" style="color:#1e3a8a;background:#dbeafe;border:1px solid #93c5fd" onclick="viewEligReport(${i.id})" title="Full 8-section Advanced Laboratory Eligibility Report: patient/subscriber, DOS coverage, CPT-level benefits, medical necessity, prior auth/MolDX, ABN, and a billing go/no-go.">Report</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
       };
       // File results UNDER each client: group the worklist by account and print a
@@ -8090,6 +8090,174 @@
       h += `<div style="text-align:right;margin-top:8px"><button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligPrecheckResult').style.display='none'">Dismiss</button></div></div>`;
       box.innerHTML = h; box.style.display = '';
       box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ── Advanced Laboratory Eligibility Report (8-section RCM read) ──
+    // Opens the full per-patient coverage + billing-readiness report built by the
+    // eligibility + policy engine. Honest by design: member active status and
+    // financials show only from a real 271; otherwise they read "requires live 271"
+    // and the decision stays PENDING — nothing is fabricated.
+    async function viewEligReport(id) {
+      let ov = document.getElementById('eligReportModal');
+      if (!ov) {
+        ov = document.createElement('div');
+        ov.className = 'modal-overlay'; ov.id = 'eligReportModal';
+        ov.innerHTML = `<div class="modal" style="max-width:940px;width:96%">
+          <div class="modal-header">
+            <h2 style="font-size:17px">Advanced Laboratory Eligibility Report</h2>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-secondary btn-sm" onclick="_printEligReport()" title="Print or save as PDF">Print / PDF</button>
+              <button class="modal-close" onclick="closeModal('eligReportModal')">&times;</button>
+            </div>
+          </div>
+          <div id="eligReportBody" style="max-height:78vh;overflow:auto"></div>
+        </div>`;
+        document.body.appendChild(ov);
+      }
+      const body = document.getElementById('eligReportBody');
+      body.innerHTML = `<div style="padding:34px;text-align:center;color:#64748b;font-size:13px">Building report…</div>`;
+      ov.classList.add('open');
+      try {
+        const r = await fetch(`/hub/api/eligibility/${id}/report`);
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.detail || `Could not build report (${r.status})`);
+        body.innerHTML = _renderLabReport(d.report);
+      } catch (e) {
+        body.innerHTML = `<div style="padding:24px;color:#dc2626;font-size:13px">Could not build report: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function _printEligReport() {
+      const body = document.getElementById('eligReportBody');
+      if (!body) return;
+      const w = window.open('', '_blank');
+      if (!w) { toast('Allow pop-ups to print the report.', 'warning'); return; }
+      w.document.write(`<html><head><title>Advanced Laboratory Eligibility Report</title>`
+        + `<style>body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:22px;color:#0f172a}`
+        + `table{width:100%;border-collapse:collapse}td,th{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;text-align:left;font-size:12px}</style></head>`
+        + `<body>${body.innerHTML}</body></html>`);
+      w.document.close(); w.focus(); setTimeout(() => w.print(), 250);
+    }
+
+    function _renderLabReport(R) {
+      R = R || {};
+      const S = v => esc(v == null || v === '' ? '—' : String(v));
+      const money = v => (v == null || v === '') ? '—' : ('$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const pct = v => (v == null || v === '') ? '—' : (Number(v) + '%');
+      const card = (title, inner) => `<div style="border:1px solid #e5e7eb;border-radius:10px;margin:12px 0;overflow:hidden">`
+        + `<div style="background:#f8fafc;padding:9px 14px;font-weight:700;font-size:12.5px;color:#0f172a;border-bottom:1px solid #eef2f7">${title}</div>`
+        + `<div style="padding:12px 14px">${inner}</div></div>`;
+      const kv = pairs => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;font-size:12.5px">`
+        + pairs.map(([k, v]) => `<div><span style="color:#64748b">${esc(k)}: </span><b style="color:#0f172a">${v}</b></div>`).join('') + `</div>`;
+      const listOr = (arr, empty) => (arr && arr.length)
+        ? `<ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.55">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
+        : `<div style="color:#64748b;font-size:12.5px">${esc(empty)}</div>`;
+
+      const meta = R.meta || {}, p = R.patient_verification || {}, c = R.coverage_status || {};
+      const fin = R.financials || {}, pf = R.policy_flags || {}, pm = R.payer_meta || {}, br = R.billing_readiness || {};
+
+      // ── Header banner: connection state + go/no-go decision ──
+      const decCol = { 'GO': '#059669', 'HOLD': '#b45309', 'NO-GO': '#dc2626', 'PENDING VERIFICATION': '#2563eb' }[br.decision] || '#64748b';
+      const connBadge = meta.connected
+        ? `<span style="background:#d1fae5;color:#065f46;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700">Live 271 verified</span>`
+        : `<span style="background:#fef3c7;color:#92400e;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700">Coverage policy only — live 271 pending</span>`;
+      const header = `<div style="padding:14px 16px;border-bottom:1px solid #eef2f7">`
+        + `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">`
+        + `<div><div style="font-size:15px;font-weight:800;color:#0f172a">${S(p.patient_name)}</div>`
+        + `<div style="font-size:12px;color:#64748b">DOB ${S(p.dob)} · ${S(pm.payer)} · Member ${S(p.member_id)}</div></div>`
+        + `<div style="text-align:right"><div style="font-size:20px;font-weight:800;color:${decCol}">${S(br.decision)}</div>`
+        + `<div style="font-size:11px;color:#94a3b8">Date of service ${S(meta.date_of_service)}</div></div></div>`
+        + `<div style="margin-top:8px">${connBadge}</div></div>`;
+
+      // ── Section 3: CPT-level lab benefits table ──
+      const bens = R.lab_benefits || [];
+      const benBody = bens.length ? bens.map(b => {
+        const cc = b.covered === 'Yes' ? '#059669' : b.covered === 'No' ? '#dc2626' : '#2563eb';
+        return `<tr><td style="font-weight:600">${S(b.cpt)}</td><td>${S(b.description)}</td>`
+          + `<td style="color:${cc};font-weight:600">${S(b.covered)}</td><td>${S(b.auth_required)}</td>`
+          + `<td>${S(b.frequency)}</td><td style="color:#475569">${S(b.note)}</td></tr>`;
+      }).join('') : '';
+      const benTable = bens.length
+        ? `<table><thead><tr style="color:#64748b;border-bottom:1px solid #e5e7eb">`
+        + `<th>CPT</th><th>Description</th><th>Covered?</th><th>Auth?</th><th>Frequency</th><th>Notes</th></tr></thead>`
+        + `<tbody>${benBody}</tbody></table>`
+        : `<div style="color:#64748b;font-size:12.5px">No CPT codes on the order yet. Add the ordered test(s) under Requested Services for CPT-level coverage.</div>`;
+
+      // ── Section 4: financials ──
+      const finBody = fin.available
+        ? kv([
+          ['Annual deductible', money(fin.annual_deductible)],
+          ['Deductible met', money(fin.deductible_met)],
+          ['Remaining deductible', money(fin.remaining_deductible)],
+          ['Coinsurance', pct(fin.coinsurance_pct)],
+          ['Copay', money(fin.copay)],
+          ['Out-of-pocket max', money(fin.oop_max)],
+          ['Out-of-pocket met', money(fin.oop_met)],
+          ['Out-of-pocket remaining', money(fin.oop_remaining)],
+        ])
+        : `<div style="color:#b45309;font-size:12.5px">${esc(fin.note || 'Patient financials require a live 271 from the payer.')}</div>`;
+
+      // ── Section 5: policy limitations & med-necessity flags ──
+      const integ = (pf.integrity || []).map(f =>
+        `${(f.severity || 'info').toUpperCase()}: ${f.message || f.code || ''}${f.action ? ' — ' + f.action : ''}`);
+      const s5 = `<div style="font-size:12px;color:#0f172a;font-weight:700;margin-bottom:4px">Medical necessity</div>${listOr(pf.medical_necessity, 'No diagnosis restriction on file for the ordered tests.')}`
+        + `<div style="font-size:12px;color:#0f172a;font-weight:700;margin:10px 0 4px">Non-covered services</div>${listOr(pf.non_covered, 'None flagged as non-covered.')}`
+        + `<div style="font-size:12px;color:#0f172a;font-weight:700;margin:10px 0 4px">Frequency limits</div>${listOr(pf.frequency_limits, 'No frequency limit on file.')}`
+        + `<div style="font-size:12px;color:#0f172a;font-weight:700;margin:10px 0 4px">MolDX / molecular</div>${listOr(pf.moldx, 'No MolDX registration required.')}`
+        + `<div style="font-size:12px;color:#0f172a;font-weight:700;margin:10px 0 4px">Claim-integrity checks (NCCI / MUE / QW / data)</div>${listOr(integ, 'No coding or data-integrity issues detected.')}`;
+
+      // ── Section 6: authorizations ──
+      const auths = R.authorizations || [];
+      const authTable = auths.length
+        ? `<table><thead><tr style="color:#64748b;border-bottom:1px solid #e5e7eb">`
+        + `<th>Service</th><th>Auth required</th><th>Auth #</th><th>Valid dates</th><th>Notes</th></tr></thead><tbody>`
+        + auths.map(a => `<tr><td>${S(a.service)}</td><td>${S(a.auth_required)}</td><td>${S(a.auth_number)}</td>`
+          + `<td>${S(a.valid_dates)}</td><td style="color:#475569">${S(a.notes)}</td></tr>`).join('')
+        + `</tbody></table>`
+        : `<div style="color:#059669;font-size:12.5px">No prior authorization required for the ordered tests.</div>`;
+
+      // ── Section 8: billing readiness ──
+      const riskCol = { 'High': '#dc2626', 'Medium': '#b45309', 'Low': '#059669' }[br.risk_of_denial] || '#2563eb';
+      const s8 = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">`
+        + `<span style="background:${decCol};color:#fff;padding:4px 14px;border-radius:8px;font-weight:800;font-size:13px">${S(br.decision)}</span>`
+        + `<span style="font-size:12.5px;color:#334155">Eligible for DOS: <b>${S(br.patient_eligible_for_dos)}</b></span>`
+        + `<span style="font-size:12.5px;color:#334155">Denial risk: <b style="color:${riskCol}">${S(br.risk_of_denial)}</b></span></div>`
+        + kv([
+          ['Covered except', (br.covered_except && br.covered_except.length) ? esc(br.covered_except.join(', ')) : 'All ordered CPTs'],
+          ['Authorization required for', (br.authorization_required_for && br.authorization_required_for.length) ? esc(br.authorization_required_for.join(', ')) : 'None'],
+        ])
+        + `<div style="font-size:12px;color:#0f172a;font-weight:700;margin:10px 0 4px">Billing recommendation (per CPT)</div>`
+        + listOr(br.recommendations, 'No recommendation.');
+
+      return `<style>#eligReportBody td,#eligReportBody th{padding:5px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top;text-align:left;font-size:12px}#eligReportBody table{width:100%;border-collapse:collapse}</style>`
+        + header
+        + `<div style="padding:2px 14px 14px">`
+        + card('1 · Patient &amp; Subscriber Verification', kv([
+          ['Patient', S(p.patient_name)], ['Date of birth', S(p.dob)],
+          ['Subscriber', S(p.subscriber_name)], ['Relationship', S(p.relationship)],
+          ['Member ID', S(p.member_id)], ['Group #', S(p.group_number)],
+          ['Plan type', S(p.plan_type)], ['Verification source', S(p.verification_source)],
+          ['Verified at', S(p.verification_timestamp)], ['Reference #', S(p.reference_number)],
+        ]))
+        + card('2 · Coverage Status (as of date of service)', kv([
+          ['Coverage status', S(c.coverage_status)], ['Date of service', S(c.date_of_service)],
+          ['Effective date', S(c.effective_date)], ['Termination date', S(c.termination_date)],
+          ['Primary / secondary', S(c.primary_secondary)], ['Coordination of benefits', S(c.coordination_of_benefits)],
+          ['Plan category', S(c.plan_category)],
+        ]))
+        + card('3 · Laboratory Benefits — CPT-level coverage', benTable)
+        + card('4 · Deductible / Copay / Coinsurance', finBody)
+        + card('5 · Policy Limitations &amp; Medical Necessity Flags', s5)
+        + card('6 · Authorization Details', authTable)
+        + card('7 · Payer Contact &amp; Verification Metadata', kv([
+          ['Payer', S(pm.payer)], ['Source / portal', S(pm.source)],
+          ['Transaction type', S(pm.transaction_type)], ['Verification agent', S(pm.verification_agent)],
+          ['Response code', S(pm.response_code)], ['Reference #', S(pm.reference_number)],
+          ['Notes', S(pm.notes)],
+        ]))
+        + card('8 · Billing Readiness Summary (RCM go / no-go)', s8)
+        + `<div style="font-size:11px;color:#94a3b8;padding:4px 2px 8px;line-height:1.5">${esc(meta.disclaimer || '')}</div>`
+        + `</div>`;
     }
 
     // ── Intake submission (client-facing) ──

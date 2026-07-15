@@ -4134,6 +4134,134 @@ def list_elig_checks(rid: int, hub_session: Optional[str] = Cookie(None)):
     return get_eligibility_checks(rid)
 
 
+@router.get("/eligibility/{rid}/report")
+def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
+    """Advanced Laboratory Eligibility Report — the full 8-section RCM read for one
+    patient (patient/subscriber, DOS coverage, CPT-level benefits, financials,
+    policy limits, authorizations, payer metadata, and a go/no-go billing summary).
+
+    Assembled from the verified coverage record + the coverage-policy engine
+    (LCD/NCD medical necessity, prior auth, MolDX, ABN) + the claim-integrity
+    intercept (NCCI PTP, MUE, QW, term risk). Honest by design: member active
+    status and financials are shown ONLY from a real 271; with no live payer
+    confirmation they read 'requires live 271' and the decision stays PENDING."""
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+
+    order_text = rec.get("RequestedServices") or ""
+    cpts = _parse_cpts(order_text)
+    icd10s = _parse_icd10s(order_text)
+    payer_name = (rec.get("Payor") or "").strip()
+    dos = datetime.now().strftime("%Y-%m-%d")
+
+    def _num(v):
+        import re as _re
+        if v is None:
+            return None
+        s = _re.sub(r"[^0-9.]", "", str(v))
+        try:
+            return float(s) if s else None
+        except ValueError:
+            return None
+
+    # Pull the most recent REAL 271 (if any) for live status + financials + ref#.
+    connected = False
+    benefit: dict = {}
+    ref_no = ""
+    checked_at = rec.get("VerifiedDate") or ""
+    source_label = ""
+    status = (rec.get("Status") or "").strip()
+    try:
+        checks = get_eligibility_checks(rid, limit=25)
+        real = next((c for c in checks
+                     if (c.get("source") or "") in ("stedi", "hets", "pverify")), None)
+        if real:
+            full = get_eligibility_check_raw(int(real["id"]))
+            if full and full.get("result_json"):
+                try:
+                    rj = _json.loads(full["result_json"])
+                except Exception:
+                    rj = {}
+                if isinstance(rj, dict) and rj:
+                    connected = True
+                    status = rj.get("status") or status
+                    benefit = rj.get("benefit") or {}
+                    source_label = _ELIG_SOURCE_LABEL.get(
+                        full.get("source"), full.get("source") or "")
+                    checked_at = full.get("created_at") or checked_at
+                    ref_no = ((rj.get("raw") or {}).get("reference_number")
+                              or (rj.get("raw") or {}).get("trace_id") or "")
+    except Exception:
+        pass
+
+    # Fall back to coverage facts written on the row (human-verified or prior 271).
+    if not benefit:
+        benefit = {
+            "copay": _num(rec.get("Copay")),
+            "deductible_total": _num(rec.get("Deductible")),
+            "coinsurance_pct": _num(rec.get("Coinsurance")),
+            "oop_total": _num(rec.get("OOPMax")),
+        }
+    if not connected and status and status.lower() in ("active", "inactive", "termed") \
+            and (rec.get("VerifiedBy") or "").strip():
+        connected = True
+        source_label = source_label or (rec.get("VerifiedBy") or "")
+
+    # Claim-integrity findings (NCCI PTP / MUE / QW / term / data quality).
+    findings: list = []
+    try:
+        from eligibility_hybrid import PatientRequest
+        from eligibility_hybrid.models import CoverageResult, CoverageStatus
+        from eligibility_hybrid.intercept import run_intercept
+        first, last = _split_patient_name(rec.get("PatientName"))
+        req = PatientRequest(
+            first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
+            member_id=(rec.get("MemberID") or "").strip(),
+            payer_name=payer_name or "Medicare", cpt_codes=cpts, icd10_codes=icd10s,
+            provider_npi=_elig_cfg("STEDI_PROVIDER_NPI") or _elig_cfg("HETS_PROVIDER_NPI"),
+            date_of_service=dos,
+        )
+        _smap = {"active": CoverageStatus.ACTIVE, "inactive": CoverageStatus.INACTIVE,
+                 "termed": CoverageStatus.TERMED, "pending": CoverageStatus.PENDING}
+        cov = CoverageResult(
+            status=_smap.get(status.lower(), CoverageStatus.UNKNOWN),
+            source=source_label or "policy", payer_name=payer_name,
+            member_id=(rec.get("MemberID") or "").strip(),
+            effective_date=(rec.get("EffectiveDate") or ""),
+            term_date=(rec.get("TermDate") or ""),
+        )
+        lines = [type("L", (), {"cpt": c, "allowed_amount": None})() for c in cpts]
+        findings = run_intercept(req, cov, lines)
+    except Exception:
+        findings = []
+
+    from eligibility_hybrid.lab_report import build_lab_eligibility_report
+    report = build_lab_eligibility_report(
+        patient={
+            "name": rec.get("PatientName") or "", "dob": rec.get("DOB") or "",
+            "member_id": rec.get("MemberID") or "", "payer": payer_name,
+            "group": rec.get("PlanGroup") or "", "subscriber": "",
+        },
+        coverage={
+            "status": status, "connected": connected,
+            "effective_date": rec.get("EffectiveDate") or "",
+            "term_date": rec.get("TermDate") or "",
+            "plan_name": rec.get("PlanGroup") or "",
+            "source": source_label or "MedPharma rule intercept",
+            "reference_number": ref_no, "checked_at": checked_at,
+            "verified_by": rec.get("VerifiedBy") or "", "benefit": benefit,
+        },
+        cpts=cpts, icd10s=icd10s, dos=dos, findings=findings,
+        auth_number=(rec.get("AuthNumber") or ""),
+    )
+    return {"ok": True, "report": report}
+
+
 @router.get("/eligibility/check/{check_id}/raw")
 def download_elig_check_raw(check_id: int, hub_session: Optional[str] = Cookie(None)):
     """Download the raw 270/271 evidence for one check (audit artifact)."""
