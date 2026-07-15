@@ -2450,14 +2450,14 @@ _PRE_BILL_STATUSES = ("Intake", "Verification", "Coding")
 # in the dated report). Anything dated before this — or carrying no usable DOS —
 # is legacy backlog whose still-open balance rolls up into a single "Rolling AR"
 # figure instead of muddying the current-period production numbers.
-_ROLLING_AR_DOS_CUTOFF = "2026-06-18"
+_ROLLING_AR_DOS_CUTOFF = "2026-06-15"
 
 
 def _rolling_ar_cutoff_date():
     try:
         return date.fromisoformat(_ROLLING_AR_DOS_CUTOFF)
     except (ValueError, TypeError):
-        return date(2026, 6, 18)
+        return date(2026, 6, 15)
 
 
 def backfill_missing_bill_dates():
@@ -3756,25 +3756,25 @@ def billing_cycle_window(anchor_iso, today):
 
 
 # Default billing-cycle anchor day-of-month for accounts without their own
-# billing_cycle_start. The team runs a 15th-to-15th cycle (matching the 6/15
-# New-vs-Rolling cutoff), so every dashboard reports on that period, not the
-# calendar month. Override with the BILLING_CYCLE_ANCHOR_DAY env var if needed.
-DEFAULT_BILLING_CYCLE_ANCHOR_DAY = int(os.getenv("BILLING_CYCLE_ANCHOR_DAY", "15") or 15)
+# billing_cycle_start. The team runs a 10th-to-10th cycle (e.g. 7/10-8/10), so
+# every dashboard reports on that period, not the calendar month. Override with
+# the BILLING_CYCLE_ANCHOR_DAY env var if needed.
+DEFAULT_BILLING_CYCLE_ANCHOR_DAY = int(os.getenv("BILLING_CYCLE_ANCHOR_DAY", "10") or 10)
 
 
 def default_cycle_window(today, anchor_day: int = None):
     """The standard monthly billing cycle that contains ``today``, anchored to a
-    fixed day-of-month (default the 15th). Returns (start_iso, end_iso, label)
-    as a clean month-to-month window — e.g. today 7/10 -> 6/15–7/15. Used for the
+    fixed day-of-month (default the 10th). Returns (start_iso, end_iso, label)
+    as a clean month-to-month window — e.g. today 7/11 -> 7/10–8/10. Used for the
     admin portfolio roll-up and any account without its own billing_cycle_start,
-    so "this month" figures follow the 6/15 billing cutoff, not the calendar
-    month."""
+    so "this month" figures follow the 10th-of-month billing cutoff, not the
+    calendar month."""
     import datetime as _dt, calendar as _cal
     day = anchor_day if anchor_day is not None else DEFAULT_BILLING_CYCLE_ANCHOR_DAY
     try:
         day = min(max(int(day), 1), 28)  # stay valid in every month (Feb-safe)
     except Exception:
-        day = 15
+        day = 10
     if isinstance(today, _dt.datetime):
         today = today.date()
 
@@ -3871,10 +3871,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                 _anchor = ""
         # An account with its own explicit anchor keeps its drifting cycle; every
         # other dashboard — including the admin portfolio roll-up (client_id=None)
-        # — reports on the standard monthly billing cycle anchored to the 15th
-        # (6/15–7/15, 7/15–8/15 …), matching the New-vs-Rolling 6/15 cutoff. The
-        # calendar month is no longer used, so "this month" figures always follow
-        # the real billing period the team runs on.
+        # — reports on the standard monthly billing cycle anchored to the 10th
+        # (7/10–8/10, 8/10–9/10 …). The calendar month is no longer used, so
+        # "this month" figures always follow the real billing period the team
+        # runs on.
         _win = (billing_cycle_window(_anchor, today) if _anchor else None) \
             or default_cycle_window(today)
         if _win:
@@ -4070,10 +4070,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         cur.execute(f"SELECT ClaimStatus, COUNT(*) FROM claims_master {cond} GROUP BY ClaimStatus", p)
         status_dist = {r[0]: r[1] for r in cur.fetchall()}
 
-        # Payor mix (flat: payor → count, for frontend bar chart)
-        cur.execute(f"""SELECT Payor, COUNT(*)
-                        FROM claims_master {cond} GROUP BY Payor ORDER BY COUNT(*) DESC LIMIT 8""", p)
-        payor_mix = {r[0]: r[1] for r in cur.fetchall()}
+        # Payor mix removed per admin: only billed-out amounts and payments posted
+        # are tracked on the dashboard (the payor/percentage breakdown was not
+        # trusted, so it is no longer computed or returned).
 
         # Denial categories (flat: category → count, for frontend bar chart)
         cur.execute(f"""SELECT DenialCategory, COUNT(*) FROM claims_master
@@ -4106,7 +4105,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         #   Denied  = status Denied/Appeals OR a real Denied Date (charge value)
         #   Paid    = claim lines with money paid             (paid value)
         #   Posted  = payments actually posted/deposited      (payment value)
-        ROLLING_AR_START = "2026-06-18"  # first day the team began entering data
+        ROLLING_AR_START = "2026-06-15"  # billing cycle start (team's first cycle)
         claim_buckets = {
             "billed": {"count": 0, "amount": 0.0},
             "denied": {"count": 0, "amount": 0.0},
@@ -4235,9 +4234,9 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                          "amount": round(float(_pay_all or 0) - float(_pay_new or 0), 2)},
             }
 
-        # Rolling A/R since the team's first data-entry day (6/18). Outstanding
-        # balance on claims billed on/after the start date — the live A/R the team
-        # has actually generated (vs. legacy balances carried in from before 6/18).
+        # Rolling A/R since the team's cycle start (6/15). Outstanding balance on
+        # claims billed on/after the start date — the live A/R the team has
+        # actually generated (vs. legacy balances carried in from before 6/15).
         rolling_ar = q1(
             f"SELECT COALESCE(SUM(BalanceRemaining),0) FROM claims_master {cond} "
             f"{'AND' if cond else 'WHERE'} BillDate >= ?", p + [ROLLING_AR_START])
@@ -4286,7 +4285,6 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "rolling_ar": round(rolling_ar, 2),
             "rolling_ar_start": ROLLING_AR_START,
             "status_distribution": status_dist,
-            "payor_mix": payor_mix,
             "denial_categories": denial_cats,
             "payment_trend": pay_trend,
             "credentialing_stats": cred_stats,

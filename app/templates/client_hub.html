@@ -2200,6 +2200,11 @@
               </div>
             </div>
           </div>
+          <!-- Admin per-account billing tabs — comprehensive billing per account
+               (SV Diagnostics, PCR, …). Shown only to the comprehensive-view
+               audience (admin + Eric); lets them flip between each account's
+               billed-out + paid figures in place. Populated by renderAccountTabs(). -->
+          <div id="dashAccountTabs" style="display:none;gap:6px;flex-wrap:wrap;margin-bottom:18px;border-bottom:2px solid var(--gray-100)"></div>
           <!-- Eligibility snapshot — shown ONLY for accounts with the eligibility
                module (e.g. PCR verification). Gives an at-a-glance worklist summary
                (real counts + a jump to the board) so the Dashboard isn't blank for
@@ -2284,37 +2289,9 @@
               <div id="paymentsPostedResult" style="margin-top:12px"></div>
             </div>
           </div>
-          <!-- Data Summary Card -->
-          <div class="card" id="dashSummaryCard" style="margin-bottom:18px;display:none">
-            <div class="card-header">
-              <div class="card-title">📊 Data Summary</div>
-            </div>
-            <div id="dashSummaryBody"
-              style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:4px 0">
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px" data-module-section="claims">
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">AR Aging Buckets</div>
-              </div>
-              <div class="aging-grid" id="agingGrid"></div>
-            </div>
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Claims by Status</div>
-              </div>
-              <div class="bar-list" id="statusChart"></div>
-            </div>
-          </div>
-          <div style="margin-bottom:18px" data-module-section="claims">
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Payor Mix</div>
-              </div>
-              <div class="bar-list" id="payorChart"></div>
-            </div>
-          </div>
+          <!-- Data Summary, AR Aging and Claims-by-Status cards were removed per
+               admin: the dashboard tracks only billed-out amounts and payments
+               posted (paid). -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
             <div class="card" data-module-section="credentialing">
               <div class="card-header">
@@ -2399,18 +2376,12 @@
           <!-- Claims Status Summary Chart -->
           <div id="claimsStatusChart" class="section-chart-strip"></div>
           <!-- Claims Visual Charts -->
-          <div id="claimsChartsRow" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+          <div id="claimsChartsRow" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
             <div class="card">
               <div class="card-header">
                 <div class="card-title">📊 Status Distribution</div>
               </div>
               <div id="claimsSectionDonut" style="padding:12px"></div>
-            </div>
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">📊 Payor Mix</div>
-              </div>
-              <div id="claimsSectionPayor" style="padding:12px"></div>
             </div>
             <div class="card">
               <div class="card-header">
@@ -2644,7 +2615,7 @@
               <button class="btn btn-secondary btn-sm" onclick="document.getElementById('eligExcelInput').click()">📥 Import Excel</button>
               <input type="file" id="eligExcelInput" accept=".xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="importExcel(this,'Eligibility')">
               <button class="btn btn-secondary btn-sm" onclick="runEligPrecheck()" title="Validate Medicare MBI format + required data on every record. Real check, no payer call.">🔎 Pre-check</button>
-              <button class="btn btn-secondary btn-sm" onclick="verifyAllElig()" title="Auto-verify EVERY patient now — real-time coverage, medical necessity, and ABN (NGS/PGx). Honest: says 'pending connection' if no live payer source, never fabricates.">⚡ Verify All</button>
+              <button id="eligVerifyAllBtn" class="btn btn-secondary btn-sm" onclick="verifyAllElig()" title="Auto-verify EVERY patient now — real-time coverage, medical necessity, and ABN (NGS/PGx). Honest: says 'pending connection' if no live payer source, never fabricates.">⚡ Verify All</button>
               <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
             </div>
             <div id="eligPrecheckResult" style="display:none;margin-bottom:14px"></div>
@@ -4724,6 +4695,13 @@
     // Role helpers
     function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
 
+    // Running an eligibility check (a real payer 270/271) is a BILLING-TEAM action:
+    // the admin (me), Eric, and the billers — Susan, Melissa, Jessica, Maria — who
+    // are all staff/admin. Eligibility clients such as Spirit Health (David) may
+    // UPLOAD / intake patients but never RUN the check; a biller runs it for them.
+    // Enforced again server-side on /eligibility/{id}/verify + /verify-all.
+    function _canRunEligibility() { return isStaffOrAdmin(); }
+
     // A login is "eligibility-only" when it's a client login whose modules include
     // 'eligibility' but NOT the billing dashboard ('claims'/'dashboard'). Such logins
     // (PCR eligibility verifiers) land on the Eligibility board instead of Claims Out.
@@ -4736,6 +4714,17 @@
       if (!mods) return false;
       const s = new Set(mods);
       return s.has('eligibility') && !s.has('claims') && !s.has('dashboard');
+    }
+    // A "reporting-only viewer" (e.g. Tommy on SV Diagnostics) is a non-staff login
+    // who may ONLY see billed-out + payments-posted totals for their own account
+    // plus their account's Team Chat — no claims queue, no uploads, no production,
+    // no other reports. Identified by login so it holds regardless of DB modules.
+    const REPORTING_ONLY_USERNAMES = new Set(['tivany', 'tommy']);
+    function isReportingOnlyViewer() {
+      if (!currentUser || isStaffOrAdmin()) return false;
+      return [currentUser.username, currentUser.contact_name]
+        .filter(Boolean)
+        .some(v => REPORTING_ONLY_USERNAMES.has(String(v).toLowerCase().split('@')[0].trim()));
     }
     function isFullAdmin()    { return currentUser && currentUser.role === 'admin'; }
     function isBizdev()       { return currentUser && currentUser.role === 'bizdev'; }
@@ -6172,8 +6161,40 @@
         </div>`;
     }
 
+    // Admin per-account billing tabs. One tab per client account so the admin can
+    // review each account's billed-out + paid figures in place (plus an "All
+    // Accounts" aggregate). Restricted to the comprehensive-view audience
+    // (admin + Eric); billers keep the account switcher scoped to their accounts.
+    function renderAccountTabs() {
+      const el = document.getElementById('dashAccountTabs');
+      if (!el) return;
+      if (!canViewReporting() || !Array.isArray(clientsList) || clientsList.length === 0) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      const tab = (id, label, active) =>
+        `<button onclick="selectAccountTab(${id === null ? 'null' : id})" title="${esc(label)}" ` +
+        `style="border:1px solid ${active ? 'var(--primary)' : 'var(--gray-200)'};border-bottom:none;` +
+        `background:${active ? 'var(--primary)' : '#fff'};color:${active ? '#fff' : 'var(--gray-600)'};` +
+        `border-radius:8px 8px 0 0;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;` +
+        `white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(label)}</button>`;
+      el.innerHTML =
+        tab(null, '🏢 All Accounts', activeClientId === null || activeClientId === undefined) +
+        clientsList.map(c => tab(c.id, c.company || c.username || ('Account ' + c.id), activeClientId === c.id)).join('');
+      el.style.display = 'flex';
+    }
+    // Switch the comprehensive billing view to a specific account tab (or the
+    // aggregate "All Accounts" tab). Reuses the existing account-selection flow.
+    function selectAccountTab(id) {
+      if (id === null || id === undefined) { enterAsAdmin(); return; }
+      if (id === activeClientId) return;
+      selectAccount(id);
+    }
+
     function renderDashboard(d) {
       const adminView = isStaffOrAdmin();
+      renderAccountTabs();
       let title = d.user ? `${d.user.company || 'Dashboard'}` : 'Dashboard';
       // Brand shows as "MedPharma" (without the legal "SC" suffix) in the hub UI.
       title = title.replace(/\bMedPharma\s+SC\b/i, 'MedPharma');
@@ -6232,14 +6253,13 @@
       // misleading ~0.3% off a paid side that isn't fully loaded. Rather than show
       // a number that doesn't compute honestly, the tile is dropped until there's
       // reliable first-pass/rejection data to build a real clean-claim rate.
+      // Per admin, the dashboard tracks ONLY the two numbers that are trusted:
+      // Billed Out (charges billed) and Payments (money actually posted/paid).
+      // Active Claims, Submitted, Avg Days to Pay and SLA Breaches were removed.
       const kpis = [
         { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
-        { label: 'Active Claims', val: d.active_claims || 0, color: 'blue', icon: '📋' },
-        { label: (d.cycle_label ? 'Submitted (' + d.cycle_label + ')' : 'Submitted (This Month)'), val: d.submitted_mtd || 0, color: 'purple', icon: '📤', title: (d.cycle_label ? 'Current billing cycle ' + d.cycle_start + ' → ' + d.cycle_end : '') },
         { label: (d.cycle_label ? 'Payments (' + d.cycle_label + ')' : 'Payments (This Month)'), val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅', title: (d.cycle_label ? 'Current billing cycle ' + d.cycle_start + ' → ' + d.cycle_end : '') },
-        { label: 'Avg Days to Pay', val: (d.paid_dated_count ? (d.avg_days_to_pay || 0) + ' days' : '—'), color: 'blue', icon: '📅', title: (d.paid_dated_count ? '' : 'Shows once claims carry a payment date') },
       ];
-      if (adminView) kpis.push({ label: 'SLA Breaches', val: d.sla_breaches || 0, color: 'red', icon: '🚨' });
 
       document.getElementById('kpiGrid').innerHTML = kpis.map(k => `
     <div class="kpi-card ${k.color}"${k.title ? ` title="${k.title}"` : ''}>
@@ -6409,73 +6429,12 @@
         baEl.innerHTML = _tiles + _byWeekHtml;
       }
 
-      // Data Summary Card (shows record counts per section)
-      const summaryCard = document.getElementById('dashSummaryCard');
-      const cs = d.credentialing_stats || {};
-      const es = d.enrollment_stats || {};
-      const claimCount = d.active_claims || 0;
-      const credCount = Object.values(cs).reduce((a, b) => a + (b || 0), 0);
-      const enrCount = Object.values(es).reduce((a, b) => a + (b || 0), 0);
-      const hasData = claimCount || credCount || enrCount;
-      summaryCard.style.display = hasData ? '' : 'none';
-      if (hasData) {
-        const sbox = (icon, label, val, clr) => `<div style="background:${clr};border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:18px">${icon}</div><div style="font-size:20px;font-weight:700;color:var(--gray-800)">${val}</div>
-          <div style="font-size:10px;font-weight:600;color:var(--gray-500);text-transform:uppercase">${label}</div></div>`;
-        document.getElementById('dashSummaryBody').innerHTML =
-          sbox('📋', 'Claims', claimCount, 'var(--info-light)') +
-          sbox('🎓', 'Credentialing', credCount, 'var(--purple-light)') +
-          sbox('📝', 'Enrollment', enrCount, 'var(--success-light)') +
-          sbox('💰', (d.cycle_label ? 'Payments ' + d.cycle_label : 'Payments MTD'), '$' + fmt(d.payments_mtd), 'var(--warning-light)');
-      }
+      // Data Summary, AR Aging and Claims-by-Status were removed per admin: the
+      // dashboard tracks only billed-out amounts and payments posted (paid).
 
-      // AR Aging
-      const aging = d.ar_aging || { current: 0, days_31_60: 0, days_61_90: 0, days_90_plus: 0 };
-      document.getElementById('agingGrid').innerHTML = `
-    <div class="aging-bucket">
-      <div class="ab-val">$${fmt(aging.current || 0)}</div><div class="ab-lbl">0–30 Days</div>
-    </div>
-    <div class="aging-bucket warning">
-      <div class="ab-val">$${fmt(aging.days_31_60 || 0)}</div><div class="ab-lbl">31–60 Days</div>
-    </div>
-    <div class="aging-bucket warning">
-      <div class="ab-val">$${fmt(aging.days_61_90 || 0)}</div><div class="ab-lbl">61–90 Days</div>
-    </div>
-    <div class="aging-bucket danger">
-      <div class="ab-val">$${fmt(aging.days_90_plus || 0)}</div><div class="ab-lbl">90+ Days</div>
-    </div>
-  `;
-
-      // Status chart  
-      const sd = d.status_distribution || {};
-      const sdMax = Math.max(...Object.values(sd).map(Number), 1);
-      const sdColors = {
-        Paid: 'bf-green', 'Billed/Submitted': 'bf-blue', Denied: 'bf-red',
-        'A/R Follow-up': 'bf-indigo', Appeal: 'bf-purple', Intake: 'bf-amber', Coding: 'bf-amber'
-      };
-      document.getElementById('statusChart').innerHTML = Object.entries(sd).length
-        ? Object.entries(sd).map(([s, c]) => `
-      <div class="bar-row">
-        <div class="bar-lbl">${esc(s)}</div>
-        <div class="bar-track">
-          <div class="bar-fill ${sdColors[s] || 'bf-indigo'}" style="width:${Math.max(6, (c / sdMax) * 100)}%">${c}</div>
-        </div>
-      </div>`).join('')
-        : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No claims data</p>';
-
-      // Payor mix
-      const pm = d.payor_mix || {};
-      const pmMax = Math.max(...Object.values(pm).map(Number), 1);
-      const pmColors = ['bf-indigo', 'bf-green', 'bf-amber', 'bf-purple', 'bf-blue'];
-      document.getElementById('payorChart').innerHTML = Object.entries(pm).length
-        ? Object.entries(pm).map(([s, c], i) => `
-      <div class="bar-row">
-        <div class="bar-lbl">${esc(s)}</div>
-        <div class="bar-track">
-          <div class="bar-fill ${pmColors[i % pmColors.length]}" style="width:${Math.max(6, (c / pmMax) * 100)}%">${c}</div>
-        </div>
-      </div>`).join('')
-        : '<p style="color:var(--gray-400);font-size:13px;padding:8px 0">No payor data</p>';
+      // Payor Mix report removed per admin: the dashboard tracks only billed-out
+      // amounts and payments posted (the payor/percentage breakdown was not
+      // trusted). The #payorChart card was removed from the markup as well.
 
       // Credentialing stats
       const credStats = d.credentialing_stats || {};
@@ -6566,11 +6525,7 @@
       const statusData = Object.entries(statusCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
       renderDonutChart('claimsSectionDonut', statusData, 'value', 'label');
 
-      // Payor mix donut
-      const payorCounts = {};
-      claims.forEach(c => { const p = c.Payor || 'Unknown'; payorCounts[p] = (payorCounts[p] || 0) + 1; });
-      const payorData = Object.entries(payorCounts).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 8);
-      renderDonutChart('claimsSectionPayor', payorData, 'value', 'label');
+      // Payor Mix removed per admin (payor/percentage breakdown not tracked).
 
       // Financial summary bar. Billed Out = the full charged value of every claim
       // in the queue — each claim is billed the moment it's loaded, so there is no
@@ -7657,6 +7612,10 @@
     function renderEligTable() {
       const sel = document.getElementById('eligFilter');
       activeEligFilter = sel ? sel.value : activeEligFilter;
+      // Only the billing team may RUN checks — hide the board-wide "Verify All"
+      // for eligibility clients (they upload; a biller runs the check).
+      const _vaBtn = document.getElementById('eligVerifyAllBtn');
+      if (_vaBtn) _vaBtn.style.display = _canRunEligibility() ? '' : 'none';
       const f = (activeEligFilter || '').toLowerCase();
       const _isPendingElig = i => !((i.BillingReadiness || '').trim()) || i.BillingReadiness === 'Pending Verification';
       const items = !f
@@ -7697,7 +7656,7 @@
     <td>${_eligFileLink(i.IntakeFileId, i.IntakeFileName, false)}</td>
     <td>${_eligFileLink(i.ReportFileId, i.ReportFileName, true)}</td>
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
-    <td style="white-space:nowrap"><button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> <button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
+    <td style="white-space:nowrap">${_canRunEligibility() ? `<button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> ` : ''}<button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
       }).join('');
     }
@@ -7811,6 +7770,7 @@
     // payer source connected, each record gets a clear "pending connection"
     // explanation (plus offline service/ABN policy) — nothing is fabricated.
     async function verifyAllElig() {
+      if (!_canRunEligibility()) { toast('Eligibility checks are run by the billing team (admin, Eric or a biller). You can upload records — a biller will run the check.', 'warning', 7000); return; }
       if (!confirm('Auto-verify every patient on this board now?\n\nEach patient gets a plain-English plan explanation — active vs lapsed, deductible, whether the requested services are covered, and medical-necessity / ABN guidance for NGS & PGx.\n\nWith no live payer source connected, records get an honest “pending connection” note. Nothing is ever fabricated.')) return;
       try {
         const r = await fetch('/hub/api/eligibility/verify-all', { method: 'POST' });
@@ -7826,6 +7786,7 @@
     // Sends the record to a real payer and writes back only what a real 271 says.
     // It never fabricates a status: if no source is connected it says so plainly.
     async function verifyEligNow(id) {
+      if (!_canRunEligibility()) { toast('Eligibility checks are run by the billing team (admin, Eric or a biller). You can upload records — a biller will run the check.', 'warning', 7000); return; }
       const it = (allEligItems || []).find(x => x.id === id) || {};
       // Courtesy client-side gate so we don't waste a real call on a bad identifier.
       const iss = _precheckOne(it);
@@ -12544,12 +12505,29 @@
       // Exception: eligibility-only logins (PCR verifiers) have no billing
       // dashboard at all, so Claims Out is hidden and Eligibility is their home.
       const eligOnly = _isEligibilityOnly();
+      // Reporting-only viewers (e.g. Tommy) get ONLY the Dashboard (billed+paid)
+      // and Team Chat — every other nav item is hidden below.
+      const reportingOnly = isReportingOnlyViewer();
       navItems.forEach(n => {
         const key = n.getAttribute('data-module');
+        // Reporting-only viewer: Dashboard + Chat only, nothing else.
+        if (reportingOnly) { n.style.display = (key === 'dashboard' || key === 'chat') ? '' : 'none'; return; }
         if (eligOnly && key === 'dashboard') { n.style.display = 'none'; return; }
+        // Eligibility verifiers may NOT upload claims or see team production —
+        // hard-hide those tabs even if a stray module slips into their config.
+        if (eligOnly && (key === 'claims' || key === 'production')) { n.style.display = 'none'; return; }
+        // Eligibility-only PCR verifiers still belong to shared, membership-gated
+        // chat rooms (e.g. the "PCR Eligibility" room), so keep Team Chat reachable
+        // even though their enabled modules are limited to eligibility. Room access
+        // is enforced server-side by membership, so this never exposes other rooms.
+        if (eligOnly && key === 'chat') { n.style.display = ''; return; }
         if (!enabled) { n.style.display = ''; return; }
         if (ALWAYS_VISIBLE.has(key)) { n.style.display = ''; return; }
         if (staffAdmin && ADMIN_ALWAYS.has(key)) { n.style.display = ''; return; }
+        // Eligibility Tracking is a billing-team feature offered on EVERY account —
+        // always show it for admin, Eric and the billers so they can run checks on
+        // any account (SV Diagnostics, PCR, …) without per-account module config.
+        if (staffAdmin && key === 'eligibility') { n.style.display = ''; return; }
         n.style.display = enabled.has(key) ? '' : 'none';
       });
 
@@ -12563,9 +12541,18 @@
       // never sees those widgets on the Dashboard or in Reporting either.
       document.querySelectorAll('[data-module-section]').forEach(s => {
         const key = s.getAttribute('data-module-section');
+        // Reporting-only viewer sees only the billing (claims) cards so billed+paid
+        // show; the claims QUEUE nav stays hidden, so they can't work claims.
+        if (reportingOnly) { s.classList.toggle('module-hidden', key !== 'claims'); return; }
         if (!enabled) { s.classList.remove('module-hidden'); return; }
         s.classList.toggle('module-hidden', !enabled.has(key));
       });
+
+      // Payment Posting is a billing-team action — admin, Eric and the billers
+      // (all staff/admin). Client logins never post payments, so hide the upload
+      // card for them (this also keeps it off reporting-only viewers like Tommy).
+      const _payCard = document.getElementById('dashPaymentsPostedCard');
+      if (_payCard && !staffAdmin) _payCard.classList.add('module-hidden');
 
       updateDashAdminControls();
 

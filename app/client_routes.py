@@ -3794,10 +3794,11 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
                              data.get("VerifiedBy"), data.get("VerifiedDate"))
     data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
     eid = create_eligibility(data)
-    # Real-time: auto-verify the moment a patient lands on the board. Runs in a
-    # background thread so the upload returns instantly; writes the plain-English
-    # VerificationSummary (or an honest 'pending connection' note if no source).
-    _auto_verify_async(eid)
+    # Real-time auto-verify runs only when the BILLING TEAM adds a record.
+    # Eligibility clients (e.g. Spirit Health / David) may UPLOAD / intake patients
+    # but never RUN the check — their uploads wait for a biller/admin to verify.
+    if user["role"] in ("admin", "staff"):
+        _auto_verify_async(eid)
     notify_activity(user["username"], "created", "Eligibility",
                     f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
     return {"id": eid, "ok": True}
@@ -3841,12 +3842,15 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
         the raw request + 271 in eligibility_checks as immutable audit evidence.
     """
     user = _require_user(hub_session)
+    # Running a real coverage check is a billing-team action (admin, Eric, billers).
+    # Eligibility clients like Spirit Health may upload records but not run checks.
+    if user["role"] not in ("admin", "staff"):
+        raise HTTPException(403, "Eligibility checks are run by the billing team "
+                                 "(admin, Eric or a biller). You can upload records "
+                                 "— a biller will run the check.")
     rec = get_eligibility_one(rid)
     if not rec:
         raise HTTPException(404, "Eligibility record not found")
-    if user["role"] not in ("admin", "staff"):
-        if int(rec.get("client_id") or 0) != _client_account_id(user):
-            raise HTTPException(403, "Not authorized for this record")
 
     res = _verify_and_record(rec, actor_label="Manual",
                              actor_username=user.get("username", ""))
@@ -3878,9 +3882,12 @@ def verify_all_elig(client_id: Optional[int] = None,
     connected, records get a clear 'pending connection' summary + offline service /
     ABN policy — nothing fabricated. Runs in the background; refresh the board."""
     user = _require_user(hub_session)
-    scope = client_id or _client_scope(user)
+    # Board-wide verification is a billing-team action; clients upload but never run.
     if user["role"] not in ("admin", "staff"):
-        scope = _client_account_id(user)
+        raise HTTPException(403, "Eligibility checks are run by the billing team "
+                                 "(admin, Eric or a biller). You can upload records "
+                                 "— a biller will run the check.")
+    scope = client_id or _client_scope(user)
     if not scope:
         raise HTTPException(400, "client_id required")
     recs = get_eligibility(scope)
@@ -5966,6 +5973,11 @@ async def import_payments_posted_route(
     re-uploading the same remittance never double-counts.
     """
     user = _require_user(hub_session)
+    # Payment posting is a billing-team action (admin, Eric and the billers).
+    # Client logins never post payments, so reject them here — defense in depth
+    # beyond the hidden upload card in the UI.
+    if user["role"] not in ("admin", "staff"):
+        raise HTTPException(status_code=403, detail="Payment posting is restricted to the billing team")
     scope = client_id if client_id is not None else (
         _client_scope(user) if _client_scope(user) is not None
         else _single_client_account_or(user["id"]))
