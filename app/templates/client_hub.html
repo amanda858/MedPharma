@@ -6356,7 +6356,7 @@
               ? ` <span title="Billed Out matches the billed claims and every dollar is attributed to one biller" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-weight:700;font-size:10px">✓ numbers balance</span>`
               : ` <span title="A total doesn't reconcile — check the team breakdown below" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;font-weight:700;font-size:10px">⚠ check numbers</span>`;
           }
-          cbSub.innerHTML = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_paidPosted.amount || 0)}` + _badge;
+          cbSub.innerHTML = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_postedB.amount || 0)}` + _badge;
         }
       }
 
