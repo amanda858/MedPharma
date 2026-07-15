@@ -2609,6 +2609,7 @@
               <button id="eligVerifyAllBtn" class="btn btn-secondary btn-sm" onclick="verifyAllElig()" title="Auto-verify EVERY patient now — real-time coverage, medical necessity, and ABN (NGS/PGx). Honest: says 'pending connection' if no live payer source, never fabricates.">⚡ Verify All</button>
               <button class="btn btn-primary btn-sm" onclick="openEligModal()">+ Add Verification</button>
             </div>
+            <div id="eligReportingConnBanner" style="display:none;margin-bottom:14px"></div>
             <div id="eligPrecheckResult" style="display:none;margin-bottom:14px"></div>
             <div class="card" style="padding:0">
               <div class="table-wrap">
@@ -7216,6 +7217,7 @@
       renderEligTable();
       renderEligTiles();
       renderEligDashboardCharts();
+      loadReportingConnBanner();
     }
 
     // Show/hide the three eligibility sub-views. Clients never see the MedPharma
@@ -7252,6 +7254,7 @@
         if (btn) btn.classList.toggle('active', v === view);
       });
       if (view === 'dashboard') loadEligConnStatus();
+      if (view === 'reporting') loadReportingConnBanner();
     }
 
     // ── Real-time payer connection proof (admin-only) ──
@@ -7279,6 +7282,38 @@
           el.innerHTML = `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;font-weight:700">● NOT CONNECTED</span> No live payer source yet — the engine stays honest and never fabricates.${c.next_step ? '<div style="margin-top:6px;color:#475569">' + esc(c.next_step) + '</div>' : ''}`;
         }
       } catch (e) { if (el) el.textContent = 'Could not read connection status.'; }
+    }
+
+    // Honest "why is everything pending?" banner shown on the Completed Reporting
+    // worklist itself (where the pending patients are), not just the dashboard.
+    // When no live payer source is connected it explains that the engine still
+    // proves billing POLICY but will not fake an active status, and gives a
+    // one-click path to connect. When live it shows the green LIVE pill.
+    async function loadReportingConnBanner() {
+      const el = document.getElementById('eligReportingConnBanner');
+      if (!el) return;
+      if (!_eligConnAdmin()) { el.style.display = 'none'; return; }
+      try {
+        const r = await fetch('/hub/api/admin/eligibility/config');
+        const c = r.ok ? await r.json() : null;
+        if (!c) { el.style.display = 'none'; return; }
+        if (c.live) {
+          const src = c.verify_source ? esc(String(c.verify_source)) : 'your clearinghouse';
+          el.style.display = '';
+          el.innerHTML = `<div style="border:1px solid #86efac;background:#f0fdf4;border-radius:10px;padding:10px 14px;font-size:12.5px;color:#166534;display:flex;align-items:center;gap:10px;flex-wrap:wrap">`
+            + `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#dcfce7;border:1px solid #86efac;font-weight:700;white-space:nowrap">● LIVE</span>`
+            + `<span>Real-time verification is connected via <b>${src}</b>. Every <b>Verify</b> sends a real 270 and stores the payer's 271, so patients read <b>Active / Inactive</b> with financials instead of pending.</span></div>`;
+        } else {
+          el.style.display = '';
+          el.innerHTML = `<div style="border:1px solid #fcd34d;background:#fffbeb;border-radius:10px;padding:11px 14px;font-size:12.5px;color:#92400e">`
+            + `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">`
+            + `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#fef3c7;border:1px solid #fcd34d;font-weight:700;white-space:nowrap">● WHY PATIENTS SHOW PENDING</span>`
+            + `<span style="flex:1;min-width:260px">No live payer source is connected, so the engine can prove coverage <b>policy</b> (covered / prior-auth / ABN / medical necessity) but <b>cannot</b> confirm a member is active without a real 271 &mdash; so it stays honest and says <b>pending</b> instead of faking Active. Connect one source and every patient flips to a real answer.</span>`
+            + `<button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="switchEligView('dashboard')">Connect a payer source &rarr;</button></div>`
+            + (c.next_step ? `<div style="margin-top:8px;color:#78350f;font-size:11.5px">Fastest fix: ${esc(c.next_step)}</div>` : '')
+            + `</div>`;
+        }
+      } catch (e) { el.style.display = 'none'; }
     }
 
     // Admin pastes a Stedi key (or pVerify creds) here; saved Fernet-encrypted
@@ -8169,13 +8204,16 @@
       const connBadge = meta.connected
         ? `<span style="background:#d1fae5;color:#065f46;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700">Live 271 verified</span>`
         : `<span style="background:#fef3c7;color:#92400e;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700">Coverage policy only - live 271 pending</span>`;
+      const pendingNote = meta.connected ? '' :
+        `<div style="margin-top:8px;font-size:11.5px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:7px 11px;line-height:1.5">`
+        + `<b>Why this reads "pending":</b> no live payer source is connected, so the engine confirmed the billing <b>policy</b> for these tests (coverage, prior-auth, ABN and medical necessity in sections 3, 5, 6 &amp; 8 below are real) but will not fake an "active" status it has not confirmed with a real 271. Connect a payer source (Eligibility &rarr; Dashboard &rarr; Connect a payer source) to flip this to a real Active / Inactive with financials.</div>`;
       const header = `<div style="padding:14px 16px;border-bottom:1px solid #eef2f7">`
         + `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">`
         + `<div><div style="font-size:15px;font-weight:800;color:#0f172a">${S(p.patient_name)}</div>`
         + `<div style="font-size:12px;color:#64748b">DOB ${S(p.dob)} · ${S(pm.payer)} · Member ${S(p.member_id)}</div></div>`
         + `<div style="text-align:right"><div style="font-size:20px;font-weight:800;color:${decCol}">${S(br.decision)}</div>`
         + `<div style="font-size:11px;color:#94a3b8">Date of service ${S(meta.date_of_service)}</div></div></div>`
-        + `<div style="margin-top:8px">${connBadge}</div></div>`;
+        + `<div style="margin-top:8px">${connBadge}</div>${pendingNote}</div>`;
 
       // ── Section 3: CPT-level lab benefits table ──
       const bens = R.lab_benefits || [];
