@@ -52,7 +52,7 @@ def _plan_category(payer: str, plan_name: str = "") -> str:
 
 def _covered_label(active: bool, connected: bool, necessary: bool,
                    medicare_noncovered: bool, status: str) -> tuple[str, str]:
-    """(short, detail) coverage verdict for one CPT — never fabricated."""
+    """(short, detail) coverage verdict for one CPT - never fabricated."""
     if medicare_noncovered:
         return ("No", "Medicare generally non-covered (not reasonable & necessary) - ABN required to bill the patient.")
     if not necessary:
