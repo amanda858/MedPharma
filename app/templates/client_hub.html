@@ -2520,6 +2520,15 @@
             <button id="eligTabBtn-dashboard" class="elig-subtab" onclick="switchEligView('dashboard')">📊 Dashboard</button>
           </div>
 
+          <!-- Client (account) picker — choose which client's patients to work on
+               (Spirit, PCR, or any other account), or “All clients” to see every
+               client's completed results grouped by client. Billing team only. -->
+          <div id="eligClientBar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <span style="font-size:12.5px;color:var(--gray-500);font-weight:600">Client account:</span>
+            <select id="eligClientPicker" class="form-control btn-sm" onchange="eligPickClient(this.value)" style="width:auto;min-width:210px"></select>
+            <span id="eligClientHint" style="font-size:12px;color:var(--gray-400)"></span>
+          </div>
+
           <!-- ── CLIENT INTAKE ─────────────────────────────────────── -->
           <div id="eligView-intake" class="elig-view">
             <div class="card" id="eligIntakeDrop"
@@ -2530,14 +2539,19 @@
               <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="openEligIntake()">+ New Intake</button>
             </div>
             <div class="card" style="padding:0">
-              <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+              <div class="card-header" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
                 <span class="card-title">📋 Submissions</span>
-                <span id="eligIntakeCount" style="font-size:13px;color:var(--gray-400)"></span>
+                <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span id="eligSelCount" style="font-size:12px;color:var(--gray-500)"></span>
+                  <button id="eligRunSelectedBtn" class="btn btn-primary btn-sm" style="display:none" onclick="runSelectedElig()" title="Run a real-time coverage check on the ticked patients and file each result in the Completed report under its client.">▶ Run Eligibility on Selected</button>
+                  <span id="eligIntakeCount" style="font-size:13px;color:var(--gray-400)"></span>
+                </span>
               </div>
               <div class="table-wrap">
                 <table>
                   <thead>
                     <tr>
+                      <th id="eligSelAllTh" style="width:34px;text-align:center;display:none"><input type="checkbox" id="eligSelectAll" onchange="eligToggleSelectAll(this)" title="Select all"></th>
                       <th>Patient</th><th>Payor</th><th>Submitted</th><th>Stage</th>
                       <th>Intake Doc</th><th>Result</th><th>Report</th><th></th>
                     </tr>
@@ -7159,6 +7173,7 @@
         allEligDocs = (await dr.json()).documents || [];
       } catch (_) { allEligDocs = []; }
       // Render every sub-view (cheap) so switching tabs is instant.
+      renderEligClientPicker();
       renderEligIntakeList();
       renderEligDocsList();
       renderEligTable();
@@ -7199,6 +7214,87 @@
         if (panel) panel.style.display = (v === view) ? '' : 'none';
         if (btn) btn.classList.toggle('active', v === view);
       });
+    }
+
+    // ── Client (account) picker for the eligibility workspace ──
+    // The billing team picks which client's patients to work (Spirit, PCR, or any
+    // other account) or “All clients” to see every client's results grouped by
+    // client. A client login is already scoped to its own account, so it's hidden.
+    function _eligClientName(cid) {
+      const c = (clientsList || []).find(x => x.id === cid);
+      if (c) return brand(c.company || c.username || ('Account ' + cid));
+      return cid ? ('Account ' + cid) : 'Unassigned';
+    }
+
+    async function renderEligClientPicker() {
+      const bar = document.getElementById('eligClientBar');
+      const sel = document.getElementById('eligClientPicker');
+      if (!bar || !sel) return;
+      if (!isStaffOrAdmin()) { bar.style.display = 'none'; return; }
+      if (!clientsList.length) {
+        try { const r = await fetch('/hub/api/accounts'); const d = await r.json(); clientsList = Array.isArray(d) ? d : (d.clients || []); } catch (_) { }
+      }
+      bar.style.display = 'flex';
+      const opts = ['<option value="">🏢 All clients</option>'].concat(
+        (clientsList || []).map(c => `<option value="${c.id}">${esc(brand(c.company || c.username || ('Account ' + c.id)))}</option>`));
+      sel.innerHTML = opts.join('');
+      sel.value = activeClientId ? String(activeClientId) : '';
+      const hint = document.getElementById('eligClientHint');
+      if (hint) hint.textContent = activeClientId ? '' : 'Every client — completed results below are grouped by client.';
+    }
+
+    // Re-scope the whole eligibility workspace to one client (or all clients).
+    function eligPickClient(val) {
+      const id = (val === '' || val == null) ? null : parseInt(val, 10);
+      activeClientId = id;
+      activeSubProfile = null;
+      try {
+        const c = (clientsList || []).find(x => x.id === id);
+        const label = id == null ? 'All Accounts' : brand((c && (c.company || c.username)) || ('Account ' + id));
+        const ta = document.getElementById('topAccount');
+        if (ta) ta.innerHTML = `<span style="opacity:.6;font-size:11px">&#8629;</span> ${esc(label)} <span style="opacity:.5;font-size:10px">▼ switch</span>`;
+      } catch (_) { }
+      loadEligibility();
+    }
+
+    // ── Batch select + run in the intake list ──
+    function _eligSelectedIds() {
+      return Array.from(document.querySelectorAll('#eligIntakeTbody .eligSel:checked'))
+        .map(c => parseInt(c.value, 10)).filter(Boolean);
+    }
+
+    function _eligSelChanged() {
+      const ids = _eligSelectedIds();
+      const cnt = document.getElementById('eligSelCount');
+      if (cnt) cnt.textContent = ids.length ? `${ids.length} selected` : '';
+      const boxes = document.querySelectorAll('#eligIntakeTbody .eligSel');
+      const all = document.getElementById('eligSelectAll');
+      if (all) all.checked = boxes.length > 0 && ids.length === boxes.length;
+    }
+
+    function eligToggleSelectAll(master) {
+      document.querySelectorAll('#eligIntakeTbody .eligSel').forEach(c => { c.checked = master.checked; });
+      _eligSelChanged();
+    }
+
+    // Run a real-time coverage check on ONLY the ticked patients, then file each
+    // result into the Completed report under its client. Honest engine: offline
+    // rule-intercept when no payer source is connected — nothing fabricated.
+    async function runSelectedElig() {
+      if (!_canRunEligibility()) { toast('Eligibility checks are run by the billing team (admin, Eric or a biller). You can upload records — a biller will run the check.', 'warning', 7000); return; }
+      const ids = _eligSelectedIds();
+      if (!ids.length) { toast('Tick the patient(s) you want to run first — or use “Select all”.', 'warning', 6000); return; }
+      if (!confirm(`Run the coverage check on ${ids.length} selected patient(s) now?\n\nEach result is filed into the Completed report under its client. The MedPharma rule-intercept engine checks medical necessity, prior auth / MolDX and ABN — no payer credential needed. Live active/inactive status needs a payer source; nothing is ever fabricated.`)) return;
+      try {
+        const r = await fetch('/hub/api/eligibility/verify-selected', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(res.detail || `Run failed (${r.status})`, 'error'); return; }
+        toast(res.message || `Running ${ids.length} patient(s)…`, 'info', 6000);
+        setTimeout(() => { loadEligibility(); }, 4000);
+      } catch (e) { toast('Run failed: ' + e.message, 'error'); }
     }
 
     function _eligNeedsReverify(i) {
@@ -7481,9 +7577,17 @@
       const cnt = document.getElementById('eligIntakeCount');
       if (!tbody) return;
       const items = allEligItems;
+      const canRun = _canRunEligibility();
+      // Show the tick-boxes + “Run on Selected” only to people who can run a check.
+      const _selAllTh = document.getElementById('eligSelAllTh');
+      const _runBtn = document.getElementById('eligRunSelectedBtn');
+      if (_selAllTh) _selAllTh.style.display = canRun ? '' : 'none';
+      if (_runBtn) _runBtn.style.display = canRun ? '' : 'none';
       if (cnt) cnt.textContent = items.length ? `${items.length} submission${items.length === 1 ? '' : 's'}` : '';
+      const _cols = canRun ? 9 : 8;
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="es-icon">📥</div><p>No submissions yet — click “+ New Intake”.</p></div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="${_cols}"><div class="empty-state"><div class="es-icon">📥</div><p>No submissions yet — click “+ New Intake”.</p></div></td></tr>`;
+        _eligSelChanged();
         return;
       }
       tbody.innerHTML = items.map(i => {
@@ -7492,8 +7596,9 @@
         const result = completed ? statusBadge(i.Status) : '<span style="color:#9ca3af;font-size:12px">Pending</span>';
         const report = completed ? _eligFileLink(i.ReportFileId, i.ReportFileName, true) : '—';
         const canAddDoc = !i.IntakeFileId;
+        const pick = canRun ? `<td style="text-align:center"><input type="checkbox" class="eligSel" value="${i.id}" onchange="_eligSelChanged()"></td>` : '';
         return `<tr>
-    <td style="font-weight:600">${esc(i.PatientName || '—')}</td>
+    ${pick}<td style="font-weight:600">${esc(i.PatientName || '—')}</td>
     <td>${esc(i.Payor || '—')}</td>
     <td style="font-size:12px">${esc((i.created_at || '').slice(0, 10) || '—')}</td>
     <td>${stageBadge(stage)}</td>
@@ -7503,6 +7608,9 @@
     <td style="white-space:nowrap">${canAddDoc ? `<button class="btn btn-secondary btn-sm" onclick="eligIntakeAddDoc(${i.id})">📎 Add Doc</button> ` : ''}<button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
       }).join('');
+      const _selAll = document.getElementById('eligSelectAll');
+      if (_selAll) _selAll.checked = false;
+      _eligSelChanged();
     }
 
     // ── Uploaded documents on this account (reachable from Eligibility) ──
@@ -7604,7 +7712,7 @@
         tbody.innerHTML = `<tr><td colspan="19"><div class="empty-state"><div class="es-icon">🩺</div><p>${_msg}</p></div></td></tr>`;
         return;
       }
-      tbody.innerHTML = items.map(i => {
+      const _rowHtml = i => {
         const reverify = _eligNeedsReverify(i);
         const auth = esc(i.PriorAuthRequired || '—') + (i.AuthNumber ? ' · ' + esc(i.AuthNumber) : '');
         return `<tr>
@@ -7628,6 +7736,17 @@
     <td style="font-size:12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.Notes || '')}</td>
     <td style="white-space:nowrap">${_canRunEligibility() ? `<button class="btn btn-sm" style="color:#065f46;background:#d1fae5;border:1px solid #6ee7b7" onclick="verifyEligNow(${i.id})" title="Run a REAL real-time coverage check (Stedi or direct-to-CMS HETS). Result is never fabricated — refuses honestly if not connected yet.">✔︎ Verify</button> ` : ''}<button class="btn btn-sm" style="color:#3730a3;background:#e0e7ff;border:1px solid #a5b4fc" onclick="viewEligChecks(${i.id})" title="Audit trail: real 270/271 evidence for every coverage check on this record.">🧾</button> <button class="btn btn-secondary btn-sm" onclick="editEligItem(${i.id})">Edit</button> <button class="btn btn-sm" style="color:var(--danger);background:var(--danger-light);border:1px solid #fca5a5" onclick="deleteEligRow(${i.id})">🗑</button></td>
   </tr>`;
+      };
+      // File results UNDER each client: group the worklist by account and print a
+      // client subtitle row before that client's patients (Spirit, PCR, …) so
+      // results are organized by client instead of a random flat list.
+      const _groups = {};
+      items.forEach(i => { const k = i.client_id || 0; (_groups[k] = _groups[k] || []).push(i); });
+      const _keys = Object.keys(_groups).sort((a, b) => _eligClientName(+a).localeCompare(_eligClientName(+b)));
+      tbody.innerHTML = _keys.map(k => {
+        const rows = _groups[k];
+        const head = `<tr class="elig-group-row"><td colspan="19" style="background:var(--gray-50);font-weight:700;font-size:12.5px;color:var(--gray-700);padding:10px 14px;border-top:2px solid var(--gray-200)">🏢 ${esc(_eligClientName(+k))} <span style="font-weight:500;color:var(--gray-400)">· ${rows.length} patient${rows.length === 1 ? '' : 's'}</span></td></tr>`;
+        return head + rows.map(_rowHtml).join('');
       }).join('');
     }
 

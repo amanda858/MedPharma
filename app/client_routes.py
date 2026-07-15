@@ -3580,7 +3580,7 @@ def _explain_coverage(result, cpts: list, payer_name: str, order_text: str = "")
 
 
 def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
-                       actor_username: str = "") -> dict:
+                       actor_username: str = "", mark_completed: bool = False) -> dict:
     """Run a REAL eligibility check for one record and write the plain-English
     VerificationSummary + coverage facts + audit evidence. Honest by design: with
     no live payer source connected it writes a clear 'pending connection' summary
@@ -3665,6 +3665,12 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
             stamp = f"[{today}] Rule intercept: " + "; ".join(hold_reasons)
             prior = (rec.get("Notes") or "").strip()
             changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
+        if mark_completed and (rec.get("Stage") or "") != "Completed":
+            # A biller ran the check on purpose -> file the result in the
+            # Completed report under this patient's account.
+            changes["Stage"] = "Completed"
+            changes["CompletedBy"] = actor_username or actor_label
+            changes["CompletedAt"] = datetime.now().isoformat()
         update_eligibility(rid, changes)
         try:
             record_eligibility_check({
@@ -3743,6 +3749,12 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         prior = (rec.get("Notes") or "").strip()
         stamp = f"[{today}] {src_label}: {errors_txt}"
         changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
+    if mark_completed and (rec.get("Stage") or "") != "Completed":
+        # A biller ran the check on purpose -> file the result in the
+        # Completed report under this patient's account.
+        changes["Stage"] = "Completed"
+        changes["CompletedBy"] = actor_username or actor_label
+        changes["CompletedAt"] = datetime.now().isoformat()
     update_eligibility(rid, changes)
     return {"ok": True, "configured": True, "changed": True, "source": src,
             "status": status_val, "check_id": check_id, "summary": summary,
@@ -3915,7 +3927,8 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
                                      "account’s patients.")
 
     res = _verify_and_record(rec, actor_label="Manual",
-                             actor_username=user.get("username", ""))
+                             actor_username=user.get("username", ""),
+                             mark_completed=True)
     if res.get("configured") is False and not res.get("offline"):
         # Engine genuinely unavailable — coverage facts unchanged, nothing faked.
         return {
@@ -3957,13 +3970,66 @@ def verify_all_elig(client_id: Optional[int] = None,
         for r in recs:
             try:
                 _verify_and_record(r, actor_label="Auto-verify",
-                                   actor_username=user.get("username", ""))
+                                   actor_username=user.get("username", ""),
+                                   mark_completed=True)
             except Exception as e:  # pragma: no cover
                 log.warning("verify-all failed for eligibility %s: %s", r.get("id"), e)
     threading.Thread(target=_work, daemon=True).start()
     return {"ok": True, "queued": len(recs), "client_id": scope,
             "message": f"Verifying {len(recs)} patient(s) now — refresh in a moment "
                        "to see each plan explanation."}
+
+
+class VerifySelectedIn(BaseModel):
+    ids: Optional[list] = None
+
+
+@router.post("/eligibility/verify-selected")
+def verify_selected_elig(body: VerifySelectedIn,
+                         hub_session: Optional[str] = Cookie(None)):
+    """Run a real-time coverage check on ONLY the patients the user ticked in the
+    intake list, then file each result into the Completed report under its own
+    account. Same honest engine as verify-all (offline rule-intercept when no payer
+    source is connected — nothing fabricated). Runs in the background."""
+    user = _require_user(hub_session)
+    ids = []
+    for x in (body.ids or []):
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        raise HTTPException(400, "Select at least one patient to run.")
+    # The billing team may run any account; an eligibility client may run only
+    # their own account's patients.
+    allowed = None
+    if user["role"] not in ("admin", "staff"):
+        allowed = set(_doc_account_ids(user))
+    recs = []
+    for rid in ids:
+        rec = get_eligibility_one(rid)
+        if not rec:
+            continue
+        if allowed is not None and int(rec.get("client_id") or 0) not in allowed:
+            raise HTTPException(403, "You can only run eligibility for your own account.")
+        recs.append(rec)
+    if not recs:
+        raise HTTPException(404, "None of the selected patients were found.")
+
+    def _work():
+        for r in recs:
+            try:
+                _verify_and_record(r, actor_label="Auto-verify",
+                                   actor_username=user.get("username", ""),
+                                   mark_completed=True)
+            except Exception as e:  # pragma: no cover
+                log.warning("verify-selected failed for eligibility %s: %s", r.get("id"), e)
+    threading.Thread(target=_work, daemon=True).start()
+    notify_activity(user["username"], "ran eligibility", "Eligibility",
+                    f"{len(recs)} selected patient(s)")
+    return {"ok": True, "queued": len(recs),
+            "message": f"Running eligibility on {len(recs)} patient(s) now — they’ll "
+                       "move to the Completed report in a moment."}
 
 
 @router.get("/eligibility/{rid}/checks")
