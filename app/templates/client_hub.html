@@ -2266,28 +2266,6 @@
             </div>
             <div id="dashBilledActivity" style="padding:16px"></div>
           </div>
-          <!-- Payments Posted upload — records real deposits into the payments
-               table only (no claims are created or changed) so "Payments (This
-               Month)" and the collections rates reflect money actually posted. -->
-          <div class="card" id="dashPaymentsPostedCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--warning)">
-            <div class="card-header">
-              <div class="card-title">💰 Payments Posted</div>
-              <div style="font-size:11px;color:var(--gray-500)">Upload posted deposits so “Payments (This Month)” reflects real money collected</div>
-            </div>
-            <div style="padding:16px">
-              <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px;max-width:660px">
-                Drop your <b>Posting Payments</b> report (PDF or Word) or an ERA / remittance deposit sheet (Excel/CSV).
-                The <b>Payment</b> amount and <b>posting date</b> are auto-detected.
-                This tab is the only place payments are counted — no claims are created or changed, and re-uploading the same report won’t double-count.
-              </div>
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <input type="file" id="paymentsPostedInput" accept=".pdf,.doc,.docx,.xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="uploadPaymentsPosted(this)">
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('paymentsPostedInput').click()">⬆ Upload Payments Posted</button>
-                <span id="paymentsPostedStatus" style="font-size:12px;color:var(--gray-500)"></span>
-              </div>
-              <div id="paymentsPostedResult" style="margin-top:12px"></div>
-            </div>
-          </div>
           <!-- Data Summary, AR Aging and Claims-by-Status cards were removed per
                admin: the dashboard tracks only billed-out amounts and payments
                posted (paid). -->
@@ -6243,7 +6221,6 @@
       // Active Claims, Submitted, Avg Days to Pay and SLA Breaches were removed.
       const kpis = [
         { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
-        { label: (d.cycle_label ? 'Payments (' + d.cycle_label + ')' : 'Payments (This Month)'), val: '$' + fmt(d.payments_mtd), color: 'green', icon: '✅', title: (d.cycle_label ? 'Current billing cycle ' + d.cycle_start + ' → ' + d.cycle_end : '') },
       ];
 
       document.getElementById('kpiGrid').innerHTML = kpis.map(k => `
@@ -6264,10 +6241,8 @@
       // single source of truth for money collected, so this tile mirrors it and
       // never blends claim-side paid (which would reference an unauthorized
       // second payments source).
-      const _postedB = cb.posted || { count: 0, amount: 0 };
       const cbCards = [
         { label: 'Billed', color: 'var(--primary)', hint: 'Claims out the door', v: cb.billed || { count: 0, amount: 0 } },
-        { label: 'Posted', color: 'var(--success)', hint: 'Collected — Payment Posting tab', v: _postedB },
       ];
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
@@ -6357,7 +6332,7 @@
               ? ` <span title="Billed Out matches the billed claims and every dollar is attributed to one biller" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-weight:700;font-size:10px">✓ numbers balance</span>`
               : ` <span title="A total doesn't reconcile — check the team breakdown below" style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;font-weight:700;font-size:10px">⚠ check numbers</span>`;
           }
-          cbSub.innerHTML = `Billed Out: $${fmt((cb.billed || {}).amount || 0)} · Paid/Posted: $${fmt(_postedB.amount || 0)}` + _badge;
+          cbSub.innerHTML = `Billed Out: $${fmt((cb.billed || {}).amount || 0)}` + _badge;
         }
       }
 
