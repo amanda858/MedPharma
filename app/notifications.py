@@ -1,5 +1,5 @@
 """
-Notification system — Individual Progress Report.
+Notification system - Individual Progress Report.
 
 Buffers all activity during a user's session and sends ONE consolidated
 "Individual Progress" report when the user logs out, including:
@@ -8,14 +8,14 @@ Buffers all activity during a user's session and sends ONE consolidated
   • AI-powered productivity analysis (via OpenAI, with rule-based fallback)
 
 Configuration via environment variables:
-  SENDGRID_API_KEY — SendGrid API key for sending email
-  NOTIFY_EMAIL     — Comma-separated destination emails for notifications
-  SENDGRID_FROM    — Sender email address (must be verified in SendGrid)
-  TWILIO_SID     — Twilio Account SID
-  TWILIO_TOKEN   — Twilio Auth Token
-  TWILIO_FROM    — Twilio phone number (E.164 format, e.g. +18001234567)
-  NOTIFY_PHONE   — Destination phone for SMS (E.164 format)
-  OPENAI_API_KEY — For AI productivity narrative (optional; falls back to rule-based)
+  SENDGRID_API_KEY - SendGrid API key for sending email
+  NOTIFY_EMAIL     - Comma-separated destination emails for notifications
+  SENDGRID_FROM    - Sender email address (must be verified in SendGrid)
+  TWILIO_SID     - Twilio Account SID
+  TWILIO_TOKEN   - Twilio Auth Token
+  TWILIO_FROM    - Twilio phone number (E.164 format, e.g. +18001234567)
+  NOTIFY_PHONE   - Destination phone for SMS (E.164 format)
+  OPENAI_API_KEY - For AI productivity narrative (optional; falls back to rule-based)
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ TWILIO_TOKEN = os.getenv("TWILIO_TOKEN", "")
 TWILIO_FROM = os.getenv("TWILIO_FROM", "")
 NOTIFY_PHONE = _normalize_phone(os.getenv("NOTIFY_PHONE", "+18036263500"))
 
-# Free carrier email-to-SMS gateways — no Twilio required.
+# Free carrier email-to-SMS gateways - no Twilio required.
 # Set NOTIFY_PHONE_CARRIER to your carrier name (e.g. "att", "verizon", "tmobile").
 # The 10-digit phone from NOTIFY_PHONE is sent as an email to <number>@<gateway>.
 _CARRIER_GATEWAYS: dict[str, str] = {
@@ -182,7 +182,7 @@ NOTIFY_ON_USERS = {
     u.strip().lower() for u in _notify_on_users_env.split(",") if u.strip()
 } if _notify_on_users_env and _notify_on_users_env != "*" else {"*"}
 
-# SMTP (primary send path — no SendGrid account required)
+# SMTP (primary send path - no SendGrid account required)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
@@ -221,7 +221,7 @@ AUTO_FLUSH_MAX_AGE_MINUTES = int(os.getenv("NOTIFY_AUTO_FLUSH_MAX_AGE_MINUTES", 
 
 # Individual Progress report ("MEETS STANDARDS / NEEDS IMPROVEMENT") toggle.
 # These per-user scorecard emails were unwanted noise, so they are OFF by
-# default. The buffer is still drained (so it never grows unbounded) — only
+# default. The buffer is still drained (so it never grows unbounded) - only
 # the email/SMS send is suppressed. Set INDIVIDUAL_PROGRESS_REPORT_ENABLED=1
 # (or true/yes/on) to turn them back on without a code change.
 def _individual_progress_enabled() -> bool:
@@ -290,7 +290,7 @@ Write a concise 3-5 sentence "Individual Progress Assessment" that:
 3. Assesses whether the employee worked a productive and sufficient day
 4. Gives one specific, actionable recommendation
 
-Keep the tone professional but direct — this is an internal team lead report.
+Keep the tone professional but direct - this is an internal team lead report.
 Do NOT use bullet points; write in paragraph form. Do not include any greeting.
 """
 
@@ -343,7 +343,7 @@ def _rule_based_summary(username: str, session_hrs: float,
         )
     if worst["section"] != best["section"] and worst["pct"] < 80:
         summary += (
-            f"{worst['section']} needs attention — only {worst['pct']:.0f}% of the daily target was reached. "
+            f"{worst['section']} needs attention - only {worst['pct']:.0f}% of the daily target was reached. "
         )
 
     # Hours-based "review time management" recommendation removed per admin:
@@ -358,7 +358,7 @@ def _rule_based_summary(username: str, session_hrs: float,
     return summary
 
 
-# ── Public API — called from route handlers ──
+# ── Public API - called from route handlers ──
 
 def notify_activity(username: str, action: str, section: str, detail: str = "", sms_copy: bool = False):
     """Buffer a single activity event.
@@ -443,7 +443,7 @@ def flush_all_pending_notifications():
 
 def flush_and_notify(username: str):
     """
-    Called at logout — builds a full **Individual Progress** report with:
+    Called at logout - builds a full **Individual Progress** report with:
       • Activity breakdown by section
       • Industry benchmark comparison
       • AI-powered productivity narrative
@@ -463,7 +463,7 @@ def flush_and_notify(username: str):
     if not _individual_progress_enabled():
         log.info(
             "Individual Progress report suppressed for %s "
-            "(INDIVIDUAL_PROGRESS_REPORT_ENABLED is off) — %d buffered action(s) cleared",
+            "(INDIVIDUAL_PROGRESS_REPORT_ENABLED is off) - %d buffered action(s) cleared",
             username, len(activities),
         )
         return
@@ -531,7 +531,7 @@ def flush_and_notify(username: str):
         "",
         f"  Employee:  {username}",
         f"  Date:      {date_str}",
-        f"  Session:   {start_str} — {time_str} ({session_hrs:.1f} hrs)",
+        f"  Session:   {start_str} - {time_str} ({session_hrs:.1f} hrs)",
         f"  Rating:    {rating_label} ({overall_pct:.0f}%)",
         "",
         "───────────────────────────────────────────",
@@ -563,7 +563,7 @@ def flush_and_notify(username: str):
     for section, items in by_section.items():
         lines.append(f"  ── {section} ({len(items)} actions) ──")
         for item in items:
-            line = f"    • {item['timestamp']} — {item['action']} {item['section']}"
+            line = f"    • {item['timestamp']} - {item['action']} {item['section']}"
             if item.get("detail"):
                 line += f" ({item['detail']})"
             lines.append(line)
@@ -609,7 +609,7 @@ def flush_and_notify(username: str):
             </tr>"""
         section_html += f"""
         <div style="margin-bottom:12px">
-            <div style="font-weight:600;font-size:13px;color:#475569;padding:6px 0;border-bottom:1px solid #e2e8f0">{section} — {len(items)} action{'s' if len(items)!=1 else ''}</div>
+            <div style="font-weight:600;font-size:13px;color:#475569;padding:6px 0;border-bottom:1px solid #e2e8f0">{section} - {len(items)} action{'s' if len(items)!=1 else ''}</div>
             <table style="width:100%;border-collapse:collapse">{rows}</table>
         </div>"""
 
@@ -620,7 +620,7 @@ def flush_and_notify(username: str):
 
             <!-- HEADER -->
             <div style="background: linear-gradient(135deg, #0f172a, #1e293b); padding: 24px 28px;">
-                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">📊 INDIVIDUAL PROGRESS REPORT</h1>
+                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">INDIVIDUAL PROGRESS REPORT</h1>
                 <div style="margin-top: 12px; display: flex; gap: 20px;">
                     <div>
                         <div style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600;">Employee</div>
@@ -632,7 +632,7 @@ def flush_and_notify(username: str):
                     </div>
                     <div>
                         <div style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 600;">Session</div>
-                        <div style="font-size: 16px; color: #f1f5f9; font-weight: 700;">{start_str} — {time_str}</div>
+                        <div style="font-size: 16px; color: #f1f5f9; font-weight: 700;">{start_str} - {time_str}</div>
                     </div>
                 </div>
             </div>
@@ -661,7 +661,7 @@ def flush_and_notify(username: str):
 
                 <!-- AI PRODUCTIVITY ASSESSMENT -->
                 <div style="background:linear-gradient(135deg,#ede9fe,#e0e7ff);border-left:4px solid #6366f1;border-radius:8px;padding:18px 20px;margin-bottom:24px;">
-                    <div style="font-size:12px;font-weight:800;text-transform:uppercase;color:#4338ca;letter-spacing:1px;margin-bottom:8px;">🤖 AI Productivity Assessment</div>
+                    <div style="font-size:12px;font-weight:800;text-transform:uppercase;color:#4338ca;letter-spacing:1px;margin-bottom:8px;">AI Productivity Assessment</div>
                     <div style="font-size:13px;line-height:1.7;color:#1e293b;">{ai_summary}</div>
                 </div>
 
@@ -694,16 +694,16 @@ def flush_and_notify(username: str):
 
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                 <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
-                    Individual Progress Report — MedPharma Hub — {date_str}
+                    Individual Progress Report - MedPharma Hub - {date_str}
                 </p>
             </div>
         </div>
     </body>
     </html>"""
 
-    subject = f"Individual Progress: {username} — {rating_label} ({overall_pct:.0f}%) — {date_str}"
+    subject = f"Individual Progress: {username} - {rating_label} ({overall_pct:.0f}%) - {date_str}"
 
-    # SMS — concise summary with rating
+    # SMS - concise summary with rating
     section_counts = ", ".join(f"{s}: {len(items)}" for s, items in by_section.items())
     sms = (f"Progress Report: {username} | {date_str} | "
            f"{rating_label} ({overall_pct:.0f}%) | "
@@ -718,7 +718,7 @@ def flush_and_notify(username: str):
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
     threading.Thread(target=_send_sms, args=(sms,), daemon=True).start()
     log.info(f"Individual progress report queued for {username}: {rating_label} "
-             f"({overall_pct:.0f}%) — {len(activities)} actions across {len(by_section)} sections")
+             f"({overall_pct:.0f}%) - {len(activities)} actions across {len(by_section)} sections")
 
 
 # ── Send helpers ──
@@ -728,7 +728,7 @@ def _send_email(subject: str, body: str, html_body: str = ""):
     Uses _live_config() to read credentials fresh (avoids stale cache)."""
     cfg = _live_config()
     if cfg["IN_APP_ONLY_MODE"]:
-        log.info(f"In-app notification mode active — email send simulated: {subject}")
+        log.info(f"In-app notification mode active - email send simulated: {subject}")
         return
 
     emails = cfg["NOTIFY_EMAILS"]
@@ -740,7 +740,7 @@ def _send_email(subject: str, body: str, html_body: str = ""):
     smtp_pw = cfg["SMTP_PASS"]
 
     if not emails:
-        log.debug("Email notification skipped — NOTIFY_EMAILS not configured")
+        log.debug("Email notification skipped - NOTIFY_EMAILS not configured")
         return
 
     # Primary: SendGrid
@@ -780,7 +780,7 @@ def _send_email(subject: str, body: str, html_body: str = ""):
 
     # Fallback: SMTP
     if not smtp_h or not smtp_u or not smtp_pw:
-        log.error("Email notification skipped — no working provider configured (SendGrid/SMTP)")
+        log.error("Email notification skipped - no working provider configured (SendGrid/SMTP)")
         return
 
     try:
@@ -807,12 +807,12 @@ def _send_sms(message: str):
     """Send SMS notification.
     Priority:
       1. Twilio (if TWILIO_SID/TOKEN/FROM configured)
-      2. Carrier email-to-SMS via SMTP (if NOTIFY_PHONE_CARRIER + SMTP configured — FREE, no sign-up)
+      2. Carrier email-to-SMS via SMTP (if NOTIFY_PHONE_CARRIER + SMTP configured - FREE, no sign-up)
       3. Skip silently with a log warning
     """
     cfg = _live_config()
     if cfg["IN_APP_ONLY_MODE"]:
-        log.info("In-app notification mode active — SMS send simulated")
+        log.info("In-app notification mode active - SMS send simulated")
         return
 
     t_sid = cfg["TWILIO_SID"]
@@ -836,7 +836,7 @@ def _send_sms(message: str):
             log.error(f"Failed to send SMS via Twilio: {e}")
         return
 
-    # Path 2: Carrier email-to-SMS (free — just needs SMTP + NOTIFY_PHONE_CARRIER)
+    # Path 2: Carrier email-to-SMS (free - just needs SMTP + NOTIFY_PHONE_CARRIER)
     sms_email = _carrier_sms_email(phone, carrier) if carrier else None
     smtp_h = cfg["SMTP_HOST"]
     smtp_u = cfg["SMTP_USER"]
@@ -862,13 +862,13 @@ def _send_sms(message: str):
         return
 
     if not carrier:
-        log.debug("SMS skipped — set NOTIFY_PHONE_CARRIER (e.g. att, verizon, tmobile) to enable free SMS via SMTP")
+        log.debug("SMS skipped - set NOTIFY_PHONE_CARRIER (e.g. att, verizon, tmobile) to enable free SMS via SMTP")
     else:
-        log.debug(f"SMS skipped — carrier '{carrier}' configured but SMTP credentials missing (SMTP_USER/SMTP_PASS)")
+        log.debug(f"SMS skipped - carrier '{carrier}' configured but SMTP credentials missing (SMTP_USER/SMTP_PASS)")
 
 
 def _send_email_force(subject: str, body: str, html_body: str = ""):
-    """Send email — always attempts delivery (ignores IN_APP_ONLY_MODE).
+    """Send email - always attempts delivery (ignores IN_APP_ONLY_MODE).
     Uses stdlib urllib.request (no third-party dependency).
     Tries SendGrid first, then SMTP fallback."""
     cfg = _live_config()
@@ -883,7 +883,7 @@ def _send_email_force(subject: str, body: str, html_body: str = ""):
     if not emails:
         raise ValueError("No email recipients configured (NOTIFY_EMAIL env var)")
 
-    log.info(f"[TEST] Email attempt — SendGrid={'YES' if sg_key else 'NO'}, SMTP={'YES' if smtp_u else 'NO'}, to={emails}")
+    log.info(f"[TEST] Email attempt - SendGrid={'YES' if sg_key else 'NO'}, SMTP={'YES' if smtp_u else 'NO'}, to={emails}")
 
     sg_error = None
 
@@ -957,11 +957,11 @@ def _send_email_force(subject: str, body: str, html_body: str = ""):
 
     if sg_error:
         raise RuntimeError(sg_error)
-    raise ValueError("No email provider configured — set SENDGRID_API_KEY or SMTP_USER+SMTP_PASS in Render environment")
+    raise ValueError("No email provider configured - set SENDGRID_API_KEY or SMTP_USER+SMTP_PASS in Render environment")
 
 
 def _send_sms_force(message: str):
-    """Send SMS — always attempts delivery (ignores IN_APP_ONLY_MODE).
+    """Send SMS - always attempts delivery (ignores IN_APP_ONLY_MODE).
     Uses stdlib urllib.request (no third-party dependency).
     Reads credentials LIVE from env vars to avoid stale cached values."""
     cfg = _live_config()
@@ -972,11 +972,11 @@ def _send_sms_force(message: str):
 
     if not t_sid or not t_tok or not t_from:
         missing = [k for k, v in {"TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from}.items() if not v]
-        raise ValueError(f"Twilio not configured — missing: {', '.join(missing)}")
+        raise ValueError(f"Twilio not configured - missing: {', '.join(missing)}")
     if not phone:
-        raise ValueError("No SMS recipient configured — set NOTIFY_PHONE env var")
+        raise ValueError("No SMS recipient configured - set NOTIFY_PHONE env var")
 
-    log.info(f"[TEST] SMS attempt — from={t_from}, to={phone}, sid={t_sid[:8]}...")
+    log.info(f"[TEST] SMS attempt - from={t_from}, to={phone}, sid={t_sid[:8]}...")
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{t_sid}/Messages.json"
     post_data = urllib.parse.urlencode({
@@ -1034,9 +1034,9 @@ def send_direct_sms(message: str, to_phone: str = "") -> dict:
 
     if not t_sid or not t_tok or not t_from:
         missing = [k for k, v in {"TWILIO_SID": t_sid, "TWILIO_TOKEN": t_tok, "TWILIO_FROM": t_from}.items() if not v]
-        raise ValueError(f"Twilio not configured — missing: {', '.join(missing)}")
+        raise ValueError(f"Twilio not configured - missing: {', '.join(missing)}")
     if not phone:
-        raise ValueError("No SMS recipient configured — set NOTIFY_PHONE or pass to_phone")
+        raise ValueError("No SMS recipient configured - set NOTIFY_PHONE or pass to_phone")
 
     text = (message or "").strip()
     if not text:
@@ -1090,10 +1090,10 @@ def send_direct_sms(message: str, to_phone: str = "") -> dict:
 def send_test_notification(triggered_by: str = "system") -> dict:
     """Send an immediate test notification to configured recipients/channels.
     Test notifications ALWAYS attempt real delivery (bypass IN_APP_ONLY_MODE).
-    Runs SYNCHRONOUSLY — no threading — to ensure errors are captured clearly."""
+    Runs SYNCHRONOUSLY - no threading - to ensure errors are captured clearly."""
     cfg = _live_config()
     now = business_now().strftime("%Y-%m-%d %I:%M %p")
-    subject = f"MedPharma Hub Test Notification — {now}"
+    subject = f"MedPharma Hub Test Notification - {now}"
     emails = cfg["NOTIFY_EMAILS"]
     phone = cfg["NOTIFY_PHONE"]
 
@@ -1109,7 +1109,7 @@ def send_test_notification(triggered_by: str = "system") -> dict:
     <html><body style="font-family:Arial,sans-serif;padding:20px">
       <div style="max-width:500px;margin:0 auto;border:2px solid #22c55e;border-radius:12px;overflow:hidden">
         <div style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:20px;color:white">
-          <h2 style="margin:0">✅ MedPharma Hub — Notifications Active</h2>
+          <h2 style="margin:0">MedPharma Hub - Notifications Active</h2>
         </div>
         <div style="padding:20px">
           <p><b>Triggered by:</b> {triggered_by}</p>
@@ -1241,7 +1241,7 @@ def get_notification_debug() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DAILY OVERALL ACCOUNT SUMMARY — Scheduled at 6 PM EST
+#  DAILY OVERALL ACCOUNT SUMMARY - Scheduled at 6 PM EST
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _fmt_money(val):
@@ -1281,7 +1281,7 @@ Write a 4-6 sentence executive summary that:
 2. Calls out any red flags (high denial rate, aging AR, SLA breaches)
 3. Notes today's productivity (claims flow, payments received)
 4. Provides one key recommendation for tomorrow
-Keep it professional and data-driven. No greeting, no bullet points — paragraph form only.
+Keep it professional and data-driven. No greeting, no bullet points - paragraph form only.
 """
     if not OPENAI_API_KEY:
         return _rule_based_account_summary(d)
@@ -1340,7 +1340,7 @@ def _rule_based_account_summary(d: dict) -> str:
 def _render_account_client_card(d: dict, date_str_long: str) -> str:
     """Render ONE client's section for the daily account summary.
 
-    Simple and true: only money that actually moved — claims billed out and
+    Simple and true: only money that actually moved - claims billed out and
     payments posted. AR estimates, collection/denial percentages, payor mix and
     aging buckets were removed as unreliable.
     """
@@ -1404,14 +1404,14 @@ def send_daily_account_summary():
     date_str_long = now.strftime("%B %d, %Y")
     day_of_week = now.strftime("%A")
 
-    # Portfolio headline — simple and true: money actually collected, no estimates.
+    # Portfolio headline - simple and true: money actually collected, no estimates.
     ai_summary = (
         f"{_fmt_money(d.get('payments_mtd', 0))} collected month-to-date across "
         f"{d.get('total_clients', 0)} client{'s' if d.get('total_clients', 0) != 1 else ''}, "
         f"with {_fmt_money(d.get('payments_today', 0))} posted today."
     )
 
-    # ── Per-client breakdown — one card per active client ──
+    # ── Per-client breakdown - one card per active client ──
     try:
         from app.client_db import get_per_client_daily_summaries
         per_client = get_per_client_daily_summaries()
@@ -1436,9 +1436,9 @@ def send_daily_account_summary():
 
             <!-- HEADER -->
             <div style="background: linear-gradient(135deg, #1e3a5f, #2563eb); padding: 28px 32px;">
-                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">📋 MEDPHARMA DAILY REPORT</h1>
-                <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; font-weight: 500;">{day_of_week}, {date_str} — Daily Account Summary</p>
-                <p style="color: rgba(255,255,255,0.65); margin: 4px 0 0; font-size: 12px;">MedPharma Revenue Cycle Management — {d['total_clients']} Active Client{'s' if d['total_clients']!=1 else ''}</p>
+                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0.5px;">MEDPHARMA DAILY REPORT</h1>
+                <p style="color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; font-weight: 500;">{day_of_week}, {date_str} - Daily Account Summary</p>
+                <p style="color: rgba(255,255,255,0.65); margin: 4px 0 0; font-size: 12px;">MedPharma Revenue Cycle Management - {d['total_clients']} Active Client{'s' if d['total_clients']!=1 else ''}</p>
             </div>
 
             <div style="padding: 28px 32px;">
@@ -1450,7 +1450,7 @@ def send_daily_account_summary():
 
                 <!-- PORTFOLIO ROLL-UP -->
                 <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:16px;">
-                    💰 Payments Posted — {client_count} Client{'s' if client_count != 1 else ''}
+                    Payments Posted - {client_count} Client{'s' if client_count != 1 else ''}
                 </div>
                 <div style="display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
                     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;flex:1;min-width:120px;text-align:center">
@@ -1462,17 +1462,17 @@ def send_daily_account_summary():
                         <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase">Paid (Today)</div>
                     </div>
                 </div>
-                <div style="font-size:11px;color:#94a3b8;margin-bottom:26px;">Real money posted across all client books — full detail is broken out per client below.</div>
+                <div style="font-size:11px;color:#94a3b8;margin-bottom:26px;">Real money posted across all client books - full detail is broken out per client below.</div>
 
                 <!-- PER-CLIENT BREAKDOWN -->
                 <div style="font-size:14px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;padding-bottom:8px;border-bottom:2px solid #1e293b;margin-bottom:18px;">
-                    🏢 Per-Client Breakdown
+                    Per-Client Breakdown
                 </div>
                 {client_cards_html}
 
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;">
                 <p style="font-size: 11px; color: #94a3b8; text-align: center; margin: 0;">
-                    MedPharma Daily Report — {date_str}
+                    MedPharma Daily Report - {date_str}
                 </p>
             </div>
         </div>
@@ -1507,7 +1507,7 @@ def send_daily_account_summary():
         body_lines.append("  (no client activity on record yet)")
     body = "\n".join(body_lines)
 
-    subject = f"MedPharma Daily Report — {date_str} — {client_count} client{'s' if client_count != 1 else ''} — {_fmt_money(d['payments_mtd'])} collected MTD"
+    subject = f"MedPharma Daily Report - {date_str} - {client_count} client{'s' if client_count != 1 else ''} - {_fmt_money(d['payments_mtd'])} collected MTD"
 
     threading.Thread(target=_send_email, args=(subject, body, html_body), daemon=True).start()
     log.info(f"MedPharma Daily Report email queued: {date_str}, {_fmt_money(d['payments_mtd'])} MTD, "
@@ -1515,7 +1515,7 @@ def send_daily_account_summary():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SCHEDULER — 5:30 PM & 6 PM EST daily
+#  SCHEDULER - 5:30 PM & 6 PM EST daily
 # ═══════════════════════════════════════════════════════════════════════════
 
 # User emails for individual reminders
@@ -1538,10 +1538,10 @@ def send_production_reminders():
         try:
             from app.client_db import has_production_data_today
             if has_production_data_today(username, today):
-                log.info(f"Production reminder skipped for {username} — data already uploaded for {today}")
+                log.info(f"Production reminder skipped for {username} - data already uploaded for {today}")
                 continue
 
-            subject = f"⏰ Reminder: Upload Your Daily Production — {business_now().strftime('%B %d, %Y')}"
+            subject = f"⏰ Reminder: Upload Your Daily Production - {business_now().strftime('%B %d, %Y')}"
             html_body = f"""
             <html>
             <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; color: #1e293b; background: #f8fafc;">
@@ -1549,7 +1549,7 @@ def send_production_reminders():
                     <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 24px 28px;">
                         <h1 style="color: white; margin: 0; font-size: 20px; font-weight: 800;">⏰ Daily Production Reminder</h1>
                         <p style="color: rgba(255,255,255,0.9); margin: 6px 0 0; font-size: 14px;">
-                            {business_now().strftime('%A, %B %d, %Y')} — 5:30 PM EST
+                            {business_now().strftime('%A, %B %d, %Y')} - 5:30 PM EST
                         </p>
                     </div>
                     <div style="padding: 24px 28px;">
@@ -1558,7 +1558,7 @@ def send_production_reminders():
                         </p>
                         <div style="background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;">
                             <p style="font-size: 14px; line-height: 1.6; margin: 0; color: #92400e;">
-                                📋 You have <strong>not uploaded</strong> any production data for today yet.
+                                You have <strong>not uploaded</strong> any production data for today yet.
                                 Please log your daily work entries or upload your production report before end of day.
                             </p>
                         </div>
@@ -1661,7 +1661,7 @@ def _send_email_to(to_email: str, subject: str, body: str, html_body: str = "",
     smtp_u = cfg["SMTP_USER"]
     smtp_pw = cfg["SMTP_PASS"]
     if not smtp_h or not smtp_u or not smtp_pw:
-        log.error("Email skipped — no working provider configured (SendGrid/SMTP)")
+        log.error("Email skipped - no working provider configured (SendGrid/SMTP)")
         return False, "no provider configured (SendGrid/SMTP env vars missing)"
 
     try:
@@ -1720,7 +1720,7 @@ def send_team_progress_reports():
     """
     users = [u for u in NOTIFY_ON_USERS if u and u != "*"]
     if not users:
-        log.info("Team progress dispatch skipped — no explicit tracked users configured")
+        log.info("Team progress dispatch skipped - no explicit tracked users configured")
         return
 
     sent = 0
@@ -1733,7 +1733,7 @@ def send_team_progress_reports():
     log.info(f"Team progress dispatch completed for {sent} user(s): {', '.join(sorted(users))}")
 
 
-# ─── End-of-Day Team Report (internal — Lexi only) ───────────────────────
+# ─── End-of-Day Team Report (internal - Lexi only) ───────────────────────
 
 # Default recipients for the EOD per-user / per-client breakdown email.
 # Override at runtime with the EOD_REPORT_EMAIL setting (Email Setup tab) or
@@ -1747,7 +1747,7 @@ _EOD_EXCLUDE_USERS_DEFAULT = {
     "eric@medprosc.com", "eric",
 }
 
-# MedPharma brand assets — used in every email header so it always
+# MedPharma brand assets - used in every email header so it always
 # looks like a real product, not a debug dump.
 _MEDPHARMA_LOGO_URL = "https://medpharmasc.com/wp-content/uploads/2024/11/IMG_2392.png"
 _MEDPHARMA_SITE_URL = "https://medpharmasc.com"
@@ -1770,7 +1770,7 @@ def _hub_link(path: str = "/hub") -> str:
     """Build an ABSOLUTE Client Hub URL for use in email buttons.
 
     Accepts paths such as "/hub", "/hub?chat=5" or "hub?panel=chat". The
-    configured HUB_BASE_URL may include or omit a trailing "/hub" — either
+    configured HUB_BASE_URL may include or omit a trailing "/hub" - either
     form yields a correct, non-duplicated link. Email clients cannot follow
     relative URLs, so all email CTAs must go through this helper.
     """
@@ -1809,7 +1809,7 @@ def _eod_excluded_users() -> set:
 
 
 def _esc_html(s) -> str:
-    """Minimal HTML escape — we're building markup with f-strings."""
+    """Minimal HTML escape - we're building markup with f-strings."""
     return (
         str(s if s is not None else "")
         .replace("&", "&amp;")
@@ -1821,18 +1821,18 @@ def _esc_html(s) -> str:
 
 # Friendly per-tab icons (matches the sidebar in client_hub.html).
 _EOD_TAB_ICONS = {
-    "Claims":        "💼",
-    "Payments":      "💵",
-    "Credentialing": "🎓",
-    "Enrollment":    "📝",
-    "EDI":           "🔌",
-    "Production":    "⏱️",
-    "Leads":         "📈",
-    "Documents":     "📁",
-    "Notes":         "🗒️",
-    "Chat":          "💬",
-    "Audit":         "🔍",
-    "Pageviews":     "👁️",
+    "Claims":        "",
+    "Payments":      "",
+    "Credentialing": "",
+    "Enrollment":    "",
+    "EDI":           "",
+    "Production":    "",
+    "Leads":         "",
+    "Documents":     "",
+    "Notes":         "",
+    "Chat":          "",
+    "Audit":         "",
+    "Pageviews":     "",
 }
 
 # Map a tab name → the client `enabled_modules` slug that gates it.
@@ -1844,7 +1844,7 @@ _TAB_TO_MODULE = {
     "Enrollment":    "enrollment",
     "EDI":           "edi",
     "Production":    "production",
-    "Leads":         None,        # business development — always shown
+    "Leads":         None,        # business development - always shown
     "Documents":     "documents",
     "Notes":         "claims",   # notes ride with claims
     "Chat":          "chat",
@@ -1953,7 +1953,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
 
     Design rules (after Lexi feedback 2026-06-10):
       * Branded shell with MedPharma logo header
-      * Admins (Lexi/Eric) suppressed by default — operators only
+      * Admins (Lexi/Eric) suppressed by default - operators only
       * Per-client section uses a vertical card (no giant 11-col table)
       * Module-filtered badges so EDI/Credentialing don't show for clients
         who haven't enabled those services
@@ -1969,6 +1969,8 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
 
     headlines = report.get("headlines", {}) or {}
     tabs_all = report.get("tab_keys", []) or list(_EOD_TAB_ICONS.keys())
+    # Business Development / Leads reporting is disabled per request.
+    tabs_all = [t for t in tabs_all if t != "Leads"]
     users_all = report.get("users", []) or []
     excluded = _eod_excluded_users()
 
@@ -1995,7 +1997,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
 
     # ── plain-text fallback ──
     text_lines = [
-        f"MedPharma End-of-Day Team Report — {date_long}",
+        f"MedPharma End-of-Day Team Report - {date_long}",
         "",
         f"Active operators today: {len(users)}",
         f"Billed since {week_start_long}: {_money(headlines.get('billed_wtd_amount', 0))} "
@@ -2004,7 +2006,6 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         f"Claims created: {headlines.get('claims_new', 0)} · updated: {headlines.get('claims_touched', 0)}",
         f"Credentialing new: {headlines.get('cred_new', 0)} · Enrollment new: {headlines.get('enroll_new', 0)} · EDI new: {headlines.get('edi_new', 0)}",
         f"Production entries: {headlines.get('production_rows', 0)} ({headlines.get('production_hours', 0)} hrs)",
-        f"Business Development leads: {headlines.get('leads_new', 0)} new · {headlines.get('leads_touched', 0)} updated",
         f"Notes: {headlines.get('notes_new', 0)} · Files uploaded: {headlines.get('files_uploaded', 0)} · Chat messages: {headlines.get('chat_messages', 0)} · Audit events: {headlines.get('audit_events', 0)}",
         "",
         "Per-operator breakdown:",
@@ -2015,12 +2016,12 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         _billed_txt = ""
         if (_bw.get("amount") or 0) or (_bt.get("amount") or 0):
             _billed_txt = (
-                f" — billed {_money(_bw.get('amount'))} since {week_start_long}"
+                f" - billed {_money(_bw.get('amount'))} since {week_start_long}"
                 f" ({_bw.get('count', 0)} claims) / {_money(_bt.get('amount'))} today"
             )
         text_lines.append(
             f"\n* {u.get('contact_name') or u.get('username')} "
-            f"<{u.get('email','')}> — {u.get('active_hours',0)}h active / "
+            f"<{u.get('email','')}> - {u.get('active_hours',0)}h active / "
             f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions{_billed_txt}"
         )
         for cname, cb in (u.get("clients") or {}).items():
@@ -2032,7 +2033,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 ts = _ts_short(it.get("ts") or it.get("at") or "")
                 ts_prefix = f"[{ts}] " if ts else ""
                 text_lines.append(
-                    f"        · {ts_prefix}[{it.get('tab')}] {it.get('action','')} — {it.get('title','')}"
+                    f"        · {ts_prefix}[{it.get('tab')}] {it.get('action','')} - {it.get('title','')}"
                 )
     text_body = "\n".join(text_lines)
 
@@ -2069,7 +2070,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         '</table>'
     )
 
-    # ── Billed banner — the headline number Eric/Amanda want at a glance:
+    # ── Billed banner - the headline number Eric/Amanda want at a glance:
     #    how much was billed since last Friday, plus today's slice. ──
     billed_wtd_amount = headlines.get("billed_wtd_amount", 0)
     billed_wtd_count  = headlines.get("billed_wtd_count", 0)
@@ -2105,7 +2106,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 f'<span style="display:inline-block;background:#eef2ff;'
                 f'color:#1d4ed8;border-radius:6px;padding:4px 9px;'
                 f'margin:2px 4px 2px 0;font-size:12px;font-weight:600">'
-                f'{_EOD_TAB_ICONS.get(t,"")} {t} <b>{v}</b></span>'
+                f'{t} <b>{v}</b></span>'
             )
         return out
 
@@ -2121,7 +2122,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         badges = _badges_for(cb.get("totals", {}), only_tabs=visible_tabs) or (
             '<span style="color:#94a3b8;font-size:12px;font-style:italic">No tracked work captured</span>'
         )
-        # Items (chronologically) — already trimmed/sorted by aggregator.
+        # Items (chronologically) - already trimmed/sorted by aggregator.
         items_html = ""
         items_iter = cb.get("items") or []
         # Sort by ts if available
@@ -2143,9 +2144,9 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             items_html += (
                 f'<tr><td style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:12px;color:#334155">'
                 f'{ts_html}'
-                f'<span style="color:#1d4ed8;font-weight:600;margin-right:6px">{_EOD_TAB_ICONS.get(tab,"")} {_esc_html(tab)}</span>'
+                f'<span style="color:#1d4ed8;font-weight:600;margin-right:6px">{_esc_html(tab)}</span>'
                 f'<span style="color:#64748b">{_esc_html(it.get("action","")) }</span> '
-                f'— {_esc_html(it.get("title",""))}'
+                f'- {_esc_html(it.get("title",""))}'
                 f'</td></tr>'
             )
         if not items_html:
@@ -2178,7 +2179,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             first = _ts_short(u.get("first_seen") or "")
             last  = _ts_short(u.get("last_seen") or "")
             session_line = (
-                f"{first}–{last}" if first and last else (first or last or "—")
+                f"{first}-{last}" if first and last else (first or last or "-")
             )
             tab_badges = _badges_for(u.get("totals", {})) or (
                 '<span style="color:#94a3b8;font-size:12px;font-style:italic">Logged in but no tracked work</span>'
@@ -2191,7 +2192,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 billed_strip_html = (
                     '<div style="margin-top:10px;padding:8px 12px;background:#ecfdf5;'
                     'border-left:3px solid #10b981;border-radius:6px;font-size:12px;color:#065f46">'
-                    f'<b>💵 Billed {_money(_bw.get("amount"))}</b> since {_esc_html(week_start_long)} '
+                    f'<b>Billed {_money(_bw.get("amount"))}</b> since {_esc_html(week_start_long)} '
                     f'({_bw.get("count", 0)} claims) · '
                     f'<b>{_money(_bt.get("amount"))}</b> today ({_bt.get("count", 0)} claims)'
                     '</div>'
@@ -2215,7 +2216,7 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 client_blocks = (
                     '<div style="padding:14px;color:#94a3b8;font-size:12px;font-style:italic;'
                     'background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;margin-top:12px">'
-                    'No per-client work captured — only page visits.</div>'
+                    'No per-client work captured - only page visits.</div>'
                 )
             cards_html += f"""
             <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(15,23,42,.04)">
@@ -2244,13 +2245,13 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
         billed_banner_html +
         ribbon_html +
         '<h2 style="margin:6px 0 4px;font-size:15px;color:#0f172a;font-weight:800;letter-spacing:.2px">Operator Breakdown</h2>'
-        '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Workers only — admins suppressed (configure with <code>EOD_REPORT_EXCLUDE_USERS</code>).</div>' +
+        '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Workers only - admins suppressed (configure with <code>EOD_REPORT_EXCLUDE_USERS</code>).</div>' +
         cards_html
     )
 
     html_body = _brand_email_shell(
         title="End-of-Day Team Report",
-        subtitle=f"{date_long} — per operator, per client, per module",
+        subtitle=f"{date_long} - per operator, per client, per module",
         accent="#2563eb",
         inner_html=inner,
     )
@@ -2287,7 +2288,7 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
 
     headlines = report.get("headlines", {}) or {}
     if not force and not report.get("users") and sum(headlines.values()) == 0:
-        log.info(f"EOD report skipped — zero activity for {report_date}")
+        log.info(f"EOD report skipped - zero activity for {report_date}")
         return {"ok": True, "skipped": "no activity", "date": report_date}
 
     text_body, html_body = _render_eod_report_html(report)
@@ -2297,7 +2298,7 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
     except Exception:
         d_long = report_date
     subject = (
-        f"📋 MedPharma EOD — {d_long} — "
+        f"MedPharma EOD - {d_long} - "
         f"{headlines.get('active_users', 0)} active, "
         f"{headlines.get('claims_new', 0)} new claims, "
         f"{headlines.get('production_hours', 0)}h logged"
@@ -2422,7 +2423,7 @@ def send_eod_team_report(report_date: str = None, force: bool = False) -> dict:
 def _build_demo_eod_report() -> dict:
     """Fabricate a realistic EOD report so the email preview shows what
     the final product looks like even when the live DB is quiet. Same
-    shape as get_eod_team_report() — fed directly to the renderer.
+    shape as get_eod_team_report() - fed directly to the renderer.
     """
     from datetime import datetime as _dt
     today = business_today_iso()
@@ -2449,8 +2450,8 @@ def _build_demo_eod_report() -> dict:
             "total_actions": 124,
             "billed": {"today": {"count": 6, "amount": 18420.0}, "wtd": {"count": 23, "amount": 61240.0}},
             "highlights": [
-                "claim_status_update claims_master — moved CLM-44218 from A/R Follow-Up → Paid",
-                "note_added notes_log — Aetna confirmed reprocess; eta 14 days",
+                "claim_status_update claims_master - moved CLM-44218 from A/R Follow-Up → Paid",
+                "note_added notes_log - Aetna confirmed reprocess; eta 14 days",
             ],
             "clients": {
                 "Apex Pain Management": {
@@ -2459,8 +2460,8 @@ def _build_demo_eod_report() -> dict:
                         {"tab": "Claims",     "action": "created", "title": "CLM-44218 (Billed/Submitted)"},
                         {"tab": "Claims",     "action": "updated", "title": "CLM-44109 (Paid)"},
                         {"tab": "Claims",     "action": "updated", "title": "CLM-44091 (Appeals)"},
-                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44091 — sent reconsideration packet to Cigna"},
-                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44218 — Aetna confirmed receipt"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44091 - sent reconsideration packet to Cigna"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-44218 - Aetna confirmed receipt"},
                     ],
                 },
                 "Coastal Orthopedics": {
@@ -2468,7 +2469,7 @@ def _build_demo_eod_report() -> dict:
                     "items": [
                         {"tab": "Claims",     "action": "updated", "title": "CLM-22107 (Denied → Appeals)"},
                         {"tab": "Production", "action": "logged",  "title": "A/R Follow-Up: Worked Cigna denials batch (12 · 2.5h)"},
-                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-22107 — Cigna requires CPT modifier docs"},
+                        {"tab": "Notes",      "action": "noted",   "title": "Claim CLM-22107 - Cigna requires CPT modifier docs"},
                     ],
                 },
             },
@@ -2487,8 +2488,8 @@ def _build_demo_eod_report() -> dict:
             "total_actions": 84,
             "billed": {"today": {"count": 3, "amount": 7910.0}, "wtd": {"count": 11, "amount": 26010.0}},
             "highlights": [
-                "credentialing_submit credentialing — Dr Chen / BCBS-SC initial app submitted",
-                "file_upload client_files — uploaded CAQH attestation PDF",
+                "credentialing_submit credentialing - Dr Chen / BCBS-SC initial app submitted",
+                "file_upload client_files - uploaded CAQH attestation PDF",
             ],
             "clients": {
                 "Apex Pain Management": {
@@ -2497,7 +2498,7 @@ def _build_demo_eod_report() -> dict:
                         {"tab": "Credentialing", "action": "created", "title": "Dr Chen · BCBS-SC (Submitted)"},
                         {"tab": "Credentialing", "action": "updated", "title": "Dr Patel · Aetna (Approved)"},
                         {"tab": "Documents",     "action": "uploaded","title": "Patel-CAQH-attestation.pdf · Credentialing"},
-                        {"tab": "Notes",         "action": "noted",   "title": "Credentialing Dr Chen — recruiter packet forwarded"},
+                        {"tab": "Notes",         "action": "noted",   "title": "Credentialing Dr Chen - recruiter packet forwarded"},
                     ],
                 },
                 "Magnolia Imaging": {
@@ -2523,8 +2524,8 @@ def _build_demo_eod_report() -> dict:
             "totals": _tabs(Production=5, EDI=3, Notes=2, Chat=4, Pageviews=40, Audit=2),
             "total_actions": 56,
             "highlights": [
-                "production_log team_production — 4.5h posted (ERA reconciliation)",
-                "edi_status edi_setup — Apex GoLive confirmed for 06/12",
+                "production_log team_production - 4.5h posted (ERA reconciliation)",
+                "edi_status edi_setup - Apex GoLive confirmed for 06/12",
             ],
             "clients": {
                 "Apex Pain Management": {
@@ -2532,7 +2533,7 @@ def _build_demo_eod_report() -> dict:
                     "items": [
                         {"tab": "Production", "action": "logged", "title": "ERA Reconciliation: Tied out Aetna 06/03 ERA (28 · 2.0h)"},
                         {"tab": "EDI",        "action": "updated","title": "Apex · UHC (ERA Active, EFT Active)"},
-                        {"tab": "Chat",       "action": "messaged","title": "room 'Apex — RCM Daily Standup'"},
+                        {"tab": "Chat",       "action": "messaged","title": "room 'Apex - RCM Daily Standup'"},
                     ],
                 },
                 "Coastal Orthopedics": {
@@ -2540,7 +2541,7 @@ def _build_demo_eod_report() -> dict:
                     "items": [
                         {"tab": "Production", "action": "logged",  "title": "Posting: BCBS-SC EOB batch (14 · 1.0h)"},
                         {"tab": "EDI",        "action": "updated", "title": "Coastal · Aetna (ERA Pending → Active)"},
-                        {"tab": "Chat",       "action": "messaged","title": "room 'Coastal — Posting Queue'"},
+                        {"tab": "Chat",       "action": "messaged","title": "room 'Coastal - Posting Queue'"},
                     ],
                 },
             },
@@ -2558,21 +2559,21 @@ def _build_demo_eod_report() -> dict:
             "totals": _tabs(Chat=11, Pageviews=27, Audit=2),
             "total_actions": 40,
             "highlights": [
-                "client_review clients — opened Apex profile; reviewed open AR queue",
-                "chat_room_create chat_rooms — created 'Apex — RCM Daily Standup'",
+                "client_review clients - opened Apex profile; reviewed open AR queue",
+                "chat_room_create chat_rooms - created 'Apex - RCM Daily Standup'",
             ],
             "clients": {
                 "Apex Pain Management": {
                     "totals": _tabs(Chat=7, Pageviews=18, Audit=1),
                     "items": [
-                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex — RCM Daily Standup'"},
-                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex — Credentialing Sync'"},
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex - RCM Daily Standup'"},
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Apex - Credentialing Sync'"},
                     ],
                 },
                 "Coastal Orthopedics": {
                     "totals": _tabs(Chat=4, Pageviews=9, Audit=1),
                     "items": [
-                        {"tab": "Chat", "action": "messaged", "title": "room 'Coastal — Posting Queue'"},
+                        {"tab": "Chat", "action": "messaged", "title": "room 'Coastal - Posting Queue'"},
                     ],
                 },
             },
@@ -2590,22 +2591,22 @@ def _build_demo_eod_report() -> dict:
             "totals": _tabs(Audit=6, Pageviews=18),
             "total_actions": 24,
             "highlights": [
-                "client_create clients — Magnolia Imaging onboarded",
-                "user_invite clients — invited admin@magnoliaimg.com (staff)",
-                "module_toggle clients — enabled Documents + Chat for Coastal",
+                "client_create clients - Magnolia Imaging onboarded",
+                "user_invite clients - invited admin@magnoliaimg.com (staff)",
+                "module_toggle clients - enabled Documents + Chat for Coastal",
             ],
             "clients": {
                 "Magnolia Imaging": {
                     "totals": _tabs(Audit=4, Pageviews=11),
                     "items": [
-                        {"tab": "Audit", "action": "created", "title": "client_create — Magnolia Imaging onboarded"},
-                        {"tab": "Audit", "action": "updated", "title": "user_invite — admin@magnoliaimg.com"},
+                        {"tab": "Audit", "action": "created", "title": "client_create - Magnolia Imaging onboarded"},
+                        {"tab": "Audit", "action": "updated", "title": "user_invite - admin@magnoliaimg.com"},
                     ],
                 },
                 "Coastal Orthopedics": {
                     "totals": _tabs(Audit=2, Pageviews=7),
                     "items": [
-                        {"tab": "Audit", "action": "updated", "title": "module_toggle — enabled Documents + Chat"},
+                        {"tab": "Audit", "action": "updated", "title": "module_toggle - enabled Documents + Chat"},
                     ],
                 },
             },
@@ -2680,7 +2681,7 @@ def send_eod_team_report_demo() -> dict:
     except Exception:
         d_long = report["report_date"]
     subject = (
-        f"📋 MedPharma EOD [DEMO] — {d_long} — "
+        f"MedPharma EOD [DEMO] - {d_long} - "
         f"{headlines['active_users']} active, "
         f"{headlines['claims_new']} new claims, "
         f"{headlines['production_hours']}h logged"
@@ -2717,13 +2718,13 @@ def send_eod_team_report_demo() -> dict:
 
 # Friendly section headers + ordering for the client email + Excel sheet.
 _CLIENT_SECTION_META = [
-    ("claims",        "Claims Activity",      "claims",        "💼", "#2563eb"),
-    ("credentialing", "Credentialing",        "credentialing", "🎓", "#7c3aed"),
-    ("enrollment",    "Payor Enrollment",     "enrollment",    "📝", "#7c3aed"),
-    ("edi",           "EDI / ERA / EFT",      "edi",           "🔌", "#0891b2"),
-    ("production",    "Production Hours",     "production",    "⏱️", "#16a34a"),
-    ("notes",         "Notes",                "claims",        "🗒️", "#0f766e"),
-    ("documents",     "Documents Uploaded",   "documents",     "📁", "#0f766e"),
+    ("claims",        "Claims Activity",      "claims",        "", "#2563eb"),
+    ("credentialing", "Credentialing",        "credentialing", "", "#7c3aed"),
+    ("enrollment",    "Payor Enrollment",     "enrollment",    "", "#7c3aed"),
+    ("edi",           "EDI / ERA / EFT",      "edi",           "", "#0891b2"),
+    ("production",    "Production Hours",     "production",    "", "#16a34a"),
+    ("notes",         "Notes",                "claims",        "", "#0f766e"),
+    ("documents",     "Documents Uploaded",   "documents",     "", "#0f766e"),
 ]
 
 
@@ -2738,7 +2739,7 @@ def _client_section_visible(section_key: str, enabled_modules: list) -> bool:
 
 
 def _ts_long(value) -> str:
-    """Format 'HH:MM' (24h) — same logic as _ts_short but exposed for symmetry."""
+    """Format 'HH:MM' (24h) - same logic as _ts_short but exposed for symmetry."""
     return _ts_short(value)
 
 
@@ -2767,7 +2768,7 @@ def _render_client_daily_report_html(report: dict) -> tuple[str, str]:
 
     # ── plain-text fallback ──
     txt = [
-        f"MedPharma Daily Production Report — {company}",
+        f"MedPharma Daily Production Report - {company}",
         f"{date_long}",
         "",
         f"Claims: {headlines.get('claims_new',0)} new · {headlines.get('claims_touched',0)} touched · "
@@ -2790,13 +2791,13 @@ def _render_client_daily_report_html(report: dict) -> tuple[str, str]:
             ts = _ts_short(r.get("ts") or "")
             ts_prefix = f"[{ts}] " if ts else ""
             if key == "claims":
-                txt.append(f"  {ts_prefix}{r.get('ClaimKey','')} — {r.get('ClaimStatus','')} ({r.get('action','')}) by {r.get('Owner','')}")
+                txt.append(f"  {ts_prefix}{r.get('ClaimKey','')} - {r.get('ClaimStatus','')} ({r.get('action','')}) by {r.get('Owner','')}")
             elif key in ("credentialing", "enrollment", "edi"):
-                txt.append(f"  {ts_prefix}{r.get('ProviderName','')} · {r.get('Payor','')} — {r.get('Status','')} ({r.get('action','')}) by {r.get('Owner','')}")
+                txt.append(f"  {ts_prefix}{r.get('ProviderName','')} · {r.get('Payor','')} - {r.get('Status','')} ({r.get('action','')}) by {r.get('Owner','')}")
             elif key == "production":
-                txt.append(f"  {ts_prefix}{r.get('Owner','')}: {r.get('Category','')} — {r.get('Task','')} ({r.get('Qty',0)} · {r.get('Hours',0)}h)")
+                txt.append(f"  {ts_prefix}{r.get('Owner','')}: {r.get('Category','')} - {r.get('Task','')} ({r.get('Qty',0)} · {r.get('Hours',0)}h)")
             elif key == "notes":
-                txt.append(f"  {ts_prefix}{r.get('Author','')}: {r.get('Subject','')} — {r.get('Note','')}")
+                txt.append(f"  {ts_prefix}{r.get('Author','')}: {r.get('Subject','')} - {r.get('Note','')}")
             elif key == "documents":
                 txt.append(f"  {ts_prefix}{r.get('Filename','')} ({r.get('Category','')}) by {r.get('UploadedBy','')}")
         txt.append("")
@@ -2889,7 +2890,7 @@ def _render_client_daily_report_html(report: dict) -> tuple[str, str]:
         if len(rows) > 30:
             more_note = (
                 f'<div style="font-size:11px;color:#64748b;padding:6px 12px;font-style:italic">'
-                f'…and {len(rows) - 30} more rows — see the attached Excel for the full list.</div>'
+                f'…and {len(rows) - 30} more rows - see the attached Excel for the full list.</div>'
             )
         return f"""
         <div style="margin:18px 0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
@@ -2949,7 +2950,7 @@ def _render_client_daily_report_html(report: dict) -> tuple[str, str]:
     inner = intro + ribbon_html + sections_html + ops_html
 
     html_body = _brand_email_shell(
-        title=f"Daily Production Report — {company}",
+        title=f"Daily Production Report - {company}",
         subtitle=date_long,
         accent="#16a34a",
         inner_html=inner,
@@ -2968,7 +2969,7 @@ def _build_client_report_xlsx(report: dict) -> bytes:
     section. Returns the raw bytes so the email layer can attach it.
 
     Falls back gracefully (returns empty bytes) when openpyxl isn't
-    installed — the email still ships, just without the attachment.
+    installed - the email still ships, just without the attachment.
     """
     try:
         from openpyxl import Workbook
@@ -3131,7 +3132,7 @@ def send_client_daily_report(client_id: int, report_date: str = None,
     headlines = report.get("headlines", {}) or {}
     has_activity = any(v for v in headlines.values() if isinstance(v, (int, float)) and v)
     if not force and not demo and not has_activity:
-        log.info(f"Client {client_id} report skipped — no activity for {report.get('report_date')}")
+        log.info(f"Client {client_id} report skipped - no activity for {report.get('report_date')}")
         return {"ok": True, "skipped": "no activity", "client_id": client_id,
                 "date": report.get("report_date")}
 
@@ -3146,7 +3147,7 @@ def send_client_daily_report(client_id: int, report_date: str = None,
     company = report.get("company", "")
     demo_tag = " [DEMO]" if demo else ""
     subject = (
-        f"📊 MedPharma Daily Report{demo_tag} — {company} — {d_long} — "
+        f"MedPharma Daily Report{demo_tag} - {company} - {d_long} - "
         f"{headlines.get('claims_new', 0)} new claims · "
         f"{headlines.get('production_hours', 0)}h logged"
     )
@@ -3305,9 +3306,9 @@ def _build_demo_client_daily_report() -> dict:
             ],
             "notes": [
                 {"ts": ts(10, 30),"Author": "jessica","Subject": "Claim CLM-44091","Note": "Sent reconsideration packet to Cigna with corrected modifier"},
-                {"ts": ts(11, 20),"Author": "rcm",    "Subject": "Claim CLM-44109","Note": "Aetna posted 06/03 ERA — $1,247.18 to patient acct"},
+                {"ts": ts(11, 20),"Author": "rcm",    "Subject": "Claim CLM-44109","Note": "Aetna posted 06/03 ERA - $1,247.18 to patient acct"},
                 {"ts": ts(13, 45),"Author": "susan",  "Subject": "Cred Dr Chen",   "Note": "BCBS-SC initial app submitted; expect 60-day window"},
-                {"ts": ts(14, 50),"Author": "jessica","Subject": "Claim CLM-44188","Note": "Denied 197 — auth not on file; pulling pre-auth from EMR"},
+                {"ts": ts(14, 50),"Author": "jessica","Subject": "Claim CLM-44188","Note": "Denied 197 - auth not on file; pulling pre-auth from EMR"},
                 {"ts": ts(15, 20),"Author": "susan",  "Subject": "Cred Dr Chen",   "Note": "Cigna initial app submitted; CAQH attestation confirmed"},
             ],
             "documents": [
@@ -3349,7 +3350,7 @@ def _send_demo_client_report(report: dict) -> dict:
         d_long = report.get("report_date", "")
     headlines = report.get("headlines", {}) or {}
     subject = (
-        f"📊 MedPharma Daily Report [DEMO] — {report.get('company','')} — {d_long} — "
+        f"MedPharma Daily Report [DEMO] - {report.get('company','')} - {d_long} - "
         f"{headlines.get('claims_new', 0)} new claims · "
         f"{headlines.get('production_hours', 0)}h logged"
     )
@@ -3392,7 +3393,7 @@ def _send_demo_client_report(report: dict) -> dict:
 
 def send_bizdev_followup_reminders() -> dict:
     """Remind BizDev (and admins) about leads that haven't been followed up
-    in 2+ days. Fires in-app notifications only — email delivery was removed
+    in 2+ days. Fires in-app notifications only - email delivery was removed
     as it was not applicable to this team. Runs on a 2-day cadence per lead so
     a single overdue lead is not re-sent every day."""
     from app.client_db import claim_leads_for_reminder, list_chat_eligible_users, fanout_notification
@@ -3407,7 +3408,7 @@ def send_bizdev_followup_reminders() -> dict:
         return {"ok": True, "due": len(due), "emailed": 0, "notified": 0,
                 "note": "no admin/Eric recipients"}
 
-    # In-app notification for every recipient — works with no email provider.
+    # In-app notification for every recipient - works with no email provider.
     notified = 0
     try:
         ids = [int(u["id"]) for u in recipients if u.get("id")]
@@ -3423,7 +3424,7 @@ def send_bizdev_followup_reminders() -> dict:
     except Exception as e:
         log.error(f"bizdev follow-up in-app notify failed: {e}")
 
-    # Email delivery intentionally removed — BizDev follow-up reminders are
+    # Email delivery intentionally removed - BizDev follow-up reminders are
     # in-app only (email notifications were not applicable to this team).
     log.info(f"BizDev follow-up reminders: due={len(due)} notified={notified} (email disabled)")
     return {"ok": True, "due": len(due), "emailed": 0, "notified": notified}
@@ -3434,7 +3435,7 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
     they STILL haven't read after ``min_age_minutes`` (default 2 hours).
 
     This replaces the old "email on every message" behaviour. Read messages
-    never trigger a reminder, and each mention is reminded at most once — so
+    never trigger a reminder, and each mention is reminded at most once - so
     the inbox stays quiet unless someone is genuinely being waited on.
     PHI-safe: the message body is never included, only "open the room to view".
     """
@@ -3462,7 +3463,7 @@ def send_chat_unread_reminders(min_age_minutes: int = 120):
         room_name = item.get("room_name") or "a chat room"
         sender = item.get("sender_name") or "a teammate"
         who = (item.get("contact_name") or item.get("username") or "there").split()[0]
-        subject = f"💬 You were mentioned in '{room_name}' — still unread"
+        subject = f"You were mentioned in '{room_name}' - still unread"
         text_body = (
             f"Hi {who},\n\n"
             f"{sender} mentioned you in the chat room '{room_name}' over two "
@@ -3498,7 +3499,7 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
     """Email a gentle "please catch up on team chat" nudge to anyone who STILL
     has unread chat messages older than ``min_age_minutes`` (default 15).
 
-    Only people who haven't read are emailed — the moment someone opens the
+    Only people who haven't read are emailed - the moment someone opens the
     room and reads, they drop off the list. A per-user high-water mark means
     each person gets at most one nudge per wave of new messages (no per-message
     spam). PHI-safe: the message body is never included.
@@ -3528,12 +3529,12 @@ def send_chat_catchup_reminders(min_age_minutes: int = 15):
         n = int(item.get("unread_count") or 0)
         count_phrase = (f"{n} unread message{'s' if n != 1 else ''}"
                         if n else "unread messages")
-        subject = "💬 Please catch up on team communication"
+        subject = "Please catch up on team communication"
         text_body = (
             f"Hi {who},\n\n"
             f"You have {count_phrase} in MedPharma Hub Team Chat that have been "
             f"sitting unread for more than {int(min_age_minutes)} minutes.\n\n"
-            f"Please make sure you're up to date on team communication — log in "
+            f"Please make sure you're up to date on team communication - log in "
             f"to MedPharma Hub and open the chat to read and reply (message "
             f"content isn't included here for HIPAA compliance).\n"
         )
@@ -3582,7 +3583,7 @@ def start_daily_scheduler():
     """
         Start APScheduler to fire:
             - send_daily_account_summary at 9:00 PM EST
-    Safe to call multiple times — only starts once.
+    Safe to call multiple times - only starts once.
     """
     global _scheduler_started
     if _scheduler_started:
@@ -3597,7 +3598,7 @@ def start_daily_scheduler():
         est = pytz.timezone("US/Eastern")
         scheduler = BackgroundScheduler(daemon=True)
 
-        # 7:00 AM & 8:50 PM EST every day — refresh claim totals automatically so
+        # 7:00 AM & 8:50 PM EST every day - refresh claim totals automatically so
         # the dashboard and the evening email reports always reflect the latest
         # uploaded files WITHOUT anyone logging in or clicking re-import. The
         # importer upserts by (client_id, ClaimKey), so this is idempotent.
@@ -3616,43 +3617,39 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # 9:00 PM EST — Account summary report (weekdays only, Mon–Fri)
+        # 9:00 PM EST - Account summary report (weekdays only, Mon-Fri)
         scheduler.add_job(
             send_daily_account_summary,
             CronTrigger(day_of_week="mon-fri", hour=21, minute=0, timezone=est),
             id="daily_account_summary",
-            name="9 PM EST Overall Account Summary (Mon–Fri)",
+            name="9 PM EST Overall Account Summary (Mon-Fri)",
             replace_existing=True,
         )
 
-        # 9:05 PM EST — End-of-Day per-user / per-client / per-tab team report
+        # 9:05 PM EST - End-of-Day per-user / per-client / per-tab team report
         scheduler.add_job(
             send_eod_team_report,
             CronTrigger(day_of_week="mon-fri", hour=21, minute=5, timezone=est),
             id="daily_eod_team_report",
-            name="9:05 PM EST EOD Team Report (lexi) (Mon–Fri)",
+            name="9:05 PM EST EOD Team Report (lexi) (Mon-Fri)",
             replace_existing=True,
         )
 
-        # 9:10 PM EST — Per-client production reports (with Excel attachments)
+        # 9:10 PM EST - Per-client production reports (with Excel attachments)
         scheduler.add_job(
             send_all_client_daily_reports,
             CronTrigger(day_of_week="mon-fri", hour=21, minute=10, timezone=est),
             id="daily_client_reports",
-            name="9:10 PM EST Per-Client Production Reports (Mon–Fri)",
+            name="9:10 PM EST Per-Client Production Reports (Mon-Fri)",
             replace_existing=True,
         )
 
-        # 9:00 AM EST — BizDev follow-up reminders (weekdays only, Mon–Fri)
-        scheduler.add_job(
-            send_bizdev_followup_reminders,
-            CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=est),
-            id="bizdev_followup_reminders",
-            name="9 AM EST BizDev Follow-up Reminders (Mon–Fri)",
-            replace_existing=True,
-        )
+        # Business Development reports are DISABLED per request (2026-07-15).
+        # The 9 AM BizDev follow-up reminder job is intentionally not scheduled.
+        # (The manual trigger route and the on-demand Leads weekly view remain,
+        # but nothing BizDev is auto-sent.) Re-enable by restoring the add_job.
 
-        # Every 30 min — nudge people @mentioned in chat who still haven't
+        # Every 30 min - nudge people @mentioned in chat who still haven't
         # read the message after 2 hours (replaces email-on-every-message).
         from apscheduler.triggers.interval import IntervalTrigger
         scheduler.add_job(
@@ -3663,7 +3660,7 @@ def start_daily_scheduler():
             replace_existing=True,
         )
 
-        # Every 5 min — gentle "catch up on team communication" nudge to anyone
+        # Every 5 min - gentle "catch up on team communication" nudge to anyone
         # with chat messages still unread after 15 minutes (one nudge per wave).
         scheduler.add_job(
             send_chat_catchup_reminders,
@@ -3674,10 +3671,10 @@ def start_daily_scheduler():
         )
 
         scheduler.start()
-        log.info("Daily scheduler started — 5:00 national pull, 9:00 summary, 9:05 EOD team, 9:10 client reports")
+        log.info("Daily scheduler started - 5:00 national pull, 9:00 summary, 9:05 EOD team, 9:10 client reports")
     except ImportError:
         # Fallback: use a simple threading timer that checks every 60 seconds
-        log.warning("apscheduler not installed — falling back to threading-based scheduler")
+        log.warning("apscheduler not installed - falling back to threading-based scheduler")
         _start_thread_scheduler()
     except Exception as e:
         log.error(f"Failed to start scheduler: {e}")
@@ -3685,7 +3682,7 @@ def start_daily_scheduler():
 
 
 def _start_thread_scheduler():
-    """Fallback scheduler using threading — checks every 60s for 9:00 PM EST reports."""
+    """Fallback scheduler using threading - checks every 60s for 9:00 PM EST reports."""
     import time as _time
 
     def _check_loop():
@@ -3701,7 +3698,7 @@ def _start_thread_scheduler():
                     est = pytz.timezone("US/Eastern")
                     now_est = datetime.now(est)
                 except ImportError:
-                    # No pytz — approximate EST as UTC-5
+                    # No pytz - approximate EST as UTC-5
                     from datetime import timedelta, timezone
                     est_tz = timezone(timedelta(hours=-5))
                     now_est = datetime.now(est_tz)
@@ -3710,25 +3707,25 @@ def _start_thread_scheduler():
                 # Skip weekends (Mon=0 … Sun=6) for daily business reports.
                 is_weekday = now_est.weekday() < 5
 
-                # 9:00 PM — Daily account summary
+                # 9:00 PM - Daily account summary
                 if is_weekday and now_est.hour == 21 and now_est.minute < 5 and last_sent_date != today:
                     last_sent_date = today
                     log.info("Thread scheduler firing daily account summary")
                     send_daily_account_summary()
 
-                # 9:05 PM — End-of-Day per-user / per-client / per-tab report
+                # 9:05 PM - End-of-Day per-user / per-client / per-tab report
                 if is_weekday and now_est.hour == 21 and 5 <= now_est.minute < 10 and last_eod_date != today:
                     last_eod_date = today
                     log.info("Thread scheduler firing EOD team report")
                     send_eod_team_report()
 
-                # 9:10 PM — Per-client production reports with Excel
+                # 9:10 PM - Per-client production reports with Excel
                 if is_weekday and now_est.hour == 21 and 10 <= now_est.minute < 15 and last_clients_date != today:
                     last_clients_date = today
                     log.info("Thread scheduler firing per-client production reports")
                     send_all_client_daily_reports()
 
-                # Every ~5 min — chat catch-up nudge (15-min unread). Runs all
+                # Every ~5 min - chat catch-up nudge (15-min unread). Runs all
                 # week, not just weekdays, since chat happens any time.
                 if last_catchup_at is None or (now_est - last_catchup_at).total_seconds() >= 300:
                     last_catchup_at = now_est
@@ -3743,4 +3740,4 @@ def _start_thread_scheduler():
 
     t = threading.Thread(target=_check_loop, daemon=True)
     t.start()
-    log.info("Fallback thread scheduler started — 9:00 summary + 9:05 EOD team + 9:10 client reports")
+    log.info("Fallback thread scheduler started - 9:00 summary + 9:05 EOD team + 9:10 client reports")

@@ -5095,8 +5095,8 @@
       const greetWord = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
       const greetEl = document.getElementById('accountGreeting');
       const subEl   = document.getElementById('accountSubtitle');
-      if (greetEl) greetEl.textContent = `${greetWord}! 👋`;
-      if (subEl)   subEl.textContent   = 'Select a client account below to continue.';
+      if (greetEl) greetEl.textContent = greetWord;
+      if (subEl)   subEl.textContent   = '';
       const newClientBtn = document.getElementById('selectorNewClientBtn');
       if (newClientBtn) newClientBtn.style.display = isFullAdmin() ? '' : 'none';
       const addUserBtn = document.getElementById('selectorAddUserBtn');
@@ -13074,7 +13074,7 @@
       // receipts matter on the messages I send.
       const others = (reads || []).filter(u => parseInt(u.user_id, 10) !== myId);
       if (!msgs.length) {
-        box.innerHTML = '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">No messages yet. Be the first to say hi 👋</div>';
+        box.innerHTML = '<div style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 20px">No messages yet. Be the first to say hi.</div>';
         return;
       }
       box.innerHTML = msgs.map(m => {
