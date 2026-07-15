@@ -438,14 +438,23 @@ def _apply_startup_user_migrations(conn):
 
 def _ensure_eligibility_team_chat(cur):
     """Guarantee every eligibility board has a Team Chat room whose members are
-    the account's assigned users plus the full admins — so eligibility clients
-    such as Spirit Health (David) always have a working chat instead of an empty
-    list.
+    the account's own team (owner login + granted users) plus the MedPharma
+    admins — Lexi and Eric — so eligibility clients such as Spirit Health (David)
+    always have a working chat instead of an empty list.
+
+    The admin login is Lexi: the `admin` account (email lexi@medprosc.com) IS
+    Lexi. Because Lexi (and Eric) each own two login aliases — a short username
+    (`admin`/`eric`) and a canonical `@medprosc.com` row — the admins are DEDUPED
+    to one row per PERSON (by email) so Lexi never shows up twice as "Admin" +
+    "Lexi". The surviving row is the one the person actually logs in with (lowest
+    id) and its display name is normalised to "Lexi"/"Eric".
 
     Targets accounts that carry the eligibility module OR already hold eligibility
-    records. Idempotent: reuses an existing non-DM room tied to the account and
-    only ever ADDS members (INSERT OR IGNORE). Wrapped so it can never break
-    startup."""
+    records. Idempotent + self-healing: reuses the account's existing non-DM room,
+    ADDS the right members, and — for rooms this function created
+    (created_by='system') — PRUNES any leftover duplicate-alias admin so older
+    rooms provisioned before the dedupe collapse back to one Lexi + one Eric.
+    Wrapped so it can never break startup."""
     try:
         acct_ids: set[int] = set()
         try:
@@ -466,9 +475,43 @@ def _ensure_eligibility_team_chat(cur):
             pass
         if not acct_ids:
             return
-        admin_ids = [int(r[0]) for r in cur.execute(
-            "SELECT id FROM clients WHERE role='admin' AND COALESCE(is_active,1)=1"
-        ).fetchall()]
+        # Admin team = Lexi (`admin` login) + Eric, DEDUPED to one row per person
+        # by email so an admin with two login aliases isn't listed twice. Keep the
+        # lowest id (the row the person logs in with) and normalise its display
+        # name so the kept Lexi row never reads as a generic "Admin".
+        admin_rows = cur.execute(
+            "SELECT id, LOWER(COALESCE(NULLIF(email,''), username)) AS who "
+            "FROM clients WHERE role='admin' AND COALESCE(is_active,1)=1 ORDER BY id"
+        ).fetchall()
+        all_admin_ids = {int(r[0]) for r in admin_rows}
+        keep_admin_ids: list[int] = []
+        seen_person: set[str] = set()
+        for aid, who in admin_rows:
+            key = (who or f"id{int(aid)}").strip()
+            if key in seen_person:
+                continue
+            seen_person.add(key)
+            keep_admin_ids.append(int(aid))
+        keep_admin_set = set(keep_admin_ids)
+        # Normalise the kept admins' display names (admin == Lexi, eric == Eric).
+        for aid in keep_admin_ids:
+            row = cur.execute(
+                "SELECT LOWER(COALESCE(email,'')), LOWER(COALESCE(username,'')) "
+                "FROM clients WHERE id=?", (aid,)
+            ).fetchone()
+            if not row:
+                continue
+            em, un = row[0] or "", row[1] or ""
+            nice = None
+            if "lexi@" in em or un in ("admin", "lexi", "admin@medprosc.com"):
+                nice = "Lexi"
+            elif "eric@" in em or un in ("eric", "eric@medprosc.com"):
+                nice = "Eric"
+            if nice:
+                cur.execute(
+                    "UPDATE clients SET contact_name=? WHERE id=? "
+                    "AND COALESCE(contact_name,'')<>?", (nice, aid, nice)
+                )
         for cid in sorted(acct_ids):
             arow = cur.execute(
                 "SELECT COALESCE(NULLIF(company,''), NULLIF(contact_name,''), username) "
@@ -477,8 +520,9 @@ def _ensure_eligibility_team_chat(cur):
             if not arow:
                 continue
             acct_name = (arow[0] or f"Account {cid}").strip()
-            # Members = the account-owner login + its granted users + full admins.
-            member_ids: set[int] = set(admin_ids)
+            # Members = the account-owner login + its granted users + the deduped
+            # admins (Lexi + Eric).
+            member_ids: set[int] = set(keep_admin_ids)
             member_ids.add(cid)
             for r in cur.execute(
                 "SELECT user_id FROM client_user_access WHERE client_id=?", (cid,)
@@ -494,11 +538,12 @@ def _ensure_eligibility_team_chat(cur):
             if len(member_ids) < 2:
                 continue
             rr = cur.execute(
-                "SELECT id FROM chat_rooms WHERE client_id=? AND COALESCE(is_dm,0)=0 "
-                "ORDER BY id LIMIT 1", (cid,)
+                "SELECT id, COALESCE(created_by,'') FROM chat_rooms "
+                "WHERE client_id=? AND COALESCE(is_dm,0)=0 ORDER BY id LIMIT 1", (cid,)
             ).fetchone()
             if rr:
                 room_id = int(rr[0])
+                room_is_system = (rr[1] == "system")
             else:
                 cur.execute(
                     "INSERT INTO chat_rooms (name, description, client_id, created_by) "
@@ -506,11 +551,23 @@ def _ensure_eligibility_team_chat(cur):
                     (f"{acct_name} — Eligibility Team", "Eligibility team chat", cid, "system"),
                 )
                 room_id = int(cur.lastrowid)
+                room_is_system = True
             for uid in member_ids:
                 cur.execute(
                     "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, role, added_by) "
                     "VALUES (?,?,?,?)",
-                    (room_id, uid, "admin" if uid in admin_ids else "member", "system"),
+                    (room_id, uid, "admin" if uid in all_admin_ids else "member", "system"),
+                )
+            # Self-heal auto-provisioned rooms: drop any admin that isn't one of
+            # the deduped Lexi/Eric rows (removes the old duplicate alias). Never
+            # touch operator-made rooms.
+            if room_is_system and keep_admin_ids:
+                placeholders = ",".join("?" * len(keep_admin_ids))
+                cur.execute(
+                    "DELETE FROM chat_room_members WHERE room_id=? "
+                    "AND user_id IN (SELECT id FROM clients WHERE role='admin') "
+                    f"AND user_id NOT IN ({placeholders})",
+                    [room_id, *keep_admin_ids],
                 )
     except Exception as exc:  # never break startup
         log.warning("ensure_eligibility_team_chat: %s (non-fatal)", exc)
