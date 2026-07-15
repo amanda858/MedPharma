@@ -8106,6 +8106,7 @@
           <div class="modal-header">
             <h2 style="font-size:17px">Advanced Laboratory Eligibility Report</h2>
             <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-secondary btn-sm" onclick="_openEligPrintable()" title="Open a printable, downloadable copy (save as PDF or attach to the completed report) in a new tab">Open printable</button>
               <button class="btn btn-secondary btn-sm" onclick="_printEligReport()" title="Print or save as PDF">Print / PDF</button>
               <button class="modal-close" onclick="closeModal('eligReportModal')">&times;</button>
             </div>
@@ -8114,6 +8115,7 @@
         </div>`;
         document.body.appendChild(ov);
       }
+      ov.dataset.rid = id;
       const body = document.getElementById('eligReportBody');
       body.innerHTML = `<div style="padding:34px;text-align:center;color:#64748b;font-size:13px">Building report…</div>`;
       ov.classList.add('open');
@@ -8125,6 +8127,12 @@
       } catch (e) {
         body.innerHTML = `<div style="padding:24px;color:#dc2626;font-size:13px">Could not build report: ${esc(e.message)}</div>`;
       }
+    }
+
+    function _openEligPrintable() {
+      const ov = document.getElementById('eligReportModal');
+      const rid = ov && ov.dataset ? ov.dataset.rid : '';
+      if (rid) window.open(`/hub/api/eligibility/${rid}/report/print`, '_blank');
     }
 
     function _printEligReport() {

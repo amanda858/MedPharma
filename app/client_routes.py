@@ -4133,26 +4133,11 @@ def list_elig_checks(rid: int, hub_session: Optional[str] = Cookie(None)):
             raise HTTPException(403, "Not authorized for this record")
     return get_eligibility_checks(rid)
 
-
-@router.get("/eligibility/{rid}/report")
-def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
-    """Advanced Laboratory Eligibility Report — the full 8-section RCM read for one
-    patient (patient/subscriber, DOS coverage, CPT-level benefits, financials,
-    policy limits, authorizations, payer metadata, and a go/no-go billing summary).
-
-    Assembled from the verified coverage record + the coverage-policy engine
-    (LCD/NCD medical necessity, prior auth, MolDX, ABN) + the claim-integrity
-    intercept (NCCI PTP, MUE, QW, term risk). Honest by design: member active
-    status and financials are shown ONLY from a real 271; with no live payer
-    confirmation they read 'requires live 271' and the decision stays PENDING."""
-    user = _require_user(hub_session)
-    rec = get_eligibility_one(rid)
-    if not rec:
-        raise HTTPException(404, "Eligibility record not found")
-    if user["role"] not in ("admin", "staff"):
-        if int(rec.get("client_id") or 0) != _client_account_id(user):
-            raise HTTPException(403, "Not authorized for this record")
-
+def _assemble_lab_report(rec: dict) -> dict:
+    """Build the 8-section Advanced Laboratory Eligibility Report dict for one
+    record. Shared by the JSON view and the printable-document endpoint so both
+    stay identical. Honest by design: live status/financials only from a real
+    271; otherwise marked 'requires live 271'."""
     order_text = rec.get("RequestedServices") or ""
     cpts = _parse_cpts(order_text)
     icd10s = _parse_icd10s(order_text)
@@ -4170,6 +4155,7 @@ def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
             return None
 
     # Pull the most recent REAL 271 (if any) for live status + financials + ref#.
+    rid = int(rec.get("id") or 0)
     connected = False
     benefit: dict = {}
     ref_no = ""
@@ -4241,7 +4227,7 @@ def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
         findings = []
 
     from eligibility_hybrid.lab_report import build_lab_eligibility_report
-    report = build_lab_eligibility_report(
+    return build_lab_eligibility_report(
         patient={
             "name": rec.get("PatientName") or "", "dob": rec.get("DOB") or "",
             "member_id": rec.get("MemberID") or "", "payer": payer_name,
@@ -4259,7 +4245,208 @@ def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
         cpts=cpts, icd10s=icd10s, dos=dos, findings=findings,
         auth_number=(rec.get("AuthNumber") or ""),
     )
-    return {"ok": True, "report": report}
+
+
+@router.get("/eligibility/{rid}/report")
+def eligibility_report(rid: int, hub_session: Optional[str] = Cookie(None)):
+    """Advanced Laboratory Eligibility Report — the full 8-section RCM read for one
+    patient (patient/subscriber, DOS coverage, CPT-level benefits, financials,
+    policy limits, authorizations, payer metadata, and a go/no-go billing summary).
+
+    Assembled from the verified coverage record + the coverage-policy engine
+    (LCD/NCD medical necessity, prior auth, MolDX, ABN) + the claim-integrity
+    intercept (NCCI PTP, MUE, QW, term risk). Honest by design: member active
+    status and financials are shown ONLY from a real 271; with no live payer
+    confirmation they read 'requires live 271' and the decision stays PENDING."""
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+    return {"ok": True, "report": _assemble_lab_report(rec)}
+
+
+@router.get("/eligibility/{rid}/report/print")
+def eligibility_report_print(rid: int, hub_session: Optional[str] = Cookie(None)):
+    """Standalone, printable/downloadable Advanced Laboratory Eligibility Report
+    (a self-contained HTML document a biller can save as PDF or attach to the
+    patient's completed report as verification evidence)."""
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) != _client_account_id(user):
+            raise HTTPException(403, "Not authorized for this record")
+    report = _assemble_lab_report(rec)
+    html = _lab_report_html(report)
+    return Response(content=html, media_type="text/html")
+
+
+def _lab_report_html(R: dict) -> str:
+    """Render the 8-section report as a clean, self-contained printable document."""
+    from html import escape as _e
+
+    def S(v):
+        return _e("" if v is None or v == "" else str(v)) or "&mdash;"
+
+    def money(v):
+        try:
+            return "$" + format(float(v), ",.2f") if v not in (None, "") else "&mdash;"
+        except (TypeError, ValueError):
+            return "&mdash;"
+
+    def pct(v):
+        return (str(v) + "%") if v not in (None, "") else "&mdash;"
+
+    def kv(pairs):
+        return ("<table class='kv'>" + "".join(
+            f"<tr><td class='k'>{_e(k)}</td><td class='v'>{v}</td></tr>" for k, v in pairs
+        ) + "</table>")
+
+    def ul(items, empty):
+        items = items or []
+        if not items:
+            return f"<div class='muted'>{_e(empty)}</div>"
+        return "<ul>" + "".join(f"<li>{_e(str(x))}</li>" for x in items) + "</ul>"
+
+    meta = R.get("meta", {}); p = R.get("patient_verification", {})
+    c = R.get("coverage_status", {}); fin = R.get("financials", {})
+    pf = R.get("policy_flags", {}); pm = R.get("payer_meta", {}); br = R.get("billing_readiness", {})
+    dec = br.get("decision", "")
+    dec_col = {"GO": "#059669", "HOLD": "#b45309", "NO-GO": "#dc2626",
+               "PENDING VERIFICATION": "#2563eb"}.get(dec, "#64748b")
+    risk_col = {"High": "#dc2626", "Medium": "#b45309", "Low": "#059669"}.get(
+        br.get("risk_of_denial"), "#2563eb")
+
+    # Section 3 table
+    _cov_col = {"Yes": "#059669", "No": "#dc2626"}
+    bens = R.get("lab_benefits", [])
+    if bens:
+        _brows = []
+        for b in bens:
+            cc = _cov_col.get(b.get("covered"), "#2563eb")
+            _brows.append(
+                "<tr>"
+                f"<td><b>{S(b.get('cpt'))}</b></td><td>{S(b.get('description'))}</td>"
+                f"<td style='color:{cc};font-weight:600'>{S(b.get('covered'))}</td>"
+                f"<td>{S(b.get('auth_required'))}</td><td>{S(b.get('frequency'))}</td>"
+                f"<td class='muted'>{S(b.get('note'))}</td></tr>")
+        rows = "".join(_brows)
+        s3 = ("<table class='grid'><thead><tr><th>CPT</th><th>Description</th>"
+              "<th>Covered?</th><th>Auth?</th><th>Frequency</th><th>Notes</th></tr></thead>"
+              f"<tbody>{rows}</tbody></table>")
+    else:
+        s3 = ("<div class='muted'>No CPT codes on the order yet. Add the ordered "
+              "test(s) under Requested Services for CPT-level coverage.</div>")
+
+    # Section 4 financials
+    if fin.get("available"):
+        s4 = kv([
+            ("Annual deductible", money(fin.get("annual_deductible"))),
+            ("Deductible met", money(fin.get("deductible_met"))),
+            ("Remaining deductible", money(fin.get("remaining_deductible"))),
+            ("Coinsurance", pct(fin.get("coinsurance_pct"))),
+            ("Copay", money(fin.get("copay"))),
+            ("Out-of-pocket max", money(fin.get("oop_max"))),
+            ("Out-of-pocket met", money(fin.get("oop_met"))),
+            ("Out-of-pocket remaining", money(fin.get("oop_remaining"))),
+        ])
+    else:
+        s4 = (f"<div class='warn'>{_e(fin.get('note') or 'Patient financials require a live 271 from the payer.')}</div>")
+
+    integ = [f"{(f.get('severity') or 'info').upper()}: {f.get('message') or f.get('code') or ''}"
+             + (f" - {f.get('action')}" if f.get('action') else "")
+             for f in (pf.get("integrity") or [])]
+    s5 = ("<div class='sub'>Medical necessity</div>" + ul(pf.get("medical_necessity"), "No diagnosis restriction on file for the ordered tests.")
+          + "<div class='sub'>Non-covered services</div>" + ul(pf.get("non_covered"), "None flagged as non-covered.")
+          + "<div class='sub'>Frequency limits</div>" + ul(pf.get("frequency_limits"), "No frequency limit on file.")
+          + "<div class='sub'>MolDX / molecular</div>" + ul(pf.get("moldx"), "No MolDX registration required.")
+          + "<div class='sub'>Claim-integrity checks (NCCI / MUE / QW / data)</div>" + ul(integ, "No coding or data-integrity issues detected."))
+
+    auths = R.get("authorizations", [])
+    if auths:
+        rows = "".join(
+            f"<tr><td>{S(a.get('service'))}</td><td>{S(a.get('auth_required'))}</td>"
+            f"<td>{S(a.get('auth_number'))}</td><td>{S(a.get('valid_dates'))}</td>"
+            f"<td class='muted'>{S(a.get('notes'))}</td></tr>" for a in auths)
+        s6 = ("<table class='grid'><thead><tr><th>Service</th><th>Auth required</th>"
+              "<th>Auth #</th><th>Valid dates</th><th>Notes</th></tr></thead>"
+              f"<tbody>{rows}</tbody></table>")
+    else:
+        s6 = "<div class='ok'>No prior authorization required for the ordered tests.</div>"
+
+    ce = br.get("covered_except") or []
+    af = br.get("authorization_required_for") or []
+    s8 = (f"<div class='decision' style='background:{dec_col}'>{S(dec)}</div>"
+          f"<table class='kv'><tr><td class='k'>Eligible for DOS</td><td class='v'><b>{S(br.get('patient_eligible_for_dos'))}</b></td></tr>"
+          f"<tr><td class='k'>Denial risk</td><td class='v'><b style='color:{risk_col}'>{S(br.get('risk_of_denial'))}</b></td></tr>"
+          f"<tr><td class='k'>Covered except</td><td class='v'>{_e(', '.join(ce)) if ce else 'All ordered CPTs'}</td></tr>"
+          f"<tr><td class='k'>Authorization required for</td><td class='v'>{_e(', '.join(af)) if af else 'None'}</td></tr></table>"
+          "<div class='sub'>Billing recommendation (per CPT)</div>" + ul(br.get("recommendations"), "No recommendation."))
+
+    conn = ("<span class='badge ok'>Live 271 verified</span>" if meta.get("connected")
+            else "<span class='badge warn'>Coverage policy only - live 271 pending</span>")
+
+    def card(title, inner):
+        return f"<div class='card'><div class='card-h'>{title}</div><div class='card-b'>{inner}</div></div>"
+
+    css = ("body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;margin:0;padding:24px;background:#fff}"
+           ".hd{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:6px}"
+           ".name{font-size:20px;font-weight:800}.sub2{font-size:12px;color:#64748b;margin-top:2px}"
+           ".dec{font-size:22px;font-weight:800}.dos{font-size:11px;color:#94a3b8}"
+           ".badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;margin:8px 0}"
+           ".badge.ok{background:#d1fae5;color:#065f46}.badge.warn{background:#fef3c7;color:#92400e}"
+           ".card{border:1px solid #e5e7eb;border-radius:10px;margin:12px 0;overflow:hidden;break-inside:avoid}"
+           ".card-h{background:#f8fafc;padding:9px 14px;font-weight:700;font-size:12.5px;border-bottom:1px solid #eef2f7}"
+           ".card-b{padding:12px 14px;font-size:12.5px}"
+           "table.grid{width:100%;border-collapse:collapse}table.grid th{text-align:left;color:#64748b;border-bottom:1px solid #e5e7eb;font-size:11px;padding:5px 8px}"
+           "table.grid td{padding:5px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}"
+           "table.kv{width:100%;border-collapse:collapse}table.kv td{padding:4px 8px;vertical-align:top}table.kv td.k{color:#64748b;width:44%}table.kv td.v{font-weight:600}"
+           ".muted{color:#475569}.warn{color:#b45309}.ok{color:#059669}"
+           ".sub{font-weight:700;font-size:12px;margin:10px 0 4px}ul{margin:0;padding-left:18px;line-height:1.5}"
+           ".decision{display:inline-block;color:#fff;font-weight:800;padding:5px 16px;border-radius:8px;margin-bottom:8px}"
+           ".foot{font-size:11px;color:#94a3b8;margin-top:12px;line-height:1.5}"
+           "@media print{body{padding:0}}")
+
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Advanced Laboratory Eligibility Report</title>"
+        f"<style>{css}</style></head><body>"
+        "<div class='hd'><div>"
+        f"<div class='name'>{S(p.get('patient_name'))}</div>"
+        f"<div class='sub2'>DOB {S(p.get('dob'))} &middot; {S(pm.get('payer'))} &middot; Member {S(p.get('member_id'))}</div>"
+        f"</div><div style='text-align:right'><div class='dec' style='color:{dec_col}'>{S(dec)}</div>"
+        f"<div class='dos'>Date of service {S(meta.get('date_of_service'))}</div></div></div>"
+        f"<div style='font-size:13px;font-weight:700'>Advanced Laboratory Eligibility Report</div>{conn}"
+        + card("1 &middot; Patient &amp; Subscriber Verification", kv([
+            ("Patient", S(p.get("patient_name"))), ("Date of birth", S(p.get("dob"))),
+            ("Subscriber", S(p.get("subscriber_name"))), ("Relationship", S(p.get("relationship"))),
+            ("Member ID", S(p.get("member_id"))), ("Group #", S(p.get("group_number"))),
+            ("Plan type", S(p.get("plan_type"))), ("Verification source", S(p.get("verification_source"))),
+            ("Verified at", S(p.get("verification_timestamp"))), ("Reference #", S(p.get("reference_number"))),
+        ]))
+        + card("2 &middot; Coverage Status (as of date of service)", kv([
+            ("Coverage status", S(c.get("coverage_status"))), ("Date of service", S(c.get("date_of_service"))),
+            ("Effective date", S(c.get("effective_date"))), ("Termination date", S(c.get("termination_date"))),
+            ("Primary / secondary", S(c.get("primary_secondary"))), ("Coordination of benefits", S(c.get("coordination_of_benefits"))),
+            ("Plan category", S(c.get("plan_category"))),
+        ]))
+        + card("3 &middot; Laboratory Benefits - CPT-level coverage", s3)
+        + card("4 &middot; Deductible / Copay / Coinsurance", s4)
+        + card("5 &middot; Policy Limitations &amp; Medical Necessity Flags", s5)
+        + card("6 &middot; Authorization Details", s6)
+        + card("7 &middot; Payer Contact &amp; Verification Metadata", kv([
+            ("Payer", S(pm.get("payer"))), ("Source / portal", S(pm.get("source"))),
+            ("Transaction type", S(pm.get("transaction_type"))), ("Verification agent", S(pm.get("verification_agent"))),
+            ("Response code", S(pm.get("response_code"))), ("Reference #", S(pm.get("reference_number"))),
+            ("Notes", S(pm.get("notes"))),
+        ]))
+        + card("8 &middot; Billing Readiness Summary (RCM go / no-go)", s8)
+        + f"<div class='foot'>{S(meta.get('disclaimer'))}</div>"
+        + "</body></html>")
 
 
 @router.get("/eligibility/check/{check_id}/raw")
