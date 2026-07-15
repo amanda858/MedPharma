@@ -43,6 +43,13 @@ class PVerifyProvider(EligibilityProvider):
     def supports_discovery(self) -> bool:
         return True
 
+    @property
+    def configured(self) -> bool:
+        """True only when real creds are set AND sandbox is off, so a
+        configured pVerify always performs a REAL call - it never returns a
+        mock/fabricated result on the live verify path."""
+        return bool(self.client_id and self.client_secret and not self.sandbox)
+
     # ── live HTTP plumbing (exercised only with real credentials) ──
     def _get_token(self) -> str:
         if self._token and time.time() < self._token_exp - 30:

@@ -5277,6 +5277,10 @@ ALLOWED_SETTING_KEYS = {
     "SENDGRID_API_KEY", "SENDGRID_FROM",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS",
     "NOTIFY_EMAILS", "EOD_REPORT_EMAIL",
+    # Real-time eligibility credentials, admin-pasted from the hub UI so no
+    # Render env / redeploy is needed. Fernet-encrypted at rest like the rest.
+    "STEDI_API_KEY", "STEDI_PROVIDER_NPI", "STEDI_PROVIDER_NAME", "STEDI_PAYER_ID",
+    "PVERIFY_CLIENT_ID", "PVERIFY_CLIENT_SECRET",
 }
 
 

@@ -3378,7 +3378,96 @@ _ELIG_STATUS_MAP = {
 _ELIG_SOURCE_LABEL = {
     "stedi": "Stedi real-time",
     "hets": "CMS HETS (direct)",
+    "pverify": "pVerify real-time",
 }
+
+
+# ── Settings-aware eligibility credentials ────────────────────────────────
+# Real-time verification needs exactly ONE payer/clearinghouse credential.
+# Admins paste it straight into the hub UI (stored Fernet-encrypted in the
+# app_settings table) instead of editing Render env vars — so no redeploy and
+# no infrastructure access is required. We read the encrypted DB setting first,
+# then fall back to a server env var. One Stedi key covers real-time Medicare,
+# Medicaid AND commercial 270/271; pVerify covers commercial + Medicare; CMS
+# HETS is straight-Medicare direct. Every provider is honest-by-design: with no
+# credential it refuses and fabricates nothing.
+def _elig_cfg(key: str) -> str:
+    """Credential lookup: encrypted DB setting first, then server env var."""
+    try:
+        v = (get_app_setting(key) or "").strip()
+    except Exception:
+        v = ""
+    return v or (os.getenv(key, "") or "").strip()
+
+
+def _build_stedi_from_settings():
+    from eligibility_hybrid.stedi import StediProvider
+    return StediProvider(
+        api_key=_elig_cfg("STEDI_API_KEY"),
+        endpoint_url=_elig_cfg("STEDI_ENDPOINT_URL"),
+        payer_id=_elig_cfg("STEDI_PAYER_ID") or "CMS",
+        provider_npi=_elig_cfg("STEDI_PROVIDER_NPI"),
+        provider_name=_elig_cfg("STEDI_PROVIDER_NAME"),
+        forwarded_for=_elig_cfg("STEDI_FORWARDED_FOR"),
+    )
+
+
+def _build_hets_from_settings():
+    from eligibility_hybrid.hets import HETSProvider
+    return HETSProvider(
+        endpoint_url=_elig_cfg("HETS_ENDPOINT_URL"),
+        submitter_id=_elig_cfg("HETS_SUBMITTER_ID"),
+        username=_elig_cfg("HETS_USERNAME"),
+        password=_elig_cfg("HETS_PASSWORD"),
+        receiver_id=_elig_cfg("HETS_RECEIVER_ID") or "CMS",
+        payer_id=_elig_cfg("HETS_PAYER_ID"),
+        client_cert=_elig_cfg("HETS_CLIENT_CERT"),
+        client_key=_elig_cfg("HETS_CLIENT_KEY"),
+    )
+
+
+def _build_pverify_from_settings():
+    """pVerify for the LIVE verify path — real only (sandbox=False) so it never
+    returns a mock. Reports configured only when both creds are present."""
+    from eligibility_hybrid.pverify import PVerifyProvider
+    return PVerifyProvider(
+        client_id=_elig_cfg("PVERIFY_CLIENT_ID"),
+        client_secret=_elig_cfg("PVERIFY_CLIENT_SECRET"),
+        base_url=_elig_cfg("PVERIFY_BASE_URL") or "https://api.pverify.com",
+        sandbox=False,
+    )
+
+
+def _build_live_eligibility_provider():
+    """Best-configured REAL eligibility provider, reading admin-pasted DB creds
+    first then env. Preference: Stedi (self-serve; Medicare + Medicaid +
+    commercial) → pVerify (commercial + Medicare) → direct CMS HETS. Honest by
+    design: if nothing is configured it returns the unconfigured Stedi provider
+    so callers surface the fastest path and every provider refuses cleanly."""
+    stedi = _build_stedi_from_settings()
+    if stedi.configured:
+        return stedi
+    pverify = _build_pverify_from_settings()
+    if getattr(pverify, "configured", False):
+        return pverify
+    hets = _build_hets_from_settings()
+    if hets.configured:
+        return hets
+    return stedi
+
+
+def _elig_source_flags() -> dict:
+    """Which real sources are configured right now (never returns secrets)."""
+    try:
+        stedi_ok = bool(_build_stedi_from_settings().configured)
+    except Exception:
+        stedi_ok = False
+    try:
+        hets_ok = bool(_build_hets_from_settings().configured)
+    except Exception:
+        hets_ok = False
+    pverify_ok = bool(_elig_cfg("PVERIFY_CLIENT_ID") and _elig_cfg("PVERIFY_CLIENT_SECRET"))
+    return {"stedi": stedi_ok, "hets": hets_ok, "pverify": pverify_ok}
 
 
 # ── Auto-verify explainer: real 271 + policy → plain-English coverage story ────
@@ -3591,12 +3680,12 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
     payer_name = (rec.get("Payor") or "").strip()
 
     try:
-        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+        from eligibility_hybrid import PatientRequest
     except Exception as e:  # pragma: no cover
         return {"ok": False, "configured": False, "changed": False,
                 "error": f"engine unavailable: {e}"}
 
-    provider = build_eligibility_provider()
+    provider = _build_live_eligibility_provider()
     first, last = _split_patient_name(rec.get("PatientName"))
     req = PatientRequest(
         first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
@@ -3604,8 +3693,8 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         payer_name=payer_name or "Medicare",
         cpt_codes=cpts,
         service_type_codes=["30", "5"],
-        provider_npi=os.getenv("HETS_PROVIDER_NPI") or os.getenv("STEDI_PROVIDER_NPI", ""),
-        provider_name=os.getenv("HETS_PROVIDER_NAME") or os.getenv("STEDI_PROVIDER_NAME", ""),
+        provider_npi=_elig_cfg("STEDI_PROVIDER_NPI") or _elig_cfg("HETS_PROVIDER_NPI"),
+        provider_name=_elig_cfg("STEDI_PROVIDER_NAME") or _elig_cfg("HETS_PROVIDER_NAME"),
     )
 
     # ── No live payer source: run the MedPharma rule-intercept coverage review ──
@@ -4122,7 +4211,7 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
     """
     _require_user(hub_session)
     try:
-        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+        from eligibility_hybrid import PatientRequest
         from eligibility_hybrid.policy import is_traditional_medicare
     except Exception as e:  # pragma: no cover
         raise HTTPException(503, f"Eligibility engine unavailable: {e}")
@@ -4144,13 +4233,13 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
         service_type_codes=["30", "5"],
         # The lab's OWN NPI — per-call value wins, else one-time server config.
         provider_npi=((prov.npi or "").strip()
-                      or os.getenv("HETS_PROVIDER_NPI")
-                      or os.getenv("STEDI_PROVIDER_NPI", "")),
-        provider_name=(os.getenv("HETS_PROVIDER_NAME")
-                       or os.getenv("STEDI_PROVIDER_NAME", "")),
+                      or _elig_cfg("STEDI_PROVIDER_NPI")
+                      or _elig_cfg("HETS_PROVIDER_NPI")),
+        provider_name=(_elig_cfg("STEDI_PROVIDER_NAME")
+                       or _elig_cfg("HETS_PROVIDER_NAME")),
     )
 
-    provider = build_eligibility_provider()
+    provider = _build_live_eligibility_provider()
     if not provider.configured:
         return {
             "eligibility_status": "UNKNOWN",
@@ -10416,24 +10505,19 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
     """
     _require_full_admin(hub_session)
 
-    # -- The REAL board Verify path: Stedi -> CMS HETS (what verifies patients) --
-    stedi_configured = hets_configured = False
-    verify_source = None
-    try:
-        from eligibility_hybrid import build_stedi_provider, build_hets_provider
-        stedi_configured = bool(build_stedi_provider().configured)
-        hets_configured = bool(build_hets_provider().configured)
-    except Exception:
-        pass
-    if stedi_configured:
-        verify_source = "stedi"
-    elif hets_configured:
-        verify_source = "hets"
-    verify_live = bool(stedi_configured or hets_configured)
+    # -- The REAL board Verify path: Stedi -> pVerify -> CMS HETS -------------
+    # Credentials are read DB-first (admin-pasted, encrypted) then env, so the
+    # board can go live with no redeploy the moment a key is saved in the hub.
+    flags = _elig_source_flags()
+    stedi_configured = flags["stedi"]
+    hets_configured = flags["hets"]
+    pverify = flags["pverify"]
 
-    # -- The pre-analytical gate/batch review path: optional pVerify -----------
-    # (the free Stedi provider above is the gate tool's real-time fallback).
-    pverify = bool(os.environ.get("PVERIFY_CLIENT_ID") and os.environ.get("PVERIFY_CLIENT_SECRET"))
+    prov = _build_live_eligibility_provider()
+    verify_live = bool(getattr(prov, "configured", False))
+    verify_source = getattr(prov, "name", None) if verify_live else None
+
+    # -- The pre-analytical gate/batch review path ---------------------------
     sandbox = _elig_is_sandbox()
     review_live = (not sandbox) and (pverify or stedi_configured)
 
@@ -10441,18 +10525,19 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
     next_step = None
     if not verify_live:
         next_step = (
-            "Create a Stedi account, generate an API key, and set STEDI_API_KEY "
-            "+ STEDI_PROVIDER_NPI (and STEDI_PROVIDER_NAME) in the server "
-            "environment. That turns on real-time Medicare & commercial 270/271 "
-            "on the Verify button in minutes \u2014 no multi-week enrollment."
+            "Paste a Stedi API key + your provider NPI in the connection box "
+            "below (or set STEDI_API_KEY + STEDI_PROVIDER_NPI in the server "
+            "environment). One Stedi key turns on real-time Medicare, Medicaid "
+            "and commercial 270/271 on the Verify button in minutes \u2014 no "
+            "multi-week enrollment and no redeploy."
         )
 
     missing = []
     if not verify_live:
         missing.append(
-            "A real-time verify source \u2014 fastest is Stedi (STEDI_API_KEY, "
-            "STEDI_PROVIDER_NPI); or direct CMS HETS (HETS_ENDPOINT_URL, "
-            "HETS_SUBMITTER_ID + credentials)."
+            "A real-time verify source \u2014 fastest is a Stedi API key (paste "
+            "it in the hub, no redeploy); or pVerify commercial credentials; or "
+            "direct CMS HETS (HETS_ENDPOINT_URL, HETS_SUBMITTER_ID + creds)."
         )
     missing.append(
         "A signed BAA with the clearinghouse/CMS before real patient PHI is "
@@ -10500,23 +10585,23 @@ def admin_eligibility_self_test(body: EligSelfTestIn,
     """
     _require_full_admin(hub_session)
     try:
-        from eligibility_hybrid import build_eligibility_provider, PatientRequest
+        from eligibility_hybrid import PatientRequest
     except Exception as e:  # pragma: no cover
         return {"ok": False, "live": False, "error": f"engine unavailable: {e}"}
 
-    provider = build_eligibility_provider()
+    provider = _build_live_eligibility_provider()
     src = getattr(provider, "name", "eligibility")
     if not provider.configured:
         return {
             "ok": True, "live": False, "configured": False, "source": src,
             "message": ("No real-time payer source is connected yet, so there is "
-                        "nothing to fabricate. Add STEDI_API_KEY + "
-                        "STEDI_PROVIDER_NPI (+ STEDI_PROVIDER_NAME) to the server "
-                        "environment — self-serve at portal.stedi.com in minutes — "
-                        "then run this test again for a real 271."),
-            "next_step": ("Set STEDI_API_KEY, STEDI_PROVIDER_NPI and "
-                          "STEDI_PROVIDER_NAME in the Render environment, redeploy, "
-                          "then click Test connection again."),
+                        "nothing to fabricate. Paste a Stedi API key + your "
+                        "provider NPI in the connection box below (self-serve at "
+                        "portal.stedi.com in minutes) and click Save, then run this "
+                        "test again for a real 271 - no redeploy needed."),
+            "next_step": ("Paste STEDI_API_KEY + STEDI_PROVIDER_NPI (and provider "
+                          "name) into the hub connection box and click Save, then "
+                          "click Test connection again."),
         }
 
     req = PatientRequest(
@@ -10528,11 +10613,11 @@ def admin_eligibility_self_test(body: EligSelfTestIn,
         payer_id=(body.payer_id or "").strip() or None,
         service_type_codes=["30"],
         provider_npi=((body.npi or "").strip()
-                      or os.getenv("STEDI_PROVIDER_NPI")
-                      or os.getenv("HETS_PROVIDER_NPI", "")),
+                      or _elig_cfg("STEDI_PROVIDER_NPI")
+                      or _elig_cfg("HETS_PROVIDER_NPI")),
         provider_name=((body.provider_name or "").strip()
-                       or os.getenv("STEDI_PROVIDER_NAME")
-                       or os.getenv("HETS_PROVIDER_NAME", "")),
+                       or _elig_cfg("STEDI_PROVIDER_NAME")
+                       or _elig_cfg("HETS_PROVIDER_NAME")),
     )
     try:
         result = provider.verify(req)
@@ -10559,6 +10644,73 @@ def admin_eligibility_self_test(body: EligSelfTestIn,
         "raw_request": raw.get("x12_270") or raw.get("request_json") or "",
         "raw_271": raw.get("x12_271") or "",
     }
+
+
+class EligCredsIn(BaseModel):
+    stedi_api_key: Optional[str] = None
+    stedi_provider_npi: Optional[str] = None
+    stedi_provider_name: Optional[str] = None
+    stedi_payer_id: Optional[str] = None
+    pverify_client_id: Optional[str] = None
+    pverify_client_secret: Optional[str] = None
+
+
+@router.get("/admin/eligibility/credentials")
+def admin_eligibility_credentials_get(hub_session: Optional[str] = Cookie(None)):
+    """Report which eligibility credentials are set (never the secret values)."""
+    _require_full_admin(hub_session)
+    flags = _elig_source_flags()
+    return {
+        "ok": True,
+        "stedi_configured": flags["stedi"],
+        "pverify_configured": flags["pverify"],
+        "fields": {
+            "stedi_api_key": bool(_elig_cfg("STEDI_API_KEY")),
+            "stedi_provider_npi": bool(_elig_cfg("STEDI_PROVIDER_NPI")),
+            "stedi_provider_name": bool(_elig_cfg("STEDI_PROVIDER_NAME")),
+            "stedi_payer_id": bool(_elig_cfg("STEDI_PAYER_ID")),
+            "pverify_client_id": bool(_elig_cfg("PVERIFY_CLIENT_ID")),
+            "pverify_client_secret": bool(_elig_cfg("PVERIFY_CLIENT_SECRET")),
+        },
+    }
+
+
+@router.post("/admin/eligibility/credentials")
+def admin_eligibility_credentials_save(body: EligCredsIn,
+                                       hub_session: Optional[str] = Cookie(None)):
+    """Save (or clear) real-time eligibility credentials from the hub UI.
+
+    Stored Fernet-encrypted in app_settings - no Render env / redeploy needed.
+    An empty string clears a key; null leaves it unchanged. Admin-only. The
+    secret values themselves are never echoed back.
+    """
+    admin = _require_full_admin(hub_session)
+    mapping = {
+        "STEDI_API_KEY":         body.stedi_api_key,
+        "STEDI_PROVIDER_NPI":    body.stedi_provider_npi,
+        "STEDI_PROVIDER_NAME":   body.stedi_provider_name,
+        "STEDI_PAYER_ID":        body.stedi_payer_id,
+        "PVERIFY_CLIENT_ID":     body.pverify_client_id,
+        "PVERIFY_CLIENT_SECRET": body.pverify_client_secret,
+    }
+    saved, cleared = [], []
+    for key, raw_val in mapping.items():
+        if raw_val is None:
+            continue
+        val = (raw_val or "").strip()
+        if not set_app_setting(key, val, updated_by=admin.get("username", "")):
+            raise HTTPException(400, f"Could not save {key}")
+        (saved if val else cleared).append(key)
+    try:
+        log_audit(None, admin.get("username", ""),
+                  "eligibility_credentials_update", "app_settings", None,
+                  f"saved={saved} cleared={cleared}")
+    except Exception:
+        pass
+    flags = _elig_source_flags()
+    return {"ok": True, "saved": saved, "cleared": cleared,
+            "stedi_configured": flags["stedi"],
+            "pverify_configured": flags["pverify"]}
 
 
 def _elig_num(v) -> float:
