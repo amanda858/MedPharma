@@ -3852,11 +3852,13 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
                              data.get("VerifiedBy"), data.get("VerifiedDate"))
     data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
     eid = create_eligibility(data)
-    # Real-time auto-verify runs only when the BILLING TEAM adds a record.
-    # Eligibility clients (e.g. Spirit Health / David) may UPLOAD / intake patients
-    # but never RUN the check — their uploads wait for a biller/admin to verify.
-    if user["role"] in ("admin", "staff"):
-        _auto_verify_async(eid)
+    # Real-time auto-verify on EVERY upload — including eligibility clients
+    # (Spirit Health / David, PCR), not just the billing team. The engine is
+    # honest: with no live payer source connected it records a "pending
+    # connection" summary plus offline service / ABN policy and fabricates
+    # nothing, so running it the instant a patient is uploaded is safe and gives
+    # immediate coverage information.
+    _auto_verify_async(eid)
     notify_activity(user["username"], "created", "Eligibility",
                     f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
     return {"id": eid, "ok": True}
@@ -3900,15 +3902,17 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
         the raw request + 271 in eligibility_checks as immutable audit evidence.
     """
     user = _require_user(hub_session)
-    # Running a real coverage check is a billing-team action (admin, Eric, billers).
-    # Eligibility clients like Spirit Health may upload records but not run checks.
-    if user["role"] not in ("admin", "staff"):
-        raise HTTPException(403, "Eligibility checks are run by the billing team "
-                                 "(admin, Eric or a biller). You can upload records "
-                                 "— a biller will run the check.")
     rec = get_eligibility_one(rid)
     if not rec:
         raise HTTPException(404, "Eligibility record not found")
+    # The billing team (admin, Eric, billers) may run any account's check. An
+    # eligibility client such as Spirit Health / David or PCR may run a check on
+    # THEIR OWN account's patients — so the moment they upload a patient they can
+    # pull real-time coverage themselves instead of waiting on a biller.
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            raise HTTPException(403, "You can only run eligibility for your own "
+                                     "account’s patients.")
 
     res = _verify_and_record(rec, actor_label="Manual",
                              actor_username=user.get("username", ""))
@@ -3938,14 +3942,15 @@ def verify_all_elig(client_id: Optional[int] = None,
     connected, records get a clear 'pending connection' summary + offline service /
     ABN policy — nothing fabricated. Runs in the background; refresh the board."""
     user = _require_user(hub_session)
-    # Board-wide verification is a billing-team action; clients upload but never run.
-    if user["role"] not in ("admin", "staff"):
-        raise HTTPException(403, "Eligibility checks are run by the billing team "
-                                 "(admin, Eric or a biller). You can upload records "
-                                 "— a biller will run the check.")
-    scope = client_id or _client_scope(user)
+    scope = client_id or _client_scope(user) or _client_account_id(user)
     if not scope:
         raise HTTPException(400, "client_id required")
+    # The billing team may sweep any account; an eligibility client (Spirit
+    # Health / David, PCR) may sweep THEIR OWN account's board — real-time
+    # coverage on everything they just uploaded.
+    if user["role"] not in ("admin", "staff"):
+        if int(scope) not in set(_doc_account_ids(user)):
+            raise HTTPException(403, "You can only run eligibility for your own account.")
     recs = get_eligibility(scope)
 
     def _work():
@@ -5753,22 +5758,30 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
     billing_activity = {
         "this_week": {"count": 0, "charged": 0.0},
         "all_time": {"count": 0, "charged": 0.0},
+        "undated": {"count": 0, "charged": 0.0},
         "week_start": _this_monday_iso,
         "week_end": (_this_monday + _ba_td(days=4)).isoformat(),
     }
+    # Every billed line counts toward All-Time Billed. A claim with no usable bill
+    # date is STILL billed — it can't be placed in a week, so it lands in the
+    # "undated" bucket instead of being dropped, keeping All-Time = Billed Out.
     ba_sql = (f"SELECT BillDate, ChargeAmount FROM claims_master "
-              f"WHERE client_id=?{sp_clause} AND COALESCE(BillDate,'')!=''")
+              f"WHERE client_id=?{sp_clause}")
     for r in conn.execute(ba_sql, [client_id] + sp_params).fetchall():
+        amt = float(r["ChargeAmount"] or 0)
+        billing_activity["all_time"]["count"] += 1
+        billing_activity["all_time"]["charged"] += amt
         bd = str(r["BillDate"] or "").strip()[:10]
         try:
             d = _ba_date.fromisoformat(bd)
         except Exception:
+            d = None
+        if d is None:
+            billing_activity["undated"]["count"] += 1
+            billing_activity["undated"]["charged"] += amt
             continue
-        amt = float(r["ChargeAmount"] or 0)
-        # All-time billed since inception — every billed claim line.
-        billing_activity["all_time"]["count"] += 1
-        billing_activity["all_time"]["charged"] += amt
-        # Bucket into its calendar work week (Mon–Fri); weekend dates are ignored.
+        # Bucket into its calendar work week (Mon–Fri); weekend dates stay in
+        # all_time but show in no weekday bar.
         if d.weekday() <= 4:
             wm = (d - _ba_td(days=d.weekday())).isoformat()
             slot = _week_acc.get(wm)
@@ -5780,6 +5793,7 @@ def _build_section_data(conn, client_id, sub_profile=None, period=None):
                     billing_activity["this_week"]["charged"] += amt
     billing_activity["all_time"]["charged"] = round(billing_activity["all_time"]["charged"], 2)
     billing_activity["this_week"]["charged"] = round(billing_activity["this_week"]["charged"], 2)
+    billing_activity["undated"]["charged"] = round(billing_activity["undated"]["charged"], 2)
     # Calendar-week breakdown (oldest → newest), each with its Mon–Fri range.
     _bw_list = []
     for _w in range(_WEEK_COUNT - 1, -1, -1):

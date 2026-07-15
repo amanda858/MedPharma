@@ -4694,12 +4694,13 @@
     // Role helpers
     function isStaffOrAdmin() { return currentUser && (currentUser.role === 'admin' || currentUser.role === 'staff'); }
 
-    // Running an eligibility check (a real payer 270/271) is a BILLING-TEAM action:
-    // the admin (me), Eric, and the billers — Susan, Melissa, Jessica, Maria — who
-    // are all staff/admin. Eligibility clients such as Spirit Health (David) may
-    // UPLOAD / intake patients but never RUN the check; a biller runs it for them.
+    // Running an eligibility check (a real payer 270/271) is done by the BILLING
+    // TEAM (admin, Eric, the billers) AND by the eligibility client on their own
+    // board — Spirit Health (David), PCR — so the moment they upload a patient
+    // they can pull real-time coverage themselves. The engine stays honest: with
+    // no live payer source it says "pending connection" and fabricates nothing.
     // Enforced again server-side on /eligibility/{id}/verify + /verify-all.
-    function _canRunEligibility() { return isStaffOrAdmin(); }
+    function _canRunEligibility() { return isStaffOrAdmin() || _isEligibilityOnly(); }
 
     // A login is "eligibility-only" when it's a client login whose modules include
     // 'eligibility' but NOT the billing dashboard ('claims'/'dashboard'). Such logins
@@ -6410,7 +6411,15 @@
               <div style="display:flex;align-items:flex-end;gap:6px;height:92px;padding:0 2px">${_bars}</div>
             </div>`;
         }
-        baEl.innerHTML = _tiles + _byWeekHtml;
+        const _un = ba.undated || { count: 0, charged: 0 };
+        const _undatedHtml = ((_un.charged || 0) > 0 || (_un.count || 0) > 0)
+          ? `<div style="margin-top:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center">
+              <div><div style="font-size:13px;font-weight:700;color:#9a3412">No bill date · Rolling A/R</div>
+              <div style="font-size:11px;color:#c2410c;margin-top:2px">Billed, but no calendar date yet — still counts in All-Time Billed &amp; Billed Out</div></div>
+              <div style="text-align:right"><div style="font-size:18px;font-weight:700;color:#9a3412">$${fmt(_un.charged)}</div>
+              <div style="font-size:11px;color:#c2410c">${_un.count} line${_un.count === 1 ? '' : 's'}</div></div>
+            </div>` : '';
+        baEl.innerHTML = _tiles + _undatedHtml + _byWeekHtml;
       }
 
       // Data Summary, AR Aging and Claims-by-Status were removed per admin: the
@@ -8862,7 +8871,15 @@
               <th style="text-align:right;padding:6px 12px;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Lines</th>
               <th style="text-align:right;padding:6px 12px;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase">Billed</th>
             </tr></thead><tbody>${_rows}</tbody></table>` : '';
-        baEl.innerHTML = _tiles + _tbl;
+        const _un = ba.undated || { count: 0, charged: 0 };
+        const _undatedHtml = ((_un.charged || 0) > 0 || (_un.count || 0) > 0)
+          ? `<div style="margin-top:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center">
+              <div><div style="font-size:13px;font-weight:700;color:#9a3412">No bill date · Rolling A/R</div>
+              <div style="font-size:11px;color:#c2410c;margin-top:2px">Billed, no calendar date yet — still in All-Time Billed</div></div>
+              <div style="text-align:right"><div style="font-size:18px;font-weight:700;color:#9a3412">$${fmt(_un.charged)}</div>
+              <div style="font-size:11px;color:#c2410c">${_un.count} claim${_un.count === 1 ? '' : 's'}</div></div>
+            </div>` : '';
+        baEl.innerHTML = _tiles + _undatedHtml + _tbl;
       }
 
       const claimStatusData = (cl.by_status || []).map(s => ({ label: s.status, value: s.count }));

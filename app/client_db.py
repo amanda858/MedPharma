@@ -432,7 +432,88 @@ def _apply_startup_user_migrations(conn):
     _ensure_medpharma_team_accounts(cur)
     _ensure_bizdev_account(cur)
     _reparent_misfiled_claims(cur)
+    _ensure_eligibility_team_chat(cur)
     conn.commit()
+
+
+def _ensure_eligibility_team_chat(cur):
+    """Guarantee every eligibility board has a Team Chat room whose members are
+    the account's assigned users plus the full admins — so eligibility clients
+    such as Spirit Health (David) always have a working chat instead of an empty
+    list.
+
+    Targets accounts that carry the eligibility module OR already hold eligibility
+    records. Idempotent: reuses an existing non-DM room tied to the account and
+    only ever ADDS members (INSERT OR IGNORE). Wrapped so it can never break
+    startup."""
+    try:
+        acct_ids: set[int] = set()
+        try:
+            for row in cur.execute(
+                "SELECT id FROM clients WHERE COALESCE(enabled_modules,'') LIKE '%eligibility%' "
+                "AND COALESCE(is_active,1)=1"
+            ).fetchall():
+                acct_ids.add(int(row[0]))
+        except Exception:
+            pass
+        try:
+            for row in cur.execute(
+                "SELECT DISTINCT client_id FROM eligibility WHERE client_id IS NOT NULL"
+            ).fetchall():
+                if row[0] is not None:
+                    acct_ids.add(int(row[0]))
+        except Exception:
+            pass
+        if not acct_ids:
+            return
+        admin_ids = [int(r[0]) for r in cur.execute(
+            "SELECT id FROM clients WHERE role='admin' AND COALESCE(is_active,1)=1"
+        ).fetchall()]
+        for cid in sorted(acct_ids):
+            arow = cur.execute(
+                "SELECT COALESCE(NULLIF(company,''), NULLIF(contact_name,''), username) "
+                "FROM clients WHERE id=? AND COALESCE(is_active,1)=1", (cid,)
+            ).fetchone()
+            if not arow:
+                continue
+            acct_name = (arow[0] or f"Account {cid}").strip()
+            # Members = the account-owner login + its granted users + full admins.
+            member_ids: set[int] = set(admin_ids)
+            member_ids.add(cid)
+            for r in cur.execute(
+                "SELECT user_id FROM client_user_access WHERE client_id=?", (cid,)
+            ).fetchall():
+                if r[0] is not None:
+                    member_ids.add(int(r[0]))
+            # Keep only active, real logins; a room needs >=2 people to converse.
+            member_ids = {
+                uid for uid in member_ids
+                if cur.execute("SELECT 1 FROM clients WHERE id=? AND COALESCE(is_active,1)=1",
+                               (uid,)).fetchone()
+            }
+            if len(member_ids) < 2:
+                continue
+            rr = cur.execute(
+                "SELECT id FROM chat_rooms WHERE client_id=? AND COALESCE(is_dm,0)=0 "
+                "ORDER BY id LIMIT 1", (cid,)
+            ).fetchone()
+            if rr:
+                room_id = int(rr[0])
+            else:
+                cur.execute(
+                    "INSERT INTO chat_rooms (name, description, client_id, created_by) "
+                    "VALUES (?,?,?,?)",
+                    (f"{acct_name} — Eligibility Team", "Eligibility team chat", cid, "system"),
+                )
+                room_id = int(cur.lastrowid)
+            for uid in member_ids:
+                cur.execute(
+                    "INSERT OR IGNORE INTO chat_room_members (room_id, user_id, role, added_by) "
+                    "VALUES (?,?,?,?)",
+                    (room_id, uid, "admin" if uid in admin_ids else "member", "system"),
+                )
+    except Exception as exc:  # never break startup
+        log.warning("ensure_eligibility_team_chat: %s (non-fatal)", exc)
 
 
 def _ensure_bizdev_account(cur):
@@ -4027,22 +4108,31 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
         billing_activity = {
             "this_week": {"count": 0, "charged": 0.0},
             "all_time": {"count": 0, "charged": 0.0},
+            "undated": {"count": 0, "charged": 0.0},
             "week_start": _this_monday_iso,
             "week_end": (_this_monday + timedelta(days=4)).isoformat(),
         }
-        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master
-                        {base_cond} {'AND' if base_cond else 'WHERE'} COALESCE(BillDate,'') != ''""", base_p)
+        # Every billed line counts toward All-Time Billed. A claim with no usable
+        # bill date is STILL billed — it just can't be placed in a calendar week,
+        # so it lands in the "undated" bucket instead of being dropped. This keeps
+        # All-Time Billed equal to Billed Out (no billed dollars ever disappear).
+        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master {base_cond}""", base_p)
         for _bd_raw, _amt_raw in cur.fetchall():
+            _amt = float(_amt_raw or 0)
+            billing_activity["all_time"]["count"] += 1
+            billing_activity["all_time"]["charged"] += _amt
             _bd = str(_bd_raw or "").strip()[:10]
             try:
                 _d = date.fromisoformat(_bd)
             except (ValueError, TypeError):
+                _d = None
+            if _d is None:
+                # No usable bill date — still billed, just unschedulable to a week.
+                billing_activity["undated"]["count"] += 1
+                billing_activity["undated"]["charged"] += _amt
                 continue
-            _amt = float(_amt_raw or 0)
-            # All-time billed since inception — every billed claim line.
-            billing_activity["all_time"]["count"] += 1
-            billing_activity["all_time"]["charged"] += _amt
-            # Bucket into its calendar work week (Mon–Fri); weekend dates are ignored.
+            # Bucket into its calendar work week (Mon–Fri); weekend dates stay in
+            # all_time but show in no weekday bar.
             if _d.weekday() <= 4:
                 _wm = (_d - timedelta(days=_d.weekday())).isoformat()
                 _slot = _week_acc.get(_wm)
@@ -4054,6 +4144,7 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
                         billing_activity["this_week"]["charged"] += _amt
         billing_activity["all_time"]["charged"] = round(billing_activity["all_time"]["charged"], 2)
         billing_activity["this_week"]["charged"] = round(billing_activity["this_week"]["charged"], 2)
+        billing_activity["undated"]["charged"] = round(billing_activity["undated"]["charged"], 2)
         # Calendar-week breakdown (oldest → newest), each with its Mon–Fri range.
         _by_week = []
         for _w in range(_WEEK_COUNT - 1, -1, -1):
