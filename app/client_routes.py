@@ -68,6 +68,7 @@ from app.client_db import (
     get_team_activity_rollup,
     set_app_setting, get_app_setting, list_app_settings,
     ALLOWED_SETTING_KEYS,
+    get_reported_summary, set_reported_summary,
     list_leads, create_lead, update_lead,
     delete_lead, mark_lead_followed_up, list_leads_due_followup,
     restore_lead, list_deleted_leads, get_leads_pipeline,
@@ -6172,6 +6173,63 @@ def download_credentialing_template():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=credentialing_template.csv"}
     )
+
+
+# ─── Reported Summary (admin-entered, tivany-only) ────────────────────────────
+# The dedicated reporting login "tivany" (SV Diagnostics' reporting-only viewer)
+# shows an admin-entered "as reported" billing summary + payor breakdown. The
+# figures are attested by an admin (e.g. copied from the Optum portal) and stored
+# in the dedicated reported_summary table -- NEVER in claims_master -- so they can
+# never affect any other account's computed totals. Served only to the tivany
+# login (its own view) and to full admins (manage / verify).
+
+def _reported_summary_key_for(user: dict) -> Optional[str]:
+    """The reported-summary key this login may view as its OWN dashboard, or None.
+    Only the dedicated 'tivany' reporting login has one."""
+    for field in (user.get("username"), user.get("contact_name"), user.get("email")):
+        if not field:
+            continue
+        if str(field).strip().lower().split("@")[0] == "tivany":
+            return "tivany"
+    return None
+
+
+@router.get("/reported-summary")
+def reported_summary_self(hub_session: Optional[str] = Cookie(None)):
+    """Return the current login's own admin-entered reported summary (tivany only).
+    Every other user gets {summary: null}, so no other account is ever touched."""
+    user = _require_user(hub_session)
+    key = _reported_summary_key_for(user)
+    if not key:
+        return {"ok": True, "summary": None}
+    return {"ok": True, "summary": get_reported_summary(key) or None}
+
+
+class ReportedSummaryIn(BaseModel):
+    account: str = "tivany"
+    data: dict
+
+
+@router.get("/admin/reported-summary")
+def admin_reported_summary_get(account: str = Query("tivany"),
+                               hub_session: Optional[str] = Cookie(None)):
+    """Admin read-back of a stored reported summary (manage / verify)."""
+    _require_full_admin(hub_session)
+    key = (account or "").strip().lower() or "tivany"
+    return {"ok": True, "account": key, "summary": get_reported_summary(key) or None}
+
+
+@router.post("/admin/reported-summary")
+def admin_reported_summary_set(body: ReportedSummaryIn,
+                               hub_session: Optional[str] = Cookie(None)):
+    """Create / update / clear the tivany reported summary. Full admin only."""
+    user = _require_full_admin(hub_session)
+    key = (body.account or "").strip().lower() or "tivany"
+    if key != "tivany":
+        raise HTTPException(status_code=400, detail="Only the 'tivany' reported summary is supported")
+    if not set_reported_summary(key, body.data or {}, updated_by=user.get("username", "")):
+        raise HTTPException(status_code=500, detail="Failed to save reported summary")
+    return {"ok": True, "account": key, "summary": get_reported_summary(key) or None}
 
 
 # ─── Client Report ────────────────────────────────────────────────────────────

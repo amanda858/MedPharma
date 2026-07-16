@@ -2244,6 +2244,22 @@
                lives on the Team Production tab, and the full (editable) Client
                Profile has its own dedicated "Client Profile" tab. -->
 
+          <!-- Reported Summary - admin-entered "as reported" figures for a single
+               reporting login (tivany). Hidden by default; loadReportedSummary()
+               shows it ONLY when the server returns THIS login's summary, so no
+               other account is ever affected. Deliberately NOT tagged
+               data-module-section so the module gating leaves it alone. -->
+          <div class="card" id="reportedSummaryCard" style="margin-bottom:18px;border-left:4px solid #7c3aed;display:none">
+            <div class="card-header">
+              <div class="card-title">Reported Summary <span id="reportedSummaryLabel" style="font-weight:500;color:var(--gray-500);font-size:12px"></span></div>
+              <div style="font-size:11px;color:var(--gray-500)" id="reportedSummaryAsOf"></div>
+            </div>
+            <div style="padding:8px 16px 0;font-size:11px;color:#7c3aed;font-weight:600">
+              Manually entered, as reported - not computed from hub claims.
+            </div>
+            <div id="reportedSummaryBody" style="padding:8px 16px 16px"></div>
+          </div>
+
           <!-- Claims Out — the billing production view the team monitors:
                Billed Out (claims sent out the door) and Paid/Posted (collected
                money). Visible to every user, scoped to their data. -->
@@ -6058,6 +6074,108 @@
         const d = await r.json();
         renderDashboard(d);
       } catch (e) { console.error(e); }
+      loadReportedSummary();
+    }
+
+    // Reported Summary - admin-entered "as reported" figures shown ONLY to the
+    // dedicated reporting login (tivany). The server returns a summary only for
+    // that login; everyone else gets null and the card stays hidden, so no other
+    // account is ever touched. These figures are manually entered / attested and
+    // are NOT computed from hub claims.
+    function _rsMoney(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return '-';
+      return '$' + fmt(n);
+    }
+
+    function loadReportedSummary() {
+      const card = document.getElementById('reportedSummaryCard');
+      if (!card) return;
+      fetch('/hub/api/reported-summary', { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(j => {
+          const s = j && j.summary;
+          if (!s) { card.style.display = 'none'; return; }
+          renderReportedSummary(s);
+          card.style.display = '';
+        })
+        .catch(() => { card.style.display = 'none'; });
+    }
+
+    function renderReportedSummary(s) {
+      const labelEl = document.getElementById('reportedSummaryLabel');
+      const asOfEl = document.getElementById('reportedSummaryAsOf');
+      const body = document.getElementById('reportedSummaryBody');
+      if (!body) return;
+      const t = s.totals || {};
+      if (labelEl) labelEl.textContent = s.account_label ? '· ' + s.account_label : '';
+      const range = (s.date_start && s.date_end) ? (s.date_start + ' to ' + s.date_end) : '';
+      if (asOfEl) asOfEl.textContent = [range ? 'Range ' + range : '', s.as_of ? 'As of ' + s.as_of : ''].filter(Boolean).join(' · ');
+
+      // Headline tiles
+      const tileDefs = [];
+      if (t.billed != null) {
+        const flag = s.billed_needs_confirm
+          ? '<div style="font-size:10px;font-weight:700;color:#b45309;margin-top:3px">CONFIRM EXACT FIGURE</div>' : '';
+        tileDefs.push({ big: _rsMoney(t.billed), sub: 'Total billed (reported)', extra: flag, color: 'var(--primary)' });
+      }
+      if (t.line_items != null) tileDefs.push({ big: fmt(t.line_items), sub: 'Line items', color: 'var(--gray-600)' });
+      if (t.pending_optum != null) tileDefs.push({ big: _rsMoney(t.pending_optum), sub: 'Pending - Optum', color: '#b45309' });
+      if (t.paid_posted != null) tileDefs.push({ big: _rsMoney(t.paid_posted), sub: 'Paid & posted', color: 'var(--success)' });
+      if (t.avg_turnaround) tileDefs.push({ big: esc(String(t.avg_turnaround)), sub: 'Avg turnaround', color: 'var(--gray-600)' });
+      const tiles = tileDefs.map(d => `
+          <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:20px;font-weight:700;color:${d.color}">${d.big}</div>
+            ${d.extra || ''}
+            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">${d.sub}</div>
+          </div>`).join('');
+      const tilesHtml = tiles
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">${tiles}</div>` : '';
+
+      // Reissue / not-rectified status line
+      const bits = [];
+      if (s.under_reissue_total != null) bits.push(`Under reissue <b>${_rsMoney(s.under_reissue_total)}</b>`);
+      if (s.not_rectified != null) bits.push(`Not yet rectified <b>${_rsMoney(s.not_rectified)}</b>`);
+      const statusHtml = bits.length
+        ? `<div style="margin-top:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:10px 14px;font-size:13px;color:#9a3412">${bits.join(' &nbsp;·&nbsp; ')}</div>` : '';
+
+      // Payor breakdown with computed %
+      const payors = (Array.isArray(s.payors) ? s.payors.slice() : [])
+        .map(p => ({ name: String(p.name || ''), amount: Number(p.amount) || 0 }))
+        .sort((a, b) => b.amount - a.amount);
+      let payHtml = '';
+      if (payors.length) {
+        const paySum = payors.reduce((a, p) => a + p.amount, 0) || 1;
+        const rows = payors.map(p => {
+          const pct = (p.amount / paySum) * 100;
+          return `<tr>
+              <td style="padding:6px 8px;border-bottom:1px solid var(--gray-100)">${esc(p.name)}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid var(--gray-100);text-align:right">${_rsMoney(p.amount)}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid var(--gray-100);text-align:right;color:var(--gray-500)">${pct.toFixed(1)}%</td>
+            </tr>`;
+        }).join('');
+        payHtml = `<div style="margin-top:16px">
+            <div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-bottom:6px">Payor breakdown (by billed amount)</div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr>
+                <th style="text-align:left;padding:6px 8px;color:var(--gray-500);font-size:11px;text-transform:uppercase">Payor</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--gray-500);font-size:11px;text-transform:uppercase">Billed</th>
+                <th style="text-align:right;padding:6px 8px;color:var(--gray-500);font-size:11px;text-transform:uppercase">% of mix</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr>
+                <td style="padding:6px 8px;font-weight:700;border-top:2px solid var(--gray-200)">Total</td>
+                <td style="padding:6px 8px;text-align:right;font-weight:700;border-top:2px solid var(--gray-200)">${_rsMoney(paySum)}</td>
+                <td style="padding:6px 8px;text-align:right;font-weight:700;border-top:2px solid var(--gray-200)">100.0%</td>
+              </tr></tfoot>
+            </table>
+          </div>`;
+      }
+
+      const noteHtml = s.note
+        ? `<div style="margin-top:12px;font-size:12px;color:var(--gray-500)">${esc(String(s.note))}</div>` : '';
+
+      body.innerHTML = tilesHtml + statusHtml + payHtml + noteHtml;
     }
 
     // Upload a posted-payments / ERA deposit file. Records deposits into the

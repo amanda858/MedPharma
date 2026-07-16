@@ -1388,6 +1388,18 @@ def init_client_hub_db():
             updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- ── Reported summary (admin-entered "as reported" figures, per account) ──
+        -- A manually-entered billing summary + payor breakdown for a single
+        -- reporting login (e.g. 'tivany'). Kept FULLY SEPARATE from claims_master
+        -- so these attested figures can never affect any other account's computed
+        -- totals. Editable by full admins only; each row is one reporting account.
+        CREATE TABLE IF NOT EXISTS reported_summary (
+            key         TEXT PRIMARY KEY,
+            data_json   TEXT NOT NULL DEFAULT '{}',
+            updated_by  TEXT DEFAULT '',
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- ── Client access grants (which staff/admin users can open a given client) ──
         -- Used by /accounts to filter the selector for staff users.
         -- Admins always see every client regardless of rows here.
@@ -5341,6 +5353,63 @@ def get_app_setting(key: str) -> str:
             return ""
     finally:
         conn.close()
+
+
+def get_reported_summary(key: str) -> dict:
+    """Return the admin-entered 'reported summary' JSON for one reporting account
+    (e.g. 'tivany'), or {} if none. This is manually-entered, as-reported data kept
+    entirely separate from claims_master so it never affects any computed totals."""
+    import json as _json
+    k = (key or "").strip().lower()
+    if not k:
+        return {}
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT data_json FROM reported_summary WHERE key=?", (k,)
+        ).fetchone()
+        if not row or not row[0]:
+            return {}
+        try:
+            return _json.loads(row[0]) or {}
+        except Exception:
+            return {}
+    finally:
+        conn.close()
+
+
+def set_reported_summary(key: str, data: dict, updated_by: str = "") -> bool:
+    """Upsert the admin-entered reported summary JSON for one reporting account.
+    An empty/None data dict deletes the row."""
+    import json as _json
+    k = (key or "").strip().lower()
+    if not k:
+        return False
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        if not data:
+            cur.execute("DELETE FROM reported_summary WHERE key=?", (k,))
+            conn.commit()
+            return True
+        payload = _json.dumps(data, separators=(",", ":"))
+        cur.execute(
+            "INSERT INTO reported_summary (key, data_json, updated_by, updated_at) "
+            "VALUES (?,?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "data_json=excluded.data_json, updated_by=excluded.updated_by, "
+            "updated_at=CURRENT_TIMESTAMP",
+            (k, payload, updated_by or ""),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        log.exception("set_reported_summary failed for key=%s", key)
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def list_app_settings() -> dict:
