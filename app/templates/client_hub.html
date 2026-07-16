@@ -6119,9 +6119,9 @@
           ? '<div style="font-size:10px;font-weight:700;color:#b45309;margin-top:3px">CONFIRM EXACT FIGURE</div>' : '';
         tileDefs.push({ big: _rsMoney(t.billed), sub: 'Total billed (reported)', extra: flag, color: 'var(--primary)' });
       }
-      if (t.line_items != null) tileDefs.push({ big: fmt(t.line_items), sub: 'Line items', color: 'var(--gray-600)' });
       if (t.pending_optum != null) tileDefs.push({ big: _rsMoney(t.pending_optum), sub: 'Pending - Optum', color: '#b45309' });
       if (t.paid_posted != null) tileDefs.push({ big: _rsMoney(t.paid_posted), sub: 'Paid & posted', color: 'var(--success)' });
+      if (t.adjustments != null) tileDefs.push({ big: _rsMoney(t.adjustments), sub: 'Adjustments', color: 'var(--gray-600)' });
       if (t.avg_turnaround) tileDefs.push({ big: esc(String(t.avg_turnaround)), sub: 'Avg turnaround', color: 'var(--gray-600)' });
       const tiles = tileDefs.map(d => `
           <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
@@ -6175,7 +6175,23 @@
       const noteHtml = s.note
         ? `<div style="margin-top:12px;font-size:12px;color:var(--gray-500)">${esc(String(s.note))}</div>` : '';
 
-      body.innerHTML = tilesHtml + statusHtml + payHtml + noteHtml;
+      // Posting Payments report (attached export) - summary totals only, no line items
+      let postingHtml = '';
+      const pp = s.posting_payments;
+      if (pp) {
+        const ppRange = (pp.date_start && pp.date_end) ? (pp.date_start + ' to ' + pp.date_end) : '';
+        postingHtml = `<div style="margin-top:18px;border-top:1px solid var(--gray-200);padding-top:14px">
+            <div style="font-size:13px;font-weight:700;color:var(--gray-700,#374151)">${esc(pp.title || 'Posting Payments report')}</div>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:2px">${ppRange ? 'Posting date range ' + esc(ppRange) : ''}${pp.report_date ? ' &middot; Report date ' + esc(String(pp.report_date)) : ''}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:10px">
+              ${pp.payments_total != null ? `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--success)">${_rsMoney(pp.payments_total)}</div><div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">Payments posted</div></div>` : ''}
+              ${pp.adjustments_total != null ? `<div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--gray-600)">${_rsMoney(pp.adjustments_total)}</div><div style="font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;margin-top:6px">Adjustments</div></div>` : ''}
+            </div>
+            ${pp.note ? `<div style="margin-top:8px;font-size:12px;color:var(--gray-500)">${esc(String(pp.note))}</div>` : ''}
+          </div>`;
+      }
+
+      body.innerHTML = tilesHtml + statusHtml + payHtml + postingHtml + noteHtml;
     }
 
     // Upload a posted-payments / ERA deposit file. Records deposits into the
