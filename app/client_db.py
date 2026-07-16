@@ -7916,6 +7916,15 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         if client_id and not self_scope:
             ar_conditions.append("client_id=?")
             ar_p.append(client_id)
+        if self_scope:
+            # Personal Rolling A/R must cover the SAME claims as this biller's
+            # Billed Out (uploads_total), which keys on an EXACT
+            # uploaded_by = hub-username match. Filtering identically here (rather
+            # than on looser name aliases, which pulled in rows uploaded under a
+            # bare first name and inflated A/R past Billed Out) keeps A/R inside
+            # the Billed-Out universe so it can never exceed it.
+            ar_conditions.append("LOWER(TRIM(uploaded_by))=LOWER(?)")
+            ar_p.append(self_user)
         ar_cond = "WHERE " + " AND ".join(ar_conditions)
         cur.execute(
             f"SELECT TRIM(COALESCE(Owner,'')) AS owner, "
@@ -7932,27 +7941,17 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                     continue  # current-window DOS — not rolling backlog
             except (ValueError, TypeError):
                 pass  # blank / unparseable DOS counts as legacy backlog
+            _bal = float(r["bal"] or 0)
             if self_scope:
-                # My Numbers is a biller's OWN uploaded work - Submitted, Paid and
-                # Denied are all uploaded_by-scoped - so personal Rolling A/R must
-                # count the SAME claims (the ones this biller uploaded) and nothing
-                # they merely own. Matching uploaded_by only keeps the A/R universe
-                # identical to Billed Out; a claim they own but did not upload is
-                # not part of their Billed Out, so counting its balance here is
-                # exactly what pushed A/R above Billed Out ("$262k A/R on $260k
-                # billed"). Then cap each claim at its own charge so a balance-only
-                # backlog import (blank / understated ChargeAmount) can't inflate
-                # A/R past what was billed either. Together these guarantee a
-                # biller's Rolling A/R reconciles to - and never exceeds - Billed Out.
-                uploader_l = str(r["uploader"] or "").strip().lower()
-                if (uploader_l != self_user.lower()
-                        and uploader_l not in self_identities):
-                    continue
-                _bal = float(r["bal"] or 0)
+                # uploaded_by scope is already applied in SQL above (matching
+                # Billed Out exactly). Cap each claim at its own charge so a
+                # balance-only backlog import (a blank / understated
+                # ChargeAmount) can't push a biller's personal Rolling A/R above
+                # their Billed Out, so A/R always reconciles to (never exceeds) it.
                 _chg = float(r["charge"] or 0)
                 rolling_ar += min(_bal, _chg) if _chg > 0 else 0.0
             else:
-                rolling_ar += float(r["bal"] or 0)
+                rolling_ar += _bal
         rolling_ar = round(rolling_ar, 2)
 
         # ── Imported data attributed to each uploader ─────────────────────
