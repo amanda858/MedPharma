@@ -4182,11 +4182,15 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             "week_end": (_this_monday + timedelta(days=4)).isoformat(),
         }
         # Every billed line counts toward All-Time Billed. A claim with no usable
-        # bill date is STILL billed — it just can't be placed in a calendar week,
-        # so it lands in the "undated" bucket instead of being dropped. This keeps
-        # All-Time Billed equal to Billed Out (no billed dollars ever disappear).
-        cur.execute(f"""SELECT BillDate, ChargeAmount FROM claims_master {base_cond}""", base_p)
-        for _bd_raw, _amt_raw in cur.fetchall():
+        # bill date is STILL billed, so rather than orphan it in an "undated"
+        # bucket that reads $0, fall back to the day it was worked: the upload
+        # (created) date first, then the service date. That keeps All-Time Billed
+        # equal to Billed Out AND lets today's uploads show up in THIS week, so
+        # the weekly chart never hides real billing behind a blank Bill Date.
+        cur.execute(
+            f"""SELECT BillDate, ChargeAmount, created_at, DOS
+                  FROM claims_master {base_cond}""", base_p)
+        for _bd_raw, _amt_raw, _created_raw, _dos_raw in cur.fetchall():
             _amt = float(_amt_raw or 0)
             billing_activity["all_time"]["count"] += 1
             billing_activity["all_time"]["charged"] += _amt
@@ -4196,7 +4200,10 @@ def get_dashboard(client_id: int = None, sub_profile: str = None,
             except (ValueError, TypeError):
                 _d = None
             if _d is None:
-                # No usable bill date — still billed, just unschedulable to a week.
+                # No explicit Bill Date - use the upload date, then DOS, so the
+                # claim still lands in a work week instead of vanishing to $0.
+                _d = _parse_any_date(_created_raw) or _parse_any_date(_dos_raw)
+            if _d is None:
                 billing_activity["undated"]["count"] += 1
                 billing_activity["undated"]["charged"] += _amt
                 continue
@@ -7926,21 +7933,25 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 pass  # blank / unparseable DOS counts as legacy backlog
             if self_scope:
                 # A biller's own rolling A/R is the still-open balance on the
-                # claims they brought in (uploaded) OR were assigned as Owner.
-                # Imported claims usually have a blank Owner, so matching only on
-                # Owner made an upload-driven biller show $0 A/R. Match the
-                # uploader too so their real carried A/R shows.
+                # claims THEY brought in. Attribute each claim to exactly one
+                # biller: the uploader when the row carries an uploaded_by (the
+                # normal case for imported work), else fall back to the assigned
+                # Owner for legacy manually-keyed claims with no uploader. Doing
+                # it uploader-first (not uploader-OR-owner) stops a biller from
+                # also claiming balance on claims someone else uploaded, which had
+                # let personal Rolling A/R climb above personal Billed Out.
                 uploader_l = str(r["uploader"] or "").strip().lower()
                 owner_l = str(r["owner"] or "").strip().lower()
-                matched = False
-                if uploader_l and (uploader_l == self_user.lower()
-                                   or uploader_l in self_identities):
-                    matched = True
+                if uploader_l:
+                    if (uploader_l != self_user.lower()
+                            and uploader_l not in self_identities):
+                        continue
                 elif owner_l:
                     resolved_l = alias_to_user.get(owner_l, owner_l).lower()
-                    if owner_l in self_identities or resolved_l == self_user.lower():
-                        matched = True
-                if not matched:
+                    if (owner_l not in self_identities
+                            and resolved_l != self_user.lower()):
+                        continue
+                else:
                     continue
             rolling_ar += float(r["bal"] or 0)
         rolling_ar = round(rolling_ar, 2)
