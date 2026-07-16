@@ -7921,7 +7921,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             f"SELECT TRIM(COALESCE(Owner,'')) AS owner, "
             f"       TRIM(COALESCE(uploaded_by,'')) AS uploader, "
             f"       substr(COALESCE(DOS,''),1,10) AS dos, "
-            f"       COALESCE(BalanceRemaining,0) AS bal "
+            f"       COALESCE(BalanceRemaining,0) AS bal, "
+            f"       COALESCE(ChargeAmount,0) AS charge "
             f"FROM claims_master {ar_cond}", ar_p)
         for r in cur.fetchall():
             dos_raw = str(r["dos"] or "").strip()
@@ -7953,7 +7954,18 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                         continue
                 else:
                     continue
-            rolling_ar += float(r["bal"] or 0)
+                # Outstanding A/R on a claim can't exceed what was billed on it.
+                # Some legacy backlog rows were imported balance-only (a blank or
+                # understated ChargeAmount), which let summed balances float
+                # ABOVE the biller's own Billed Out and read as "$262k A/R on
+                # $260k billed" - which makes no sense. Cap each claim at its own
+                # charge so a biller's personal Rolling A/R always reconciles to
+                # (and never exceeds) their Billed Out.
+                _bal = float(r["bal"] or 0)
+                _chg = float(r["charge"] or 0)
+                rolling_ar += min(_bal, _chg) if _chg > 0 else 0.0
+            else:
+                rolling_ar += float(r["bal"] or 0)
         rolling_ar = round(rolling_ar, 2)
 
         # ── Imported data attributed to each uploader ─────────────────────
