@@ -7912,6 +7912,7 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         ar_cond = "WHERE " + " AND ".join(ar_conditions)
         cur.execute(
             f"SELECT TRIM(COALESCE(Owner,'')) AS owner, "
+            f"       TRIM(COALESCE(uploaded_by,'')) AS uploader, "
             f"       substr(COALESCE(DOS,''),1,10) AS dos, "
             f"       COALESCE(BalanceRemaining,0) AS bal "
             f"FROM claims_master {ar_cond}", ar_p)
@@ -7924,11 +7925,22 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             except (ValueError, TypeError):
                 pass  # blank / unparseable DOS counts as legacy backlog
             if self_scope:
+                # A biller's own rolling A/R is the still-open balance on the
+                # claims they brought in (uploaded) OR were assigned as Owner.
+                # Imported claims usually have a blank Owner, so matching only on
+                # Owner made an upload-driven biller show $0 A/R. Match the
+                # uploader too so their real carried A/R shows.
+                uploader_l = str(r["uploader"] or "").strip().lower()
                 owner_l = str(r["owner"] or "").strip().lower()
-                if not owner_l:
-                    continue
-                resolved_l = alias_to_user.get(owner_l, owner_l).lower()
-                if owner_l not in self_identities and resolved_l != self_user.lower():
+                matched = False
+                if uploader_l and (uploader_l == self_user.lower()
+                                   or uploader_l in self_identities):
+                    matched = True
+                elif owner_l:
+                    resolved_l = alias_to_user.get(owner_l, owner_l).lower()
+                    if owner_l in self_identities or resolved_l == self_user.lower():
+                        matched = True
+                if not matched:
                     continue
             rolling_ar += float(r["bal"] or 0)
         rolling_ar = round(rolling_ar, 2)

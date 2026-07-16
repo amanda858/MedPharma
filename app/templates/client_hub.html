@@ -6275,19 +6275,28 @@
       const titleEl = document.getElementById('myNumbersTitle');
       if (!body) return;
       const byUser = d.by_user || [];
-      const billedCount = d.billed_total_count != null ? d.billed_total_count
-        : byUser.reduce((s, u) => s + (u.claims_billed || 0), 0);
-      const billedAmount = d.billed_total_amount != null ? d.billed_total_amount
-        : byUser.reduce((s, u) => s + (u.claims_billed_amount || 0), 0);
-      const paidAmount = d.paid_total_amount != null ? d.paid_total_amount
-        : (d.payments_total_amount != null ? d.payments_total_amount
-            : byUser.reduce((s, u) => s + (u.claims_paid_amount || u.payments_amount || 0), 0));
-      const deniedCount = d.denied_total_count != null ? d.denied_total_count
-        : byUser.reduce((s, u) => s + (u.claims_denied || 0), 0);
+      // Claims this biller SUBMITTED = the daily claim rows they actually
+      // uploaded - this is exactly what the account dashboard counts as "Billed
+      // Out". The old status-based billed_total stays 0 in the team's upload
+      // workflow, so show the real uploaded-claim numbers (fall back to billed
+      // only if uploads are absent).
+      const submittedCount = d.uploads_total_count != null ? d.uploads_total_count
+        : (d.billed_total_count != null ? d.billed_total_count
+            : byUser.reduce((s, u) => s + (u.claims_uploaded || u.claims_billed || 0), 0));
+      const submittedAmount = d.uploads_total_amount != null ? d.uploads_total_amount
+        : (d.billed_total_amount != null ? d.billed_total_amount
+            : byUser.reduce((s, u) => s + (u.claims_uploaded_amount || u.claims_billed_amount || 0), 0));
+      // Paid/Posted = the actual ERA payments this biller posted. The claim-level
+      // "Paid status" field stays 0 in this workflow, so use the posted payments.
       const postedCount = d.payments_total_count != null ? d.payments_total_count
         : byUser.reduce((s, u) => s + (u.payments_posted || 0), 0);
+      const paidAmount = d.payments_total_amount != null ? d.payments_total_amount
+        : (d.paid_total_amount != null ? d.paid_total_amount
+            : byUser.reduce((s, u) => s + (u.payments_amount || u.claims_paid_amount || 0), 0));
+      const deniedCount = d.denied_total_count != null ? d.denied_total_count
+        : byUser.reduce((s, u) => s + (u.claims_denied || 0), 0);
       const rollingAr = Number(d.rolling_ar || 0);
-      const arCutoff = d.rolling_ar_cutoff || '2026-06-18';
+      const arCutoff = d.rolling_ar_cutoff || '2026-06-15';
       const scopeName = d.scope_username || (currentUser && (currentUser.contact_name || currentUser.username)) || '';
       if (titleEl) titleEl.textContent = `🧾 My Numbers${scopeName ? ' — ' + scopeName : ''}`;
       const money2 = v => '$' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -6301,7 +6310,7 @@
       body.style.textAlign = 'left';
       body.innerHTML = `
         <div style="display:flex;flex-wrap:wrap;gap:12px">
-          ${tile('Claims Submitted', billedCount, money2(billedAmount) + ' submitted', '#eff6ff', '#bfdbfe', '#1d4ed8', '#1e3a8a')}
+          ${tile('Claims Submitted', submittedCount, money2(submittedAmount) + ' submitted', '#eff6ff', '#bfdbfe', '#1d4ed8', '#1e3a8a')}
           ${tile('Paid/Posted', money2(paidAmount), postedCount + ' payment(s) posted', '#ecfdf5', '#a7f3d0', '#047857', '#065f46')}
           ${tile('Denied', deniedCount, 'claim(s) denied', '#fef2f2', '#fecaca', '#b91c1c', '#991b1b')}
           ${tile('Rolling AR', money2(rollingAr), 'open before ' + esc(arCutoff), '#f5f3ff', '#ddd6fe', '#6d28d9', '#5b21b6')}
