@@ -9503,7 +9503,7 @@ def import_stored_file_as_claims(file_id: int, hub_session: Optional[str] = Cook
     # file's synthesized Bill Date reflects when the work actually came in.
     received_date = str(rec.get("created_at") or "")[:10]
     try:
-        imported, import_errors = _import_claims_from_excel(
+        imported, import_errors = _import_claims_or_batch(
             content, ext, client_id, uploaded_by=uploader, received_date=received_date)
     except Exception as e:
         raise HTTPException(400, f"Import failed: {e}")
