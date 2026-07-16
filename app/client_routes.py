@@ -722,7 +722,14 @@ def _parse_svd_batch_sheets(content: bytes, ext: str) -> dict:
 
 
 def _import_svd_batch_gap(content: bytes, ext: str, client_id: int, uploaded_by: str = "") -> int:
-    """Post ONLY the *new* batches from an SVD DAILY batch-transmission log.
+    """DISABLED - DO NOT CALL. Kept only for reference. This posted SVD batch-log
+    batches as synthetic SVDBATCH-* claims, but the log's DATE is a clearinghouse
+    TRANSMISSION date while the per-claim register is keyed on SERVICE date (DOS),
+    so importing it double-counted claims the register already carries. It is no
+    longer wired into any import path (see _import_claims_or_batch, which skips
+    batch workbooks). Removing it entirely is a safe follow-up.
+
+    Post ONLY the *new* batches from an SVD DAILY batch-transmission log.
 
     The batch log restates, at a flat per-claim rate, submissions already itemized
     with their real charges in the per-claim register - so importing the whole log
