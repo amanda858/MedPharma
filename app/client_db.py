@@ -7933,34 +7933,21 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             except (ValueError, TypeError):
                 pass  # blank / unparseable DOS counts as legacy backlog
             if self_scope:
-                # A biller's own rolling A/R is the still-open balance on the
-                # claims THEY brought in. Attribute each claim to exactly one
-                # biller: the uploader when the row carries an uploaded_by (the
-                # normal case for imported work), else fall back to the assigned
-                # Owner for legacy manually-keyed claims with no uploader. Doing
-                # it uploader-first (not uploader-OR-owner) stops a biller from
-                # also claiming balance on claims someone else uploaded, which had
-                # let personal Rolling A/R climb above personal Billed Out.
+                # My Numbers is a biller's OWN uploaded work - Submitted, Paid and
+                # Denied are all uploaded_by-scoped - so personal Rolling A/R must
+                # count the SAME claims (the ones this biller uploaded) and nothing
+                # they merely own. Matching uploaded_by only keeps the A/R universe
+                # identical to Billed Out; a claim they own but did not upload is
+                # not part of their Billed Out, so counting its balance here is
+                # exactly what pushed A/R above Billed Out ("$262k A/R on $260k
+                # billed"). Then cap each claim at its own charge so a balance-only
+                # backlog import (blank / understated ChargeAmount) can't inflate
+                # A/R past what was billed either. Together these guarantee a
+                # biller's Rolling A/R reconciles to - and never exceeds - Billed Out.
                 uploader_l = str(r["uploader"] or "").strip().lower()
-                owner_l = str(r["owner"] or "").strip().lower()
-                if uploader_l:
-                    if (uploader_l != self_user.lower()
-                            and uploader_l not in self_identities):
-                        continue
-                elif owner_l:
-                    resolved_l = alias_to_user.get(owner_l, owner_l).lower()
-                    if (owner_l not in self_identities
-                            and resolved_l != self_user.lower()):
-                        continue
-                else:
+                if (uploader_l != self_user.lower()
+                        and uploader_l not in self_identities):
                     continue
-                # Outstanding A/R on a claim can't exceed what was billed on it.
-                # Some legacy backlog rows were imported balance-only (a blank or
-                # understated ChargeAmount), which let summed balances float
-                # ABOVE the biller's own Billed Out and read as "$262k A/R on
-                # $260k billed" - which makes no sense. Cap each claim at its own
-                # charge so a biller's personal Rolling A/R always reconciles to
-                # (and never exceeds) their Billed Out.
                 _bal = float(r["bal"] or 0)
                 _chg = float(r["charge"] or 0)
                 rolling_ar += min(_bal, _chg) if _chg > 0 else 0.0
