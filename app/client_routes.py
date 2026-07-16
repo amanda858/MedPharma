@@ -51,6 +51,7 @@ from app.client_db import (
     list_sharefile_links, add_sharefile_link, delete_sharefile_link,
     create_job, append_job_event, set_job_running, update_job_progress,
     complete_job, fail_job, get_job, list_jobs, reset_job_for_retry,
+    clear_finished_jobs,
     _load_clients_seed,
     list_rooms_for_user, get_room, create_room, update_room, delete_room,
     list_room_members, add_room_member, remove_room_member,
@@ -5728,6 +5729,20 @@ def jobs_retry(job_id: str, hub_session: Optional[str] = Cookie(None)):
     append_job_event(job_id, "queued", f"Retry requested by {user.get('username', '')}")
     _start_production_report_job(job_id, user)
     return {"ok": True, "job_id": job_id, "status": "queued"}
+
+
+@router.post("/jobs/clear")
+def jobs_clear(hub_session: Optional[str] = Cookie(None)):
+    """Dismiss finished (done/error) jobs so the Recent Jobs badge does not stay
+    stuck on an old failed import. Running/queued jobs are always preserved.
+    Admin/Eric clear the whole account view; everyone else clears only the jobs
+    they created themselves."""
+    user = _require_user(hub_session)
+    if user.get("role") == "admin" or _is_eric(user):
+        cleared = clear_finished_jobs(account_id=_client_scope(user))
+    else:
+        cleared = clear_finished_jobs(created_by=user.get("username", ""))
+    return {"ok": True, "cleared": cleared}
 
 
 @router.get("/production/report")

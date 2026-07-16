@@ -7391,6 +7391,35 @@ def reset_job_for_retry(job_id: str) -> dict | None:
     return get_job(job_id)
 
 
+def clear_finished_jobs(account_id: int = None, created_by: str = None) -> int:
+    """Delete finished (done/error) jobs so a stale failed import stops showing
+    as a stuck alert badge. Running and queued jobs are always preserved. Scoped
+    by account and/or by the job creator; also removes their job_events."""
+    ids: list = []
+    conn = get_db()
+    try:
+        _ensure_jobs_tables(conn)
+        cond = ["status IN ('done', 'error')"]
+        params: list = []
+        if account_id is not None:
+            cond.append("account_id=?")
+            params.append(account_id)
+        if created_by:
+            cond.append("created_by=?")
+            params.append(created_by)
+        where = " AND ".join(cond)
+        ids = [r[0] for r in conn.execute(
+            f"SELECT id FROM jobs WHERE {where}", params).fetchall()]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM job_events WHERE job_id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", ids)
+            conn.commit()
+    finally:
+        conn.close()
+    return len(ids)
+
+
 # ─── Team Production ──────────────────────────────────────────────────────
 
 def list_production_logs(client_id: int = None, start_date: str = None, end_date: str = None, username: str = None):

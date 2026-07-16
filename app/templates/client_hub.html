@@ -2083,6 +2083,7 @@
         <div style="font-weight:700;color:var(--gray-800)">Recent Jobs</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span id="jobsDrawerMeta" style="font-size:11px;color:var(--gray-500)"></span>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px" onclick="clearFinishedJobs()" title="Dismiss finished and failed jobs">Clear</button>
           <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px" onclick="loadGlobalJobsStatus(true)">Refresh</button>
         </div>
       </div>
@@ -5103,6 +5104,16 @@
       `).join('');
     }
 
+    // Dismiss finished (done/error) jobs so an old failed import stops showing as
+    // a stuck red badge. Running/queued jobs are preserved by the server.
+    async function clearFinishedJobs() {
+      try {
+        await fetch('/hub/api/jobs/clear', { method: 'POST', credentials: 'same-origin' });
+      } catch (_) { /* best-effort */ }
+      globalJobsCache = (globalJobsCache || []).filter(j => j.status === 'running' || j.status === 'queued');
+      loadGlobalJobsStatus(true);
+    }
+
     function toggleJobsDrawer(forceOpen = false) {
       const drawer = document.getElementById('jobsDrawer');
       if (!drawer) return;
@@ -6394,9 +6405,12 @@
 
       // My Numbers — biller self-view. Show only for team billers (staff who are
       // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
+      // For billers, "My Numbers" is their single production report, so the
+      // account-level Billed Out KPI and Claims Out card below are hidden to
+      // avoid repeating the same billed-out figure in several places.
+      const isBiller = currentUser && currentUser.role === 'staff' && !canViewReporting();
       const myNumbersCard = document.getElementById('myNumbersCard');
       if (myNumbersCard) {
-        const isBiller = currentUser && currentUser.role === 'staff' && !canViewReporting();
         myNumbersCard.style.display = isBiller ? '' : 'none';
         if (isBiller) loadMyNumbers();
       }
@@ -6418,13 +6432,17 @@
         { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
       ];
 
-      document.getElementById('kpiGrid').innerHTML = kpis.map(k => `
+      const _kpiGrid = document.getElementById('kpiGrid');
+      _kpiGrid.innerHTML = kpis.map(k => `
     <div class="kpi-card ${k.color}"${k.title ? ` title="${k.title}"` : ''}>
       <div style="font-size:22px;margin-bottom:8px">${k.icon}</div>
       <div class="kpi-value">${k.val}</div>
       <div class="kpi-label">${k.label}</div>
     </div>
   `).join('');
+      // Billers see their own Billed Out inside "My Numbers"; hide the duplicate
+      // account KPI so the same figure is not repeated on their dashboard.
+      _kpiGrid.style.display = isBiller ? 'none' : '';
 
       // Claims Out — the billing view: Billed Out (what the team sent out the
       // door) and Posted (collected money). No denial/rework bucket: this is a
@@ -6442,7 +6460,10 @@
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
       const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
-      if (cbCard) cbCard.style.display = cbHasData ? '' : 'none';
+      // Hidden for billers: "My Numbers" already shows their Billed Out, and the
+      // New-vs-Rolling split just repeats the same total when they have no new
+      // (post-cutoff) claims. Admin/Eric/clients still see the full Claims Out card.
+      if (cbCard) cbCard.style.display = (cbHasData && !isBiller) ? '' : 'none';
       if (cbEl && cbHasData) {
         // Per-member Billed Out — credits each biller with the full charges from
         // the files they submitted (uploaded_by). Rows sum exactly to Billed Out.
@@ -6487,7 +6508,13 @@
           </div>`
         ) : '';
         const bs = d.billed_split || null;
-        const splitLine = (adminView && bs && !members.length && ((bs.new && bs.new.amount) || (bs.rolling_ar && bs.rolling_ar.amount))) ? (
+        // Only show the New-vs-Rolling split when BOTH sides are non-zero (a real
+        // mix). If every claim is on one side, the split just repeats Billed, and
+        // a "New Claims $0" tile next to the full billed total reads as a
+        // contradiction, so it is suppressed.
+        const _bsNew = (bs && bs.new && bs.new.amount) || 0;
+        const _bsRoll = (bs && bs.rolling_ar && bs.rolling_ar.amount) || 0;
+        const splitLine = (adminView && bs && !members.length && _bsNew > 0 && _bsRoll > 0) ? (
           `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;border-top:1px solid var(--gray-200);padding-top:14px">
              <div style="background:var(--gray-50);border-radius:10px;padding:12px 14px;text-align:center;border-top:3px solid var(--success)">
                <div style="font-size:20px;font-weight:800;color:${(bs.new.amount) > 0 ? 'var(--success)' : 'var(--gray-400)'}">$${fmt(bs.new.amount)}</div>
@@ -6549,8 +6576,10 @@
       const _twRange = _wkRange(ba.week_start, ba.week_end);
       const baCard = document.getElementById('dashBilledActivityCard');
       const baEl = document.getElementById('dashBilledActivity');
+      // Billers get their single "My Numbers" scorecard; the account-level weekly
+      // Billed Activity repeats the same billed total, so hide it for them.
       const baHasData = (_at.count || _at.charged || _weeks.some(w => w.count || w.charged));
-      if (baCard) baCard.style.display = baHasData ? '' : 'none';
+      if (baCard) baCard.style.display = (baHasData && !isBiller) ? '' : 'none';
       if (baEl && baHasData) {
         const _tiles = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
             <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
