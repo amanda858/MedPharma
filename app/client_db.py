@@ -7910,6 +7910,7 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         # (or with no usable DOS). This is the carried-forward A/R that isn't
         # part of current-period production — surfaced as one rolling figure.
         rolling_ar = 0.0
+        _rar_dbg = {"ver": "exactmatch-cap-v1", "n": 0, "raw": 0.0, "capped": 0.0}
         ar_cutoff = _rolling_ar_cutoff_date()
         ar_conditions = ["COALESCE(BalanceRemaining,0) > 0"]
         ar_p = []
@@ -7949,10 +7950,14 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
                 # ChargeAmount) can't push a biller's personal Rolling A/R above
                 # their Billed Out, so A/R always reconciles to (never exceeds) it.
                 _chg = float(r["charge"] or 0)
+                _rar_dbg["n"] += 1
+                _rar_dbg["raw"] += _bal
                 rolling_ar += min(_bal, _chg) if _chg > 0 else 0.0
             else:
                 rolling_ar += _bal
         rolling_ar = round(rolling_ar, 2)
+        _rar_dbg["raw"] = round(_rar_dbg["raw"], 2)
+        _rar_dbg["capped"] = rolling_ar
 
         # ── Imported data attributed to each uploader ─────────────────────
         # When a user uploads a claims / credentialing / enrollment / EDI
@@ -8160,6 +8165,7 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         "paid_total_amount": round(sum(float(u.get("claims_paid_amount") or 0) for u in by_user), 2),
         "rolling_ar": rolling_ar,
         "rolling_ar_cutoff": _ROLLING_AR_DOS_CUTOFF,
+        "rolling_ar_debug": _rar_dbg,
         "scope_username": self_user or None,
         "is_self_view": self_scope,
         "denial_recovery": denial_recovery,
