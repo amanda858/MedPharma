@@ -795,12 +795,15 @@ def _import_claims_or_batch(content: bytes, ext: str, client_id: int, uploaded_b
                             default_sub_profile: str = "", received_date: str = ""):
     """Route an uploaded claims file to the correct importer.
 
-    An SVD DAILY batch-transmission log restates the per-claim register, so it goes
-    through the gap importer (posts only new batches, no double-count). Everything
-    else is a real per-claim register and goes through the standard importer."""
+    An SVD DAILY batch-transmission log is a flat-rate recap of submissions already
+    itemized in the per-claim register, and its DATE column is the clearinghouse
+    TRANSMISSION date - not the SERVICE date (DOS) the register is keyed on. Those
+    two date axes cannot be reconciled by date without double-counting claims the
+    register already carries by service date, so the batch log is skipped (imported
+    as 0 rows) until a per-claim reconciliation rule is defined with the team.
+    Everything else is a real per-claim register and imports normally."""
     if _is_svd_batch_workbook(content, ext):
-        n = _import_svd_batch_gap(content, ext, int(client_id), uploaded_by=uploaded_by)
-        return n, []
+        return 0, []
     return _import_claims_from_excel(
         content, ext, int(client_id), uploaded_by=uploaded_by,
         default_sub_profile=default_sub_profile, received_date=received_date)
@@ -2346,6 +2349,38 @@ def admin_diag_backups_keep(file: str, hub_session: Optional[str] = Cookie(None)
     dest = os.path.join(backup_dir, base if base.startswith("KEEP_") else f"KEEP_{base}")
     shutil.copy2(src, dest)
     return {"ok": True, "preserved": os.path.basename(dest), "size_bytes": os.path.getsize(dest)}
+
+
+@router.post("/admin/diag/purge-svd-batch")
+def admin_diag_purge_svd_batch(client_id: Optional[int] = None, hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: remove the synthetic SVDBATCH-* claim rows.
+
+    A short-lived experiment posted the SVD DAILY batch-transmission log as
+    synthetic 'SVDBATCH-<client>-<batch#>' claims. Because the log's DATE is a
+    clearinghouse transmission date (not the register's service date), those rows
+    double-counted billing already carried by the per-claim register. This deletes
+    every such synthetic row so only genuine per-claim claims remain. Optional
+    client_id scopes it to one account; omitted purges all accounts. Only ever
+    touches rows whose ClaimKey starts with 'SVDBATCH-' - real claims are never
+    affected. Returns the number of rows removed."""
+    _require_full_admin(hub_session)
+    from .client_db import get_db
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if client_id is not None:
+            n = cur.execute(
+                "DELETE FROM claims_master WHERE client_id=? "
+                "AND COALESCE(ClaimKey,'') LIKE 'SVDBATCH-%'",
+                (int(client_id),)).rowcount
+        else:
+            n = cur.execute(
+                "DELETE FROM claims_master WHERE COALESCE(ClaimKey,'') LIKE 'SVDBATCH-%'"
+            ).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "removed": int(n or 0), "client_id": client_id}
 
 
 @router.post("/admin/diag/rebuild-client-claims")
@@ -9268,23 +9303,11 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
                         # register) — importing it double-bills, so never sweep it in.
                         continue
                     if _is_batch_transmission_log(headers) or _is_svd_batch_workbook(content, ext):
-                        # SVD DAILY collective transmission recap -- the overlap with
-                        # the per-claim register is already counted, so post ONLY the
-                        # newer gap batches (billed work recorded nowhere else),
-                        # idempotent by batch number. Never falls through to the
-                        # generic importer, which would misparse the summary.
-                        gap_n = _import_svd_batch_gap(
-                            content, ext, int(r["client_id"]),
-                            uploaded_by=str(r["uploaded_by"] or ""))
-                        if gap_n:
-                            files_done += 1
-                            rows_done += gap_n
-                            try:
-                                update_file_record(int(r["id"]),
-                                                   {"category": "Claims", "status": "Imported"},
-                                                   int(r["client_id"]))
-                            except Exception:
-                                pass
+                        # SVD DAILY collective transmission recap -- the same claims as
+                        # the per-claim register. Its DATE is a clearinghouse
+                        # transmission date, not the register's service date (DOS), so
+                        # it cannot be reconciled by date without double-counting.
+                        # Skipped by design until a reconciliation rule is defined.
                         continue
                     if not _claims_structural_match(headers)["is_claims"]:
                         inferred, _dbg = _infer_excel_category(
