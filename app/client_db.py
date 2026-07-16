@@ -8126,16 +8126,18 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         conn.close()
 
     if self_scope:
-        # A biller's personal Rolling A/R is what they billed out but have not
-        # collected yet. Deriving it from the two trusted figures shown right
-        # beside it - Billed Out minus Payments Posted - keeps it reconciled: it
-        # can never exceed Billed Out and it ties out on screen. The raw imported
-        # balance backlog is not used for the personal figure because negative
-        # ChargeAmount adjustments in the import can push that balance sum past
-        # Billed Out, which is exactly the "A/R over Billed Out" nonsense we fix.
+        # Rolling A/R is the still-open balance on the claims THIS biller
+        # uploaded - specific to their own data. The rolling loop above already
+        # summed BalanceRemaining over this biller's uploaded_by claims. Cap it at
+        # their own Billed Out so stray negative-ChargeAmount adjustment rows in
+        # the import can't push their A/R above what they billed (A/R can never
+        # exceed billed). The account-wide payment posting is deliberately NOT
+        # subtracted here: deposits/ERA are not attributed to one biller's
+        # uploaded claims, so netting them against a single biller's billed would
+        # misstate their own A/R.
         _billed_self = round(sum(float(u.get("claims_uploaded_amount") or 0) for u in by_user), 2)
-        _paid_self = round(sum(float(u.get("payments_amount") or 0) for u in by_user), 2)
-        rolling_ar = round(max(0.0, _billed_self - _paid_self), 2)
+        if _billed_self > 0:
+            rolling_ar = round(min(rolling_ar, _billed_self), 2)
 
     return {
         "by_user": by_user,
