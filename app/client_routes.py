@@ -621,6 +621,191 @@ def _is_svd_batch_workbook(content: bytes, ext: str) -> bool:
             pass
 
 
+def _parse_svd_batch_sheets(content: bytes, ext: str) -> dict:
+    """Read every batch-summary sheet of an SVD DAILY workbook into
+    {batch_number: {"date": "YYYY-MM-DD", "count": int, "billed": float}}.
+
+    Each row of a batch-summary sheet is one clearinghouse transmission
+    (DATE / BATCH # / NUMBER OF CLAIMS / TOTAL BILLED / CLEARINGHOUSE). A workbook
+    can carry several such sheets (one tab per month), so this scans them all and
+    keys by batch number - the last occurrence wins, letting a re-sent batch
+    update its figures. Subtotal / label rows and rows without a batch number or a
+    positive billed amount are skipped."""
+    out: dict = {}
+    if (ext or "").lower() not in (".xlsx", ".xlsm"):
+        return out
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        return out
+
+    def _num(x):
+        try:
+            return float(str(x).replace(",", "").replace("$", "").strip())
+        except Exception:
+            return 0.0
+
+    def _iso(x):
+        if x is None:
+            return ""
+        if hasattr(x, "date"):
+            try:
+                return x.date().isoformat()
+            except Exception:
+                pass
+        s = str(x).strip()
+        if not s:
+            return ""
+        from datetime import datetime as _dt
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y"):
+            try:
+                return _dt.strptime(s[:10], fmt).date().isoformat()
+            except Exception:
+                continue
+        return s[:10]
+
+    try:
+        for sn in wb.sheetnames:
+            ws = wb[sn]
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                continue
+            hdr_i = None
+            for i, row in enumerate(rows[:8]):
+                cells = [str(c).strip().lower() for c in row if c is not None and str(c).strip()]
+                if any("batch" in c for c in cells) and any("billed" in c for c in cells):
+                    hdr_i = i
+                    break
+            if hdr_i is None:
+                continue
+            hdr = [str(c).strip().lower() if c is not None else "" for c in rows[hdr_i]]
+
+            def _col(pred):
+                for j, h in enumerate(hdr):
+                    if pred(h):
+                        return j
+                return -1
+
+            di = _col(lambda h: h == "date" or h.startswith("date") or h.endswith(" date"))
+            bi = _col(lambda h: "batch" in h)
+            ci = _col(lambda h: "claim" in h and any(t in h for t in ("numer", "number", "no", "of", "#", "count")))
+            ti = _col(lambda h: "billed" in h)
+            if bi < 0 or ti < 0:
+                continue
+            last_date = ""
+            for row in rows[hdr_i + 1:]:
+                if not row:
+                    continue
+                bnum_raw = row[bi] if bi < len(row) else None
+                bnum = str(bnum_raw).strip() if bnum_raw is not None else ""
+                if bnum.endswith(".0"):
+                    bnum = bnum[:-2]
+                if not bnum or bnum.lower() in ("total", "totals", "grand total", "batch", "batch #", "batch#"):
+                    continue
+                d = _iso(row[di]) if 0 <= di < len(row) else ""
+                if d:
+                    last_date = d
+                else:
+                    d = last_date
+                billed = _num(row[ti]) if 0 <= ti < len(row) else 0.0
+                cnt = int(_num(row[ci])) if 0 <= ci < len(row) else 0
+                if billed <= 0:
+                    continue
+                out[bnum] = {"date": d, "count": cnt, "billed": round(billed, 2)}
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+    return out
+
+
+def _import_svd_batch_gap(content: bytes, ext: str, client_id: int, uploaded_by: str = "") -> int:
+    """Post ONLY the *new* batches from an SVD DAILY batch-transmission log.
+
+    The batch log restates, at a flat per-claim rate, submissions already itemized
+    with their real charges in the per-claim register - so importing the whole log
+    double-bills. But when billing runs ahead of the register (the register stops
+    at date X while the log already lists batches for X+1..today), those newer
+    batches are billed work recorded NOWHERE else - which is why the dashboard
+    shows "zero new claims" after a daily upload. This posts exactly those gap
+    batches - dated strictly after the latest per-claim service date already on
+    file - so recent billing appears without double-counting the overlap. Each gap
+    batch becomes one Billed claim keyed SVDBATCH-<client>-<n>, so daily
+    re-uploads upsert in place (never duplicate), and any synthetic batch row that
+    a later real per-claim import comes to cover is removed so it can't linger and
+    double-count. Returns the number of gap batches imported."""
+    batches = _parse_svd_batch_sheets(content, ext)
+    if not batches:
+        return 0
+    from app.client_db import get_db as _get_db
+
+    # Coverage boundary = latest real per-claim service date already on file. Our
+    # own synthetic SVDBATCH rows are excluded so the boundary reflects only
+    # genuine per-claim data (otherwise it would creep past the gap and hide it).
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT MAX(substr(COALESCE(DOS,''),1,10)) FROM claims_master "
+            "WHERE client_id=? AND COALESCE(ClaimKey,'') NOT LIKE 'SVDBATCH-%' "
+            "AND length(TRIM(COALESCE(DOS,''))) >= 10",
+            (int(client_id),)).fetchone()
+        boundary = (row[0] or "") if row and row[0] else ""
+        # Self-heal: drop any synthetic batch rows a real per-claim import has now
+        # come to cover (the boundary moved forward), so they never linger and
+        # double-count. Only ever deletes SVDBATCH-keyed rows we created.
+        if boundary:
+            cur.execute(
+                "DELETE FROM claims_master WHERE client_id=? "
+                "AND COALESCE(ClaimKey,'') LIKE 'SVDBATCH-%' "
+                "AND length(TRIM(COALESCE(DOS,''))) >= 10 "
+                "AND substr(DOS,1,10) <= ?",
+                (int(client_id), boundary))
+            conn.commit()
+    finally:
+        conn.close()
+
+    gap = {b: v for b, v in batches.items()
+           if v["date"] and (not boundary or v["date"] > boundary)}
+    if not gap:
+        return 0
+
+    import csv as _csv
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["Claim Number", "Patient Name", "DOS", "Bill Date",
+                "Charge Amount", "Balance", "Claim Status"])
+    for bnum, v in sorted(gap.items()):
+        label = f"SVD Batch {bnum}" + (f" ({v['count']} claims)" if v["count"] else "")
+        w.writerow([f"SVDBATCH-{int(client_id)}-{bnum}", label, v["date"], v["date"],
+                    f"{v['billed']:.2f}", f"{v['billed']:.2f}", "Billed/Submitted"])
+    csv_bytes = buf.getvalue().encode("utf-8")
+    try:
+        imported, _errors = _import_claims_from_excel(
+            csv_bytes, ".csv", int(client_id), uploaded_by=uploaded_by)
+    except Exception as e:
+        log.warning("SVD batch gap import failed for client %s: %s", client_id, e)
+        return 0
+    return int(imported or 0)
+
+
+def _import_claims_or_batch(content: bytes, ext: str, client_id: int, uploaded_by: str = "",
+                            default_sub_profile: str = "", received_date: str = ""):
+    """Route an uploaded claims file to the correct importer.
+
+    An SVD DAILY batch-transmission log restates the per-claim register, so it goes
+    through the gap importer (posts only new batches, no double-count). Everything
+    else is a real per-claim register and goes through the standard importer."""
+    if _is_svd_batch_workbook(content, ext):
+        n = _import_svd_batch_gap(content, ext, int(client_id), uploaded_by=uploaded_by)
+        return n, []
+    return _import_claims_from_excel(
+        content, ext, int(client_id), uploaded_by=uploaded_by,
+        default_sub_profile=default_sub_profile, received_date=received_date)
+
+
 def _infer_excel_category(content: bytes, ext: str, filename: str = "", description: str = "") -> tuple[Optional[str], dict]:
     """Infer the best import category from Excel headers + filename/description text."""
     scores = {"Claims": 0, "Credentialing": 0, "Enrollment": 0, "EDI": 0}
@@ -6078,7 +6263,7 @@ async def upload_file(
         _sub_profile = (sub_profile or "").strip()
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(
+                imported, import_errors = _import_claims_or_batch(
                     content, ext, scope, uploaded_by=_uploader,
                     default_sub_profile=_sub_profile)
             elif file_type == "excel" and effective_category == "Credentialing":
@@ -6527,7 +6712,7 @@ async def import_excel(
 
     try:
         if category == "Claims":
-            imported, errors = _import_claims_from_excel(
+            imported, errors = _import_claims_or_batch(
                 content, ext, scope, uploaded_by=user["username"],
                 default_sub_profile=(sub_profile or "").strip())
         elif category == "Credentialing":
@@ -8992,7 +9177,7 @@ async def replace_file(
         _uploader = user.get("username") or ""
         try:
             if effective_category == "Claims":
-                imported, import_errors = _import_claims_from_excel(content, ext, scope, uploaded_by=_uploader)
+                imported, import_errors = _import_claims_or_batch(content, ext, scope, uploaded_by=_uploader)
             elif file_type == "excel" and effective_category == "Credentialing":
                 imported, import_errors = _import_credentialing_from_excel(content, ext, scope, uploaded_by=_uploader)
             elif file_type == "excel" and effective_category == "Enrollment":
@@ -9083,8 +9268,23 @@ def auto_import_pending_claim_files(client_id: Optional[int] = None) -> dict:
                         # register) — importing it double-bills, so never sweep it in.
                         continue
                     if _is_batch_transmission_log(headers) or _is_svd_batch_workbook(content, ext):
-                        # SVD DAILY collective transmission recap -- the same claims as
-                        # the per-claim register; importing it double-bills Melissa+Susan.
+                        # SVD DAILY collective transmission recap -- the overlap with
+                        # the per-claim register is already counted, so post ONLY the
+                        # newer gap batches (billed work recorded nowhere else),
+                        # idempotent by batch number. Never falls through to the
+                        # generic importer, which would misparse the summary.
+                        gap_n = _import_svd_batch_gap(
+                            content, ext, int(r["client_id"]),
+                            uploaded_by=str(r["uploaded_by"] or ""))
+                        if gap_n:
+                            files_done += 1
+                            rows_done += gap_n
+                            try:
+                                update_file_record(int(r["id"]),
+                                                   {"category": "Claims", "status": "Imported"},
+                                                   int(r["client_id"]))
+                            except Exception:
+                                pass
                         continue
                     if not _claims_structural_match(headers)["is_claims"]:
                         inferred, _dbg = _infer_excel_category(
