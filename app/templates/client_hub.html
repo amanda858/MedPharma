@@ -9074,14 +9074,43 @@
     // HELPERS
     // ═══════════════════════════════════════
     async function populateClientDrop(selectId, selectedId) {
-      if (!clientsList.length) {
-        try { const r = await fetch('/hub/api/clients'); const d = await r.json(); clientsList = d.clients || d || []; } catch (_) { }
+      // Staff and client logins are NOT allowed to read /hub/api/clients (it is
+      // admin-only and returns an error body), so fetch the accounts THIS user
+      // may actually work instead. Guard against a non-array (error) body so the
+      // dropdown never breaks or shows a stray account.
+      if (!Array.isArray(clientsList) || !clientsList.length) {
+        let list = [];
+        try {
+          const r = await fetch('/hub/api/clients');
+          const d = r.ok ? await r.json() : null;
+          if (Array.isArray(d)) list = d;
+          else if (d && Array.isArray(d.clients)) list = d.clients;
+        } catch (_) { }
+        if (!list.length) {
+          try {
+            const r2 = await fetch('/hub/api/accounts');
+            const d2 = r2.ok ? await r2.json() : null;
+            if (Array.isArray(d2)) list = d2;
+            else if (d2 && Array.isArray(d2.clients)) list = d2.clients;
+          } catch (_) { }
+        }
+        clientsList = list;
       }
       const sel = document.getElementById(selectId);
       if (!sel) return;
+      // For a NEW record (no explicit account passed in) default the selection
+      // to the account the user currently has open. Without this the browser
+      // silently selects whichever account sorts first in the list - which is
+      // how SV Diagnostic entries were being filed under PCR.
+      const want = (selectedId !== undefined && selectedId !== null && selectedId !== '')
+        ? selectedId
+        : activeClientId;
       sel.innerHTML = clientsList.map(c =>
-        `<option value="${c.id}" ${c.id == selectedId ? 'selected' : ''}>${esc(c.company)}</option>`
+        `<option value="${c.id}" ${c.id == want ? 'selected' : ''}>${esc(c.company)}</option>`
       ).join('');
+      if (want !== undefined && want !== null && sel.querySelector(`option[value="${want}"]`)) {
+        sel.value = String(want);
+      }
     }
 
     function closeModal(id) { document.getElementById(id)?.classList.remove('open'); }
