@@ -6208,10 +6208,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "first_seen": "",
             "last_seen": "",
             "totals": _new_tab_bucket(),
-            "billed": {
-                "today": {"count": 0, "amount": 0.0},
-                "wtd":   {"count": 0, "amount": 0.0},
-            },
+            "billed": {"count": 0, "amount": 0.0},
             "highlights": [],
             "clients": defaultdict(lambda: {
                 "client_id": 0,
@@ -6326,41 +6323,43 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 "ts": row["created_at"] or "",
             })
 
-        # ── 3c) Billed $ credited to the biller who uploaded it, week-to-date ──
-        # "Billed" here means the charges the team billed out — i.e. the claim
-        # rows they uploaded into the hub. Keying this on each claim's BillDate
-        # made the EOD read "$0 billed" on days the team clearly worked, because
-        # the source registers carry service/bill dates that lag the current
-        # week (the daily uploads are backfilled with earlier dates). Key on
-        # created_at (the upload timestamp) instead, and credit the uploader
-        # (uploaded_by, falling back to the free-text Owner) so each biller is
-        # credited for what they actually billed out that day. The window still
-        # resets each Friday alongside the work week.
+        # ── 3c) Billed Out per biller — the single "what's billed" figure ──
+        # The team bills in bulk periodic uploads, not evenly every day, so any
+        # "billed today / this week" window reads $0 on the many days between
+        # uploads and made the EOD look broken ("the reports show zero"). Per
+        # Lexi ("simplify to just what's billed"), collapse this to the one
+        # number everyone trusts: each biller's cumulative Billed Out (the full
+        # charged value of every claim they uploaded), which matches the
+        # dashboard "Billed Out" exactly and is never a confusing zero. Credit
+        # the uploader (uploaded_by), falling back to the free-text Owner. This
+        # is computed WITHOUT creating operator rows, then attached to whoever
+        # was actually active today during finalize.
         try:
             _rd = datetime.strptime(report_date, "%Y-%m-%d").date()
             _days_since_fri = (_rd.weekday() - 4) % 7   # Mon=0 … Fri=4 … Sun=6
             week_start = _rd.fromordinal(_rd.toordinal() - _days_since_fri).isoformat()
         except Exception:
             week_start = report_date
+        billed_by_user: dict[str, dict] = {}
+        billed_team_total = {"count": 0, "amount": 0.0}
         for row in cur.execute(
-            "SELECT uploaded_by, Owner, ChargeAmount, date(created_at) AS cd "
-            "FROM claims_master "
-            "WHERE date(created_at) >= ? AND date(created_at) <= ?",
-            (week_start, report_date),
+            "SELECT lower(TRIM(COALESCE(NULLIF(TRIM(uploaded_by),''), "
+            "       NULLIF(TRIM(Owner),''), ''))) AS biller, "
+            "       COUNT(*) AS cnt, COALESCE(SUM(ChargeAmount),0) AS amt "
+            "FROM claims_master GROUP BY biller"
         ).fetchall():
-            biller = (row["uploaded_by"] or row["Owner"] or "").strip().lower()
+            biller = (row["biller"] or "").strip().lower()
             if not biller:
                 continue
             try:
-                charge = float(row["ChargeAmount"] or 0)
+                amt = float(row["amt"] or 0)
             except (TypeError, ValueError):
-                charge = 0.0
-            slot = _u(biller)
-            slot["billed"]["wtd"]["count"] += 1
-            slot["billed"]["wtd"]["amount"] += charge
-            if row["cd"] == report_date:
-                slot["billed"]["today"]["count"] += 1
-                slot["billed"]["today"]["amount"] += charge
+                amt = 0.0
+            cnt = int(row["cnt"] or 0)
+            billed_by_user[biller] = {"count": cnt, "amount": round(amt, 2)}
+            billed_team_total["count"] += cnt
+            billed_team_total["amount"] += amt
+        billed_team_total["amount"] = round(billed_team_total["amount"], 2)
 
         # ── 4) Credentialing / Enrollment / EDI created/updated today ──
         for table, tab, status_col in (
@@ -6521,15 +6520,19 @@ def get_eod_team_report(report_date: str = None) -> dict:
         ordered = []
         for key in sorted(users.keys()):
             u = users[key]
-            # Drop completely empty rows (no activity AND no presence AND no
-            # billed work in the week-to-date window).
+            # Drop completely empty rows (no activity AND no presence today).
             total_actions = sum(u["totals"].values())
-            billed_wtd_count = u["billed"]["wtd"]["count"]
             if (total_actions == 0 and u["active_hours"] == 0
-                    and u["actions"] == 0 and billed_wtd_count == 0):
+                    and u["actions"] == 0):
                 continue
-            for _scope in ("today", "wtd"):
-                u["billed"][_scope]["amount"] = round(u["billed"][_scope]["amount"], 2)
+            # Attach this operator's cumulative Billed Out (charges from every
+            # claim they uploaded) - the single "what's billed" figure. Match on
+            # the operator key or their email, since uploads are stamped with the
+            # full email-style username while presence may use the short name.
+            _b = billed_by_user.get(key)
+            if _b is None:
+                _b = billed_by_user.get((u.get("email") or "").strip().lower())
+            u["billed"] = dict(_b) if _b else {"count": 0, "amount": 0.0}
             u["clients"] = {
                 cname: {
                     "client_id":       cb.get("client_id", 0),
@@ -6544,18 +6547,16 @@ def get_eod_team_report(report_date: str = None) -> dict:
 
         # ── Team-wide rollup ──
         team_totals = _new_tab_bucket()
-        team_billed = {
-            "today": {"count": 0, "amount": 0.0},
-            "wtd":   {"count": 0, "amount": 0.0},
-        }
         for u in ordered:
             for k, v in u["totals"].items():
                 team_totals[k] = team_totals.get(k, 0) + v
-            for _scope in ("today", "wtd"):
-                team_billed[_scope]["count"] += u["billed"][_scope]["count"]
-                team_billed[_scope]["amount"] += u["billed"][_scope]["amount"]
-        for _scope in ("today", "wtd"):
-            team_billed[_scope]["amount"] = round(team_billed[_scope]["amount"], 2)
+        # Billed Out = the whole team's cumulative billed book (every claim
+        # uploaded by anyone), so the headline is always the real number and
+        # never a windowed zero. Matches the dashboard account "Billed Out".
+        team_billed = {
+            "count":  billed_team_total["count"],
+            "amount": billed_team_total["amount"],
+        }
 
         # New rows added across the org today (handy headline numbers).
         def _scalar(sql, params=()):
@@ -6581,10 +6582,8 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "chat_messages":    _scalar("SELECT COUNT(*) FROM chat_messages WHERE date(created_at)=?", (report_date,)),
             "audit_events":     _scalar("SELECT COUNT(*) FROM audit_log    WHERE date(created_at)=?", (report_date,)),
             "active_users":     len(ordered),
-            "billed_today_amount": team_billed["today"]["amount"],
-            "billed_today_count":  team_billed["today"]["count"],
-            "billed_wtd_amount":   team_billed["wtd"]["amount"],
-            "billed_wtd_count":    team_billed["wtd"]["count"],
+            "billed_total_amount": team_billed["amount"],
+            "billed_total_count":  team_billed["count"],
         }
 
         return {
