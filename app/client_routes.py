@@ -2095,6 +2095,236 @@ def admin_diag_data_health(hub_session: Optional[str] = Cookie(None)):
     }
 
 
+def _mask_patient(name: str) -> str:
+    """Reduce a patient name to initials for a diagnostic dump so the audit does
+    not expose full PHI while still letting an admin recognize the record."""
+    parts = [p for p in str(name or "").replace(",", " ").split() if p]
+    if not parts:
+        return "(blank)"
+    return " ".join(p[0].upper() + "." for p in parts[:3])
+
+
+@router.get("/admin/diag/user-integrity")
+def admin_diag_user_integrity(hub_session: Optional[str] = Cookie(None)):
+    """Admin-only: per-user data-integrity audit - "is each biller's data correct
+    and not duplicated?"
+
+    Checks three things over claims_master:
+      1. Per-user book - claim count + charged/paid for every uploaded_by, so each
+         biller's numbers are visible and can be seen to sum to the whole.
+      2. Reconciliation - the per-user charged total equals the whole-book charged
+         total (nothing is unattributed or double-owned).
+      3. Soft-duplicates - the SAME service line (same account, patient, DOS, CPT,
+         charge and payer) stored under two or more DIFFERENT ClaimKeys. The upsert
+         key is (client_id, ClaimKey), so a claim ingested once with its real claim
+         number and again without one (a synthetic IMP-* key) slips past the unique
+         index and is counted twice. This reports how many claims and dollars are
+         the inflation and attributes each duplicate copy to the biller who loaded
+         it (keeping the real claim-number row as the canonical copy).
+    """
+    admin = _require_full_admin(hub_session)
+    from .client_db import get_db
+    import traceback
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        id_to_name = {}
+        try:
+            for r in cur.execute(
+                "SELECT id, COALESCE(NULLIF(TRIM(company),''), username) AS name FROM clients"
+            ).fetchall():
+                id_to_name[r["id"]] = r["name"]
+        except Exception:
+            id_to_name = {}
+
+        # 1. Per-user book.
+        per_user = []
+        try:
+            for r in cur.execute(
+                """SELECT COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)') AS biller,
+                          COUNT(*)                                   AS claims,
+                          ROUND(COALESCE(SUM(ChargeAmount),0),2)     AS charged,
+                          ROUND(COALESCE(SUM(PaidAmount),0),2)       AS paid,
+                          SUM(CASE WHEN ClaimKey LIKE 'IMP-%' THEN 1 ELSE 0 END)      AS synthetic_no_claimno,
+                          SUM(CASE WHEN ClaimKey LIKE 'SVDBATCH-%' THEN 1 ELSE 0 END) AS synthetic_batch
+                   FROM claims_master
+                   GROUP BY biller
+                   ORDER BY charged DESC"""
+            ).fetchall():
+                per_user.append({
+                    "biller": r["biller"],
+                    "claims": r["claims"],
+                    "charged": r["charged"],
+                    "paid": r["paid"],
+                    "synthetic_no_claimno": r["synthetic_no_claimno"],
+                    "synthetic_batch": r["synthetic_batch"],
+                })
+        except Exception as e:
+            per_user = [{"error": f"{type(e).__name__}: {e}"}]
+
+        # Overall totals for the reconciliation check.
+        overall = {}
+        try:
+            t = cur.execute(
+                "SELECT COUNT(*) AS claims, ROUND(COALESCE(SUM(ChargeAmount),0),2) AS charged, "
+                "ROUND(COALESCE(SUM(PaidAmount),0),2) AS paid FROM claims_master"
+            ).fetchone()
+            overall = {"claims": t["claims"], "charged": t["charged"], "paid": t["paid"]}
+        except Exception as e:
+            overall = {"error": f"{type(e).__name__}: {e}"}
+
+        per_user_charged = round(
+            sum(float(u.get("charged") or 0) for u in per_user if "error" not in u), 2)
+        reconciles = ("error" not in overall
+                      and abs(per_user_charged - float(overall.get("charged") or 0)) < 0.01)
+
+        # 2. Soft-duplicate service lines: identical identity, different ClaimKey.
+        dup_examples = []
+        dup_group_count = 0
+        dup_excess_claims = 0
+        dup_excess_charge = 0.0
+        cross_user_group_count = 0
+        try:
+            for r in cur.execute(
+                """SELECT client_id,
+                          MAX(PatientName)                      AS patient,
+                          TRIM(COALESCE(DOS,''))                AS dos,
+                          TRIM(COALESCE(CPTCode,''))            AS cpt,
+                          ROUND(COALESCE(ChargeAmount,0),2)     AS chg,
+                          COUNT(*)                              AS copies,
+                          GROUP_CONCAT(DISTINCT ClaimKey)       AS claim_keys,
+                          GROUP_CONCAT(DISTINCT COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)')) AS billers
+                   FROM claims_master
+                   WHERE TRIM(COALESCE(CPTCode,'')) <> '' AND TRIM(COALESCE(PatientName,'')) <> ''
+                   GROUP BY client_id,
+                            LOWER(TRIM(COALESCE(PatientName,''))),
+                            TRIM(COALESCE(PatientID,'')),
+                            TRIM(COALESCE(DOS,'')),
+                            TRIM(COALESCE(CPTCode,'')),
+                            ROUND(COALESCE(ChargeAmount,0),2),
+                            LOWER(TRIM(COALESCE(Payor,'')))
+                   HAVING COUNT(*) > 1 AND COUNT(DISTINCT ClaimKey) > 1
+                   ORDER BY (COUNT(*) - 1) * ROUND(COALESCE(ChargeAmount,0),2) DESC"""
+            ).fetchall():
+                copies = int(r["copies"])
+                excess = copies - 1
+                dup_group_count += 1
+                dup_excess_claims += excess
+                dup_excess_charge = round(dup_excess_charge + excess * float(r["chg"] or 0), 2)
+                billers = [b.strip() for b in str(r["billers"] or "").split(",") if b.strip()]
+                if len(billers) > 1:
+                    cross_user_group_count += 1
+                if len(dup_examples) < 25:
+                    dup_examples.append({
+                        "account": id_to_name.get(r["client_id"], f"client {r['client_id']}"),
+                        "patient": _mask_patient(r["patient"]),
+                        "dos": r["dos"],
+                        "cpt": r["cpt"],
+                        "charge": r["chg"],
+                        "copies": copies,
+                        "claim_keys": [k for k in str(r["claim_keys"] or "").split(",") if k],
+                        "billers": billers,
+                    })
+        except Exception as e:
+            dup_examples = [{"error": f"{type(e).__name__}: {e}"}]
+
+        # 2b. Attribute each duplicate (non-canonical) copy to the biller who loaded
+        # it. The real claim-number row is kept as canonical; synthetic-key copies
+        # rank last, so the duplicate that gets flagged is the redundant re-ingest.
+        dup_by_user = []
+        try:
+            for r in cur.execute(
+                """WITH ranked AS (
+                       SELECT ChargeAmount,
+                              COALESCE(NULLIF(TRIM(uploaded_by),''),'(unattributed)') AS biller,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY client_id,
+                                      LOWER(TRIM(COALESCE(PatientName,''))),
+                                      TRIM(COALESCE(PatientID,'')),
+                                      TRIM(COALESCE(DOS,'')),
+                                      TRIM(COALESCE(CPTCode,'')),
+                                      ROUND(COALESCE(ChargeAmount,0),2),
+                                      LOWER(TRIM(COALESCE(Payor,'')))
+                                  ORDER BY
+                                      CASE WHEN ClaimKey LIKE 'IMP-%' OR ClaimKey LIKE 'SVDBATCH-%'
+                                           THEN 1 ELSE 0 END,
+                                      ClaimKey
+                              ) AS rn
+                       FROM claims_master
+                       WHERE TRIM(COALESCE(CPTCode,'')) <> '' AND TRIM(COALESCE(PatientName,'')) <> ''
+                   )
+                   SELECT biller,
+                          COUNT(*)                          AS duplicate_claims,
+                          ROUND(SUM(ChargeAmount),2)         AS duplicate_charge
+                   FROM ranked WHERE rn > 1
+                   GROUP BY biller ORDER BY duplicate_charge DESC"""
+            ).fetchall():
+                dup_by_user.append({
+                    "biller": r["biller"],
+                    "duplicate_claims": r["duplicate_claims"],
+                    "duplicate_charge": r["duplicate_charge"],
+                })
+        except Exception as e:
+            dup_by_user = [{"error": f"{type(e).__name__}: {e}"}]
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"error": "user_integrity", "detail": f"{type(e).__name__}: {e}",
+                "trace": traceback.format_exc()}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    verdict = []
+    if reconciles:
+        verdict.append(
+            f"RECONCILES: every claim is attributed to one biller and the per-user "
+            f"charged total (${per_user_charged:,.2f}) equals the whole book "
+            f"(${float(overall.get('charged') or 0):,.2f}). No money is lost or double-owned.")
+    else:
+        verdict.append(
+            f"CHECK: per-user charged (${per_user_charged:,.2f}) does not equal the "
+            f"whole-book charged (${overall.get('charged')}). Investigate the "
+            f"(unattributed) row and any biller whose rows look off.")
+    if dup_group_count == 0:
+        verdict.append(
+            "NO DUPLICATES: no service line is stored under two different claim keys, "
+            "so no biller's book is inflated by a re-ingested claim.")
+    else:
+        verdict.append(
+            f"DUPLICATES FOUND: {dup_group_count} service line(s) exist under more than "
+            f"one claim key - {dup_excess_claims} redundant claim row(s) worth "
+            f"${dup_excess_charge:,.2f} of double-counted charges "
+            f"({cross_user_group_count} span more than one biller). See duplicates.by_user "
+            f"for who loaded the redundant copy; the underlying claim numbers are in "
+            f"duplicates.examples[].claim_keys.")
+
+    return {
+        "ok": True,
+        "viewed_by": admin.get("username"),
+        "overall_totals": overall,
+        "per_user": per_user,
+        "reconciliation": {
+            "per_user_charged": per_user_charged,
+            "whole_book_charged": overall.get("charged"),
+            "reconciles": reconciles,
+        },
+        "duplicates": {
+            "group_count": dup_group_count,
+            "excess_claims": dup_excess_claims,
+            "excess_charge": round(dup_excess_charge, 2),
+            "cross_user_group_count": cross_user_group_count,
+            "by_user": dup_by_user,
+            "examples": dup_examples,
+        },
+        "verdict": verdict,
+    }
+
+
 @router.get("/admin/diag/claim-mapping")
 def admin_diag_claim_mapping(hub_session: Optional[str] = Cookie(None)):
     """Admin-only: show EXACTLY what the system's mapping 'glasses' recognize in

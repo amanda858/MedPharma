@@ -6405,10 +6405,9 @@
 
       // My Numbers — biller self-view. Show only for team billers (staff who are
       // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
-      // For billers, "My Numbers" is their personal scorecard. Only the single
-      // account "Billed Out" KPI tile is hidden for them (it just repeats one
-      // figure); the Claims Out and Billed Activity report cards stay visible so
-      // billers keep the production reports they rely on.
+      // For billers, "My Numbers" is their personal scorecard. The Claims Out and
+      // Billed Activity report cards stay visible so billers keep the production
+      // reports they rely on.
       const isBiller = currentUser && currentUser.role === 'staff' && !canViewReporting();
       const myNumbersCard = document.getElementById('myNumbersCard');
       if (myNumbersCard) {
@@ -6419,31 +6418,13 @@
       // (The read-only Client Profile summary card was removed from the dashboard
       //  — the full, editable Client Profile now lives only on its own tab.)
 
-      // KPI grid. Headline is Billed Out (total charges billed out) — the number
-      // the team tracks. A/R tiles removed; AR is just the unpaid slice of Billed.
-      // Clean Claim Rate was removed: it was computed as paid ÷ submitted (a
-      // collections proxy, not a true first-pass acceptance rate), so it read a
-      // misleading ~0.3% off a paid side that isn't fully loaded. Rather than show
-      // a number that doesn't compute honestly, the tile is dropped until there's
-      // reliable first-pass/rejection data to build a real clean-claim rate.
-      // Per admin, the dashboard tracks ONLY the two numbers that are trusted:
-      // Billed Out (charges billed) and Payments (money actually posted/paid).
-      // Active Claims, Submitted, Avg Days to Pay and SLA Breaches were removed.
-      const kpis = [
-        { label: 'Billed Out', val: '$' + fmt(d.total_charge), color: 'indigo', icon: '💵' },
-      ];
-
+      // The standalone "Billed Out" KPI tile was removed. It repeated the exact
+      // figure the Claims Out card below already leads with (that card also has
+      // the reconciliation badge and the per-biller breakdown), so Billed Out was
+      // on the dashboard twice. Claims Out is now the single Billed Out headline
+      // for every user; the KPI grid stays empty and hidden.
       const _kpiGrid = document.getElementById('kpiGrid');
-      _kpiGrid.innerHTML = kpis.map(k => `
-    <div class="kpi-card ${k.color}"${k.title ? ` title="${k.title}"` : ''}>
-      <div style="font-size:22px;margin-bottom:8px">${k.icon}</div>
-      <div class="kpi-value">${k.val}</div>
-      <div class="kpi-label">${k.label}</div>
-    </div>
-  `).join('');
-      // Billers see their own Billed Out inside "My Numbers"; hide the duplicate
-      // account KPI so the same figure is not repeated on their dashboard.
-      _kpiGrid.style.display = isBiller ? 'none' : '';
+      if (_kpiGrid) { _kpiGrid.innerHTML = ''; _kpiGrid.style.display = 'none'; }
 
       // Claims Out — the billing view: Billed Out (what the team sent out the
       // door) and Posted (collected money). No denial/rework bucket: this is a
