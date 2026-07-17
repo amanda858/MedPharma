@@ -2283,6 +2283,31 @@
             </div>
             <div id="dashBilledActivity" style="padding:16px"></div>
           </div>
+          <!-- Payments Posted upload - records real deposits into the payments
+               table only (no claims are created or changed) so "Payments (This
+               Month)" and the collections rates reflect money actually posted.
+               RESTORED (was dropped in 125d755, which left the billing team with
+               no way to post payments): the billing team posts payments here and
+               the card is hidden from client logins by the staffAdmin gate below. -->
+          <div class="card" id="dashPaymentsPostedCard" data-module-section="claims" style="margin-bottom:18px;border-left:4px solid var(--warning)">
+            <div class="card-header">
+              <div class="card-title">💰 Payments Posted</div>
+              <div style="font-size:11px;color:var(--gray-500)">Upload posted deposits so “Payments (This Month)” reflects real money collected</div>
+            </div>
+            <div style="padding:16px">
+              <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px;max-width:660px">
+                Drop your <b>Posting Payments</b> report (PDF or Word) or an ERA / remittance deposit sheet (Excel/CSV).
+                The <b>Payment</b> amount and <b>posting date</b> are auto-detected.
+                This tab is the only place payments are counted — no claims are created or changed, and re-uploading the same report won’t double-count.
+              </div>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <input type="file" id="paymentsPostedInput" accept=".pdf,.doc,.docx,.xlsx,.xls,.csv,.ods,.odf" style="display:none" onchange="uploadPaymentsPosted(this)">
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('paymentsPostedInput').click()">⬆ Upload Payments Posted</button>
+                <span id="paymentsPostedStatus" style="font-size:12px;color:var(--gray-500)"></span>
+              </div>
+              <div id="paymentsPostedResult" style="margin-top:12px"></div>
+            </div>
+          </div>
           <!-- Data Summary, AR Aging and Claims-by-Status cards were removed per
                admin: the dashboard tracks only billed-out amounts and payments
                posted (paid). -->
