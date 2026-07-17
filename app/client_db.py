@@ -6326,12 +6326,16 @@ def get_eod_team_report(report_date: str = None) -> dict:
                 "ts": row["created_at"] or "",
             })
 
-        # ── 3c) Billed $ attributed to the claim Owner, week-to-date ──
-        # Eric/Amanda want the daily report to surface how much was *billed*
-        # (sum of ChargeAmount on claims that carry a BillDate) attributed to
-        # whoever owns the claim — not just today, but cumulatively "since last
-        # Friday". Compute the most recent Friday on/before report_date as the
-        # window start so the figure resets each Friday alongside the work week.
+        # ── 3c) Billed $ credited to the biller who uploaded it, week-to-date ──
+        # "Billed" here means the charges the team billed out — i.e. the claim
+        # rows they uploaded into the hub. Keying this on each claim's BillDate
+        # made the EOD read "$0 billed" on days the team clearly worked, because
+        # the source registers carry service/bill dates that lag the current
+        # week (the daily uploads are backfilled with earlier dates). Key on
+        # created_at (the upload timestamp) instead, and credit the uploader
+        # (uploaded_by, falling back to the free-text Owner) so each biller is
+        # credited for what they actually billed out that day. The window still
+        # resets each Friday alongside the work week.
         try:
             _rd = datetime.strptime(report_date, "%Y-%m-%d").date()
             _days_since_fri = (_rd.weekday() - 4) % 7   # Mon=0 … Fri=4 … Sun=6
@@ -6339,21 +6343,22 @@ def get_eod_team_report(report_date: str = None) -> dict:
         except Exception:
             week_start = report_date
         for row in cur.execute(
-            "SELECT Owner, ChargeAmount, BillDate FROM claims_master "
-            "WHERE COALESCE(BillDate,'') != '' AND BillDate >= ? AND BillDate <= ?",
+            "SELECT uploaded_by, Owner, ChargeAmount, date(created_at) AS cd "
+            "FROM claims_master "
+            "WHERE date(created_at) >= ? AND date(created_at) <= ?",
             (week_start, report_date),
         ).fetchall():
-            owner = (row["Owner"] or "").strip().lower()
-            if not owner:
+            biller = (row["uploaded_by"] or row["Owner"] or "").strip().lower()
+            if not biller:
                 continue
             try:
                 charge = float(row["ChargeAmount"] or 0)
             except (TypeError, ValueError):
                 charge = 0.0
-            slot = _u(owner)
+            slot = _u(biller)
             slot["billed"]["wtd"]["count"] += 1
             slot["billed"]["wtd"]["amount"] += charge
-            if row["BillDate"] == report_date:
+            if row["cd"] == report_date:
                 slot["billed"]["today"]["count"] += 1
                 slot["billed"]["today"]["amount"] += charge
 

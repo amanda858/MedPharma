@@ -6405,9 +6405,10 @@
 
       // My Numbers — biller self-view. Show only for team billers (staff who are
       // not full admin and not Eric); admin/Eric use the comprehensive Reporting.
-      // For billers, "My Numbers" is their single production report, so the
-      // account-level Billed Out KPI and Claims Out card below are hidden to
-      // avoid repeating the same billed-out figure in several places.
+      // For billers, "My Numbers" is their personal scorecard. Only the single
+      // account "Billed Out" KPI tile is hidden for them (it just repeats one
+      // figure); the Claims Out and Billed Activity report cards stay visible so
+      // billers keep the production reports they rely on.
       const isBiller = currentUser && currentUser.role === 'staff' && !canViewReporting();
       const myNumbersCard = document.getElementById('myNumbersCard');
       if (myNumbersCard) {
@@ -6460,10 +6461,10 @@
       const cbCard = document.getElementById('dashClaimBucketsCard');
       const cbEl = document.getElementById('dashClaimBuckets');
       const cbHasData = cbCards.some(c => c.v && (c.v.count || c.v.amount));
-      // Hidden for billers: "My Numbers" already shows their Billed Out, and the
-      // New-vs-Rolling split just repeats the same total when they have no new
-      // (post-cutoff) claims. Admin/Eric/clients still see the full Claims Out card.
-      if (cbCard) cbCard.style.display = (cbHasData && !isBiller) ? '' : 'none';
+      // Shown for billers too: this is one of the production reports they rely
+      // on. The redundant single "Billed Out" KPI tile above is what stays
+      // hidden for them; this card carries the billed breakdown + reconciliation.
+      if (cbCard) cbCard.style.display = cbHasData ? '' : 'none';
       if (cbEl && cbHasData) {
         // Per-member Billed Out — credits each biller with the full charges from
         // the files they submitted (uploaded_by). Rows sum exactly to Billed Out.
@@ -6576,10 +6577,11 @@
       const _twRange = _wkRange(ba.week_start, ba.week_end);
       const baCard = document.getElementById('dashBilledActivityCard');
       const baEl = document.getElementById('dashBilledActivity');
-      // Billers get their single "My Numbers" scorecard; the account-level weekly
-      // Billed Activity repeats the same billed total, so hide it for them.
+      // Shown for billers too — the weekly trend is a report they asked to keep,
+      // not a duplicate of a single total. Only the redundant KPI tile stays
+      // hidden for them.
       const baHasData = (_at.count || _at.charged || _weeks.some(w => w.count || w.charged));
-      if (baCard) baCard.style.display = (baHasData && !isBiller) ? '' : 'none';
+      if (baCard) baCard.style.display = baHasData ? '' : 'none';
       if (baEl && baHasData) {
         const _tiles = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
             <div style="background:var(--gray-50);border-radius:10px;padding:14px;text-align:center">
