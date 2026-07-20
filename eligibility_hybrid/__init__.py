@@ -31,6 +31,8 @@ from .hets import HETSProvider, build_hets_270, is_valid_mbi, parse_hets_271
 from .hybrid import HybridEligibilityEngine, HybridStrategy
 from .intercept import (ENGINE_NAME, METHOD, PRODUCT_NAME, Finding, run_intercept,
                         summarize_findings)
+from .lifecycle import (TOP_LEVEL_KEYS, build_eligibility_lifecycle,
+                        derive_billing_readiness, validate_lifecycle_shape)
 from .models import (Benefit, CoverageResult, CoverageStatus, CptCoverage,
                      CptStatus, EligibilityProvider, PatientRequest, ProviderError)
 from .policy import (MedNecResult, check_medical_necessity, is_prior_auth_required,
@@ -38,8 +40,11 @@ from .policy import (MedNecResult, check_medical_necessity, is_prior_auth_requir
 from .prior_auth import (PaChannel, PaStatus, PriorAuthEngine, PriorAuthRequest,
                          PriorAuthResult)
 from .pverify import PVerifyProvider
+from .rules import (ALLOWED_CRITERIA, ALLOWED_DECISIONS,
+                    evaluate_eligibility_rules)
 from .stedi import StediProvider, build_stedi_request, parse_stedi_response
 from .stedi_payers import StediPayers, build_stedi_payers, resolve_payer_id
+from .universal import universal_eligibility_engine
 
 PRODUCT = PRODUCT_NAME
 
@@ -53,10 +58,14 @@ __all__ = [
     "StediProvider", "build_stedi_provider", "build_stedi_request",
     "parse_stedi_response", "build_eligibility_provider",
     "StediPayers", "build_stedi_payers", "resolve_payer_id",
+    "universal_eligibility_engine",
     "AccessionGate", "AccessionResult", "CptDisposition", "Disposition",
     "MedNecResult", "check_medical_necessity", "is_prior_auth_required",
     "is_traditional_medicare",
     "PriorAuthEngine", "PriorAuthRequest", "PriorAuthResult", "PaStatus", "PaChannel",
+    "ALLOWED_CRITERIA", "ALLOWED_DECISIONS", "evaluate_eligibility_rules",
     "run_intercept", "summarize_findings", "Finding",
+    "TOP_LEVEL_KEYS", "build_eligibility_lifecycle", "derive_billing_readiness",
+    "validate_lifecycle_shape",
     "PRODUCT_NAME", "PRODUCT", "ENGINE_NAME", "METHOD",
 ]

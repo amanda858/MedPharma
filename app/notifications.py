@@ -2017,10 +2017,13 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                 f" - billed out {_money(_bb.get('amount'))}"
                 f" ({_bb.get('count', 0)} claims)"
             )
+        first = _ts_short(u.get("first_seen") or "")
+        last = _ts_short(u.get("last_seen") or "")
+        session_line = f"{first}-{last}" if first and last else (first or last or "-")
         text_lines.append(
             f"\n* {u.get('contact_name') or u.get('username')} "
-            f"<{u.get('email','')}> - {u.get('active_hours',0)}h active / "
-            f"{u.get('idle_hours',0)}h idle / {u.get('total_actions',0)} actions{_billed_txt}"
+            f"<{u.get('email','')}> - {u.get('total_actions',0)} actions "
+            f"(session: {session_line}){_billed_txt}"
         )
         for cname, cb in (u.get("clients") or {}).items():
             chunks = [f"{k}={v}" for k, v in cb.get("totals", {}).items() if v]
@@ -2165,8 +2168,6 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
             uname = _esc_html(u.get("contact_name") or u.get("username", ""))
             email = _esc_html(u.get("email", ""))
             role  = _esc_html((u.get("role") or "staff").title())
-            hrs_a = u.get("active_hours", 0)
-            hrs_i = u.get("idle_hours", 0)
             acts  = u.get("total_actions", 0)
             first = _ts_short(u.get("first_seen") or "")
             last  = _ts_short(u.get("last_seen") or "")
@@ -2217,9 +2218,8 @@ def _render_eod_report_html(report: dict) -> tuple[str, str]:
                     <div style="font-size:12px;color:#64748b;margin-top:2px">{email}</div>
                   </td>
                   <td align="right" style="vertical-align:top;white-space:nowrap">
-                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;font-weight:700">Time on hub</div>
-                    <div style="font-size:18px;font-weight:800;color:#16a34a;line-height:1.1">{hrs_a}h <span style="color:#94a3b8;font-size:11px;font-weight:600">active</span></div>
-                    <div style="font-size:11px;color:#64748b;margin-top:2px">{hrs_i}h idle · {acts} actions</div>
+                                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;font-weight:700">Daily activity</div>
+                                        <div style="font-size:18px;font-weight:800;color:#16a34a;line-height:1.1">{acts} actions</div>
                     <div style="font-size:11px;color:#64748b;margin-top:2px">{session_line}</div>
                   </td>
                 </tr>
@@ -2431,8 +2431,6 @@ def _build_demo_eod_report() -> dict:
             "contact_name": "Jessica",
             "email": "jessica@medprosc.com",
             "role": "staff",
-            "active_hours": 6.4,
-            "idle_hours": 1.1,
             "actions": 142,
             "first_seen": f"{today}T08:53:12",
             "last_seen": f"{today}T17:18:44",
@@ -2469,8 +2467,6 @@ def _build_demo_eod_report() -> dict:
             "contact_name": "Susan",
             "email": "susan@medprosc.com",
             "role": "staff",
-            "active_hours": 5.8,
-            "idle_hours": 0.7,
             "actions": 96,
             "first_seen": f"{today}T09:02:50",
             "last_seen": f"{today}T16:44:18",
@@ -2506,8 +2502,6 @@ def _build_demo_eod_report() -> dict:
             "contact_name": "RCM",
             "email": "rcm@medprosc.com",
             "role": "admin",
-            "active_hours": 4.2,
-            "idle_hours": 0.6,
             "actions": 71,
             "first_seen": f"{today}T10:11:09",
             "last_seen": f"{today}T15:33:51",
@@ -2541,8 +2535,6 @@ def _build_demo_eod_report() -> dict:
             "contact_name": "Eric",
             "email": "eric@medprosc.com",
             "role": "admin",
-            "active_hours": 2.3,
-            "idle_hours": 0.4,
             "actions": 38,
             "first_seen": f"{today}T11:24:01",
             "last_seen": f"{today}T15:08:22",
@@ -2573,8 +2565,6 @@ def _build_demo_eod_report() -> dict:
             "contact_name": "Lexi",
             "email": "lexi@medprosc.com",
             "role": "admin",
-            "active_hours": 1.7,
-            "idle_hours": 0.2,
             "actions": 24,
             "first_seen": f"{today}T13:02:11",
             "last_seen": f"{today}T15:42:00",

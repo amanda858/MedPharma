@@ -71,3 +71,57 @@ Note: domain purchase is not free by default, but once owned, connecting it on R
 ## Primary Surface
 
 Use the hub at `/hub`. Legacy `/leads` and `/admin/leads` routes have been retired.
+
+## Eligibility Engine
+
+Every eligibility completion produces and persists the same machine-readable
+five-stage state: `OPS`, `TRACK`, `COMMUNICATE`, `APPROVE`, `EXECUTE`,
+`ELIGIBILITY_ENGINE`, and `ERRORS`. Member identifiers are masked and hashed in
+the lifecycle state; raw payer evidence remains restricted to the eligibility
+audit table.
+
+Live active/inactive verification requires one configured source and an
+appropriate BAA before transmitting patient data:
+
+- Stedi: `STEDI_API_KEY`, `STEDI_PROVIDER_NPI`, and `STEDI_PROVIDER_NAME`
+- pVerify: `PVERIFY_CLIENT_ID` and `PVERIFY_CLIENT_SECRET`
+- CMS HETS (traditional Medicare only): HETS endpoint, submitter, and credential settings
+
+Credentials may be stored through the encrypted admin settings UI or supplied
+as environment variables. Never commit credentials to this repository.
+
+Machine-readable operations:
+
+- `GET /hub/api/eligibility/{id}/engine-state`
+- `POST /hub/api/eligibility/{id}/verify`
+- `POST /hub/api/eligibility-check`
+- `POST /hub/api/universal-eligibility-eval`
+- `GET /hub/api/admin/eligibility/engine-tracker`
+- `GET|POST /hub/api/admin/eligibility/rules`
+- `DELETE /hub/api/admin/eligibility/rules/{id}` (soft deactivation)
+
+Payer rules are deterministic, sourced, versioned, and scoped by facility,
+payer, plan/product, CPT, criteria, and effective dates. A rule change places
+affected records on hold until re-verification; it never fabricates payer data.
+
+`eligibility_hybrid.universal_eligibility_engine(patient, insurance, provider,
+visit)` applies the universal active-plan, network, plan-type, specialty, CPT,
+prior-authorization, referral, and ICD-10 rules. `eligible` means at least one
+ordered service is covered by the supplied payer facts. `billing_ready` is true
+only when every ordered service is covered and required referral/prior-auth
+evidence is present. The function reports missing payer facts instead of
+assuming they are false or unrestricted.
+
+Run the focused engine validation suite:
+
+```bash
+python3 test_stedi_payers.py
+python3 test_stedi_direct.py
+python3 test_hets_direct.py
+python3 test_coverage_intercept.py
+python3 test_eligibility_lifecycle.py
+python3 test_eligibility_rules.py
+python3 test_eligibility_state_persistence.py
+python3 test_eligibility_rule_persistence.py
+python3 test_eligibility_lifecycle_integration.py
+```

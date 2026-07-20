@@ -38,7 +38,10 @@ from app.client_db import (
     get_enrollment, create_enrollment, update_enrollment, delete_enrollment,
     get_eligibility, create_eligibility, update_eligibility, delete_eligibility,
     get_eligibility_one,
-    record_eligibility_check, get_eligibility_checks, get_eligibility_check_raw,
+    record_eligibility_check, finalize_eligibility_check_state,
+    has_real_eligibility_evidence, get_eligibility_checks, get_eligibility_check_raw,
+    list_eligibility_payer_rules, save_eligibility_payer_rule,
+    deactivate_eligibility_payer_rule,
     get_edi, create_edi, update_edi, delete_edi,
     get_dashboard, CLAIM_STATUSES,
     list_files, add_file, get_file_record, update_file_record, delete_file_record,
@@ -91,6 +94,18 @@ router = APIRouter(prefix="/hub/api")
 
 
 DATA_IMPORT_CATEGORIES = ("Claims", "Credentialing", "Enrollment", "EDI")
+PAYMENT_POSTING_USERS = {"melissa", "susan", "jessica", "maria"}
+
+
+def _payment_actor_key(username: str) -> str:
+    u = (username or "").strip().lower()
+    if not u:
+        return ""
+    return u.split("@", 1)[0]
+
+
+def _is_allowed_payment_poster_username(username: str) -> bool:
+    return _payment_actor_key(username) in PAYMENT_POSTING_USERS
 
 # Payments are posted ONLY through the 💰 Payment Posting tab (/payments/import),
 # which is the single source of truth for collected money. On/after this business
@@ -3549,6 +3564,23 @@ def edit_claim(claim_id: int, body: ClaimUpdate, hub_session: Optional[str] = Co
 @router.delete("/claims/{claim_id}")
 def remove_claim(claim_id: int, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    # Only admin/staff can delete claims (not client logins)
+    if user["role"] not in ("admin", "staff"):
+        raise HTTPException(status_code=403, detail="Claim deletion restricted to billing team")
+    # Verify ownership: get the claim and check client_id matches scope
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT client_id FROM claims_master WHERE id=?", (claim_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    claim_client_id = row[0]
+    scope = _client_scope(user)
+    if scope is not None and scope != claim_client_id:
+        raise HTTPException(status_code=403, detail="Claim not in your scope")
     delete_claim(claim_id)
     notify_activity(user["username"], "deleted", "Claims", f"Claim #{claim_id}")
     return {"ok": True}
@@ -3578,6 +3610,11 @@ def list_payments(claim_key: str, hub_session: Optional[str] = Cookie(None)):
 @router.post("/claims/{claim_key}/payments")
 def add_payment(claim_key: str, body: PaymentIn, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    if not _is_allowed_payment_poster_username(user.get("username") or ""):
+        raise HTTPException(
+            status_code=403,
+            detail="Payment posting is restricted to Melissa, Susan, Jessica, and Maria",
+        )
     scope = _client_scope(user)
     cid = scope if scope is not None else user["id"]
     data = body.model_dump()
@@ -3593,8 +3630,26 @@ def add_payment(claim_key: str, body: PaymentIn, hub_session: Optional[str] = Co
 
 @router.delete("/payments/{payment_id}")
 def remove_payment(payment_id: int, hub_session: Optional[str] = Cookie(None)):
-    _require_user(hub_session)
+    user = _require_user(hub_session)
+    # Payment deletion is a billing-team action (admin and staff billers only)
+    if user["role"] not in ("admin", "staff"):
+        raise HTTPException(status_code=403, detail="Payment deletion restricted to billing team")
+    # Verify ownership: get the payment and check client_id matches scope
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT client_id FROM payments WHERE id=?", (payment_id,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    payment_client_id = row[0]
+    scope = _client_scope(user)
+    if scope is not None and scope != payment_client_id:
+        raise HTTPException(status_code=403, detail="Payment not in your scope")
     delete_payment(payment_id)
+    notify_activity(user["username"], "deleted", "Payments", f"Payment #{payment_id}")
     return {"ok": True}
 
 
@@ -3795,16 +3850,19 @@ def remove_enroll(rid: int, hub_session: Optional[str] = Cookie(None)):
 
 # ─── Eligibility / Benefits Verification ──────────────────────────────────────
 
-def _guard_billing_readiness(readiness, verified_by, verified_date):
+def _guard_billing_readiness(readiness, verified_by, verified_date,
+                             has_payer_evidence: bool = False):
     """A record may only be 'Clear to Bill' when a real verification is on file
     (both who verified and when). Prevents billing off an unverified record."""
     if (readiness or "").strip() == "Clear to Bill":
         if not (verified_by and str(verified_by).strip()) or \
-           not (verified_date and str(verified_date).strip()):
+           not (verified_date and str(verified_date).strip()) or \
+           not has_payer_evidence:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot mark 'Clear to Bill' without a recorded verification "
-                       "(Verified By + Verified Date). Run a coverage check first.")
+                detail="Cannot mark 'Clear to Bill' without a successful active "
+                       "payer verification in the audit trail. Run a live coverage "
+                       "check first.")
 
 
 def _split_patient_name(name: str) -> tuple[str, str]:
@@ -3897,7 +3955,7 @@ def _build_pverify_from_settings():
     )
 
 
-def _build_live_eligibility_provider():
+def _build_live_eligibility_provider(payer_name: str = ""):
     """Best-configured REAL eligibility provider, reading admin-pasted DB creds
     first then env. Preference: Stedi (self-serve; Medicare + Medicaid +
     commercial) → pVerify (commercial + Medicare) → direct CMS HETS. Honest by
@@ -3911,7 +3969,9 @@ def _build_live_eligibility_provider():
         return pverify
     hets = _build_hets_from_settings()
     if hets.configured:
-        return hets
+        from eligibility_hybrid.policy import is_traditional_medicare
+        if not payer_name or is_traditional_medicare(payer_name):
+            return hets
     return stedi
 
 
@@ -4042,6 +4102,156 @@ def _evaluate_coverage(cpt: str, payer_name: str, icd10s: list,
             "high_risk_molecular": is_high_risk_molecular(cpt)}
 
 
+def _eligibility_policy_checks(cpts: list, payer_name: str, order_text: str,
+                               eligibility_status: str = "", *,
+                               client_id: Optional[int] = None,
+                               plan_name: str = "", member_id: str = "",
+                               state: str = "", fields: Optional[dict] = None,
+                               date_of_service: str = "") -> list[dict]:
+    """Return structured deterministic service-policy checks for lifecycle JSON."""
+    from eligibility_hybrid.rules import evaluate_eligibility_rules
+    try:
+        stored_rules = list_eligibility_payer_rules(client_id=client_id)
+        registry_errors = []
+    except Exception as exc:
+        stored_rules = []
+        registry_errors = [{"code": "RULE_REGISTRY_UNAVAILABLE", "error": str(exc)}]
+    if not cpts:
+        checks = [{
+            "cpt": "",
+            "coverage_status": "SERVICE_INPUT_REQUIRED",
+            "reason_codes": ["Requested services/CPT codes are missing."],
+            "actions": ["Add the ordered service or CPT code before billing approval"],
+            "abn_required": False,
+            "abn_modifier": "",
+            "abn_reason": "",
+            "abn_entails": [],
+            "high_risk_molecular": False,
+        }]
+    else:
+        diagnoses = _parse_icd10s(order_text)
+        checks = []
+        for cpt in cpts:
+            check = _evaluate_coverage(
+                cpt, payer_name, diagnoses, elig_status=eligibility_status
+            )
+            checks.append({"cpt": cpt, **check})
+
+    severity = {
+        "INFO": 0,
+        "APPROVED": 0,
+        "PA_REQUIRED": 2,
+        "DENY_RISK": 3,
+        "MEDICAL_NECESSITY_HOLD": 4,
+        "SERVICE_INPUT_REQUIRED": 4,
+        "NOT_ELIGIBLE": 5,
+    }
+    diagnoses = _parse_icd10s(order_text)
+    for check in checks:
+        evaluated = evaluate_eligibility_rules(stored_rules, {
+            "client_id": client_id,
+            "payer_name": payer_name,
+            "plan_name": plan_name,
+            "cpt_code": check.get("cpt") or "",
+            "date_of_service": date_of_service or business_today_iso(),
+            "icd10_codes": diagnoses,
+            "member_id": member_id,
+            "state": state,
+            "fields": fields or {},
+        })
+        matches = evaluated["matches"]
+        check["payer_rules"] = matches
+        check["payer_rule_errors"] = registry_errors + evaluated["errors"]
+        check["unknown_requirements"] = evaluated["unknown_requirements"]
+        current = str(check.get("coverage_status") or "INFO").upper()
+        for match in matches:
+            decision = str(match.get("decision") or "INFO").upper()
+            if severity.get(decision, 0) > severity.get(current, 0):
+                current = decision
+                check["coverage_status"] = decision
+            reason = match.get("reason") or f"Matched payer rule {match['rule_key']}"
+            check.setdefault("reason_codes", []).append(
+                f"{reason} [source: {match['source']}; version: {match['version']}]"
+            )
+            check.setdefault("actions", []).extend(match.get("actions") or [])
+            for missing_field in match.get("missing_fields") or []:
+                check["actions"].append(f"Provide required field: {missing_field}")
+    return checks
+
+
+def _build_eligibility_engine_state(
+    rec: dict,
+    *,
+    cpts: list,
+    source: str,
+    configured: bool,
+    verified: bool,
+    coverage_status: str,
+    policy_checks: list[dict],
+    billing_readiness: str,
+    record_stage: str,
+    summary: str,
+    check_id: Optional[int] = None,
+    actor: str = "",
+    changed: bool = False,
+    errors=None,
+) -> dict:
+    from eligibility_hybrid import build_eligibility_lifecycle
+    return build_eligibility_lifecycle(
+        {
+            "record_id": rec.get("id"),
+            "client_id": rec.get("client_id"),
+            "patient_name": rec.get("PatientName"),
+            "dob": rec.get("DOB"),
+            "payer_name": rec.get("Payor"),
+            "member_id": rec.get("MemberID"),
+            "requested_services": cpts,
+        },
+        source=source,
+        configured=configured,
+        verified=verified,
+        coverage_status=coverage_status,
+        policy_checks=policy_checks,
+        billing_readiness=billing_readiness,
+        record_stage=record_stage,
+        summary=summary,
+        check_id=check_id,
+        actor=actor,
+        changed=changed,
+        errors=errors,
+    )
+
+
+def _persist_eligibility_engine_state(rid: int, state: dict,
+                                      check_id: Optional[int] = None) -> str:
+    state_json = _json.dumps(state, separators=(",", ":"), default=str)[:200000]
+    update_eligibility(rid, {"EligibilityStateJson": state_json})
+    if check_id:
+        finalize_eligibility_check_state(check_id, state_json)
+    return state_json
+
+
+def _eligibility_audit_text(value) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        return value
+    return _json.dumps(value, separators=(",", ":"), default=str)
+
+
+def _eligibility_rule_context(rec: dict) -> dict:
+    return {
+        "client_id": int(rec.get("client_id") or 0) or None,
+        "plan_name": rec.get("PlanGroup") or "",
+        "member_id": rec.get("MemberID") or "",
+        "state": rec.get("State") or "",
+        "fields": {
+            "plan_group": rec.get("PlanGroup") or "",
+            "auth_number": rec.get("AuthNumber") or "",
+        },
+    }
+
+
 def _explain_coverage(result, cpts: list, payer_name: str, order_text: str = "") -> str:
     """Plain-English, verifier-facing summary of a REAL eligibility result: the
     plan, active vs lapsed (+ dates), patient cost, and — per requested test —
@@ -4137,6 +4347,7 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
     order_text = rec.get("RequestedServices") or ""
     cpts = _parse_cpts(order_text)
     payer_name = (rec.get("Payor") or "").strip()
+    actor = actor_username or actor_label
 
     try:
         from eligibility_hybrid import PatientRequest
@@ -4144,17 +4355,62 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         return {"ok": False, "configured": False, "changed": False,
                 "error": f"engine unavailable: {e}"}
 
-    provider = _build_live_eligibility_provider()
+    provider = _build_live_eligibility_provider(payer_name)
     first, last = _split_patient_name(rec.get("PatientName"))
     req = PatientRequest(
         first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
         member_id=(rec.get("MemberID") or "").strip(),
-        payer_name=payer_name or "Medicare",
+        payer_name=payer_name,
         cpt_codes=cpts,
         service_type_codes=["30", "5"],
         provider_npi=_elig_cfg("STEDI_PROVIDER_NPI") or _elig_cfg("HETS_PROVIDER_NPI"),
         provider_name=_elig_cfg("STEDI_PROVIDER_NAME") or _elig_cfg("HETS_PROVIDER_NAME"),
     )
+
+    provider_source = getattr(provider, "name", "eligibility")
+    provider_configured = bool(getattr(provider, "configured", False))
+    input_state = _build_eligibility_engine_state(
+        rec, cpts=cpts, source="input-validation",
+        configured=provider_configured, verified=False,
+        coverage_status="Unknown", policy_checks=[], billing_readiness="",
+        record_stage=rec.get("Stage") or "Received", summary="", actor=actor,
+    )
+    missing_fields = input_state["OPS"]["missing_fields"]
+    if missing_fields:
+        summary = "Missing required eligibility fields: " + ", ".join(missing_fields) + "."
+        next_stage = "In Progress" if (rec.get("Stage") or "") == "Received" else (
+            rec.get("Stage") or "Received"
+        )
+        changes = {"VerificationSummary": summary, "Stage": next_stage}
+        check_id = record_eligibility_check({
+            "eligibility_id": rid,
+            "client_id": int(rec.get("client_id") or 0),
+            "source": "input-validation",
+            "status": "Input Required",
+            "checked_by": actor,
+            "member_id": (rec.get("MemberID") or "").strip(),
+            "payer_name": payer_name,
+            "result_json": _json.dumps({"missing_fields": missing_fields}),
+        })
+        state = _build_eligibility_engine_state(
+            rec, cpts=cpts, source="input-validation",
+            configured=provider_configured, verified=False,
+            coverage_status="Unknown", policy_checks=[], billing_readiness="",
+            record_stage=next_stage, summary=summary, check_id=check_id,
+            actor=actor, changed=True,
+        )
+        update_eligibility(rid, changes)
+        _persist_eligibility_engine_state(rid, state, check_id)
+        return {
+            "ok": False,
+            "configured": provider_configured,
+            "changed": True,
+            "source": "input-validation",
+            "missing_fields": missing_fields,
+            "summary": summary,
+            "check_id": check_id,
+            "engine_state": state,
+        }
 
     # ── No live payer source: run the MedPharma rule-intercept coverage review ──
     # A COMPLETE, honest determination that needs ZERO payer credentials. It decides
@@ -4167,18 +4423,21 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
     if not provider.configured:
         dx = _parse_icd10s(order_text)
         today = datetime.now().strftime("%Y-%m-%d")
-        actor = actor_username or actor_label
         cpt_lines: list = []
         hold_reasons: list = []
         pa_needed = abn_needed = blocked = False
-        for cpt in cpts:
-            ev = _evaluate_coverage(cpt, payer_name, dx, "")
+        policy_checks = _eligibility_policy_checks(
+            cpts, payer_name, order_text, **_eligibility_rule_context(rec)
+        )
+        for ev in policy_checks:
+            cpt = ev.get("cpt") or "requested services"
             cs = ev["coverage_status"]
             cpt_lines.append(f"• {cpt}: {cs.lower().replace('_', ' ')} — "
                              f"{'; '.join(ev['reason_codes'])}")
             if ev.get("abn_required") and ev.get("abn_entails"):
                 cpt_lines.append("   ↳ What that entails: " + " ".join(ev["abn_entails"]))
-            if cs in ("MEDICAL_NECESSITY_HOLD", "DENY_RISK", "NOT_ELIGIBLE"):
+            if cs in ("MEDICAL_NECESSITY_HOLD", "DENY_RISK", "NOT_ELIGIBLE",
+                      "SERVICE_INPUT_REQUIRED"):
                 blocked = True
                 hold_reasons.append(f"{cpt}: {cs.lower().replace('_', ' ')}")
             if cs == "PA_REQUIRED":
@@ -4203,9 +4462,10 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
                 "Advantage / commercial) to confirm enrollment. Nothing fabricated.")
         summary = "  ".join([head] + cpt_lines + [tail])
 
-        changes = {"VerificationSummary": summary,
-                   "VerifiedBy": f"Rule Intercept · {actor}".strip(" ·"),
-                   "VerifiedDate": today}
+        # A rule-intercept review is useful policy guidance, but it is not a
+        # payer verification. Only a real 271 may populate VerifiedBy /
+        # VerifiedDate or move a patient into the Completed report.
+        changes = {"VerificationSummary": summary}
         if pa_needed:
             changes["PriorAuthRequired"] = "Yes"
         if needs_action:
@@ -4213,29 +4473,32 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
             stamp = f"[{today}] Rule intercept: " + "; ".join(hold_reasons)
             prior = (rec.get("Notes") or "").strip()
             changes["Notes"] = (prior + "\n" + stamp).strip() if prior else stamp
-        if mark_completed and (rec.get("Stage") or "") != "Completed":
-            # A biller ran the check on purpose -> file the result in the
-            # Completed report under this patient's account.
-            changes["Stage"] = "Completed"
-            changes["CompletedBy"] = actor_username or actor_label
-            changes["CompletedAt"] = datetime.now().isoformat()
+        if (rec.get("Stage") or "") == "Received":
+            changes["Stage"] = "In Progress"
+        check_id = record_eligibility_check({
+            "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
+            "source": "rule-intercept",
+            "status": "On Hold" if needs_action else "Policy Clear",
+            "checked_by": actor,
+            "member_id": (rec.get("MemberID") or "").strip(),
+            "payer_name": payer_name,
+            "result_json": _json.dumps({"cpts": cpts, "needs_action": needs_action,
+                                        "summary": summary}, default=str)[:200000]})
+        state = _build_eligibility_engine_state(
+            rec, cpts=cpts, source="rule-intercept", configured=False,
+            verified=False, coverage_status="Unknown", policy_checks=policy_checks,
+            billing_readiness=changes.get("BillingReadiness", ""),
+            record_stage=changes.get("Stage", rec.get("Stage") or "Received"),
+            summary=summary, check_id=check_id, actor=actor, changed=True,
+        )
         update_eligibility(rid, changes)
-        try:
-            record_eligibility_check({
-                "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
-                "source": "rule-intercept",
-                "status": "On Hold" if needs_action else "Policy Clear",
-                "checked_by": actor,
-                "member_id": (rec.get("MemberID") or "").strip(),
-                "payer_name": payer_name,
-                "result_json": _json.dumps({"cpts": cpts, "needs_action": needs_action,
-                                            "summary": summary}, default=str)[:200000]})
-        except Exception:
-            pass
-        return {"ok": True, "configured": False, "offline": True, "changed": True,
+        _persist_eligibility_engine_state(rid, state, check_id)
+        return {"ok": True, "configured": False, "offline": True, "verified": False,
+                "changed": True,
                 "source": "rule-intercept",
                 "billing_readiness": changes.get("BillingReadiness", ""),
-                "needs_action": needs_action, "summary": summary}
+                "needs_action": needs_action, "summary": summary,
+                "check_id": check_id, "engine_state": state}
 
     # ── Connected: real X12 270/271 ──
     src = getattr(provider, "name", "eligibility")
@@ -4243,20 +4506,38 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
     try:
         result = provider.verify(req)
     except Exception as e:  # network / transport failure
-        record_eligibility_check({
+        check_id = record_eligibility_check({
             "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
             "source": src, "status": "Error",
-            "checked_by": actor_username or actor_label,
+            "checked_by": actor,
             "member_id": (rec.get("MemberID") or "").strip(),
             "payer_name": payer_name, "errors": str(e)})
-        update_eligibility(rid, {"VerificationSummary":
-                                 f"⚠️ Verification error via {src_label}: {e}"})
-        return {"ok": False, "configured": True, "changed": True, "error": str(e)}
+        summary = f"⚠️ Verification error via {src_label}: {e}"
+        next_stage = "In Progress" if (rec.get("Stage") or "") == "Received" else (
+            rec.get("Stage") or "Received"
+        )
+        policy_checks = _eligibility_policy_checks(
+            cpts, payer_name, order_text, **_eligibility_rule_context(rec)
+        )
+        state = _build_eligibility_engine_state(
+            rec, cpts=cpts, source=src, configured=True, verified=False,
+            coverage_status="Unknown", policy_checks=policy_checks,
+            billing_readiness="", record_stage=next_stage, summary=summary,
+            check_id=check_id, actor=actor, changed=True, errors=[str(e)],
+        )
+        update_eligibility(rid, {"VerificationSummary": summary, "Stage": next_stage})
+        _persist_eligibility_engine_state(rid, state, check_id)
+        return {"ok": False, "configured": True, "changed": True,
+                "error": str(e), "check_id": check_id, "engine_state": state}
 
     status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
     errors_txt = "; ".join(result.errors or [])
-    raw_req = (result.raw or {}).get("x12_270") or (result.raw or {}).get("request_json") or ""
-    raw_resp = (result.raw or {}).get("x12_271") or ""
+    raw_req = _eligibility_audit_text(
+        (result.raw or {}).get("x12_270")
+        or (result.raw or {}).get("request_json")
+        or ""
+    )
+    raw_resp = _eligibility_audit_text((result.raw or {}).get("x12_271") or "")
     check_id = record_eligibility_check({
         "eligibility_id": rid, "client_id": int(rec.get("client_id") or 0),
         "source": src, "status": status_val,
@@ -4267,16 +4548,29 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
         "errors": errors_txt})
 
-    board_status, readiness = _ELIG_STATUS_MAP.get(status_val, ("Needs Re-verify", ""))
+    board_status, _legacy_readiness = _ELIG_STATUS_MAP.get(
+        status_val, ("Needs Re-verify", "")
+    )
+    policy_checks = _eligibility_policy_checks(
+        cpts, result.payer_name or payer_name, order_text, status_val,
+        **_eligibility_rule_context(rec),
+    )
+    from eligibility_hybrid import derive_billing_readiness
+    readiness = derive_billing_readiness(
+        status_val,
+        requested_services=cpts,
+        policy_checks=policy_checks,
+        prior_auth_required=result.prior_auth_required,
+    )
     today = datetime.now().strftime("%Y-%m-%d")
     summary = _explain_coverage(result, cpts, payer_name, order_text)
     changes: dict = {
         "Status": board_status,
-        "VerifiedBy": f"{src_label} · {actor_username or actor_label}".strip(" ·"),
+        "VerifiedBy": f"{src_label} · {actor}".strip(" ·"),
         "VerifiedDate": today,
-        "VerificationSummary": summary}
-    if readiness:
-        changes["BillingReadiness"] = readiness
+        "VerificationSummary": summary,
+        "BillingReadiness": readiness,
+    }
     b = result.benefit
     if b:
         if b.copay is not None:
@@ -4301,15 +4595,25 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         # A biller ran the check on purpose -> file the result in the
         # Completed report under this patient's account.
         changes["Stage"] = "Completed"
-        changes["CompletedBy"] = actor_username or actor_label
+        changes["CompletedBy"] = actor
         changes["CompletedAt"] = datetime.now().isoformat()
+    state = _build_eligibility_engine_state(
+        rec, cpts=cpts, source=src, configured=True, verified=True,
+        coverage_status=status_val, policy_checks=policy_checks,
+        billing_readiness=readiness,
+        record_stage=changes.get("Stage", rec.get("Stage") or "Received"),
+        summary=summary, check_id=check_id, actor=actor, changed=True,
+        errors=result.errors or [],
+    )
     update_eligibility(rid, changes)
+    _persist_eligibility_engine_state(rid, state, check_id)
     return {"ok": True, "configured": True, "changed": True, "source": src,
             "status": status_val, "check_id": check_id, "summary": summary,
             "billing_readiness": readiness, "errors": result.errors or [],
             "benefit": {"copay": b.copay, "deductible": b.deductible_total,
                         "coinsurance_pct": b.coinsurance_pct} if b else {},
-            "effective_date": result.effective_date, "term_date": result.term_date}
+            "effective_date": result.effective_date, "term_date": result.term_date,
+            "engine_state": state}
 
 
 def _auto_verify_async(rid: int) -> None:
@@ -4412,6 +4716,22 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
                              data.get("VerifiedBy"), data.get("VerifiedDate"))
     data["uploaded_by"] = (user.get("email") or user.get("username") or "").strip().lower()
     eid = create_eligibility(data)
+    rec = get_eligibility_one(eid) or {**data, "id": eid}
+    cpts = _parse_cpts(rec.get("RequestedServices") or "")
+    provider = _build_live_eligibility_provider(rec.get("Payor") or "")
+    policy_checks = _eligibility_policy_checks(
+        cpts, rec.get("Payor") or "", rec.get("RequestedServices") or "",
+        **_eligibility_rule_context(rec),
+    )
+    state = _build_eligibility_engine_state(
+        rec, cpts=cpts, source="intake",
+        configured=bool(getattr(provider, "configured", False)), verified=False,
+        coverage_status="Unknown", policy_checks=policy_checks,
+        billing_readiness="", record_stage=rec.get("Stage") or "Received",
+        summary="Eligibility intake received; verification queued.",
+        actor=user.get("username", ""), changed=True,
+    )
+    _persist_eligibility_engine_state(eid, state)
     # Real-time auto-verify on EVERY upload — including eligibility clients
     # (Spirit Health / David, PCR), not just the billing team. The engine is
     # honest: with no live payer source connected it records a "pending
@@ -4421,24 +4741,114 @@ def add_elig(body: EligIn, hub_session: Optional[str] = Cookie(None)):
     _auto_verify_async(eid)
     notify_activity(user["username"], "created", "Eligibility",
                     f"Patient: {data.get('PatientName','')}, Payor: {data.get('Payor','')}")
-    return {"id": eid, "ok": True}
+    return {"id": eid, "ok": True, "engine_state": state}
 
 
 @router.put("/eligibility/{rid}")
 def edit_elig(rid: int, body: EligUpdate, hub_session: Optional[str] = Cookie(None)):
     user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    identity_fields = {"PatientName", "DOB", "Payor", "MemberID", "PlanGroup"}
+    decision_fields = identity_fields | {"RequestedServices"}
+    reverify = bool(decision_fields & set(changes))
+    if identity_fields & set(changes):
+        changes.update({
+            "Status": "Pending",
+            "EffectiveDate": "",
+            "TermDate": "",
+            "Copay": "",
+            "Deductible": "",
+            "Coinsurance": "",
+            "OOPMax": "",
+            "PriorAuthRequired": "",
+            "AuthNumber": "",
+            "VerifiedBy": "",
+            "VerifiedDate": "",
+            "BillingReadiness": "",
+            "VerificationSummary": "",
+            "Stage": "In Progress",
+            "CompletedBy": "",
+            "CompletedAt": "",
+        })
+    elif "RequestedServices" in changes:
+        changes.update({
+            "BillingReadiness": "",
+            "VerificationSummary": "",
+            "Stage": "In Progress",
+            "CompletedBy": "",
+            "CompletedAt": "",
+        })
     # Guardrail: "Clear to Bill" requires verification evidence — check the
     # EFFECTIVE values (this update merged over what's already on the record).
     if changes.get("BillingReadiness") == "Clear to Bill":
-        rec = get_eligibility_one(rid) or {}
         eff_by = changes.get("VerifiedBy", rec.get("VerifiedBy"))
         eff_date = changes.get("VerifiedDate", rec.get("VerifiedDate"))
-        _guard_billing_readiness("Clear to Bill", eff_by, eff_date)
+        _guard_billing_readiness(
+            "Clear to Bill", eff_by, eff_date,
+            has_payer_evidence=has_real_eligibility_evidence(rid),
+        )
+    state = None
+    if reverify:
+        pending_rec = {**rec, **changes, "id": rid}
+        cpts = _parse_cpts(pending_rec.get("RequestedServices") or "")
+        provider = _build_live_eligibility_provider(pending_rec.get("Payor") or "")
+        policy_checks = _eligibility_policy_checks(
+            cpts, pending_rec.get("Payor") or "",
+            pending_rec.get("RequestedServices") or "",
+            **_eligibility_rule_context(pending_rec),
+        )
+        state = _build_eligibility_engine_state(
+            pending_rec, cpts=cpts, source="input-update",
+            configured=bool(getattr(provider, "configured", False)), verified=False,
+            coverage_status="Unknown", policy_checks=policy_checks,
+            billing_readiness="", record_stage=changes.get("Stage", "In Progress"),
+            summary="Eligibility inputs changed; verification queued.",
+            actor=user.get("username", ""), changed=True,
+        )
+        changes["EligibilityStateJson"] = _json.dumps(
+            state, separators=(",", ":"), default=str
+        )[:200000]
     update_eligibility(rid, changes)
+    if reverify:
+        _auto_verify_async(rid)
     notify_activity(user["username"], "updated", "Eligibility",
                     f"Record #{rid}, fields: {', '.join(changes.keys())}")
-    return {"ok": True}
+    return {"ok": True, "engine_state": state}
+
+
+@router.get("/eligibility/{rid}/engine-state")
+def get_eligibility_engine_state(rid: int,
+                                 hub_session: Optional[str] = Cookie(None)):
+    user = _require_user(hub_session)
+    rec = get_eligibility_one(rid)
+    if not rec:
+        raise HTTPException(404, "Eligibility record not found")
+    if user["role"] not in ("admin", "staff"):
+        if int(rec.get("client_id") or 0) not in set(_doc_account_ids(user)):
+            raise HTTPException(403, "You can only view your own account's eligibility state.")
+    state = rec.get("EligibilityState") or {}
+    if state:
+        return state
+    cpts = _parse_cpts(rec.get("RequestedServices") or "")
+    provider = _build_live_eligibility_provider(rec.get("Payor") or "")
+    state = _build_eligibility_engine_state(
+        rec, cpts=cpts, source="legacy-record",
+        configured=bool(getattr(provider, "configured", False)), verified=False,
+        coverage_status=rec.get("Status") or "Unknown",
+        policy_checks=_eligibility_policy_checks(
+            cpts, rec.get("Payor") or "", rec.get("RequestedServices") or "",
+            rec.get("Status") or "", **_eligibility_rule_context(rec),
+        ),
+        billing_readiness=rec.get("BillingReadiness") or "",
+        record_stage=rec.get("Stage") or "Received",
+        summary=rec.get("VerificationSummary") or "",
+        actor=user.get("username", ""), changed=False,
+    )
+    _persist_eligibility_engine_state(rid, state)
+    return state
 
 
 @router.delete("/eligibility/{rid}")
@@ -4479,14 +4889,12 @@ def verify_elig(rid: int, hub_session: Optional[str] = Cookie(None)):
                              mark_completed=True)
     if res.get("configured") is False and not res.get("offline"):
         # Engine genuinely unavailable — coverage facts unchanged, nothing faked.
-        return {
-            "ok": False, "configured": False, "changed": res.get("changed", False),
-            "message": "The eligibility engine is unavailable right now. Nothing was "
-                       "changed or fabricated. (Live active/inactive status also needs "
-                       "a payer source — set STEDI_API_KEY + STEDI_PROVIDER_NPI, or "
-                       "complete CMS HETS enrollment.)",
-            "summary": res.get("summary", ""), "error": res.get("error"),
-        }
+        output = dict(res)
+        output["message"] = res.get("summary") or (
+            "The eligibility engine is unavailable right now. Nothing was changed "
+            "or fabricated. Configure Stedi, pVerify, or CMS HETS."
+        )
+        return output
     if res.get("ok"):
         _label = res.get("status") or res.get("billing_readiness") or "policy reviewed"
         notify_activity(user["username"], f"verified ({res.get('source')})",
@@ -4968,6 +5376,78 @@ class EligibilityCheckIn(BaseModel):
     payer: Optional[_EligCheckPayer] = None
 
 
+class UniversalEligibilityIn(BaseModel):
+    patient: dict
+    insurance: dict
+    provider: dict
+    visit: dict
+    eligibility_id: Optional[int] = None
+    client_id: Optional[int] = None
+
+
+@router.post("/universal-eligibility-eval")
+def universal_eligibility_eval(
+    body: UniversalEligibilityIn,
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Apply universal plan/network/specialty/CPT/ICD billing logic.
+
+    This endpoint evaluates supplied real payer facts. It records a PHI-safe
+    audit decision but never substitutes for, or stamps, a live 270/271 payer
+    verification.
+    """
+    user = _require_user(hub_session)
+    requested_client_id = int(body.client_id or 0) or None
+    if user.get("role") in ("admin", "staff"):
+        client_id = requested_client_id or _client_scope(user) or int(user.get("id") or 0)
+    else:
+        client_id = _client_account_id(user)
+        if requested_client_id and int(requested_client_id) != int(client_id):
+            raise HTTPException(403, "You can only evaluate your own account.")
+
+    eligibility_id = int(body.eligibility_id or 0) or None
+    if eligibility_id:
+        record = get_eligibility_one(eligibility_id)
+        if not record:
+            raise HTTPException(404, "Eligibility record not found")
+        record_client_id = int(record.get("client_id") or 0)
+        if user.get("role") not in ("admin", "staff"):
+            if record_client_id not in set(_doc_account_ids(user)):
+                raise HTTPException(403, "You can only evaluate your own account's patients.")
+        elif requested_client_id and record_client_id != int(requested_client_id):
+            raise HTTPException(400, "eligibility_id does not belong to client_id")
+        client_id = record_client_id
+
+    from eligibility_hybrid import universal_eligibility_engine
+    result = universal_eligibility_engine(
+        body.patient, body.insurance, body.provider, body.visit
+    )
+    payer_name = str(
+        body.insurance.get("payer_name")
+        or body.insurance.get("name")
+        or ""
+    ).strip()
+    check_id = record_eligibility_check({
+        "eligibility_id": eligibility_id,
+        "client_id": client_id,
+        "source": "universal-rules",
+        "status": result["decision"],
+        "checked_by": user.get("username", ""),
+        "payer_name": payer_name,
+        "result_json": _json.dumps(result, separators=(",", ":"), default=str)[:200000],
+        "errors": "; ".join(result.get("missing_fields") or []),
+    })
+    log_audit(
+        client_id,
+        user.get("username", ""),
+        "universal_eligibility_evaluated",
+        "eligibility",
+        eligibility_id,
+        f"decision={result['decision']} check_id={check_id}",
+    )
+    return {**result, "check_id": check_id, "source": "universal-rules"}
+
+
 @router.post("/eligibility-check")
 def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Cookie(None)):
     """Real-time eligibility (X12 270/271) for one patient.
@@ -4983,9 +5463,10 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
     provider.npi is the LAB'S OWN organizational NPI — supplied per call or from
     one-time server config — never a per-patient or rendering-provider link.
     """
-    _require_user(hub_session)
+    user = _require_user(hub_session)
     try:
-        from eligibility_hybrid import PatientRequest
+        from eligibility_hybrid import (PatientRequest, build_eligibility_lifecycle,
+                                        derive_billing_readiness)
         from eligibility_hybrid.policy import is_traditional_medicare
     except Exception as e:  # pragma: no cover
         raise HTTPException(503, f"Eligibility engine unavailable: {e}")
@@ -4994,6 +5475,18 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
     prov = body.provider or _EligCheckProvider()
     pay = body.payer or _EligCheckPayer()
     payer_name = (pay.payer_name or pay.payer_code or "").strip()
+    client_id = (_client_scope(user) or _client_account_id(user)
+                 or int(user.get("id") or 0))
+
+    lifecycle_inputs = {
+        "record_id": None,
+        "client_id": client_id,
+        "patient_name": f"{(pat.first_name or '').strip()} {(pat.last_name or '').strip()}".strip(),
+        "dob": (pat.dob or "").strip(),
+        "payer_name": payer_name,
+        "member_id": (pat.member_id or "").strip(),
+        "requested_services": [],
+    }
 
     req = PatientRequest(
         first_name=(pat.first_name or "").strip(),
@@ -5013,8 +5506,72 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
                        or _elig_cfg("HETS_PROVIDER_NAME")),
     )
 
-    provider = _build_live_eligibility_provider()
+    provider = _build_live_eligibility_provider(payer_name)
+    provider_name = getattr(provider, "name", "eligibility")
+    provider_configured = bool(getattr(provider, "configured", False))
+    probe_state = build_eligibility_lifecycle(
+        lifecycle_inputs, source="input-validation",
+        configured=provider_configured, verified=False,
+        coverage_status="Unknown", record_stage="Received",
+    )
+    missing_fields = probe_state["OPS"]["missing_fields"]
+    if missing_fields:
+        summary = "Missing required eligibility fields: " + ", ".join(missing_fields) + "."
+        check_id = record_eligibility_check({
+            "eligibility_id": None,
+            "client_id": client_id,
+            "source": "input-validation",
+            "status": "Input Required",
+            "checked_by": user.get("username", ""),
+            "member_id": (pat.member_id or "").strip(),
+            "payer_name": payer_name,
+            "result_json": _json.dumps({"missing_fields": missing_fields}),
+        })
+        state = build_eligibility_lifecycle(
+            lifecycle_inputs, source="input-validation",
+            configured=provider_configured, verified=False,
+            coverage_status="Unknown", record_stage="Received",
+            summary=summary, check_id=check_id, actor=user.get("username", ""),
+        )
+        finalize_eligibility_check_state(
+            check_id, _json.dumps(state, separators=(",", ":"), default=str)
+        )
+        return JSONResponse(status_code=400, content={
+            "eligibility_status": "UNKNOWN",
+            "configured": provider_configured,
+            "missing_fields": missing_fields,
+            "message": summary,
+            "check_id": check_id,
+            "engine_state": state,
+        })
+
     if not provider.configured:
+        summary = ("No compatible live payer connection is configured. Connect CMS HETS "
+                   "for traditional Medicare or a clearinghouse for Medicare Advantage, "
+                   "Medicaid, and commercial coverage. Nothing was fabricated.")
+        check_id = record_eligibility_check({
+            "eligibility_id": None,
+            "client_id": client_id,
+            "source": "connection-check",
+            "status": "Connection Required",
+            "checked_by": user.get("username", ""),
+            "member_id": (pat.member_id or "").strip(),
+            "payer_name": payer_name,
+        })
+        state = build_eligibility_lifecycle(
+            lifecycle_inputs, source="connection-check", configured=False,
+            verified=False, coverage_status="Unknown",
+            policy_checks=_eligibility_policy_checks(
+                [], payer_name, "", client_id=client_id,
+                plan_name=pay.plan_id or "", member_id=pat.member_id or "",
+                fields={"provider_npi": prov.npi or "", "tin": prov.tin or ""},
+            ),
+            billing_readiness="", record_stage="In Progress", summary=summary,
+            check_id=check_id, actor=user.get("username", ""),
+        )
+        finalize_eligibility_check_state(
+            check_id, _json.dumps(state, separators=(",", ":"), default=str)
+        )
         return {
             "eligibility_status": "UNKNOWN",
             "configured": False,
@@ -5026,16 +5583,40 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
             "effective_date": None,
             "termination_date": None,
             "raw_271": "",
-            "message": ("No live payer connection is set, so plan status cannot be "
-                        "verified yet. Connect CMS HETS (straight Medicare) or a "
-                        "clearinghouse key (Medicare Advantage / commercial). "
-                        "Nothing was fabricated."),
+            "message": summary,
+            "check_id": check_id,
+            "engine_state": state,
         }
 
     try:
         result = provider.verify(req)
     except Exception as e:  # network / transport failure
-        raise HTTPException(502, f"Payer transport error: {e}")
+        check_id = record_eligibility_check({
+            "eligibility_id": None,
+            "client_id": client_id,
+            "source": provider_name,
+            "status": "Error",
+            "checked_by": user.get("username", ""),
+            "member_id": (pat.member_id or "").strip(),
+            "payer_name": payer_name,
+            "errors": str(e),
+        })
+        state = build_eligibility_lifecycle(
+            lifecycle_inputs, source=provider_name, configured=True,
+            verified=False, coverage_status="Unknown", record_stage="In Progress",
+            summary=f"Payer transport error: {e}", check_id=check_id,
+            actor=user.get("username", ""), errors=[str(e)],
+        )
+        finalize_eligibility_check_state(
+            check_id, _json.dumps(state, separators=(",", ":"), default=str)
+        )
+        return JSONResponse(status_code=502, content={
+            "eligibility_status": "UNKNOWN",
+            "configured": True,
+            "error": f"Payer transport error: {e}",
+            "check_id": check_id,
+            "engine_state": state,
+        })
 
     status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
     active = status_val == "Active"
@@ -5050,10 +5631,49 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
     else:
         cov_word = "Unknown"
 
+    raw_request = _eligibility_audit_text(
+        (result.raw or {}).get("x12_270")
+        or (result.raw or {}).get("request_json")
+        or ""
+    )
+    raw_response = _eligibility_audit_text((result.raw or {}).get("x12_271") or "")
+    check_id = record_eligibility_check({
+        "eligibility_id": None,
+        "client_id": client_id,
+        "source": provider_name,
+        "status": status_val,
+        "checked_by": user.get("username", ""),
+        "member_id": result.member_id or (pat.member_id or "").strip(),
+        "payer_name": payer_out,
+        "raw_request": raw_request,
+        "raw_response": raw_response,
+        "result_json": _json.dumps(result.to_dict(), default=str)[:200000],
+        "errors": "; ".join(result.errors or []),
+    })
+    policy_checks = _eligibility_policy_checks(
+        [], payer_out, "", status_val, client_id=client_id,
+        plan_name=pay.plan_id or "", member_id=pat.member_id or "",
+        fields={"provider_npi": prov.npi or "", "tin": prov.tin or ""},
+    )
+    readiness = derive_billing_readiness(
+        status_val, requested_services=[], policy_checks=policy_checks,
+        prior_auth_required=result.prior_auth_required,
+    )
+    state = build_eligibility_lifecycle(
+        lifecycle_inputs, source=provider_name, configured=True, verified=True,
+        coverage_status=status_val, policy_checks=policy_checks,
+        billing_readiness=readiness, record_stage="Completed",
+        summary=f"Live payer response: {status_val}.", check_id=check_id,
+        actor=user.get("username", ""), changed=False, errors=result.errors or [],
+    )
+    finalize_eligibility_check_state(
+        check_id, _json.dumps(state, separators=(",", ":"), default=str)
+    )
+
     return {
         "eligibility_status": status_val.upper(),
         "configured": True,
-        "source": getattr(provider, "name", "eligibility"),
+        "source": provider_name,
         "plan_type": plan_type,
         "payer_name": (payer_out or None),
         "benefits": {"lab_services": cov_word,
@@ -5061,8 +5681,10 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
                      "prior_auth_required": result.prior_auth_required},
         "effective_date": (result.effective_date or None),
         "termination_date": (result.term_date or None),
-        "raw_271": ((result.raw or {}).get("x12_271") or ""),
+        "raw_271": raw_response,
         "errors": (result.errors or []),
+        "check_id": check_id,
+        "engine_state": state,
     }
 
 
@@ -7043,11 +7665,11 @@ async def import_payments_posted_route(
     re-uploading the same remittance never double-counts.
     """
     user = _require_user(hub_session)
-    # Payment posting is a billing-team action (admin, Eric and the billers).
-    # Client logins never post payments, so reject them here — defense in depth
-    # beyond the hidden upload card in the UI.
-    if user["role"] not in ("admin", "staff"):
-        raise HTTPException(status_code=403, detail="Payment posting is restricted to the billing team")
+    if not _is_allowed_payment_poster_username(user.get("username") or ""):
+        raise HTTPException(
+            status_code=403,
+            detail="Payment posting is restricted to Melissa, Susan, Jessica, and Maria",
+        )
     scope = client_id if client_id is not None else (
         _client_scope(user) if _client_scope(user) is not None
         else _single_client_account_or(user["id"]))
@@ -9044,6 +9666,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
     # the payments table so the dashboard "Posted" bucket reflects the real money
     # posted (e.g. the ~$7k of EFT deposits), in addition to landing on the claim.
     _is_payment_template = (_tpl_used == "lims_payments")
+    _allow_payment_mirror = _is_allowed_payment_poster_username(uploaded_by)
     payment_rows = []
 
     # Pass 1: fuzzy-map every row, and tally how many times each file-provided
@@ -9205,7 +9828,7 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
                     str(uploaded_by or ""),
                 ))
                 imported += 1
-                if _is_payment_template:
+                if _is_payment_template and _allow_payment_mirror:
                     _pmt_amt = _parse_float(mapped.get("PaidAmount", 0))
                     if _pmt_amt > 0:
                         _ck = str(mapped.get("ClaimKey", ""))
@@ -9224,6 +9847,10 @@ def _import_claims_from_excel(content: bytes, ext: str, client_id: int, uploaded
         # reflects real deposits. Delete-then-insert keyed on the deterministic
         # PMT-<eft> ClaimKey keeps this idempotent across reimports (no double
         # counting). PostedBy carries the uploader so attribution is preserved.
+        if _is_payment_template and not _allow_payment_mirror:
+            errors.append(
+                "Payment rows were ignored: only Melissa, Susan, Jessica, and Maria can post payments"
+            )
         if payment_rows:
             _pmt_keys = list({pr["ClaimKey"] for pr in payment_rows})
             cur.executemany(
@@ -11326,6 +11953,291 @@ class PaGateIn(BaseModel):
     icd10_codes: Optional[str] = ""        # comma / space separated
     provider_npi: Optional[str] = ""
     provider_name: Optional[str] = ""
+
+
+class EligibilityPayerRuleIn(BaseModel):
+    id: Optional[int] = None
+    rule_key: str
+    client_id: Optional[int] = None
+    payer_pattern: str
+    plan_pattern: Optional[str] = ""
+    cpt_code: Optional[str] = "*"
+    criteria: Optional[dict] = None
+    decision: str
+    reason: Optional[str] = ""
+    actions: Optional[list] = None
+    source: str
+    version: Optional[str] = "1"
+    effective_date: Optional[str] = ""
+    term_date: Optional[str] = ""
+    is_active: Optional[bool] = True
+
+
+def _validated_eligibility_rule(body: EligibilityPayerRuleIn) -> dict:
+    from eligibility_hybrid.rules import ALLOWED_CRITERIA, ALLOWED_DECISIONS
+    data = body.model_dump()
+    required = [field for field in ("rule_key", "payer_pattern", "decision", "source")
+                if not str(data.get(field) or "").strip()]
+    if required:
+        raise HTTPException(400, detail={"missing_fields": required})
+    data["decision"] = str(data["decision"]).strip().upper()
+    if data["decision"] not in ALLOWED_DECISIONS:
+        raise HTTPException(400, f"decision must be one of {sorted(ALLOWED_DECISIONS)}")
+    criteria = data.get("criteria") or {}
+    unknown = sorted(set(criteria) - ALLOWED_CRITERIA)
+    if unknown:
+        raise HTTPException(400, detail={"unknown_criteria": unknown})
+    for key, value in criteria.items():
+        if not isinstance(value, list):
+            raise HTTPException(400, f"criteria.{key} must be an array")
+    data["criteria"] = criteria
+    data["actions"] = [str(item).strip() for item in (data.get("actions") or [])
+                       if str(item).strip()]
+    cpt_code = str(data.get("cpt_code") or "*").strip()
+    if cpt_code != "*" and not re.fullmatch(r"\d{5}", cpt_code):
+        raise HTTPException(400, "cpt_code must be a 5-digit CPT or '*'")
+    data["cpt_code"] = cpt_code
+    parsed_dates = {}
+    for field in ("effective_date", "term_date"):
+        value = str(data.get(field) or "").strip()
+        if value:
+            try:
+                parsed_dates[field] = date.fromisoformat(value)
+            except ValueError:
+                raise HTTPException(400, f"{field} must be YYYY-MM-DD")
+        data[field] = value
+    if (parsed_dates.get("effective_date") and parsed_dates.get("term_date")
+            and parsed_dates["term_date"] < parsed_dates["effective_date"]):
+        raise HTTPException(400, "term_date cannot precede effective_date")
+    if data.get("client_id"):
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM clients WHERE id=?", (int(data["client_id"]),)
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            raise HTTPException(400, "client_id not found")
+    return data
+
+
+def _rule_matches_record(rule: dict, rec: dict) -> bool:
+    from eligibility_hybrid.rules import evaluate_eligibility_rules
+    cpts = _parse_cpts(rec.get("RequestedServices") or "") or [""]
+    for cpt in cpts:
+        result = evaluate_eligibility_rules([{**rule, "is_active": True}], {
+            "client_id": rec.get("client_id"),
+            "payer_name": rec.get("Payor") or "",
+            "plan_name": rec.get("PlanGroup") or "",
+            "cpt_code": cpt,
+            "date_of_service": business_today_iso(),
+            "icd10_codes": _parse_icd10s(rec.get("RequestedServices") or ""),
+            "member_id": rec.get("MemberID") or "",
+            "fields": _eligibility_rule_context(rec).get("fields", {}),
+        })
+        if result["matches"]:
+            return True
+    return False
+
+
+def _invalidate_eligibility_for_rule(rule, actor: str) -> int:
+    rules = list(rule) if isinstance(rule, (list, tuple)) else [rule]
+    scopes = {item.get("client_id") for item in rules}
+    scope = next(iter(scopes)) if len(scopes) == 1 else None
+    records = get_eligibility(scope)
+    affected = [
+        rec for rec in records
+        if any(_rule_matches_record(item, rec) for item in rules)
+    ]
+    rule_keys = ", ".join(
+        f"{item.get('rule_key')} v{item.get('version') or '1'}" for item in rules
+    )
+    for rec in affected:
+        cpts = _parse_cpts(rec.get("RequestedServices") or "")
+        checks = _eligibility_policy_checks(
+            cpts, rec.get("Payor") or "", rec.get("RequestedServices") or "",
+            rec.get("Status") or "", **_eligibility_rule_context(rec),
+        )
+        summary = f"Eligibility rule change ({rule_keys}); re-verification required."
+        state = _build_eligibility_engine_state(
+            rec, cpts=cpts, source="rule-update",
+            configured=bool(getattr(
+                _build_live_eligibility_provider(rec.get("Payor") or ""),
+                "configured", False,
+            )),
+            verified=False, coverage_status=rec.get("Status") or "Unknown",
+            policy_checks=checks, billing_readiness="On Hold",
+            record_stage="In Progress", summary=summary,
+            actor=actor, changed=True,
+        )
+        update_eligibility(rec["id"], {
+            "BillingReadiness": "On Hold",
+            "Stage": "In Progress",
+            "VerificationSummary": summary,
+            "EligibilityStateJson": _json.dumps(
+                state, separators=(",", ":"), default=str
+            )[:200000],
+        })
+    return len(affected)
+
+
+@router.get("/admin/eligibility/rules")
+def admin_list_eligibility_rules(client_id: Optional[int] = None,
+                                 include_inactive: bool = False,
+                                 hub_session: Optional[str] = Cookie(None)):
+    _require_full_admin(hub_session)
+    rules = list_eligibility_payer_rules(client_id, include_inactive)
+    return {"ok": True, "count": len(rules), "rules": rules}
+
+
+@router.get("/admin/eligibility/engine-tracker")
+def admin_eligibility_engine_tracker(
+    hub_session: Optional[str] = Cookie(None),
+):
+    """Aggregate lifecycle state across facilities, payers, and products."""
+    _require_full_admin(hub_session)
+    records = get_eligibility()
+    client_names = {
+        int(item.get("id") or 0): (
+            item.get("company") or item.get("username") or f"Client #{item.get('id')}"
+        )
+        for item in list_clients()
+    }
+    by_facility = {}
+    by_payer = {}
+    by_product = {}
+    lifecycle_statuses = {}
+    missing_inputs = {}
+    unknown_payer_rules = 0
+    approved = held = uninitialized = 0
+
+    def _bump(bucket: dict, key: str, lifecycle_status: str):
+        slot = bucket.setdefault(key, {"count": 0, "lifecycle_statuses": {}})
+        slot["count"] += 1
+        slot["lifecycle_statuses"][lifecycle_status] = (
+            slot["lifecycle_statuses"].get(lifecycle_status, 0) + 1
+        )
+
+    for rec in records:
+        state = rec.get("EligibilityState") or {}
+        engine = state.get("ELIGIBILITY_ENGINE") or {}
+        decisions = engine.get("decisions") or {}
+        lifecycle_status = decisions.get("lifecycle_status") or "UNINITIALIZED"
+        lifecycle_statuses[lifecycle_status] = lifecycle_statuses.get(lifecycle_status, 0) + 1
+        if lifecycle_status == "UNINITIALIZED":
+            uninitialized += 1
+        if bool((state.get("APPROVE") or {}).get("approved")):
+            approved += 1
+        else:
+            held += 1
+        for field in (state.get("OPS") or {}).get("missing_fields") or []:
+            missing_inputs[field] = missing_inputs.get(field, 0) + 1
+        if "payer_specific_rules" in (
+            (engine.get("checks") or {}).get("unknown_requirements") or []
+        ):
+            unknown_payer_rules += 1
+
+        client_id = int(rec.get("client_id") or 0)
+        facility = client_names.get(client_id, f"Client #{client_id}" if client_id else "Unknown")
+        payer = (rec.get("Payor") or "Unknown").strip() or "Unknown"
+        products = _parse_cpts(rec.get("RequestedServices") or "") or ["Unspecified"]
+        _bump(by_facility, facility, lifecycle_status)
+        _bump(by_payer, payer, lifecycle_status)
+        for product in products:
+            _bump(by_product, product, lifecycle_status)
+
+    next_actions = []
+    if uninitialized:
+        next_actions.append({"code": "INITIALIZE_LEGACY_STATES", "count": uninitialized})
+    if unknown_payer_rules:
+        next_actions.append({
+            "code": "LOAD_PAYER_RULES", "count": unknown_payer_rules,
+        })
+    if missing_inputs:
+        next_actions.append({"code": "COLLECT_MISSING_INPUTS", "fields": missing_inputs})
+
+    return {
+        "OPS": {"status": "complete", "records_evaluated": len(records)},
+        "TRACK": {
+            "status": "complete",
+            "by_facility": by_facility,
+            "by_payer": by_payer,
+            "by_product": by_product,
+            "lifecycle_statuses": lifecycle_statuses,
+        },
+        "COMMUNICATE": {
+            "status": "complete",
+            "missing_inputs": missing_inputs,
+            "unknown_payer_rules": unknown_payer_rules,
+        },
+        "APPROVE": {
+            "status": "complete",
+            "approved": approved,
+            "not_approved": held,
+        },
+        "EXECUTE": {"status": "complete", "next_actions": next_actions},
+        "ELIGIBILITY_ENGINE": {
+            "inputs": {"scope": "all", "record_count": len(records)},
+            "rules": {"active_rule_count": len(list_eligibility_payer_rules())},
+            "checks": {
+                "missing_inputs": missing_inputs,
+                "unknown_payer_rules": unknown_payer_rules,
+            },
+            "decisions": {"approved": approved, "not_approved": held},
+            "status": {"lifecycle_statuses": lifecycle_statuses},
+            "next_actions": {"items": next_actions},
+        },
+        "ERRORS": {},
+    }
+
+
+@router.post("/admin/eligibility/rules")
+def admin_save_eligibility_rule(body: EligibilityPayerRuleIn,
+                                hub_session: Optional[str] = Cookie(None)):
+    admin = _require_full_admin(hub_session)
+    data = _validated_eligibility_rule(body)
+    old_rule = None
+    if data.get("id"):
+        old_rule = next((
+            item for item in list_eligibility_payer_rules(include_inactive=True)
+            if int(item["id"]) == int(data["id"])
+        ), None)
+    rule_id = save_eligibility_payer_rule(data, admin.get("username", ""))
+    rule = next(
+        item for item in list_eligibility_payer_rules(
+            data.get("client_id"), include_inactive=True
+        ) if int(item["id"]) == int(rule_id)
+    )
+    affected = _invalidate_eligibility_for_rule(
+        [item for item in (old_rule, rule) if item], admin.get("username", "")
+    )
+    log_audit(
+        data.get("client_id"), admin.get("username", ""),
+        "eligibility_rule_saved", "eligibility_payer_rules", rule_id,
+        f"key={rule['rule_key']} version={rule['version']} source={rule['source']} "
+        f"affected={affected}",
+    )
+    return {"ok": True, "rule": rule, "affected_records": affected}
+
+
+@router.delete("/admin/eligibility/rules/{rule_id}")
+def admin_deactivate_eligibility_rule(rule_id: int,
+                                      hub_session: Optional[str] = Cookie(None)):
+    admin = _require_full_admin(hub_session)
+    all_rules = list_eligibility_payer_rules(include_inactive=True)
+    rule = next((item for item in all_rules if int(item["id"]) == int(rule_id)), None)
+    if not rule:
+        raise HTTPException(404, "Eligibility rule not found")
+    if not deactivate_eligibility_payer_rule(rule_id, admin.get("username", "")):
+        raise HTTPException(409, "Eligibility rule is already inactive")
+    affected = _invalidate_eligibility_for_rule(rule, admin.get("username", ""))
+    log_audit(
+        rule.get("client_id"), admin.get("username", ""),
+        "eligibility_rule_deactivated", "eligibility_payer_rules", rule_id,
+        f"key={rule['rule_key']} version={rule['version']} affected={affected}",
+    )
+    return {"ok": True, "id": rule_id, "affected_records": affected}
 
 
 def _elig_is_sandbox() -> bool:

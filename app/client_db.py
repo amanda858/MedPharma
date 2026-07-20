@@ -1071,6 +1071,7 @@ def init_client_hub_db():
             -- Auto-verify: plain-English coverage explanation + the tests/CPTs requested
             VerificationSummary TEXT DEFAULT '',          -- human-readable: plan, active/lapsed, cleared-to-bill, deductible, service coverage
             RequestedServices   TEXT DEFAULT '',          -- free text / CPTs of the ordered test(s), e.g. "87631 respiratory PCR; 81479 NGS"
+            EligibilityStateJson TEXT DEFAULT '{}',        -- canonical OPS/TRACK/COMMUNICATE/APPROVE/EXECUTE state
             -- intake → completed-reporting workflow (PCR eligibility)
             Stage               TEXT DEFAULT 'Received',  -- Received, In Progress, Completed
             IntakeFileId        INTEGER,                  -- client-uploaded intake document (client_files.id)
@@ -1103,12 +1104,39 @@ def init_client_hub_db():
             raw_request     TEXT DEFAULT '',          -- the X12 270 we sent
             raw_response    TEXT DEFAULT '',          -- the raw 271 the payer returned
             result_json     TEXT DEFAULT '',          -- normalized CoverageResult
+            engine_state_json TEXT DEFAULT '{}',      -- lifecycle state at this attempt
             errors          TEXT DEFAULT '',          -- AAA / provider errors, if any
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
         CREATE INDEX IF NOT EXISTS idx_eligchk_elig ON eligibility_checks(eligibility_id);
         CREATE INDEX IF NOT EXISTS idx_eligchk_client ON eligibility_checks(client_id);
+
+        -- ── versioned payer/facility/product eligibility rules ─────────
+        CREATE TABLE IF NOT EXISTS eligibility_payer_rules (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_key        TEXT NOT NULL,
+            client_id       INTEGER,
+            payer_pattern   TEXT NOT NULL,
+            plan_pattern    TEXT DEFAULT '',
+            cpt_code        TEXT DEFAULT '*',
+            criteria_json   TEXT DEFAULT '{}',
+            decision        TEXT NOT NULL,
+            reason          TEXT DEFAULT '',
+            actions_json    TEXT DEFAULT '[]',
+            source          TEXT NOT NULL,
+            version         TEXT DEFAULT '1',
+            effective_date  TEXT DEFAULT '',
+            term_date       TEXT DEFAULT '',
+            is_active       INTEGER DEFAULT 1,
+            created_by      TEXT DEFAULT '',
+            updated_by      TEXT DEFAULT '',
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_elig_rules_scope
+            ON eligibility_payer_rules(client_id, payer_pattern, cpt_code, is_active);
 
         -- ── EDI / ERA / EFT setup ──────────────────────────────────────
         CREATE TABLE IF NOT EXISTS edi_setup (
@@ -1602,9 +1630,17 @@ def init_client_hub_db():
         ("BillingReadiness", "TEXT DEFAULT ''"),
         ("VerificationSummary", "TEXT DEFAULT ''"),
         ("RequestedServices", "TEXT DEFAULT ''"),
+        ("EligibilityStateJson", "TEXT DEFAULT '{}'"),
     ):
         if col not in elig_cols:
             cur.execute(f"ALTER TABLE eligibility ADD COLUMN {col} {col_def}")
+    cur.execute("PRAGMA table_info(eligibility_checks)")
+    elig_check_cols = {row[1] for row in cur.fetchall()}
+    if "engine_state_json" not in elig_check_cols:
+        cur.execute(
+            "ALTER TABLE eligibility_checks "
+            "ADD COLUMN engine_state_json TEXT DEFAULT '{}'"
+        )
     conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM clients")
@@ -3609,8 +3645,18 @@ _ELIGIBILITY_FIELDS = [
     "Stage", "IntakeFileId", "IntakeFileName", "ReportFileId", "ReportFileName",
     "CompletedBy", "CompletedAt",
     # auto-verify outputs
-    "VerificationSummary", "RequestedServices",
+    "VerificationSummary", "RequestedServices", "EligibilityStateJson",
 ]
+
+
+def _eligibility_row_dict(row) -> dict:
+    data = dict(row)
+    try:
+        state = json.loads(data.get("EligibilityStateJson") or "{}")
+        data["EligibilityState"] = state if isinstance(state, dict) else {}
+    except (TypeError, ValueError):
+        data["EligibilityState"] = {}
+    return data
 
 
 def get_eligibility(client_id: int = None, status: str = None, sub_profile: str = None):
@@ -3627,7 +3673,7 @@ def get_eligibility(client_id: int = None, status: str = None, sub_profile: str 
             q += " AND sub_profile=?"; params.append(sub_profile)
         q += " ORDER BY updated_at DESC"
         cur.execute(q, params)
-        rows = [dict(r) for r in cur.fetchall()]
+        rows = [_eligibility_row_dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
     return rows
@@ -3640,15 +3686,18 @@ def create_eligibility(data: dict) -> int:
         cur.execute("""INSERT INTO eligibility
             (client_id,PatientName,DOB,Payor,MemberID,PlanGroup,Status,EffectiveDate,TermDate,
              Copay,Deductible,Coinsurance,OOPMax,PriorAuthRequired,AuthNumber,
-             VerifiedBy,VerifiedDate,NextReverifyDate,Notes,BillingReadiness,sub_profile,uploaded_by,RequestedServices)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             VerifiedBy,VerifiedDate,NextReverifyDate,Notes,BillingReadiness,sub_profile,uploaded_by,
+             RequestedServices,EligibilityStateJson)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data["client_id"], data.get("PatientName", ""), data.get("DOB", ""),
              data.get("Payor", ""), data.get("MemberID", ""), data.get("PlanGroup", ""),
              data.get("Status", "Pending"), data.get("EffectiveDate", ""), data.get("TermDate", ""),
              data.get("Copay", ""), data.get("Deductible", ""), data.get("Coinsurance", ""),
              data.get("OOPMax", ""), data.get("PriorAuthRequired", ""), data.get("AuthNumber", ""),
              data.get("VerifiedBy", ""), data.get("VerifiedDate", ""), data.get("NextReverifyDate", ""),
-             data.get("Notes", ""), data.get("BillingReadiness", ""), data.get("sub_profile", ""), data.get("uploaded_by", ""), data.get("RequestedServices", "")))
+             data.get("Notes", ""), data.get("BillingReadiness", ""), data.get("sub_profile", ""),
+             data.get("uploaded_by", ""), data.get("RequestedServices", ""),
+             data.get("EligibilityStateJson", "{}")))
         conn.commit()
         eid = cur.lastrowid
     finally:
@@ -3675,7 +3724,8 @@ def update_eligibility(rec_id: int, data: dict):
 def delete_eligibility(rec_id: int):
     conn = get_db()
     try:
-        conn.execute("DELETE FROM eligibility WHERE id=?", (rec_id,))
+        cur = conn.cursor()
+        cur.execute("DELETE FROM eligibility WHERE id=?", (rec_id,))
         conn.commit()
     finally:
         conn.close()
@@ -3690,25 +3740,27 @@ def get_eligibility_one(rec_id: int):
         row = cur.fetchone()
     finally:
         conn.close()
-    return dict(row) if row else None
+    return _eligibility_row_dict(row) if row else None
 
 
 def record_eligibility_check(data: dict) -> int:
-    """Persist ONE real payer coverage check as immutable audit evidence.
+    """Persist one verification attempt and its immutable lifecycle outcome.
 
-    Only ever called with an actual provider response (e.g. a CMS HETS 271);
-    the raw_response is the artifact you produce in an audit."""
+    Real payer attempts include raw request/response evidence. Offline policy
+    reviews are explicitly source-labeled and never contain fabricated 271 data.
+    """
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute("""INSERT INTO eligibility_checks
             (eligibility_id, client_id, source, status, checked_by, member_id,
-             payer_name, raw_request, raw_response, result_json, errors)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+             payer_name, raw_request, raw_response, result_json, engine_state_json, errors)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.get("eligibility_id"), data["client_id"], data.get("source", ""),
              data.get("status", ""), data.get("checked_by", ""), data.get("member_id", ""),
              data.get("payer_name", ""), data.get("raw_request", ""),
              data.get("raw_response", ""), data.get("result_json", ""),
+             data.get("engine_state_json", "{}"),
              data.get("errors", "")))
         conn.commit()
         return cur.lastrowid
@@ -3716,16 +3768,60 @@ def record_eligibility_check(data: dict) -> int:
         conn.close()
 
 
+def finalize_eligibility_check_state(check_id: int, engine_state_json: str) -> bool:
+    """Fill the canonical lifecycle state once after the audit id is known."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE eligibility_checks SET engine_state_json=? "
+            "WHERE id=? AND COALESCE(NULLIF(engine_state_json,''),'{}')='{}'",
+            (engine_state_json or "{}", int(check_id)),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def has_real_eligibility_evidence(eligibility_id: int) -> bool:
+    """True only when a successful live payer check established active coverage."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM eligibility_checks "
+            "WHERE eligibility_id=? "
+            "  AND lower(source) IN ('stedi','hets','pverify') "
+            "  AND lower(status)='active' "
+            "  AND TRIM(COALESCE(errors,''))='' "
+            "  AND (TRIM(COALESCE(raw_response,''))<>'' "
+            "       OR TRIM(COALESCE(result_json,'')) NOT IN ('','{}')) "
+            "ORDER BY id DESC LIMIT 1",
+            (int(eligibility_id),),
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
 def get_eligibility_checks(eligibility_id: int, limit: int = 25):
-    """Most-recent-first audit history of real coverage checks for a record."""
+    """Most-recent-first audit history of verification attempts for a record."""
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute("""SELECT id, source, status, checked_by, member_id, payer_name,
-                              errors, created_at
+                              engine_state_json, errors, created_at
                        FROM eligibility_checks WHERE eligibility_id=?
                        ORDER BY id DESC LIMIT ?""", (eligibility_id, limit))
-        rows = [dict(r) for r in cur.fetchall()]
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            try:
+                state = json.loads(item.pop("engine_state_json", "") or "{}")
+                item["engine_state"] = state if isinstance(state, dict) else {}
+            except (TypeError, ValueError):
+                item["engine_state"] = {}
+            rows.append(item)
     finally:
         conn.close()
     return rows
@@ -3741,6 +3837,106 @@ def get_eligibility_check_raw(check_id: int):
     finally:
         conn.close()
     return dict(row) if row else None
+
+
+def _eligibility_rule_dict(row) -> dict:
+    item = dict(row)
+    try:
+        criteria = json.loads(item.pop("criteria_json", "") or "{}")
+        item["criteria"] = criteria if isinstance(criteria, dict) else {}
+    except (TypeError, ValueError):
+        item["criteria"] = {}
+    try:
+        actions = json.loads(item.pop("actions_json", "") or "[]")
+        item["actions"] = actions if isinstance(actions, list) else []
+    except (TypeError, ValueError):
+        item["actions"] = []
+    item["is_active"] = bool(item.get("is_active"))
+    return item
+
+
+def list_eligibility_payer_rules(client_id: int = None,
+                                 include_inactive: bool = False) -> list[dict]:
+    conn = get_db()
+    try:
+        where = []
+        params = []
+        if client_id is not None:
+            where.append("(client_id IS NULL OR client_id=?)")
+            params.append(int(client_id))
+        if not include_inactive:
+            where.append("is_active=1")
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        rows = conn.execute(
+            f"SELECT * FROM eligibility_payer_rules {clause} "
+            "ORDER BY payer_pattern, plan_pattern, cpt_code, rule_key, version",
+            params,
+        ).fetchall()
+        return [_eligibility_rule_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def save_eligibility_payer_rule(data: dict, updated_by: str = "") -> int:
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        values = (
+            (data.get("rule_key") or "").strip(),
+            int(data["client_id"]) if data.get("client_id") else None,
+            (data.get("payer_pattern") or "").strip(),
+            (data.get("plan_pattern") or "").strip(),
+            (data.get("cpt_code") or "*").strip() or "*",
+            json.dumps(data.get("criteria") or {}, separators=(",", ":")),
+            (data.get("decision") or "").strip().upper(),
+            (data.get("reason") or "").strip(),
+            json.dumps(data.get("actions") or [], separators=(",", ":")),
+            (data.get("source") or "").strip(),
+            (data.get("version") or "1").strip() or "1",
+            (data.get("effective_date") or "").strip(),
+            (data.get("term_date") or "").strip(),
+            1 if data.get("is_active", True) else 0,
+            updated_by or "",
+        )
+        if data.get("id"):
+            cur.execute(
+                "UPDATE eligibility_payer_rules SET "
+                "rule_key=?, client_id=?, payer_pattern=?, plan_pattern=?, cpt_code=?, "
+                "criteria_json=?, decision=?, reason=?, actions_json=?, source=?, "
+                "version=?, effective_date=?, term_date=?, is_active=?, updated_by=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (*values, int(data["id"])),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Eligibility rule not found")
+            rule_id = int(data["id"])
+        else:
+            cur.execute(
+                "INSERT INTO eligibility_payer_rules "
+                "(rule_key,client_id,payer_pattern,plan_pattern,cpt_code,criteria_json,"
+                "decision,reason,actions_json,source,version,effective_date,term_date,"
+                "is_active,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (*values, updated_by or ""),
+            )
+            rule_id = cur.lastrowid
+        conn.commit()
+        return rule_id
+    finally:
+        conn.close()
+
+
+def deactivate_eligibility_payer_rule(rule_id: int, updated_by: str = "") -> bool:
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE eligibility_payer_rules SET is_active=0, updated_by=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND is_active=1",
+            (updated_by or "", int(rule_id)),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
 
 
 # ─── EDI Setup ────────────────────────────────────────────────────────────────
@@ -5554,6 +5750,41 @@ def log_activity(username: str,
             conn.close()
 
 
+def _repair_offline_eligibility_verification_state(cur) -> int:
+    """Undo legacy rule-intercept stamps that looked like payer verification.
+
+    Rule Intercept is policy guidance only. It cannot prove enrollment and must
+    never make a patient appear payer-verified, completed, or clear to bill.
+    Preserve legitimate rows that have any real Stedi/HETS/pVerify evidence.
+    """
+    cur.execute(
+        """
+        UPDATE eligibility
+           SET VerifiedBy='',
+               VerifiedDate='',
+               Stage=CASE WHEN COALESCE(Stage,'')='Completed'
+                          THEN 'In Progress' ELSE Stage END,
+               CompletedBy=CASE WHEN COALESCE(Stage,'')='Completed'
+                                THEN '' ELSE CompletedBy END,
+               CompletedAt=CASE WHEN COALESCE(Stage,'')='Completed'
+                                THEN '' ELSE CompletedAt END,
+               BillingReadiness=CASE WHEN COALESCE(BillingReadiness,'')='Clear to Bill'
+                                     THEN '' ELSE BillingReadiness END,
+               Status=CASE WHEN COALESCE(Status,'') IN ('Active','Inactive','Termed')
+                           THEN 'Needs Re-verify' ELSE Status END,
+               updated_at=CURRENT_TIMESTAMP
+         WHERE LOWER(TRIM(COALESCE(VerifiedBy,''))) LIKE 'rule intercept%'
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM eligibility_checks ec
+                WHERE ec.eligibility_id=eligibility.id
+                  AND LOWER(COALESCE(ec.source,'')) IN ('stedi','hets','pverify')
+           )
+        """
+    )
+    return int(cur.rowcount or 0)
+
+
 def list_activity_events(username: str = None,
                          start: str = None,
                          end: str = None,
@@ -6105,7 +6336,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
         EDI / Documents / Production / Chat / Reporting)
       - how many rows they created/updated
       - how many notes / files / messages they added
-      - hours active + idle on the platform
+            - activity/actions captured on the platform
 
     Returns a structured dict the emailer can render as HTML.
     """
@@ -6114,6 +6345,13 @@ def get_eod_team_report(report_date: str = None) -> dict:
         report_date = business_today_iso()
     day_start = f"{report_date} 00:00:00"
     day_end   = f"{report_date} 23:59:59"
+    payment_posting_users = {"melissa", "susan", "jessica", "maria"}
+
+    def _payment_actor_key(username: str) -> str:
+        u = (username or "").strip().lower()
+        if not u:
+            return ""
+        return u.split("@", 1)[0]
 
     conn = get_db()
     try:
@@ -6191,7 +6429,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
 
         # users[user_key] = {
         #   "username": ..., "contact_name": ..., "email": ..., "role": ...,
-        #   "active_hours": float, "idle_hours": float, "actions": int,
+        #   "actions": int,
         #   "first_seen": str, "last_seen": str,
         #   "totals": {tab: int}, "highlights": list[str],
         #   "clients": { client_name: {totals: {tab:int}, items: list[dict]} }
@@ -6202,8 +6440,6 @@ def get_eod_team_report(report_date: str = None) -> dict:
             "email": "",
             "role": "",
             "is_admin": False,
-            "active_hours": 0.0,
-            "idle_hours": 0.0,
             "actions": 0,
             "first_seen": "",
             "last_seen": "",
@@ -6247,7 +6483,7 @@ def get_eod_team_report(report_date: str = None) -> dict:
             if item is not None and len(cb["items"]) < 25:
                 cb["items"].append({"tab": tab, **item})
 
-        # ── 1) Presence rollup → active/idle hours ──
+        # ── 1) Presence rollup → action/session markers ──
         for row in cur.execute(
             "SELECT username, active_seconds, idle_seconds, action_count, "
             "       first_seen_at, last_seen_at "
@@ -6255,8 +6491,6 @@ def get_eod_team_report(report_date: str = None) -> dict:
             (report_date,),
         ).fetchall():
             slot = _u(row["username"])
-            slot["active_hours"] = round((row["active_seconds"] or 0) / 3600.0, 2)
-            slot["idle_hours"]   = round((row["idle_seconds"]   or 0) / 3600.0, 2)
             slot["actions"]      = int(row["action_count"] or 0)
             slot["first_seen"]   = row["first_seen_at"] or ""
             slot["last_seen"]    = row["last_seen_at"]  or ""
@@ -6311,6 +6545,8 @@ def get_eod_team_report(report_date: str = None) -> dict:
         ).fetchall():
             poster = (row["PostedBy"] or "").strip().lower()
             if not poster:
+                continue
+            if _payment_actor_key(poster) not in payment_posting_users:
                 continue
             try:
                 amt = float(row["PaymentAmount"] or 0)
@@ -6520,10 +6756,9 @@ def get_eod_team_report(report_date: str = None) -> dict:
         ordered = []
         for key in sorted(users.keys()):
             u = users[key]
-            # Drop completely empty rows (no activity AND no presence today).
+            # Drop completely empty rows (no captured activity/presence today).
             total_actions = sum(u["totals"].values())
-            if (total_actions == 0 and u["active_hours"] == 0
-                    and u["actions"] == 0):
+            if total_actions == 0 and u["actions"] == 0:
                 continue
             # Attach this operator's cumulative Billed Out (charges from every
             # claim they uploaded) - the single "what's billed" figure. Match on
@@ -7498,6 +7733,14 @@ def delete_production_log(log_id: int, client_id: int = None, username: str = No
 def get_user_production_snapshot(work_date: str = None):
     """Return per-user production activity for a given date (defaults to today)."""
     target_date = (work_date or business_today_iso()).strip()
+    _allowed_payment_posters = {"melissa", "susan", "jessica", "maria"}
+
+    def _payment_actor_key(username: str) -> str:
+        u = (username or "").strip().lower()
+        if not u:
+            return ""
+        return u.split("@", 1)[0]
+
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -7560,6 +7803,8 @@ def get_user_production_snapshot(work_date: str = None):
             uname = str(r["username"] or "").strip()
             if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
                 continue
+            if _payment_actor_key(uname) not in _allowed_payment_posters:
+                continue
             cnt = int(r["payments_posted"] or 0)
             amt = float(r["payments_amount"] or 0)
             payments_by_user[uname] = {"payments_posted": cnt, "payments_amount": amt}
@@ -7602,6 +7847,14 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
     """
     self_user = (username or "").strip()
     self_scope = bool(self_user)
+    _allowed_payment_posters = {"melissa", "susan", "jessica", "maria"}
+
+    def _payment_actor_key(username: str) -> str:
+        u = (username or "").strip().lower()
+        if not u:
+            return ""
+        return u.split("@", 1)[0]
+
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -7717,6 +7970,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
             uname = str(r["username"] or "").strip()
             if not uname or uname.lower() in _HIDDEN_ROSTER_USERS:
                 continue
+            if _payment_actor_key(uname) not in _allowed_payment_posters:
+                continue
             payments_by_user[uname] = {
                 "payments_posted": int(r["payments_posted"] or 0),
                 "payments_amount": float(r["payments_amount"] or 0),
@@ -7734,6 +7989,8 @@ def get_production_report(client_id: int = None, start_date: str = None, end_dat
         for r in cur.fetchall():
             uname = str(r["username"] or "").strip()
             if uname.lower() in _HIDDEN_ROSTER_USERS:
+                continue
+            if _payment_actor_key(uname) not in _allowed_payment_posters:
                 continue
             payment_details.append(dict(r))
 
