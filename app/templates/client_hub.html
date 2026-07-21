@@ -2693,18 +2693,22 @@
               <div id="eligConnStatus" style="font-size:12.5px;color:#475569;margin:8px 0 12px">Checking connection…</div>
               <div id="eligConnectForm" style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin:6px 0 12px;background:#f8fafc">
                 <div style="font-weight:700;color:#0f172a;margin-bottom:2px">Connect a payer source</div>
-                <div style="font-size:11.5px;color:#64748b;margin-bottom:8px">Paste one credential and click Save - it is Fernet-encrypted in the database (no redeploy, no Render access needed). One <b>Stedi</b> API key covers real-time Medicare, Medicaid &amp; commercial 270/271.</div>
-                <div style="margin-bottom:10px"><a href="https://portal.stedi.com" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-size:11.5px;font-weight:700;color:#2563eb;text-decoration:none">Get a free Stedi key at portal.stedi.com &rarr;</a> <span style="font-size:11px;color:#94a3b8">self-serve, no sales call - then paste it here with your lab NPI</span></div>
+                <div style="font-size:11.5px;color:#64748b;margin-bottom:8px">Add your provider identity and one payer credential, then click Save. Secrets are Fernet-encrypted in the database (no redeploy or Render access needed). One <b>Stedi</b> API key covers real-time Medicare, Medicaid &amp; commercial 270/271.</div>
+                <div style="margin-bottom:10px"><a href="https://portal.stedi.com" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-size:11.5px;font-weight:700;color:#2563eb;text-decoration:none">Get a Stedi key at portal.stedi.com &rarr;</a> <span style="font-size:11px;color:#94a3b8">self-serve - then add the key, your lab NPI, and organization name</span></div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
                   <label style="font-size:11px;color:#475569">Stedi API key<br><input id="ecStediKey" class="input" type="password" autocomplete="new-password" style="width:230px" placeholder="paste to set / blank = leave"></label>
-                  <label style="font-size:11px;color:#475569">Provider NPI<br><input id="ecStediNpi" class="input" style="width:130px" placeholder="your lab NPI"></label>
-                  <label style="font-size:11px;color:#475569">Provider name<br><input id="ecStediName" class="input" style="width:170px" placeholder="lab / org name"></label>
+                  <label style="font-size:11px;color:#475569">Provider NPI (all sources)<br><input id="ecStediNpi" class="input" style="width:150px" placeholder="your lab NPI"></label>
+                  <label style="font-size:11px;color:#475569">Organization name (all sources)<br><input id="ecStediName" class="input" style="width:190px" placeholder="lab / org name"></label>
                 </div>
                 <div style="font-size:11px;color:#94a3b8;margin:10px 0 4px">Have a commercial pVerify account instead? Enter those:</div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
                   <label style="font-size:11px;color:#475569">pVerify Client ID<br><input id="ecPvId" class="input" style="width:200px" placeholder="optional"></label>
                   <label style="font-size:11px;color:#475569">pVerify Client Secret<br><input id="ecPvSecret" class="input" type="password" autocomplete="new-password" style="width:200px" placeholder="optional"></label>
                 </div>
+                <label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;font-size:11.5px;color:#475569;max-width:760px">
+                  <input id="ecBaaAttested" type="checkbox" style="margin-top:2px">
+                  <span>I confirm an authorized representative has verified that a signed BAA or applicable data-use/trading-partner agreement is in effect for the selected payer connection. Uncheck to lock live patient-data transmission.</span>
+                </label>
                 <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
                   <button class="btn btn-primary btn-sm" onclick="saveEligCreds()">Save connection</button>
                   <span id="ecSaveMsg" style="font-size:12px;color:#64748b"></span>
@@ -7453,6 +7457,8 @@
         const r = await fetch('/hub/api/admin/eligibility/config');
         const c = r.ok ? await r.json() : null;
         if (!c) { if (el) el.textContent = 'Could not read connection status.'; return; }
+        const baa = document.getElementById('ecBaaAttested');
+        if (baa) baa.checked = !!c.baa_attested;
         if (c.live) {
           const src = c.verify_source === 'hets' ? 'CMS HETS (direct Medicare)'
                     : c.verify_source === 'stedi' ? 'Stedi real-time clearinghouse'
@@ -7507,7 +7513,8 @@
         stedi_provider_npi: val('ecStediNpi') || null,
         stedi_provider_name: val('ecStediName') || null,
         pverify_client_id: val('ecPvId') || null,
-        pverify_client_secret: val('ecPvSecret') || null
+        pverify_client_secret: val('ecPvSecret') || null,
+        baa_attested: !!(document.getElementById('ecBaaAttested') || {}).checked
       };
       if (msg) { msg.style.color = '#64748b'; msg.textContent = 'Saving...'; }
       try {
@@ -7518,12 +7525,14 @@
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error((d && d.detail) || 'save failed');
         ['ecStediKey', 'ecPvSecret'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
-        const live = d.stedi_configured || d.pverify_configured;
+        const live = !!d.live;
         if (msg) {
           msg.style.color = live ? '#166534' : '#92400e';
           msg.textContent = live
             ? 'Saved - real-time connection is now live. Click Test to prove it with a real 271.'
-            : 'Saved. Add the remaining field (key + NPI, or both pVerify creds) to go live.';
+            : !d.baa_attested
+              ? 'Saved and locked. Record the agreement attestation before transmitting patient data.'
+              : 'Saved. Add provider NPI + organization name and either a Stedi key or both pVerify credentials to go live.';
         }
         loadEligConnStatus();
       } catch (e) {

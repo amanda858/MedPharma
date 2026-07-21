@@ -115,10 +115,10 @@ def row_to_request(row: dict) -> PatientRequest:
     )
 
 
-def build_review_gate() -> AccessionGate:
+def build_review_gate(allow_live: bool | None = None) -> AccessionGate:
     from .config import build_default_engine
     from .prior_auth import PriorAuthEngine
-    engine = build_default_engine()
+    engine = build_default_engine(allow_live=allow_live)
     return AccessionGate(engine, PriorAuthEngine(sandbox=engine.pverify.sandbox),
                          auto_submit_pa=True)
 

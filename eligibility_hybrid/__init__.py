@@ -15,8 +15,9 @@ vendor's PUBLISHED API and contain no vendor proprietary code — the vendor is 
 swappable data source ("buy the pipes"); the intelligence is MedPharma's
 ("build the brain"). Sandbox mocks are MedPharma-authored, not vendor artifacts.
 
-Runs in sandbox (mock) mode with zero credentials; drop in real creds via env
-(see config.py) to go live.
+Runs in sandbox (mock) mode with zero credentials. Live providers require real
+credentials, provider identity, explicit agreement attestation, and sandbox
+disablement (see config.py).
 
     from eligibility_hybrid import build_default_engine, PatientRequest
     engine = build_default_engine()

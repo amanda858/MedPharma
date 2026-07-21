@@ -3917,14 +3917,43 @@ def _elig_cfg(key: str) -> str:
     return v or (os.getenv(key, "") or "").strip()
 
 
+def _elig_provider_npi() -> str:
+    return (_elig_cfg("ELIGIBILITY_PROVIDER_NPI")
+            or _elig_cfg("STEDI_PROVIDER_NPI")
+            or _elig_cfg("HETS_PROVIDER_NPI"))
+
+
+def _elig_provider_name() -> str:
+    return (_elig_cfg("ELIGIBILITY_PROVIDER_NAME")
+            or _elig_cfg("STEDI_PROVIDER_NAME")
+            or _elig_cfg("HETS_PROVIDER_NAME"))
+
+
+def _elig_baa_attested() -> bool:
+    return _elig_cfg("ELIGIBILITY_BAA_ATTESTED").lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _elig_provider_configured(provider) -> bool:
+    """True when credentials and provider identity can build a request."""
+    return bool(getattr(provider, "configured", False)
+                and _elig_provider_npi() and _elig_provider_name())
+
+
+def _elig_provider_ready(provider) -> bool:
+    """True only when configured and approved to transmit patient data."""
+    return bool(_elig_provider_configured(provider) and _elig_baa_attested())
+
+
 def _build_stedi_from_settings():
     from eligibility_hybrid.stedi import StediProvider
     return StediProvider(
         api_key=_elig_cfg("STEDI_API_KEY"),
         endpoint_url=_elig_cfg("STEDI_ENDPOINT_URL"),
         payer_id=_elig_cfg("STEDI_PAYER_ID") or "CMS",
-        provider_npi=_elig_cfg("STEDI_PROVIDER_NPI"),
-        provider_name=_elig_cfg("STEDI_PROVIDER_NAME"),
+        provider_npi=_elig_provider_npi(),
+        provider_name=_elig_provider_name(),
         forwarded_for=_elig_cfg("STEDI_FORWARDED_FOR"),
     )
 
@@ -3962,30 +3991,34 @@ def _build_live_eligibility_provider(payer_name: str = ""):
     design: if nothing is configured it returns the unconfigured Stedi provider
     so callers surface the fastest path and every provider refuses cleanly."""
     stedi = _build_stedi_from_settings()
-    if stedi.configured:
+    if _elig_provider_ready(stedi):
         return stedi
     pverify = _build_pverify_from_settings()
-    if getattr(pverify, "configured", False):
+    if _elig_provider_ready(pverify):
         return pverify
     hets = _build_hets_from_settings()
-    if hets.configured:
+    if _elig_provider_ready(hets):
         from eligibility_hybrid.policy import is_traditional_medicare
         if not payer_name or is_traditional_medicare(payer_name):
             return hets
-    return stedi
+    from eligibility_hybrid.stedi import StediProvider
+    return StediProvider()
 
 
 def _elig_source_flags() -> dict:
-    """Which real sources are configured right now (never returns secrets)."""
+    """Which sources have complete credentials (never returns secrets)."""
     try:
-        stedi_ok = bool(_build_stedi_from_settings().configured)
+        stedi_ok = _elig_provider_configured(_build_stedi_from_settings())
     except Exception:
         stedi_ok = False
     try:
-        hets_ok = bool(_build_hets_from_settings().configured)
+        hets_ok = _elig_provider_configured(_build_hets_from_settings())
     except Exception:
         hets_ok = False
-    pverify_ok = bool(_elig_cfg("PVERIFY_CLIENT_ID") and _elig_cfg("PVERIFY_CLIENT_SECRET"))
+    try:
+        pverify_ok = _elig_provider_configured(_build_pverify_from_settings())
+    except Exception:
+        pverify_ok = False
     return {"stedi": stedi_ok, "hets": hets_ok, "pverify": pverify_ok}
 
 
@@ -4363,8 +4396,8 @@ def _verify_and_record(rec: dict, actor_label: str = "Auto-verify",
         payer_name=payer_name,
         cpt_codes=cpts,
         service_type_codes=["30", "5"],
-        provider_npi=_elig_cfg("STEDI_PROVIDER_NPI") or _elig_cfg("HETS_PROVIDER_NPI"),
-        provider_name=_elig_cfg("STEDI_PROVIDER_NAME") or _elig_cfg("HETS_PROVIDER_NAME"),
+        provider_npi=_elig_provider_npi(),
+        provider_name=_elig_provider_name(),
     )
 
     provider_source = getattr(provider, "name", "eligibility")
@@ -5076,7 +5109,7 @@ def _assemble_lab_report(rec: dict) -> dict:
             first_name=first, last_name=last, dob=(rec.get("DOB") or "").strip(),
             member_id=(rec.get("MemberID") or "").strip(),
             payer_name=payer_name or "Medicare", cpt_codes=cpts, icd10_codes=icd10s,
-            provider_npi=_elig_cfg("STEDI_PROVIDER_NPI") or _elig_cfg("HETS_PROVIDER_NPI"),
+            provider_npi=_elig_provider_npi(),
             date_of_service=dos,
         )
         _smap = {"active": CoverageStatus.ACTIVE, "inactive": CoverageStatus.INACTIVE,
@@ -5499,11 +5532,8 @@ def eligibility_check(body: EligibilityCheckIn, hub_session: Optional[str] = Coo
         # report outpatient-lab benefits alongside overall active status.
         service_type_codes=["30", "5"],
         # The lab's OWN NPI — per-call value wins, else one-time server config.
-        provider_npi=((prov.npi or "").strip()
-                      or _elig_cfg("STEDI_PROVIDER_NPI")
-                      or _elig_cfg("HETS_PROVIDER_NPI")),
-        provider_name=(_elig_cfg("STEDI_PROVIDER_NAME")
-                       or _elig_cfg("HETS_PROVIDER_NAME")),
+        provider_npi=((prov.npi or "").strip() or _elig_provider_npi()),
+        provider_name=_elig_provider_name(),
     )
 
     provider = _build_live_eligibility_provider(payer_name)
@@ -12272,6 +12302,7 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
     stedi_configured = flags["stedi"]
     hets_configured = flags["hets"]
     pverify = flags["pverify"]
+    baa_attested = _elig_baa_attested()
 
     prov = _build_live_eligibility_provider()
     verify_live = bool(getattr(prov, "configured", False))
@@ -12279,30 +12310,45 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
 
     # -- The pre-analytical gate/batch review path ---------------------------
     sandbox = _elig_is_sandbox()
-    review_live = (not sandbox) and (pverify or stedi_configured)
+    try:
+        from eligibility_hybrid.config import build_default_engine
+        review_engine = build_default_engine(allow_live=baa_attested)
+        review_live = bool(review_engine.pverify.configured
+                           or getattr(review_engine.secondary, "configured", False))
+    except Exception:
+        review_live = False
 
     # Exact fastest step to make the board's Verify button return real 271s.
     next_step = None
-    if not verify_live:
+    if not baa_attested:
         next_step = (
-            "Paste a Stedi API key + your provider NPI in the connection box "
-            "below (or set STEDI_API_KEY + STEDI_PROVIDER_NPI in the server "
+            "Confirm that a signed BAA or applicable data-use/trading-partner "
+            "agreement is in effect, then record that attestation below. Live "
+            "patient-data transmission remains locked until then."
+        )
+    elif not verify_live:
+        next_step = (
+            "Paste a Stedi API key + your provider NPI + organization name in "
+            "the connection box below (or set STEDI_API_KEY, "
+            "STEDI_PROVIDER_NPI, and STEDI_PROVIDER_NAME in the server "
             "environment). One Stedi key turns on real-time Medicare, Medicaid "
             "and commercial 270/271 on the Verify button in minutes \u2014 no "
             "multi-week enrollment and no redeploy."
         )
 
     missing = []
-    if not verify_live:
+    if not any(flags.values()):
         missing.append(
-            "A real-time verify source \u2014 fastest is a Stedi API key (paste "
-            "it in the hub, no redeploy); or pVerify commercial credentials; or "
-            "direct CMS HETS (HETS_ENDPOINT_URL, HETS_SUBMITTER_ID + creds)."
+            "A sendable real-time verify source: provider NPI + organization "
+            "name and either a Stedi API key (paste it in the hub, no redeploy), "
+            "pVerify credentials, or direct CMS HETS enrollment credentials."
         )
-    missing.append(
-        "A signed BAA with the clearinghouse/CMS before real patient PHI is "
-        "transmitted."
-    )
+    if not baa_attested:
+        missing.append(
+            "Admin attestation that a signed BAA or applicable data-use/"
+            "trading-partner agreement is in effect before patient data is "
+            "transmitted."
+        )
 
     return {
         "ok": True,
@@ -12317,6 +12363,7 @@ def admin_eligibility_config(hub_session: Optional[str] = Cookie(None)):
         "sandbox": sandbox,
         "review_live": review_live,
         "pverify_configured": pverify,
+        "baa_attested": baa_attested,
         "missing": missing,
     }
 
@@ -12356,11 +12403,13 @@ def admin_eligibility_self_test(body: EligSelfTestIn,
             "ok": True, "live": False, "configured": False, "source": src,
             "message": ("No real-time payer source is connected yet, so there is "
                         "nothing to fabricate. Paste a Stedi API key + your "
-                        "provider NPI in the connection box below (self-serve at "
+                        "provider NPI + organization name in the connection box "
+                        "below (self-serve at "
                         "portal.stedi.com in minutes) and click Save, then run this "
                         "test again for a real 271 - no redeploy needed."),
-            "next_step": ("Paste STEDI_API_KEY + STEDI_PROVIDER_NPI (and provider "
-                          "name) into the hub connection box and click Save, then "
+            "next_step": ("Paste STEDI_API_KEY + STEDI_PROVIDER_NPI + "
+                          "STEDI_PROVIDER_NAME into the hub connection box and "
+                          "click Save, then "
                           "click Test connection again."),
         }
 
@@ -12372,12 +12421,9 @@ def admin_eligibility_self_test(body: EligSelfTestIn,
         payer_name=(body.payer_name or "").strip() or None,
         payer_id=(body.payer_id or "").strip() or None,
         service_type_codes=["30"],
-        provider_npi=((body.npi or "").strip()
-                      or _elig_cfg("STEDI_PROVIDER_NPI")
-                      or _elig_cfg("HETS_PROVIDER_NPI")),
+        provider_npi=((body.npi or "").strip() or _elig_provider_npi()),
         provider_name=((body.provider_name or "").strip()
-                       or _elig_cfg("STEDI_PROVIDER_NAME")
-                       or _elig_cfg("HETS_PROVIDER_NAME")),
+                       or _elig_provider_name()),
     )
     try:
         result = provider.verify(req)
@@ -12413,6 +12459,7 @@ class EligCredsIn(BaseModel):
     stedi_payer_id: Optional[str] = None
     pverify_client_id: Optional[str] = None
     pverify_client_secret: Optional[str] = None
+    baa_attested: Optional[bool] = None
 
 
 @router.get("/admin/eligibility/credentials")
@@ -12424,6 +12471,7 @@ def admin_eligibility_credentials_get(hub_session: Optional[str] = Cookie(None))
         "ok": True,
         "stedi_configured": flags["stedi"],
         "pverify_configured": flags["pverify"],
+        "baa_attested": _elig_baa_attested(),
         "fields": {
             "stedi_api_key": bool(_elig_cfg("STEDI_API_KEY")),
             "stedi_provider_npi": bool(_elig_cfg("STEDI_PROVIDER_NPI")),
@@ -12431,6 +12479,7 @@ def admin_eligibility_credentials_get(hub_session: Optional[str] = Cookie(None))
             "stedi_payer_id": bool(_elig_cfg("STEDI_PAYER_ID")),
             "pverify_client_id": bool(_elig_cfg("PVERIFY_CLIENT_ID")),
             "pverify_client_secret": bool(_elig_cfg("PVERIFY_CLIENT_SECRET")),
+            "baa_attested": _elig_baa_attested(),
         },
     }
 
@@ -12452,6 +12501,10 @@ def admin_eligibility_credentials_save(body: EligCredsIn,
         "STEDI_PAYER_ID":        body.stedi_payer_id,
         "PVERIFY_CLIENT_ID":     body.pverify_client_id,
         "PVERIFY_CLIENT_SECRET": body.pverify_client_secret,
+        "ELIGIBILITY_BAA_ATTESTED": (
+            None if body.baa_attested is None
+            else "true" if body.baa_attested else "false"
+        ),
     }
     saved, cleared = [], []
     for key, raw_val in mapping.items():
@@ -12468,9 +12521,12 @@ def admin_eligibility_credentials_save(body: EligCredsIn,
     except Exception:
         pass
     flags = _elig_source_flags()
+    live = bool(getattr(_build_live_eligibility_provider(), "configured", False))
     return {"ok": True, "saved": saved, "cleared": cleared,
             "stedi_configured": flags["stedi"],
-            "pverify_configured": flags["pverify"]}
+            "pverify_configured": flags["pverify"],
+            "baa_attested": _elig_baa_attested(),
+            "live": live}
 
 
 def _elig_num(v) -> float:
@@ -12554,7 +12610,7 @@ def admin_eligibility_gate(body: PaGateIn, hub_session: Optional[str] = Cookie(N
         provider_name=(body.provider_name or "").strip(),
     )
     try:
-        gate = build_review_gate()
+        gate = build_review_gate(allow_live=_elig_baa_attested())
         res = gate.evaluate(req)
         rows = rows_from_accession(req, res)
         result = res.to_dict()
@@ -12580,7 +12636,7 @@ async def admin_eligibility_batch(
     rows_in = await _elig_read_upload(file)
     try:
         from eligibility_hybrid.batch import build_review_gate, review_rows
-        gate = build_review_gate()
+        gate = build_review_gate(allow_live=_elig_baa_attested())
         reviewed = review_rows(rows_in, gate)
     except Exception as e:
         raise HTTPException(500, f"Batch review failed: {e}")
@@ -12608,7 +12664,7 @@ async def admin_eligibility_batch_export(
     from starlette.background import BackgroundTask
     try:
         from eligibility_hybrid.batch import build_review_gate, review_rows, write_review_xlsx
-        gate = build_review_gate()
+        gate = build_review_gate(allow_live=_elig_baa_attested())
         reviewed = review_rows(rows_in, gate)
         out = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         out.close()

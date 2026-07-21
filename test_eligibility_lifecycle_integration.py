@@ -8,9 +8,11 @@ from pathlib import Path
 
 
 ELIGIBILITY_ENV_KEYS = (
-    "STEDI_API_KEY", "STEDI_PROVIDER_NPI", "PVERIFY_CLIENT_ID",
+    "ELIGIBILITY_PROVIDER_NPI", "ELIGIBILITY_PROVIDER_NAME",
+    "ELIGIBILITY_BAA_ATTESTED",
+    "STEDI_API_KEY", "STEDI_PROVIDER_NPI", "STEDI_PROVIDER_NAME", "PVERIFY_CLIENT_ID",
     "PVERIFY_CLIENT_SECRET", "HETS_ENDPOINT_URL", "HETS_SUBMITTER_ID",
-    "HETS_USERNAME", "HETS_PASSWORD",
+    "HETS_USERNAME", "HETS_PASSWORD", "HETS_PROVIDER_NPI", "HETS_PROVIDER_NAME",
 )
 
 
@@ -55,6 +57,106 @@ def _record(client_db, client_id, **overrides):
     data.update(overrides)
     record_id = client_db.create_eligibility(data)
     return client_db.get_eligibility_one(record_id)
+
+
+def test_live_source_requires_sendable_provider_identity():
+    tmp, _client_db, routes, _client_id = _bootstrap()
+    try:
+        routes._require_full_admin = lambda _session: {
+            "id": 1, "role": "admin", "username": "admin",
+        }
+        locked_save = routes.admin_eligibility_credentials_save(
+            routes.EligCredsIn(
+                stedi_api_key="test-key",
+                stedi_provider_npi="1234567893",
+                stedi_provider_name="Example Laboratory",
+                baa_attested=False,
+            ),
+            None,
+        )
+        assert locked_save["stedi_configured"] is True
+        assert locked_save["baa_attested"] is False
+        assert locked_save["live"] is False
+        unlocked_save = routes.admin_eligibility_credentials_save(
+            routes.EligCredsIn(baa_attested=True), None
+        )
+        assert unlocked_save["baa_attested"] is True
+        assert unlocked_save["live"] is True
+
+        values = {
+            "STEDI_API_KEY": "test-key",
+            "STEDI_PROVIDER_NPI": "1234567893",
+        }
+        routes._elig_cfg = lambda key: values.get(key, "")
+        assert routes._elig_source_flags() == {
+            "stedi": False, "hets": False, "pverify": False,
+        }
+        assert routes._build_live_eligibility_provider().configured is False
+
+        values["STEDI_PROVIDER_NAME"] = "Example Laboratory"
+        assert routes._elig_source_flags()["stedi"] is True
+        assert routes._build_live_eligibility_provider().configured is False
+        disconnected = routes.admin_eligibility_config(None)
+        assert disconnected["stedi_configured"] is True
+        assert disconnected["baa_attested"] is False
+        assert disconnected["live"] is False
+        assert any("attestation" in item.lower() for item in disconnected["missing"])
+        values["ELIGIBILITY_BAA_ATTESTED"] = "true"
+        assert routes._build_live_eligibility_provider().name == "stedi"
+        connected = routes.admin_eligibility_config(None)
+        assert connected["baa_attested"] is True
+        assert connected["live"] is True
+        assert not any("attestation" in item.lower() for item in connected["missing"])
+
+        values.clear()
+        values.update({
+            "PVERIFY_CLIENT_ID": "client-id",
+            "PVERIFY_CLIENT_SECRET": "client-secret",
+        })
+        assert routes._elig_source_flags()["pverify"] is False
+        values.update({
+            "ELIGIBILITY_PROVIDER_NPI": "1234567893",
+            "ELIGIBILITY_PROVIDER_NAME": "Example Laboratory",
+            "ELIGIBILITY_BAA_ATTESTED": "true",
+        })
+        assert routes._elig_source_flags()["pverify"] is True
+        assert routes._build_live_eligibility_provider().name == "pverify"
+
+        values.clear()
+        values.update({
+            "HETS_ENDPOINT_URL": "https://hets.example/core",
+            "HETS_SUBMITTER_ID": "SUBMIT12345",
+            "HETS_USERNAME": "user",
+            "HETS_PASSWORD": "password",
+        })
+        assert routes._elig_source_flags()["hets"] is False
+        values.update({
+            "HETS_PROVIDER_NPI": "1234567893",
+            "HETS_PROVIDER_NAME": "Example Laboratory",
+            "ELIGIBILITY_BAA_ATTESTED": "true",
+        })
+        assert routes._elig_source_flags()["hets"] is True
+        assert routes._build_live_eligibility_provider("Medicare Part B").name == "hets"
+        assert routes._build_live_eligibility_provider("Aetna").configured is False
+
+        os.environ.update({
+            "STEDI_API_KEY": "test-key",
+            "STEDI_PROVIDER_NPI": "1234567893",
+            "STEDI_PROVIDER_NAME": "Example Laboratory",
+            "ELIG_SANDBOX": "0",
+        })
+        from eligibility_hybrid.config import (
+            build_default_engine, build_eligibility_provider,
+        )
+        assert build_eligibility_provider().configured is False
+        assert build_default_engine(allow_live=False).secondary.configured is False
+        assert build_default_engine(allow_live=True).secondary.configured is True
+        os.environ["ELIGIBILITY_BAA_ATTESTED"] = "true"
+        assert build_eligibility_provider().configured is True
+    finally:
+        for key in ELIGIBILITY_ENV_KEYS + ("ELIG_SANDBOX",):
+            os.environ.pop(key, None)
+        tmp.cleanup()
 
 
 def test_missing_input_and_offline_and_live_hold():
@@ -241,5 +343,6 @@ def test_missing_input_and_offline_and_live_hold():
 
 
 if __name__ == "__main__":
+    test_live_source_requires_sendable_provider_identity()
     test_missing_input_and_offline_and_live_hold()
-    print("eligibility lifecycle integration test passed")
+    print("2 eligibility lifecycle integration tests passed")

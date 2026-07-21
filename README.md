@@ -80,15 +80,22 @@ five-stage state: `OPS`, `TRACK`, `COMMUNICATE`, `APPROVE`, `EXECUTE`,
 the lifecycle state; raw payer evidence remains restricted to the eligibility
 audit table.
 
-Live active/inactive verification requires one configured source and an
-appropriate BAA before transmitting patient data:
+Live active/inactive verification requires provider identity, one configured
+source, and an authorized admin attestation that an appropriate signed BAA or
+applicable data-use/trading-partner agreement is in effect before patient data
+is transmitted:
 
 - Stedi: `STEDI_API_KEY`, `STEDI_PROVIDER_NPI`, and `STEDI_PROVIDER_NAME`
-- pVerify: `PVERIFY_CLIENT_ID` and `PVERIFY_CLIENT_SECRET`
-- CMS HETS (traditional Medicare only): HETS endpoint, submitter, and credential settings
+- pVerify: `PVERIFY_CLIENT_ID`, `PVERIFY_CLIENT_SECRET`, provider NPI, and provider name
+- CMS HETS (traditional Medicare only): HETS endpoint, submitter, credentials, provider NPI, and provider name
 
 Credentials may be stored through the encrypted admin settings UI or supplied
-as environment variables. Never commit credentials to this repository.
+as environment variables. Shared identity can use `ELIGIBILITY_PROVIDER_NPI`
+and `ELIGIBILITY_PROVIDER_NAME`. Standalone engine use can set
+`ELIGIBILITY_BAA_ATTESTED=1` only after the agreement is actually in effect.
+The admin UI stores the attestation with its audit trail. Batch review also
+requires `ELIG_SANDBOX=0`; otherwise it remains deterministic sandbox review.
+Never commit credentials to this repository.
 
 Machine-readable operations:
 
@@ -115,13 +122,10 @@ assuming they are false or unrestricted.
 Run the focused engine validation suite:
 
 ```bash
-python3 test_stedi_payers.py
-python3 test_stedi_direct.py
-python3 test_hets_direct.py
-python3 test_coverage_intercept.py
-python3 test_eligibility_lifecycle.py
-python3 test_eligibility_rules.py
-python3 test_eligibility_state_persistence.py
-python3 test_eligibility_rule_persistence.py
-python3 test_eligibility_lifecycle_integration.py
+# VS Code: Run Task -> FINALIZE_PROVEN_COMPLIANT_TRUTH
 ```
+
+The task runs all focused provider, policy, lifecycle, persistence, and route
+contracts, compiles the Python owners, parses both hub scripts, and reports
+success only when every local check passes. A live payer round trip still
+requires configured credentials, agreement attestation, and approved test data.

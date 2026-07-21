@@ -9,6 +9,8 @@ Verify path is free / self-serve — set one of:
 The optional pre-analytical gate tool can also use pVerify for rich benefits:
 
     PVERIFY_CLIENT_ID, PVERIFY_CLIENT_SECRET   [, PVERIFY_BASE_URL]
+    ELIGIBILITY_PROVIDER_NPI, ELIGIBILITY_PROVIDER_NAME
+    ELIGIBILITY_BAA_ATTESTED=1                 (only with agreement in effect)
     ELIG_SANDBOX=0    (only after real creds are in place)
 """
 from __future__ import annotations
@@ -84,10 +86,13 @@ def build_eligibility_provider():
 
     Preference: Stedi (self-serve API key, fastest to go live) → direct CMS
     HETS. If neither is configured, returns the (unconfigured) Stedi provider so
-    the caller can surface the fastest path to go live. NEVER returns a
-    fabricating/sandbox provider.
+    the caller can surface the fastest path to go live. Live construction also
+    requires `ELIGIBILITY_BAA_ATTESTED=1`; without it the factory fails closed.
+    NEVER returns a fabricating/sandbox provider.
     """
     stedi = build_stedi_provider()
+    if not _bool(os.getenv("ELIGIBILITY_BAA_ATTESTED"), default=False):
+        return StediProvider()
     if stedi.configured:
         return stedi
     hets = build_hets_provider()
@@ -96,20 +101,27 @@ def build_eligibility_provider():
     return stedi
 
 
-def build_default_engine() -> HybridEligibilityEngine:
+def build_default_engine(allow_live: bool | None = None) -> HybridEligibilityEngine:
     """Wire the pre-analytical gate engine.
 
     Primary = pVerify (optional; sandbox/mock until real creds). Secondary =
     the free, self-serve Stedi real-time provider, so the gate's fallback
     verify is a genuinely free real 270/271 pipe — no paid clearinghouse and no
-    Office Ally account required.
+    Office Ally account required. Live providers remain disabled until a signed
+    BAA has been attested by the host application (or through the matching env
+    setting for standalone use).
     """
-    force_sandbox = _bool(os.getenv("ELIG_SANDBOX"), default=True)
+    if allow_live is None:
+        allow_live = _bool(os.getenv("ELIGIBILITY_BAA_ATTESTED"), default=False)
+    force_sandbox = (not allow_live
+                     or _bool(os.getenv("ELIG_SANDBOX"), default=True))
     pverify = PVerifyProvider(
         client_id=os.getenv("PVERIFY_CLIENT_ID", ""),
         client_secret=os.getenv("PVERIFY_CLIENT_SECRET", ""),
         base_url=os.getenv("PVERIFY_BASE_URL", "https://api.pverify.com"),
         sandbox=force_sandbox,
     )
-    return HybridEligibilityEngine(pverify, build_stedi_provider(),
+    stedi = (build_stedi_provider()
+             if allow_live and not force_sandbox else StediProvider())
+    return HybridEligibilityEngine(pverify, stedi,
                                    HybridStrategy.DISCOVER_THEN_VERIFY)
